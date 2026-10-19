@@ -1544,7 +1544,8 @@ class Images(_BaseMeasurement2D):
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                # The result is the real part, in the precision of the gradient.
+                meta=xp.array((), dtype=np.finfo(self.array.dtype).dtype),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -2312,8 +2313,9 @@ def _integrate_gradient_2d(gradient, sampling):
     xp = get_array_module(gradient)
     gx, gy = gradient.real, gradient.imag
     (nx, ny) = gx.shape[-2:]
-    ikx = xp.fft.fftfreq(nx, d=sampling[0])
-    iky = xp.fft.fftfreq(ny, d=sampling[1])
+    # fftfreq is float64: cast it, so that single-precision gradients stay so.
+    ikx = xp.fft.fftfreq(nx, d=sampling[0]).astype(gx.dtype)
+    iky = xp.fft.fftfreq(ny, d=sampling[1]).astype(gx.dtype)
     grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing="ij")
     k = grid_ikx**2 + grid_iky**2
     k[k == 0] = 1e-12
@@ -3438,7 +3440,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com_x = (array * x[:, None]).sum(axis=(-2, -1)) / total_intensity
         com_y = (array * y[None]).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
-        return com
+        # Integer counts are summed in float64 (exact for realistic counts);
+        # the centers are returned in the precision of the coordinates.
+        return com.astype(np.result_type(x.dtype, y.dtype, np.complex64), copy=False)
 
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
         """
@@ -3469,7 +3473,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         xp = get_array_module(self.array)
 
-        x, y = xp.asarray(x), xp.asarray(y)
+        # Coordinates in the precision of the data, so that float32 patterns give
+        # complex64 centers; counts of integer type get the configured precision.
+        if np.issubdtype(self.array.dtype, np.floating):
+            coordinate_dtype = np.result_type(self.array.dtype, np.float32)
+        else:
+            coordinate_dtype = get_dtype(complex=False)
+        x = xp.asarray(x, dtype=coordinate_dtype)
+        y = xp.asarray(y, dtype=coordinate_dtype)
 
         if self.is_lazy:
             base_axes = tuple(
@@ -3479,7 +3490,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
+                self._com,
+                x=x,
+                y=y,
+                drop_axis=base_axes,
+                dtype=np.result_type(x.dtype, y.dtype, np.complex64),
             )
         else:
             array = self._com(self.array, x=x, y=y)

@@ -959,6 +959,67 @@ def test_integrate_gradient_offset_is_per_member(chunks):
     np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "method", ["integrate_gradient", "center_of_mass", "center_of_mass_mrad"]
+)
+def test_single_precision_measurements_stay_single_precision(method, lazy):
+    # A float64 factor, here the frequency grid or the coordinates, must not widen
+    # single-precision data; the declared precision of a lazy result must be the
+    # computed one.
+    rng = np.random.default_rng(0)
+    ensemble_axes_metadata = [OrdinalAxis(values=(0, 1))]
+    with abtem.config.set({"precision": "float32"}):
+        if method == "integrate_gradient":
+            data = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+            data = data.astype(np.complex64)
+            kwargs, expected = {}, np.dtype(np.float32)
+        else:
+            data = (np.abs(rng.normal(size=(2, 16, 20))) + 1).astype(np.float32)
+            kwargs, expected = {"metadata": {"energy": 100e3}}, np.dtype(np.complex64)
+        array = da.from_array(data, chunks=(1, 16, 20)) if lazy else data
+        cls = Images if method == "integrate_gradient" else DiffractionPatterns
+        measurement = cls(
+            array, sampling=0.1, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs
+        )
+
+        if method == "integrate_gradient":
+            result = measurement.integrate_gradient()
+        else:
+            result = measurement.center_of_mass(
+                units="mrad" if method.endswith("mrad") else "1/Å"
+            )
+
+        assert result.array.dtype == expected
+        assert result.compute().array.dtype == expected
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_center_of_mass_of_integer_counts_follows_the_configured_precision(
+    precision, lazy
+):
+    counts = np.random.default_rng(3).integers(0, 50, size=(2, 16, 20))
+    kwargs = dict(
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    )
+    with abtem.config.set({"precision": precision}):
+        array = da.from_array(counts, chunks=(1, 16, 20)) if lazy else counts
+        com = DiffractionPatterns(array, **kwargs).center_of_mass()
+        expected = np.result_type(np.dtype(precision), np.complex64)
+        assert com.array.dtype == expected
+        computed = com.compute().array
+        assert computed.dtype == expected
+
+    with abtem.config.set({"precision": "float64"}):
+        reference = DiffractionPatterns(counts.astype(np.float64), **kwargs)
+        reference = reference.center_of_mass().array
+    rtol = 1e-5 if precision == "float32" else 1e-12
+    np.testing.assert_allclose(computed, reference, rtol=rtol, atol=1e-6)
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])

@@ -1,15 +1,20 @@
 import numpy as np
 import pytest
 
+import abtem
+from abtem.core.axes import OrdinalAxis
 from abtem.core.energy import energy2wavelength
 from abtem.transfer import (
     CTF,
     Aberrations,
     Aperture,
+    Bullseye,
+    RadialPhasePlate,
+    SpatialEnvelope,
     point_resolution,
     scherzer_defocus,
 )
-from abtem.waves import PlaneWave
+from abtem.waves import PlaneWave, Waves
 
 
 def test_point_resolution():
@@ -93,3 +98,46 @@ def test_scherzer_string_independent_of_keyword_order():
     assert np.isclose(ab.defocus, expected)
     ctf = CTF(energy=200e3, aberration_coefficients={"defocus": "scherzer", "C30": 1e7})
     assert np.isclose(ctf.defocus, expected)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "transform",
+    [
+        Bullseye(4, 3.0, 3, 0.5, 20),
+        RadialPhasePlate(2, 30.0),
+        SpatialEnvelope(angular_spread=2, C30=1e4),
+    ],
+    ids=["bullseye", "radial_phase_plate", "spatial_envelope"],
+)
+def test_single_precision_transforms_agree_with_double_precision(transform, lazy):
+    # Waves transformed in single precision stay in single precision and equal those
+    # transformed in double precision to rounding: in particular the phase flips of
+    # the phase plate must not depend on the precision. A flipped phase or a
+    # misplaced ring changes the waves by order one.
+    import dask.array as da
+
+    rng = np.random.default_rng(0)
+    data = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+    result = {}
+    for precision, dtype in (("float32", np.complex64), ("float64", np.complex128)):
+        with abtem.config.set({"precision": precision}):
+            array = data.astype(dtype)
+            if lazy:
+                array = da.from_array(array, chunks=(1, 16, 20))
+            waves = Waves(
+                array,
+                energy=100e3,
+                sampling=0.1,
+                ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            ).apply_transform(transform)
+            assert waves.array.dtype == dtype
+            result[precision] = waves.compute().array
+            assert result[precision].dtype == dtype
+
+    np.testing.assert_allclose(
+        result["float32"],
+        result["float64"],
+        rtol=0,
+        atol=1e-5 * np.abs(result["float64"]).max(),
+    )
