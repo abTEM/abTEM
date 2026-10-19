@@ -15,6 +15,7 @@ from abtem.bloch.utils import (
     relative_positions_for_centering,
     wrapped_is_close,
 )
+from abtem.core.backend import cp
 from abtem.parametrizations import LobatoParametrization
 
 
@@ -266,3 +267,56 @@ def test_eager_exit_waves_for_scalar_thickness_have_no_thickness_axis():
     assert eager.array.ndim == 2
     assert eager.shape == lazy.shape
     assert np.allclose(eager.array, lazy.array.compute())
+
+
+def _hermitian_propagator_argument():
+    # i*H for a Hermitian H, the form expm takes in calculate_scattering_matrix,
+    # with a norm large enough that scaling and squaring is exercised.
+    rng = np.random.default_rng(0)
+    H = rng.normal(size=(64, 64)) + 1j * rng.normal(size=(64, 64))
+    return 1j * (H + H.conj().T)
+
+
+def test_cupy_expm_algorithm_matches_scipy(monkeypatch):
+    # The CuPy matrix exponential used b[8] * A where the [13/13] Pade approximant
+    # needs b[8] * A2. Here the module is loaded with NumPy standing in for CuPy,
+    # so the algorithm itself is checked without a GPU.
+    import importlib.util
+    from pathlib import Path
+
+    from scipy.linalg import expm as expm_scipy
+
+    class NumpyAsCupy:
+        fuse = staticmethod(lambda function: function)
+
+        def __getattr__(self, name):
+            return getattr(np, name)
+
+    monkeypatch.setattr("abtem.core.backend.cp", NumpyAsCupy())
+    path = Path(abtem.__file__).parent / "bloch" / "matrix_exponential.py"
+    spec = importlib.util.spec_from_file_location("_expm_numpy", path)
+    expm_numpy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(expm_numpy)
+
+    a = _hermitian_propagator_argument()
+    reference = expm_scipy(a)
+    np.testing.assert_allclose(
+        expm_numpy.expm(a.copy()),
+        reference,
+        rtol=0,
+        atol=1e-11 * np.abs(reference).max(),
+    )
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+def test_cupy_expm_matches_scipy():
+    from scipy.linalg import expm as expm_scipy
+
+    from abtem.bloch.matrix_exponential import expm as expm_cupy
+
+    a = _hermitian_propagator_argument()
+    reference = expm_scipy(a)
+    result = cp.asnumpy(expm_cupy(cp.asarray(a)))
+    np.testing.assert_allclose(
+        result, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+    )

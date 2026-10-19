@@ -1462,7 +1462,9 @@ class BlochWaves:
         np.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        # Eager: the result feeds xp.asarray, and CuPy refuses to convert a
+        # dask array implicitly (NumPy happens to accept one).
+        A = self.calculate_structure_matrix(lazy=False)
         hkl = self.hkl
         cell = self.cell
 
