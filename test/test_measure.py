@@ -203,6 +203,24 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
+@pytest.mark.parametrize("cval", [0.0, 0.5])
+def test_gaussian_filter_lazy_constant_boundary_matches_eager(cval):
+    """dask's map_overlap only understands reflect/periodic/nearest/none or a
+    numeric fill value for `boundary`, so the string 'constant' has to be
+    translated to `cval`; passing it through raised ValueError."""
+    rng = np.random.default_rng(0)
+    array = rng.random((32, 32)).astype(np.float32)
+    images = Images(array, sampling=0.1)
+
+    eager = images.gaussian_filter(0.3, boundary="constant", cval=cval)
+    lazy = (
+        images.lazy()
+        .rechunk((16, 16))
+        .gaussian_filter(0.3, boundary="constant", cval=cval)
+    )
+    assert np.allclose(lazy.compute().array, eager.array, atol=1e-5)
+
+
 # @given(data=st.data())
 # @pytest.mark.parametrize('lazy', [True, False])
 # @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -598,6 +616,31 @@ def test_line_profiles_interpolate_comparison(lazy):
         images.interpolate(0.01).interpolate_line().array,
         rtol=0.01,
     )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.complex64])
+def test_line_profiles_interpolate_preserves_dtype(lazy, dtype):
+    """The 1D spline interpolation allocated its output as float32: a complex
+    profile raised 'output must have complex dtype' and a float64 profile was
+    silently downgraded."""
+    rng = np.random.default_rng(0)
+    array = rng.random(40).astype(dtype)
+    if np.iscomplexobj(array):
+        array = array + 1j * rng.random(40).astype(array.real.dtype)
+    profiles = RealSpaceLineProfiles(array, sampling=0.1)
+    if lazy:
+        profiles = profiles.lazy()
+
+    interpolated = profiles.interpolate(gpts=80)
+    if lazy:
+        assert interpolated.array.dtype == array.dtype
+    result = interpolated.compute().array
+
+    assert result.dtype == array.dtype
+    assert result.shape == (80,)
+    # Every second output point is an input point (periodic grid, no endpoint).
+    assert np.allclose(result[::2], array, atol=1e-5)
 
 
 @pytest.mark.parametrize("lazy", [True, False])

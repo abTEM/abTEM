@@ -1126,11 +1126,16 @@ class _BaseMeasurement2D(BaseMeasurements):
                 min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
             )
 
+            # dask.array.map_overlap's own `boundary` only understands
+            # reflect/periodic/nearest/none or a numeric fill value, so the
+            # "constant" boundary is passed as the value it fills with.
+            dask_boundary = cval if boundary == "constant" else boundary
+
             array = da.map_overlap(
                 gaussian_filter,
                 self.array,
                 sigma=sigma,
-                boundary=boundary,
+                boundary=dask_boundary,
                 mode=mode,
                 cval=cval,
                 depth=depth,
@@ -1919,7 +1924,10 @@ class _BaseMeasurement1D(BaseMeasurements):
             None
         ]
 
-        new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=xp.float32)
+        # Follow the input dtype: hardcoding float32 downgrades a float64
+        # profile and makes map_coordinates reject a complex one outright
+        # ("output must have complex dtype").
+        new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
             map_coordinates(array[i], new_points, new_array[i], order=order)
 
@@ -1978,7 +1986,7 @@ class _BaseMeasurement1D(BaseMeasurements):
                 endpoint=endpoint,
                 order=order,
                 chunks=self.array.chunks[:-1] + (gpts,),
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._interpolate(self.array, gpts, endpoint, order)
