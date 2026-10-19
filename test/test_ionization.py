@@ -358,3 +358,82 @@ def test_numerov_solves_harmonic_oscillator():
 
     assert np.allclose(x, np.sin(omega * t) / omega, atol=1e-6)
     assert np.all(f == -(omega**2))
+
+
+def _spin_factor_ratio(transitions, Z=14):
+    """Intensity of the transition potential with ``orbital_filling_factor`` on,
+    relative to the one with it off."""
+    from abtem.inelastic.core_loss import TransitionPotential
+
+    kwargs = dict(extent=6.0, gpts=32, energy=100e3, double_channel=False)
+    with_factor = TransitionPotential(
+        Z, transitions, orbital_filling_factor=True, **kwargs
+    ).build()
+    without_factor = TransitionPotential(
+        Z, transitions, orbital_filling_factor=False, **kwargs
+    ).build()
+
+    intensity_with = float((np.abs(with_factor.array) ** 2).sum())
+    intensity_without = float((np.abs(without_factor.array) ** 2).sum())
+    return intensity_with / intensity_without
+
+
+# Building a transition potential evaluates spherical harmonics (with
+# SciPy < 1.17 through the deprecated `sph_harm`) and Wigner 3j symbols (which
+# trigger a deprecation warning in some mpmath versions).
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("l", [0, 1, 2])
+def test_orbital_filling_factor_is_spin_only_for_explicit_ml(l):
+    """Regression test for a (2*l+1) orbital-degeneracy double-count.
+
+    ``SubshellTransitions.get_transitions()`` realises a subshell's orbital
+    degeneracy explicitly, with one bound state per ``ml``, and
+    ``TransitionPotential.build()`` sums them incoherently. The
+    ``orbital_filling_factor`` therefore has to contribute only the remaining
+    spin degeneracy (2), not the full subshell occupancy ``4*l+2``. For a
+    single explicit ``ml`` state it must scale the intensity by exactly 2,
+    whatever ``l`` is. The old factor was invisible for K edges (l=0), where
+    ``4*l+2`` is 2, and overcounted p and d subshells by 3 and 5.
+    """
+    from abtem.inelastic.core_loss import AtomicWaveFunction, RadialWavefunction
+
+    r = np.linspace(1e-12, 20.0, 20000)
+    k = 1.3
+    bound = RadialWavefunction(
+        n=l + 1,
+        l=l,
+        energy=-1839.0,
+        radial_grid=r,
+        radial_values=r ** (l + 1) * np.exp(-r),
+    )
+    continuum = RadialWavefunction(
+        n=None,
+        l=l + 1,
+        energy=25.0,
+        radial_grid=r,
+        radial_values=np.sin(k * r) / np.sqrt(np.pi * k),
+    )
+    transitions = [(AtomicWaveFunction(bound, 0), AtomicWaveFunction(continuum, 0))]
+
+    assert _spin_factor_ratio(transitions) == pytest.approx(2.0, rel=1e-6)
+
+
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("Z, n, l", [(14, 1, 0), (14, 2, 1), (22, 3, 2)])
+def test_orbital_filling_factor_is_spin_only_for_subshell_transitions(Z, n, l):
+    """The same check on the transitions of a SubshellTransitions (needs GPAW)."""
+    pytest.importorskip("gpaw")
+    from abtem.inelastic.core_loss import SubshellTransitions
+
+    transitions = SubshellTransitions(Z, n, l, epsilon=25.0)
+    one_ml_transitions = [t for t in transitions.get_transitions() if t[0].ml == 0]
+    assert len(one_ml_transitions) > 0
+
+    assert _spin_factor_ratio(one_ml_transitions, Z) == pytest.approx(2.0, rel=1e-6)
