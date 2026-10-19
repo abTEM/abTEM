@@ -3639,24 +3639,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
         weighting_function: str,
         width: float,
     ):
-        x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
+        xp = get_array_module(array)
+
+        # Broadcast rather than meshgrid, which not every array module has.
+        x, y = (xp.asarray(c) for c in angular_coordinates)
+        r = xp.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
         centers = np.arange(0, max_angle, radial_sampling)
 
-        values = np.zeros(array.shape[:-2] + centers.shape)
+        # On the device of the array: a host array cannot take the device sums
+        # assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape)
         for i, center in enumerate(centers):
             if weighting_function == "step":
-                mask = np.abs(r - center) < width
+                mask = xp.abs(r - center) < width
             elif weighting_function == "gaussian":
-                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
+                mask = xp.exp(-((r - center) ** 2) / (width**2 / 2))
             else:
                 raise ValueError("weighting function must be 'step' or 'gaussian'")
 
-            weight = np.sum(mask)
+            weight = xp.sum(mask)
 
             if weight > 0:
-                values[..., i] = np.sum(array * mask, axis=(-2, -1)) / weight
+                values[..., i] = xp.sum(array * mask, axis=(-2, -1)) / weight
             else:
                 values[..., i] = 0.0
 

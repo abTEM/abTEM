@@ -1668,3 +1668,42 @@ def test_reciprocal_coordinates_are_whole_multiples_of_the_sampling(fftshift):
 
         center = (shape[0] // 2, shape[1] // 2) if fftshift else (0, 0)
         assert patterns.bandlimit().array[center] == 0, gpts
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+def test_azimuthal_average_on_a_device_equals_the_reference(
+    weighting_function, lazy, device
+):
+    # The averages were collected in a host array and the radii made with NumPy, so
+    # on CuPy every eager or lazy average failed.
+    data = np.random.default_rng(1).random((3, 33, 40)).astype(np.float32)
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+
+    kx, ky = patterns.angular_coordinates
+    radius = np.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2)
+    width = min(patterns.angular_sampling)
+    centers = np.arange(0, -min(min(patterns.angular_limits)), width)
+    expected = np.zeros((3, len(centers)))
+    for i, center in enumerate(centers):
+        if weighting_function == "step":
+            mask = np.abs(radius - center) < width
+        else:
+            mask = np.exp(-((radius - center) ** 2) / (width**2 / 2))
+        expected[:, i] = (data * mask).sum(axis=(-2, -1)) / mask.sum()
+
+    on_device = patterns.copy_to_device(device)
+    if lazy:
+        on_device = on_device.ensure_lazy(chunks=(1, -1, -1))
+    result = on_device.azimuthal_average(weighting_function=weighting_function)
+    result = result.compute()
+
+    assert_array_matches_device(result.array, device)
+    np.testing.assert_allclose(asnumpy(result.array), expected, rtol=1e-5, atol=1e-7)
