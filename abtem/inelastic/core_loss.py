@@ -113,6 +113,19 @@ def _validate_transition_potentials(transition_potentials):
     return transition_potentials
 
 
+def _eager_waves(waves):
+    """The waves as an eager object; a lazy one is computed into a copy.
+
+    For the methods that reduce the whole wave intensity to a host-side result
+    (a threshold, a site subset): a lazy array would otherwise meet in-place
+    NumPy/CuPy operations it cannot take part in, or be recomputed piecewise.
+    abTEM's compute() works in place, so the caller's waves are copied first.
+    """
+    if waves.is_lazy:
+        return waves.copy().compute(progress_bar=False)
+    return waves
+
+
 class RadialWavefunction:
     def __init__(
         self,
@@ -1003,6 +1016,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        waves = _eager_waves(waves)
 
         local_potential = self.local_potential(space="real").sum(0)
         array = abs2(waves.array)
@@ -1043,6 +1057,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        waves = _eager_waves(waves)
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,

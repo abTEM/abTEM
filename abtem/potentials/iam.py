@@ -1596,12 +1596,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
+        transmission = self.array[0]
         if conjugate:
-            waves._array *= xp.conjugate(self.array[0])
-        else:
-            waves._array *= self.array[0]
+            # the method, not xp.conjugate: a CuPy function rejects a dask array
+            transmission = transmission.conj()
+
+        lazy_waves = isinstance(waves._array, da.Array)
+        if isinstance(transmission, da.Array) and not lazy_waves:
+            # The waves are transmitted in place, and an in-place NumPy or CuPy
+            # product cannot take a dask operand. Keep eager waves eager: compute
+            # the (single-slice) transmission function, synchronously so CuPy
+            # tasks never run concurrently.
+            transmission = transmission.compute(scheduler="synchronous")
+
+        waves._array *= transmission
 
         return waves
 
@@ -2012,6 +2020,18 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy.
+        if potentials.is_lazy:
+            potentials = potentials.__class__(
+                potentials.array.compute(),
+                **potentials._copy_kwargs(exclude=("array",)),
+            )
+
         rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
@@ -2038,14 +2058,9 @@ class CrystalPotential(_PotentialBuilder):
         n_configs = potentials.shape[0]
 
         # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
-        # per-tile access into the pool, so materialise the (small unit-cell)
-        # pool array once. A lazily-built PotentialArray unit carries a dask
-        # array here; compute it so per-tile fancy indexing works and stays on
-        # the target device.
+        # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
-        if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)

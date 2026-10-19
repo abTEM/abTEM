@@ -897,8 +897,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
         array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        # by keyword: not every subclass takes the array as its first argument
         kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -1408,7 +1410,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+        # by keyword: not every subclass takes the array as its first argument
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
@@ -2052,7 +2057,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            array = self.compute().array
+            # compute() works in place: materialise a copy, so that partitioning
+            # (e.g. of a lazy potential for an eager multislice) leaves the
+            # caller's object lazy
+            array = self.copy().compute().array if self.is_lazy else self.array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:
@@ -2361,7 +2369,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
 
     xp = get_array_module(arrays[0].array)
 
-    if arrays[0].is_lazy:
+    if any(has_array.is_lazy for has_array in arrays):
         array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
         array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)
