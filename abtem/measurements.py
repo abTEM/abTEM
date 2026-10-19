@@ -1526,7 +1526,9 @@ class Images(_BaseMeasurement2D):
     def integrate_gradient(self):
         """
         Calculate integrated gradients. Requires complex images whose real and imaginary
-        parts represent the `x` and `y` components of a gradient.
+        parts represent the `x` and `y` components of a gradient. The gradient
+        determines the result only up to a constant; each image of an ensemble is
+        shifted so that its minimum is zero.
 
         Returns
         -------
@@ -2317,7 +2319,7 @@ def _integrate_gradient_2d(gradient, sampling):
     k[k == 0] = 1e-12
     That = (xp.fft.fft2(gx) * grid_ikx + xp.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
     T = xp.real(xp.fft.ifft2(That))
-    T -= xp.min(T)
+    T -= xp.min(T, axis=(-2, -1), keepdims=True)
     return T
 
 
@@ -3761,7 +3763,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         radius : float, optional
             The radius of the zeroth-order reflection to block [mrad]. If not given this
-            will be inferred from the metadata, if available.
+            will be inferred from the metadata, if available. Without a
+            `semiangle_cutoff` in the metadata only the zero-angle pixel is blocked,
+            unless `margin=True`.
         margin : bool, optional
             If True adds a margin to the blocking radius to fully block soft apertures.
             Margin is true by default for diffraction patterns with `semiangle_cutoff`
@@ -3777,7 +3781,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             if "semiangle_cutoff" in self.metadata.keys():
                 radius = self.metadata["semiangle_cutoff"]
             else:
-                radius = max(self.angular_sampling) * 1.0001
+                radius = 0.5 * min(self.angular_sampling)
 
         if "semiangle_cutoff" in self.metadata.keys() and margin is None:
             margin = True
@@ -3804,8 +3808,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
           cutoffs; a cutoff of at most half the smaller angular sampling; an
           infinite one; or an array of cutoffs): the zero-frequency pixel alone,
           so the bright-field disks of an ensemble stay; pass a radius for those.
-          ``block_direct()`` without a cutoff would also block the nearest pixels,
-          which in a one-unit-cell pattern are the first-order reflections. With
+          ``block_direct()`` blocks the same pixel without a cutoff. With
           ``fftshift`` the pixel is found by its angular coordinate, within half
           the smaller angular sampling, which reaches no other pixel whatever
           roundoff the coordinate carries; without ``fftshift`` it is pixel

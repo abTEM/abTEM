@@ -22,7 +22,13 @@ from abtem.core.axes import (
     UnknownAxis,
     WaveVectorAxis,
 )
-from abtem.core.backend import copy_to_device, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    copy_to_device,
+    cp,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -1853,12 +1859,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.store_on_host:
                 array = np.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
             else:
                 array = xp.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
 
             for i, _, s_matrix in self.generate_blocks(1):
@@ -1871,7 +1877,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     new_array = self._build_s_matrix(s_matrix, slice(start, stop))
 
                     if self.store_on_host:
-                        new_array = xp.asnumpy(new_array)
+                        new_array = asnumpy(new_array)
 
                     array[items] = new_array
 

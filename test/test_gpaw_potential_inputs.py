@@ -29,6 +29,7 @@ from scipy.interpolate import interp1d
 
 import abtem
 import abtem.potentials.gpaw as gpaw_module
+from abtem.inelastic.phonons import AtomsEnsemble
 from abtem.potentials.gpaw import GPAWPotential, _DummyGPAW
 from abtem.potentials.iam import CrystalPotential
 
@@ -210,6 +211,16 @@ def test_a_list_of_calculators_has_one_configuration_each(fake_gpaw):
     potential = GPAWPotential(["a.gpw", _loaded("b.gpw")], gpts=GPTS)
 
     assert potential.num_configurations == potential.num_frozen_phonons == 2
+
+
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_one_calculator_rejects_a_trajectory(fake_gpaw, kind):
+    with pytest.raises(ValueError, match="one calculator per frame"):
+        GPAWPotential(
+            _single_calculator(kind),
+            gpts=GPTS,
+            frozen_phonons=AtomsEnsemble([_atoms(), _atoms()]),
+        )
 
 
 @pytest.mark.parametrize("lazy", [True, False])

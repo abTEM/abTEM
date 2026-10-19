@@ -945,6 +945,20 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement.integrated_center_of_mass().compute()
 
 
+@pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
+def test_integrate_gradient_offset_is_per_member(chunks):
+    rng = np.random.default_rng(0)
+    gradient = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    gradient *= np.array([1.0, 5.0, 0.3])[:, None, None]
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))])
+
+    eager = Images(gradient, **kwargs).integrate_gradient()
+    lazy = Images(da.from_array(gradient, chunks=chunks), **kwargs).integrate_gradient()
+
+    np.testing.assert_allclose(eager.array.min(axis=(-2, -1)), 0.0, atol=1e-12)
+    np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -1530,6 +1544,46 @@ def test_block_direct_of_radius_zero_blocks_the_zero_angle_pixel_on_every_grid(e
             missed.append(gpts)
 
     assert missed == []
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("fftshift", [False, True])
+def test_block_direct_without_a_cutoff_blocks_only_the_zero_angle_pixel(fftshift, lazy):
+    array = np.ones((15, 20), dtype=np.float32)
+    if lazy:
+        array = da.from_array(array)
+    patterns = DiffractionPatterns(
+        array, sampling=(0.05, 0.04), fftshift=fftshift, metadata={"energy": 100e3}
+    )
+    assert "semiangle_cutoff" not in patterns.metadata
+
+    blocked = patterns.block_direct().compute()
+
+    zeroed = np.argwhere(blocked.array == 0)
+    zero_angle = (7, 10) if fftshift else (0, 0)
+    assert [tuple(index) for index in zeroed] == [zero_angle]
+
+
+def test_block_direct_without_a_cutoff_keeps_the_first_order_reflections():
+    from ase.spacegroup import crystal
+
+    atoms = crystal(
+        ["Sr", "Ti", "O"],
+        basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221,
+        cellpar=[3.905] * 3 + [90] * 3,
+    )
+    potential = abtem.Potential(atoms, sampling=0.1)
+    waves = abtem.PlaneWave(energy=100e3).multislice(potential)
+    patterns = waves.diffraction_patterns(max_angle=None, fftshift=True).compute()
+
+    blocked = patterns.block_direct()
+
+    center = tuple(n // 2 for n in patterns.shape[-2:])
+    first_order = (center[0] + 1, center[1])
+    assert patterns.array[first_order] > 0
+    assert blocked.array[first_order] == patterns.array[first_order]
+    assert blocked.array[center] == 0
 
 
 @pytest.mark.parametrize("fftshift", [True, False])
