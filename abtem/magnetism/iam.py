@@ -265,8 +265,11 @@ def interpolate_quasi_dipole_field_projections(
     integral_limits,
     integral_sampling,
     tables,
+    B,
 ):
-    B = np.zeros((3, tables.shape[2], tables.shape[3]))
+    # B is a caller-allocated (3, tables.shape[2], tables.shape[3]) scratch
+    # buffer, fully overwritten every iteration below: np.zeros inside @jit
+    # fails to type on some numba/numpy pairings.
     for position, magnetic_moment in zip(positions, magnetic_moments):
         shifted_limits = slice_limits - position[2]
         i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
@@ -314,8 +317,11 @@ def interpolate_quasi_dipole_vector_field_projections(
     integral_limits,
     integral_sampling,
     tables,
+    A,
 ):
-    A = np.zeros((3, tables.shape[2], tables.shape[3]))
+    # A is a caller-allocated (3, tables.shape[2], tables.shape[3]) scratch
+    # buffer, fully overwritten every iteration below: np.zeros inside @jit
+    # fails to type on some numba/numpy pairings.
     for position, magnetic_moment in zip(positions, magnetic_moments):
         shifted_limits = slice_limits - position[2]
         i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
@@ -432,6 +438,7 @@ class QuasiDipoleProjections:
 
             integral_limits = self._slice_limits(symbol)
             tables = self.get_integral_table(symbol)
+            scratch = np.zeros((3, tables.shape[2], tables.shape[3]))
 
             self._interpolation_func(
                 array,
@@ -442,6 +449,7 @@ class QuasiDipoleProjections:
                 integral_limits,
                 integral_sampling,
                 tables,
+                scratch,
             )
 
         return array
