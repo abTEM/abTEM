@@ -1177,6 +1177,11 @@ class WavesDetector(BaseDetector):
         self._gpts = gpts
         super().__init__(to_cpu=to_cpu, url=url)
 
+    @property
+    def gpts(self) -> Optional[tuple[int, int]]:
+        """Number of grid points of the detected wave functions."""
+        return self._gpts
+
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves
 

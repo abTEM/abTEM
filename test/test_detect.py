@@ -301,3 +301,32 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
         return image
 
     np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=30, outer=100, offset=(5.0, -3.0)),
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        abtem.PixelatedDetector(max_angle=60, resample="uniform"),
+        abtem.WavesDetector(),
+        abtem.WavesDetector(gpts=(16, 16)),
+    ],
+    ids=lambda detector: type(detector).__name__,
+)
+def test_lazy_detect_matches_eager_detect(detector):
+    """A lazy block rebuilds the detector from its constructor arguments, which
+    must give back the detector itself."""
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    waves = abtem.Waves(
+        array.astype(np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[abtem.core.axes.UnknownAxis()],
+    )
+
+    eager = detector.detect(waves)
+    lazy = detector.detect(waves.ensure_lazy()).compute(progress_bar=False)
+
+    np.testing.assert_array_equal(lazy.array, eager.array)
