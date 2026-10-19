@@ -115,3 +115,70 @@ def test_float64_precision_keeps_charge_density(carbon_atoms):
         pot = ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
         np.testing.assert_array_equal(pot._charge_density, charge_density)
         assert pot.build(lazy=False).array.dtype == np.float64
+
+
+_CD_CELL = 8.0
+_CD_GRID = 64  # charge-density grid points per axis (0.125 A)
+
+
+def _gaussian_electrons(Z, z0, sigma):
+    """-Z electrons in a normalised 3D Gaussian of std `sigma` on the atom
+    (minimum-image in all directions, so the density is periodic)."""
+    x = np.arange(_CD_GRID) * _CD_CELL / _CD_GRID
+    d = [
+        (x - c + _CD_CELL / 2) % _CD_CELL - _CD_CELL / 2
+        for c in (_CD_CELL / 2,) * 2 + (z0,)
+    ]
+    r2 = d[0][:, None, None] ** 2 + d[1][None, :, None] ** 2 + d[2][None, None, :] ** 2
+    return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
+
+
+@pytest.mark.parametrize("z0", (3.3, 4.0))
+def test_neutral_atom_matches_screened_coulomb_per_slice(z0):
+    """Nucleus Z plus -Z electrons in a Gaussian of std 0.7 A on it: a neutral
+    atom, whose potential is V(r) = Z/(4 pi eps0) erfc(r / (sqrt(2) s)) / r.
+
+    Oracle: that V integrated over each slice along z with scipy.integrate.quad
+    (plus the +-Lz images). The long-range part of every slice used to be
+    sampled from the slice's left edge instead of at midpoints, which shifted it
+    by dz/2 against the short-range part: the slices above and below an atom on
+    a slice boundary differed and the potential 3 A from the atom was not ~0.
+    Summed over a full period the error cancels, so only per-slice values see it.
+    """
+    from scipy import integrate
+    from scipy.special import erfc
+
+    from abtem.core.constants import eps0
+
+    Z, sigma, dz = 6, 0.7, 0.5
+    atoms = Atoms(
+        [Z], positions=[(_CD_CELL / 2, _CD_CELL / 2, z0)], cell=[_CD_CELL] * 3, pbc=True
+    )
+    with abtem.config.set({"precision": "float64"}):
+        potential = ChargeDensityPotential(
+            atoms, _gaussian_electrons(Z, z0, sigma), sampling=0.05, slice_thickness=dz
+        )
+        array = potential.build(lazy=False).array
+
+    C = Z / (4 * np.pi * eps0)
+
+    def V(r):
+        return C * erfc(r / (np.sqrt(2) * sigma)) / r
+
+    s = potential.sampling
+    i0 = int(round(_CD_CELL / 2 / s[0]))
+    offsets = np.array([4, 10, 20, 40, 60])  # 0.2, 0.5, 1, 2, 3 A
+    numeric = array[:, i0 + offsets, i0]
+    oracle = np.zeros_like(numeric)
+    for j, (a, b) in enumerate(potential.slice_limits):
+        for k, offset in enumerate(offsets):
+            rho = offset * s[0]
+            for image in (-1, 0, 1):
+                lo, hi = a - z0 - image * _CD_CELL, b - z0 - image * _CD_CELL
+                oracle[j, k] += integrate.quad(
+                    lambda z: V(np.hypot(rho, z)), lo, hi, limit=200
+                )[0]
+    tolerance = 2e-3 * oracle.max()
+    assert np.abs(numeric - oracle).max() < tolerance
+    # Far from the atom a neutral atom's potential is ~0 in every slice.
+    assert np.abs(numeric[:, -1]).max() < tolerance
