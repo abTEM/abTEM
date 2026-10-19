@@ -876,3 +876,23 @@ def test_potential_array_slicing_maps_exit_planes():
     split = waves.multislice(potential[:9]).multislice(potential[9:])
 
     assert np.allclose(whole.array, split.array)
+
+
+@pytest.mark.parametrize("noise", [1e-11, 1e-9])
+def test_potential_with_off_diagonal_cell_noise(noise):
+    # A cell whose off-diagonal entries are numerical noise (e.g. from a relaxed
+    # structure) has the same diagonal as the ideal cell, but is not exactly
+    # orthogonal. It used to be passed on unchanged and the build then failed
+    # with "atoms must have an orthogonal cell".
+    positions = [(1.0, 1.0, 1.0), (3.0, 2.0, 2.5)]
+    ideal = Atoms("C2", positions=positions, cell=(4.0, 4.0, 4.0), pbc=True)
+
+    cell = np.diag((4.0, 4.0, 4.0))
+    cell[0, 1] = noise
+    cell[2, 0] = noise
+    noisy = Atoms("C2", positions=positions, cell=cell, pbc=True)
+
+    reference = Potential(ideal, gpts=32, slice_thickness=2.0).build().compute()
+    potential = Potential(noisy, gpts=32, slice_thickness=2.0).build().compute()
+
+    assert np.allclose(potential.array, reference.array)
