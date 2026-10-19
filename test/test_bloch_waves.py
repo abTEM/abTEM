@@ -5,6 +5,7 @@ from ase import Atoms
 from ase.build import bulk
 from hypothesis import assume, given
 from hypothesis import strategies as st
+from utils import gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
@@ -380,6 +381,108 @@ def test_rotation_ensemble_with_multi_axis_sequence(silicon_bloch_waves):
         single = silicon_bloch_waves.rotate("xy", np.array([x, y]))
         _assert_matches_single_orientation(
             patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
+
+
+def _si_structure_factor():
+    return StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+
+
+@pytest.mark.parametrize("criterion", ["intensity", "distance"])
+def test_sort_indexed_diffraction_patterns(criterion):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns([10.0, 20.0], lazy=False)
+
+    sorted_spots = spots.sort(criterion)
+
+    if criterion == "intensity":
+        key = np.asarray(sorted_spots.array).max(axis=0)
+    else:
+        key = np.linalg.norm(sorted_spots.positions, axis=-1).max(axis=0)
+    assert np.all(np.diff(key) <= 1e-12)  # descending
+    np.testing.assert_array_equal(
+        sorted_spots.reciprocal_lattice_vectors, spots.reciprocal_lattice_vectors
+    )
+    # the same spots, reordered
+    before = dict(zip(map(tuple, spots.miller_indices), np.asarray(spots.array).T))
+    for hkl, values in zip(
+        map(tuple, sorted_spots.miller_indices), np.asarray(sorted_spots.array).T
+    ):
+        np.testing.assert_array_equal(values, before[hkl])
+
+    with pytest.raises(RuntimeError, match="lazy"):
+        bloch_waves.calculate_diffraction_patterns(10.0, lazy=True).sort(criterion)
+
+
+@pytest.mark.parametrize("thicknesses", [10.0, [10.0, 20.0]])
+def test_positions_dict_maps_every_spot_to_its_position(thicknesses):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
+    positions = spots.positions_dict
+    assert len(positions) == len(spots.miller_indices)
+    for hkl, position in zip(
+        map(tuple, spots.miller_indices), np.moveaxis(spots.positions, -2, 0)
+    ):
+        np.testing.assert_array_equal(positions[hkl], position)
+    np.testing.assert_array_equal(positions[(0, 0, 0)], 0.0)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sequence_slice_thickness(lazy):
+    sf = _si_structure_factor()
+    depth = sf.cell[2, 2]
+    potential = sf.get_projected_potential(
+        slice_thickness=[2.0, 2.0, depth - 4.0], lazy=lazy
+    )
+    assert len(potential.slice_thickness) == 3
+    assert np.isclose(sum(potential.slice_thickness), depth)
+    # slicing only redistributes the potential along z
+    reference = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    np.testing.assert_allclose(
+        np.asarray(potential.compute().array).sum(0),
+        np.asarray(reference.compute().array).sum(0),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    with pytest.raises(ValueError, match="add up"):
+        sf.get_projected_potential(slice_thickness=[2.0, 2.0], lazy=lazy)
+    with pytest.raises(ValueError, match="at least one z grid point"):
+        sf.get_projected_potential(slice_thickness=[depth - 1e-3, 1e-3], lazy=lazy)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sampling_and_integer_gpts(lazy):
+    sf = _si_structure_factor()
+    default = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    sampled = sf.get_projected_potential(slice_thickness=2.0, sampling=0.05, lazy=lazy)
+    assert sampled.gpts != default.gpts
+    np.testing.assert_allclose(sampled.sampling, 0.05, rtol=0.01)
+    assert sf.get_projected_potential(slice_thickness=2.0, gpts=64, lazy=lazy).gpts == (
+        64,
+        64,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
+    # NumPy excitation errors / reciprocal vectors used to meet CuPy data
+    from abtem.core.backend import asnumpy
+
+    sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
+    reference_sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device="cpu")
+    for method, kwargs in (
+        ("get_kinematical_diffraction_pattern", {}),
+        ("calculate_exit_waves", dict(thicknesses=[10.0], gpts=(16, 16), lazy=False)),
+    ):
+        result = getattr(
+            BlochWaves(sf, energy=100e3, sg_max=0.1, device=device), method
+        )(**kwargs)
+        expected = getattr(BlochWaves(reference_sf, energy=100e3, sg_max=0.1), method)(
+            **kwargs
+        )
+        np.testing.assert_allclose(
+            asnumpy(result.array), asnumpy(expected.array), rtol=1e-5, atol=1e-7
         )
 
 
