@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 
@@ -17,6 +18,51 @@ try:
     from abtem.potentials.gpaw import GPAWPotential
 except ImportError:
     pass
+
+try:
+    from gpaw.new.backwards_compatibility import FakeDensity
+except ImportError:
+    FakeDensity = None
+
+
+# GPAW's own gpaw/utilities/ps2ae.py is written against the old-style Density
+# API and does dens.Q_aL.redistribute(...). For the new PW backend, calc.density
+# builds a FakeDensity compatibility object that only has the renamed ccc_aL.
+# That gap is in GPAW's compatibility layer, not in abTEM. The shim below is
+# installed only around the PS2AE calls (not for GPAWPotential itself) and is
+# valid for serial calculations only, where redistributing is a no-op.
+
+
+class _SerialCompensationChargeCoefficientsAsQaL:
+    def __init__(self, ccc_aL):
+        self._ccc_aL = ccc_aL
+
+    def __getitem__(self, a):
+        return self._ccc_aL[a]
+
+    def __getattr__(self, name):
+        return getattr(self._ccc_aL, name)
+
+    def redistribute(self, partition):
+        if partition.comm.size != 1:
+            raise NotImplementedError(
+                "the Q_aL compatibility shim only supports serial GPAW calculations"
+            )
+        return self
+
+
+@contextlib.contextmanager
+def _ps2ae_compatible_density():
+    if FakeDensity is None or hasattr(FakeDensity, "Q_aL"):
+        yield
+        return
+    FakeDensity.Q_aL = property(
+        lambda self: _SerialCompensationChargeCoefficientsAsQaL(self.ccc_aL)
+    )
+    try:
+        yield
+    finally:
+        del FakeDensity.Q_aL
 
 
 @pytest.fixture
@@ -45,10 +91,11 @@ def gpaw_calculator_bonding():
 
 
 def assert_psae_matches_abtem(calc):
-    ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
-    ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
-        rcgauss=0.01 * units.Bohr, ae=True
-    )
+    with _ps2ae_compatible_density():
+        ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
+        ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
+            rcgauss=0.01 * units.Bohr, ae=True
+        )
     ps2ae_potential = (
         -ps2ae_potential.sum(-1) * calc.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
     )
