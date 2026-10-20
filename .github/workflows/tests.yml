@@ -50,4 +50,15 @@ jobs:
         run: uv sync --group test
 
       - name: Run tests
+        if: runner.os != 'Windows'
+        run: uv run pytest test
+
+      # OpenBLAS in NumPy's Windows wheels crashes (access violation in eigh) or
+      # deadlocks when dask threads call its threaded LAPACK at the same time, as
+      # the lazy Bloch-wave ensemble tests do. One BLAS thread avoids it; dev's
+      # tests get one BLAS thread per xdist worker for the same reason.
+      - name: Run tests (Windows, one BLAS thread)
+        if: runner.os == 'Windows'
+        env:
+          OPENBLAS_NUM_THREADS: "1"
         run: uv run pytest test
