@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, SupportsFloat
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, ParameterAxis
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
     Accelerator,
@@ -373,12 +373,11 @@ class Aperture(BaseAperture):
         ensemble_axes_metadata: list[AxisMetadata] = []
         if isinstance(self.semiangle_cutoff, BaseDistribution):
             ensemble_axes_metadata = [
-                ParameterAxis(
+                ParameterAxis.from_distribution(
+                    self.semiangle_cutoff,
                     label="semiangle_cutoff",
-                    values=tuple(self.semiangle_cutoff),
                     units="mrad",
                     tex_label="$\\alpha_{cut}$",
-                    _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
         return ensemble_axes_metadata
@@ -1011,8 +1010,9 @@ class TemporalEnvelope(BaseTransferFunction):
     ) -> np.ndarray:
         xp = get_array_module(alpha)
 
-        unpacked, _ = _unpack_distributions(self.focal_spread, shape=alpha.shape, xp=xp)
-        (focal_spread,) = unpacked
+        (focal_spread,) = _unpack_distributions(
+            self.focal_spread, shape=alpha.shape, xp=xp
+        )
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
@@ -1162,11 +1162,10 @@ class _HasAberrations(HasAcceleratorMixin):
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
                 axes_metadata += [
-                    ParameterAxis(
+                    ParameterAxis.from_distribution(
+                        value,
                         label=parameter_name,
-                        values=tuple(value.values),
                         units="Å",
-                        _ensemble_mean=value.ensemble_mean,
                         tex_label=symbol_to_tex_symbol(parameter_name),
                     )
                 ]
@@ -1350,7 +1349,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
 
-        unpacked, _ = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
+        unpacked = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
         # An array, so that its sign (a float64 NumPy scalar for a plain float)
         # does not widen the single-precision envelope.
         angular_spread = xp.asarray(unpacked[-1] / 1e3, dtype=get_dtype(complex=False))
@@ -1532,7 +1531,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
             )
 
-        parameter_values, weights = _unpack_distributions(
+        parameter_values = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
 
@@ -1610,12 +1609,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         array *= xp.array(2 * xp.pi / self.wavelength, dtype=dtype)
         array = complex_exponential(-array)
 
-        if cp is not None:
-            weights = cp.asnumpy(weights)
-
-        if weights is not None:
-            array = xp.asarray(weights, dtype=dtype) * array
-
+        # The distribution weights are NOT applied here: each ensemble member is
+        # the unweighted transfer function for its parameter values, and the
+        # weights (carried by the ensemble axis metadata) are applied as
+        # probabilities when the ensemble of measurements is reduced.
         return array
 
 
