@@ -3440,8 +3440,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com_x = (array * x[:, None]).sum(axis=(-2, -1)) / total_intensity
         com_y = (array * y[None]).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
-        # Integer counts are summed in float64 (exact for realistic counts);
-        # the centers are returned in the precision of the coordinates.
+        # Integer counts are promoted with the coordinates by NumPy's rules; the
+        # centers are returned in the precision of the coordinates.
         return com.astype(np.result_type(x.dtype, y.dtype, np.complex64), copy=False)
 
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
