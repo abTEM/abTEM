@@ -270,6 +270,27 @@ class TestContinuumNormalisation:
         assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
 
 
+@requires_gpaw
+class TestContinuumPotentialVacuumTail:
+    """The atomic potential the continuum states are solved in must vanish in vacuum.
+
+    GPAW's xc kernels clamp the density from below, which leaves vxc at a
+    constant -8.5e-4 Hartree in the vacuum tail. r*V then grew linearly to the
+    edge of the radial grid, which shifted the asymptotic wavenumber of the
+    continuum and with it the energy normalisation below about 10 eV.
+    """
+
+    @pytest.mark.parametrize("Z", [6, 14])
+    def test_neutral_atom_potential_vanishes_in_vacuum(self, Z):
+        from abtem.inelastic.core_loss import _atomic_rv
+
+        rv = _atomic_rv(Z)
+        # r * V [Rydberg * Bohr] of a neutral atom goes to zero far from the
+        # nucleus; with the uncorrected vxc it was 0.25 at 150 Bohr.
+        assert abs(float(rv(150.0))) < 1e-3
+        assert abs(float(rv(60.0))) < 1e-3
+
+
 class TestPrecisionConfig:
     """The transition potential ignored ``config['precision']`` twice over.
 

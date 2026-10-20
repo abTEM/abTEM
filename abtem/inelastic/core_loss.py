@@ -401,15 +401,29 @@ def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
     return float(np.median(envelope))
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+# GPAW's xc kernels clamp the density from below at this value (measured: an
+# LDA/PBE atom's vxc is exactly constant wherever n < 1e-10).
+_GPAW_XC_DENSITY_FLOOR = 1e-10
+
+
+def _atomic_rv(Z, xc="PBE"):
+    """r*V(r) of the neutral ground-state atom [Rydberg * Bohr], from a scalar-
+    relativistic GPAW all-electron calculation. The potential the continuum
+    states are solved in.
+
+    GPAW evaluates the xc potential at a floored density, so in the vacuum
+    beyond ~17 Bohr (LDA) / ~27 Bohr (PBE) its vxc sits at a constant
+    -8.5e-4 Hartree instead of vanishing -- the same for every element, and
+    however far the radial grid extends. That constant made r*V grow
+    linearly to the edge of the grid and, extrapolated beyond it, shifted
+    the continuum's asymptotic wavenumber (q/k = 1.012 at 1 eV). Below the
+    floor vxc is scaled as n^(1/3), the low-density limit of LDA exchange and
+    correlation, which is continuous at the floor and vanishes in vacuum; r*V
+    of the neutral atom then goes to ~0 by the edge of the grid and is held
+    constant beyond it.
+    """
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
-
-    check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc, log=io.StringIO())
     # ae.f_j[subshell_index] -= 0.0
@@ -417,9 +431,29 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     ae.scalar_relativistic = True
     ae.refine()
 
-    vr = interp1d(
-        ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
+    r = ae.rgd.r_g
+    n = ae.n_sg.sum(0)
+    vr = ae.vr_sg[0].copy()  # r * (vxc + vH) - Z [Hartree * Bohr]
+    below_floor = n < _GPAW_XC_DENSITY_FLOOR
+    vxc = ae.vxc_sg[0][below_floor]
+    vr[below_floor] -= r[below_floor] * vxc * (
+        1 - np.cbrt(n[below_floor] / _GPAW_XC_DENSITY_FLOOR)
     )
+
+    # -2: to the sign and Rydberg units of radial_schroedinger_equation.
+    rv = -2 * vr
+
+    return interp1d(r, rv, fill_value=(rv[0], rv[-1]), bounds_error=False)
+
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+    check_valid_quantum_number(Z, n, l)
+    # config_tuples = config_str_to_config_tuples(
+    #     electron_configurations[chemical_symbols[Z]]
+    # )
+    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
+
+    vr = _atomic_rv(Z, xc=xc)
 
     ef = epsilon / units.Rydberg
 
