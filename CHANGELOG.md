@@ -42,6 +42,7 @@ from small test systems and vary with the data.
 
 **Bloch waves**
 - Non-centrosymmetric structures were computed for the position-negated structure (#379): exit waves change (wurtzite by up to 1.27), zone-axis patterns only at rounding; centrosymmetric results are unchanged.
+- The symmetrising metric of the eigenproblem is applied consistently (#448). The eigendecomposition path (diffraction patterns, exit waves) and the matrix-exponential path (`calculate_scattering_matrix`) disagreed off the zone axis and now agree to rounding. The standard form (`use_wave_eq=False`, still the default) now solves the textbook generalised eigenproblem exactly, and `use_wave_eq=True` no longer carries the standard form's metric. For Si at 100 keV the intensities change by R = 1.7e-3 on the zone axis and 5e-4 for a 7° tilt (R = Σ|ΔI| / ΣI over the beams), for both forms.
 - Eager rotation ensembles return each orientation's own pattern (#450); A/B/C centred cells keep the correct reflections (#487). Scattering matrices on CuPy are accurate (#449).
 
 **HRTEM and CTF**
@@ -85,7 +86,7 @@ from small test systems and vary with the data.
 
 ### Not in this release
 
-These are on `dev` and are not part of a bugfix release because they change default results or add features: the exact propagator as the default (#298), the Bloch-wave `use_wave_eq='exact'` default and Bloch waves honouring `precision` (#447, #448, #449), the GPAW defaults (`rotate_field`, `integration_step`), the `exit_planes` output shape (#516), and all new features.
+These are on `dev` and are not part of a bugfix release because they change default results or add features: the exact propagator as the default (#298), the Bloch-wave `use_wave_eq='exact'` form and default (#447, #448) and Bloch waves honouring `precision` (#449), the GPAW defaults (`rotate_field`, `integration_step`), the `exit_planes` output shape (#516), and all new features.
 
 `SMatrix.scan` with a potential that has `exit_planes` still raises an error, as in 1.0.10 (fixed on `dev` in #398).
 
