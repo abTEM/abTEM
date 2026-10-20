@@ -160,6 +160,7 @@ from small test systems and vary with the data.
 - Default patterns from `Waves.diffraction_patterns` and `PixelatedDetector` are unshifted. Their coordinates, `azimuthal_average`, `bandlimit` and centre of mass applied centred coordinates to unshifted data and are now right (#463): azimuthal averages differ by up to 80 %.
 - Radial binning and the default `FlexibleAnnularDetector` bins are exactly `step_size` wide (#469): default ADF/HAADF values move by 0.2 to 0.8 %, `radial_binning` by 13 to 33 %, more on very coarse k grids.
 - `PolarMeasurements.integrate` azimuthal limits and bin selection (#459); radian/degree conversions (#458, were off by 1e6); `depth_profile` z sampling and `Images.coordinates` spacing (#461); `interpolate_line` near edges and on anisotropic grids (#470); `Images` reflected division `2 / images` (#470); periodic spline interpolation (#506, ~1e-4).
+- A `FlexibleAnnularDetector` without an explicit `outer` takes the cutoff angle of the waves of each call; it used to keep the angle of the first waves it saw, so reusing it for another energy or grid binned the new waves wrongly (#434).
 - `AnnularDetector(offset=...)` is applied (#324); `get_detector_region` returns percent as a float, as its label says (#283).
 - `block_direct=True` blocks the whole bright-field disk instead of 1 mrad (#484); `block_direct()` without a cutoff blocks only the zero-angle pixel (#556).
 - Reciprocal-space waves measure like the same waves in real space (#565, #566).
