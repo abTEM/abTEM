@@ -511,3 +511,39 @@ def test_reduce_of_a_built_s_matrix_follows_the_ensemble_mean_of_the_frozen_phon
     scale = np.abs(scanned.array).max()
     np.testing.assert_allclose(eager.array, scanned.array, rtol=0, atol=1e-5 * scale)
     np.testing.assert_allclose(lazy.array, scanned.array, rtol=0, atol=1e-5 * scale)
+
+
+def test_prism_reduce_averages_a_ctf_ensemble_eagerly_as_lazily():
+    # With a frozen-phonon ensemble in the potential, a CTF ensemble flagged
+    # ensemble_mean is averaged by the lazy branch of SMatrix.reduce, but the
+    # eager branch returned its axis unreduced, so a 4-member defocus
+    # distribution gave a (4, 3, 3) result instead of (3, 3).
+    import ase
+
+    import abtem
+    from abtem import distributions
+    from abtem.transfer import CTF
+
+    atoms = ase.Atoms(
+        "CO", positions=[(2.0, 2.0, 1.0), (5.5, 4.0, 2.5)], cell=(8.0, 8.0, 4.0)
+    )
+    frozen_phonons = abtem.FrozenPhonons(
+        atoms, num_configs=3, sigmas=0.05, seed=1, ensemble_mean=True
+    )
+    potential = abtem.Potential(
+        frozen_phonons, gpts=48, slice_thickness=2.0, projection="finite"
+    )
+    s_matrix = abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
+    scan = abtem.GridScan((0, 0), (4, 4), gpts=(3, 3))
+    detector = abtem.AnnularDetector(10, 60)
+    defocus = distributions.from_values(
+        np.array([-40.0, 0.0, 25.0, 60.0]), ensemble_mean=True
+    )
+    ctf = CTF(semiangle_cutoff=20, defocus=defocus)
+
+    eager = s_matrix.reduce(scan, detectors=detector, ctf=ctf, lazy=False)
+    lazy = s_matrix.reduce(scan, detectors=detector, ctf=ctf, lazy=True).compute()
+
+    assert eager.shape == lazy.shape == (3, 3)
+    scale = np.abs(lazy.array).max()
+    np.testing.assert_allclose(eager.array, lazy.array, rtol=0, atol=1e-5 * scale)
