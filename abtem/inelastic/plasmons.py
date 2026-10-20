@@ -1,4 +1,5 @@
 import itertools
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -127,7 +128,7 @@ def draw_azimuthal_angle(num_samples, num_depths, rng=None) -> Tuple[float]:
 def excitations_weights(n: int, thickness: float, mean_free_path: float) -> float:
     return (
         1
-        / np.math.factorial(n)
+        / math.factorial(n)
         * (thickness / mean_free_path) ** n
         * np.exp(-thickness / mean_free_path)
     )
