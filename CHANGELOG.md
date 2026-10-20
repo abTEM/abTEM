@@ -7,9 +7,9 @@ heading `## Upcoming: <version>`, which is renamed to the version when it is rel
 
 A bugfix release on top of 1.0.10. Every fix was ported from `dev`. There are no
 new features, no new defaults, and none of the post-release algorithm changes.
-Plain potentials, plane-wave and probe multislice with default settings, probe
-ensembles, zarr round trips and the configuration defaults give bit-identical
-results to 1.0.10 (checked on 66 scenarios).
+Plain potentials, plane-wave and probe multislice with default settings,
+ensembles of unweighted parameters, zarr round trips and the configuration
+defaults give bit-identical results to 1.0.10 (checked on 66 scenarios).
 
 ### Fixed: results that change
 
@@ -54,6 +54,13 @@ from small test systems and vary with the data.
 **Backscattering**
 - Back-propagation of backscattered waves is corrected (#562, relative L2 0.4 at the entrance plane) and ensembles work (#499).
 
+**Weighted distributions (focal spread, tilt and other parameters)**
+- Distribution weights are probabilities applied when the ensemble is reduced (#466). In 1.0.10 they multiplied the wave amplitude of each member: a STEM `Probe(defocus=gaussian(σ))` was normalised member by member, which erased the weights, so the focal spread was effectively a top-hat; an HRTEM Gaussian spread had an effective standard deviation of σ/√2 instead of σ; and the weights of tilt and aperture or envelope distributions were ignored. For a 200 kV, 25 mrad probe with `defocus=gaussian(σ, num_samples=11)`, the peak of the reduced intensity is 1.76 times the 1.0.10 value at σ = 25 Å and 2.21 times at σ = 50 Å (measurement from the PR). Frozen-phonon results are unchanged to the bit.
+- `.weights` of `gaussian` distributions now sum to one (they had a unit sum of squares). `normalize='intensity'` and `'amplitude'` are deprecated, emit a `FutureWarning` and behave as the new default `'probability'`; this never changes a reduced result.
+- `.sum()` and `.mean()` over an axis with distribution weights ignore the weights and now warn: use `reduce_ensemble()` for the weighted mean, or `reduce_ensemble(axis=...)` for an axis that was kept with `ensemble_mean=False`.
+- Eager `SMatrix.scan` and `SMatrix.reduce` reduce the `ensemble_mean` axes of a `CTF`, like the lazy path (they returned an extra axis).
+- Passing negative weights, or weights of the wrong length, to a distribution now raises `ValueError`.
+
 **Distributed computations**
 - The client's configuration reaches the workers of a `distributed` client (#346). *ab*TEM resolves configuration inside each task, and worker processes started fresh and saw only the YAML defaults, so any distributed computation with a non-default configuration silently used the defaults: most importantly, `precision='float64'` runs were computed in `float32`. This applies to any distributed client, CPU clusters included, and now also to `to_tiff` and `to_zarr(compute=False)`. Distributed results obtained with a non-default configuration are worth repeating.
 
@@ -74,11 +81,11 @@ from small test systems and vary with the data.
 
 ### Added: public names that the fixes needed
 
-`LinearAxis.__getitem__` (#344), `SliceIndexedAtoms(wrap=)` (#390), `WavesDetector.gpts` (#482), `offset` on `FlexibleAnnularDetector`/`SegmentedDetector` (#469), `ArrayObject.__radd__`/`__rsub__`/`__rpow__` and `__array_priority__` (#507), `abtem.core.backend.push_config_to_workers` (#346). `StructureFactorArray.get_projected_potential(lazy=None)` (#487) and the abstract `FieldIntegrator.integrate_on_grid(atoms=...)` signature (#428) changed.
+`OrdinalAxis.weights` and `OrdinalAxis.from_distribution`, and `reduce_ensemble(axis=)` (#466), `LinearAxis.__getitem__` (#344), `SliceIndexedAtoms(wrap=)` (#390), `WavesDetector.gpts` (#482), `offset` on `FlexibleAnnularDetector`/`SegmentedDetector` (#469), `ArrayObject.__radd__`/`__rsub__`/`__rpow__` and `__array_priority__` (#507), `abtem.core.backend.push_config_to_workers` (#346). `StructureFactorArray.get_projected_potential(lazy=None)` (#487) and the abstract `FieldIntegrator.integrate_on_grid(atoms=...)` signature (#428) changed.
 
 ### Not in this release
 
-These are on `dev` and are not part of a bugfix release because they change default results or add features: the exact propagator as the default (#298), the Bloch-wave `use_wave_eq='exact'` default and Bloch waves honouring `precision` (#447, #448, #449), distribution weights applied as probabilities (#466), the GPAW defaults (`rotate_field`, `integration_step`), the `exit_planes` output shape (#516), and all new features.
+These are on `dev` and are not part of a bugfix release because they change default results or add features: the exact propagator as the default (#298), the Bloch-wave `use_wave_eq='exact'` default and Bloch waves honouring `precision` (#447, #448, #449), the GPAW defaults (`rotate_field`, `integration_step`), the `exit_planes` output shape (#516), and all new features.
 
 `SMatrix.scan` with a potential that has `exit_planes` still raises an error, as in 1.0.10 (fixed on `dev` in #398).
 
