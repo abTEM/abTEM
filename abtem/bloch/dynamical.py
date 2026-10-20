@@ -899,6 +899,29 @@ def calculate_M_matrix(
     return Mii
 
 
+def _metric(
+    hkl: np.ndarray,
+    cell: np.ndarray | Cell,
+    energy: float,
+    use_wave_eq: bool,
+) -> np.ndarray:
+    """Diagonal of M, the symmetrizing metric of the Bloch-wave eigenproblem.
+
+    The standard Bloch-wave equation (use_wave_eq=False; the Helmholtz equation with
+    only gamma**2 dropped) is the generalized eigenproblem
+
+        A C = 2 K gamma B C,   B = diag(1 + g_z / K),
+
+    solved as the Hermitian problem (M A M) C' = 2 K gamma C' with
+    M = B**(-1/2) (calculate_M_matrix) and C = M C'. The wave-equation form
+    (use_wave_eq=True), the equation multislice solves, has gamma with the
+    constant coefficient 2 K instead: an ordinary Hermitian eigenproblem, M = 1.
+    """
+    if use_wave_eq:
+        return np.ones(len(hkl))
+    return calculate_M_matrix(hkl, cell, energy)
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
@@ -938,7 +961,7 @@ def calculate_structure_matrix(
     xp = get_array_module(structure_factor)
 
     g = xp.asarray(calculate_g_vec(hkl_selected, cell))
-    Mii = calculate_M_matrix(hkl_selected, cell, energy)
+    Mii = _metric(hkl_selected, cell, energy, use_wave_eq)
 
     hkl_selected = np.asarray(hkl_selected)
 
@@ -961,8 +984,10 @@ def calculate_structure_matrix(
     A = A * (prefactor * Mii[None] * Mii[:, None])
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+    # M (2 K diag(s_g) + U) M: the diagonal carries M**2, like the off-diagonal
+    # M_i M_j
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
+    diag *= Mii**2
 
     xp.fill_diagonal(A, diag)
     return A
@@ -980,6 +1005,7 @@ def calculate_dynamical_scattering(
     cell: np.ndarray | Cell,
     energy: float,
     thicknesses: float | Iterable[float],
+    use_wave_eq: bool = False,
 ) -> np.ndarray:
     """Calculate the dynamical scattering given a structure matrix.
 
@@ -995,6 +1021,10 @@ def calculate_dynamical_scattering(
         The energy of the electrons [eV].
     thicknesses : sequence of floats
         The thicknesses of the sample [Å].
+    use_wave_eq : bool, optional
+        The form of the Bloch-wave equation the structure matrix was built for (see
+        :func:`calculate_structure_matrix`); decides the metric used to map its
+        eigenvectors back to beam amplitudes.
 
     Returns
     -------
@@ -1007,20 +1037,20 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(_metric(hkl, cell, energy, use_wave_eq))
 
+    # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
     v, C = xp.linalg.eigh(structure_matrix)
-    # v, C = scipy.linalg.eigh(structure_matrix)
 
     gamma = v * energy2wavelength(energy) / 2.0
 
-    np.fill_diagonal(C, np.diag(C) / Mii)
-
-    C_inv = xp.conjugate(C.T)
-
+    # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the physical
+    # Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as M_00 = 1 (g_z = 0
+    # for the direct beam).
     initial = plane_wave_coefficients(hkl, xp)
+    alpha = xp.conjugate(C.T) @ initial
 
-    alpha = C_inv @ initial
+    C = Mii[:, None] * C
     if not thicknesses.shape:
         array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
     else:
@@ -1061,6 +1091,7 @@ def calculate_scattering_matrix(
     z: float,
     energy: float,
     method: str = "expm",
+    use_wave_eq: bool = False,
 ) -> np.ndarray:
     """Calculate the scattering matrix for a given set of reciprocal space vectors.
 
@@ -1082,6 +1113,10 @@ def calculate_scattering_matrix(
                 Use a matrix exponential.
             ``decomposition`` :
                 Use a Hermitian matrix eigendecomposition.
+    use_wave_eq : bool, optional
+        The form of the Bloch-wave equation the structure matrix was built for (see
+        :func:`calculate_structure_matrix`); decides the metric used to map the
+        result back to beam amplitudes.
 
     Returns
     -------
@@ -1095,7 +1130,8 @@ def calculate_scattering_matrix(
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
+    # S = C exp(2 pi i gamma z) C^-1 with C = M C': M expm(...) M^-1
+    Mii = _metric(hkl, cell, energy, use_wave_eq)
     M = xp.asarray(np.diag(Mii))
     M_inv = xp.asarray(np.diag(1 / Mii))
 
@@ -1525,7 +1561,12 @@ class BlochWaves:
         A = xp.asarray(A)
 
         S = calculate_scattering_matrix(
-            A=A, hkl=hkl, cell=cell, z=z, energy=self.energy
+            A=A,
+            hkl=hkl,
+            cell=cell,
+            z=z,
+            energy=self.energy,
+            use_wave_eq=self.use_wave_eq,
         )
         return S
 
@@ -1553,6 +1594,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
                 drop_axis=1,
                 chunks=chunks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
@@ -1564,6 +1606,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
             )
 
         return array
