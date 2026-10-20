@@ -54,11 +54,13 @@ from small test systems and vary with the data.
 **Backscattering**
 - Back-propagation of backscattered waves is corrected (#562, relative L2 0.4 at the entrance plane) and ensembles work (#499).
 
+**Distributed computations**
+- The client's configuration reaches the workers of a `distributed` client (#346). *ab*TEM resolves configuration inside each task, and worker processes started fresh and saw only the YAML defaults, so any distributed computation with a non-default configuration silently used the defaults: most importantly, `precision='float64'` runs were computed in `float32`. This applies to any distributed client, CPU clusters included, and now also to `to_tiff` and `to_zarr(compute=False)`. Distributed results obtained with a non-default configuration are worth repeating.
+
 ### Fixed: errors and crashes
 
 - `Images.scan_noise`, `apply_ctf` at a second energy, `number - Images`, lazy `gaussian_filter` with a constant boundary, lazy `normalize`, single-point `GridScan`, noisy near-orthogonal `Potential` cells, tilted eager Bloch exit waves with scalar thickness, `IndexedDiffractionPatterns.sort()`, core loss on 16 or 17 pixel grids, `AnnularDetector` over a `LineScan` with an extra ensemble axis, GPAW 26 new-style calculators, frozen-phonon `GPAWPotential`, ensemble backscattering, A/B/C centring, graphene repeated along c, and numba typing on some numba/numpy pairings no longer raise.
 - `excitations_weights` (the plasmon Poisson weights) no longer fails because `np.math` is gone in NumPy 2.
-- With in-process workers, the configuration plugin of #346 no longer replays its snapshot into the client and reverts configuration changes.
 - On CuPy 14.2, a lazy FFT in a dask worker thread no longer fails with `CUFFT_EXEC_FAILED` after an FFT of the same grid in another thread (see `cupy.fft-cache-size` below).
 
 ### Changed: behaviour
@@ -68,7 +70,7 @@ from small test systems and vary with the data.
 - Backscattering with exit planes that do not start at the entrance plane, or are not after every slice, raises `ValueError` instead of returning a wrong result (#562, #499); a radial detector with a non-zero offset and an outer angle beyond the grid raises `RuntimeError` (#469).
 - Exploded `show()` grids use 0.25 in between panels (#354).
 - The configuration key `cupy.fft-cache-size`, which 1.0.10 ignored, is read and defaults to `auto`: the cuFFT plans cached in each thread may hold up to 25 % of the device memory. Use `0 MB` to disable the cache, a size such as `"2 GB"` for a fixed bound, or `-1` for no bound. A plan larger than the bound runs uncached, with a warning.
-- Results from a distributed client follow the client's configured precision (#346), including `to_tiff` and `to_zarr(compute=False)`. Importing `abtem` no longer fails if `cupyx.scipy.ndimage` cannot be loaded (#381).
+- Importing `abtem` no longer fails if `cupyx.scipy.ndimage` cannot be loaded (#381).
 
 ### Added: public names that the fixes needed
 
@@ -111,18 +113,17 @@ Dependencies:
 - Declared `sympy` as an optional dependency (`core-loss` extra), required for core-loss EELS form
   factors ([PR #320](https://github.com/abTEM/abTEM/pull/320))
 
-
 Bugfixes:
 
 - Frozen-phonon ensemble handling ([PR #267](https://github.com/abTEM/abTEM/pull/267) & [PR #292](https://github.com/abTEM/abTEM/pull/292))
   - May also have resulted in incorrect behavior with `ensemble_mean = False` for e.g. defocus distributions
 - `CrystalPotential` with frozen phonons bugs (especially bad on – luckily rare – eager compute) ([PR #306](https://github.com/abTEM/abTEM/pull/306))
 - Minor bugs, unsafe patterns, and dead code ([PR #265](https://github.com/abTEM/abTEM/pull/265))
-- Anistropic Debye-Waller factors for Bloch wave ([PR #271](https://github.com/abTEM/abTEM/pull/271))
+- Anisotropic Debye-Waller factors for Bloch waves ([PR #271](https://github.com/abTEM/abTEM/pull/271))
   - Added helper functions to convert between crystallographic B-factors and thermal sigmas
-- Added missing `.calculate_exit_waves` for `BlochwaveEnsamble` ([PR #294](https://github.com/abTEM/abTEM/pull/294))
-- Silent atom drop when `z`-position lands in SliceIndexedAtoms blind spot  ([PR #273](https://github.com/abTEM/abTEM/pull/273))
-- Early-exit bug in orthogonalize_cell ([PR #291](https://github.com/abTEM/abTEM/pull/291))
+- Added missing `.calculate_exit_waves` for `BlochwaveEnsemble` ([PR #294](https://github.com/abTEM/abTEM/pull/294))
+- Silent atom drop when `z`-position lands in `SliceIndexedAtoms` blind spot ([PR #273](https://github.com/abTEM/abTEM/pull/273))
+- Early-exit bug in `orthogonalize_cell` ([PR #291](https://github.com/abTEM/abTEM/pull/291))
 - Fixed broken tutorial workflow for core-loss filtered imaging ([PR #284](https://github.com/abTEM/abTEM/pull/284))
   - Minor performance improvements for `transition_potential_scan` ([PR #286](https://github.com/abTEM/abTEM/pull/286))
 - `Bullseye` aperture: `ring_width` and `spoke_width` are now validated, rejecting values that previously
@@ -136,7 +137,7 @@ Bugfixes:
 Dependencies:
 
 - Support for `scipy>=1.7` and `cupy>=12`.
-- Restricted Dask versions (`>=2022.12.1,!=2025.12.*,!=2026.1.*"`) to avoid an issue with Numba in the latest ones
+- Restricted Dask versions (`>=2022.12.1,!=2025.12.*,!=2026.1.*`) to avoid an issue with Numba in the latest ones
 
 ## 1.0.8
 
