@@ -196,6 +196,54 @@ def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
     )
 
 
+class _DaskRefusingArray(np.ndarray):
+    """Treats a dask array operand the way CuPy does: it raises ``TypeError``
+    instead of returning ``NotImplemented``, so a dask array can only take part
+    in an operation through its own methods. Lets the CPU run the code path of
+    an eager device measurement."""
+
+    __array_priority__ = 100.0
+
+
+def _refuse_dask_operands(name):
+    def method(self, other):
+        if getattr(other, "__array_priority__", 0) > self.__array_priority__:
+            return NotImplemented
+        if isinstance(other, da.core.Array):
+            raise TypeError(f"Unsupported type {type(other)}")
+        return getattr(np.ndarray, name)(self, other)
+
+    return method
+
+
+for _name in ["add", "sub", "mul", "truediv", "pow"]:
+    for _method in (f"__{_name}__", f"__r{_name}__"):
+        setattr(_DaskRefusingArray, _method, _refuse_dask_operands(_method))
+
+
+@pytest.mark.parametrize("dask_side", ["left", "right"])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+def test_dask_operand_of_a_measurement_whose_array_refuses_it(op, dask_side):
+    # Oracle: the same operation on the plain arrays, in the same operand order.
+    other = np.array([[3.0, 1.0, 2.0], [5.0, 7.0, 11.0]], dtype=get_dtype())
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(array.view(_DaskRefusingArray), sampling=(0.1, 0.2))
+    dask_other = da.from_array(other, chunks=(1, 3))
+
+    if dask_side == "left":
+        result = getattr(operator, op)(dask_other, measurement)
+        expected = getattr(operator, op)(other.astype(np.float64), array)
+    else:
+        result = getattr(operator, op)(measurement, dask_other)
+        expected = getattr(operator, op)(array.astype(np.float64), other)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy
+    np.testing.assert_allclose(
+        result.compute().array, expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
+
+
 @pytest.mark.parametrize("reflected", [False, True], ids=["forward", "reflected"])
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])

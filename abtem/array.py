@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import operator
 import warnings
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager, nullcontext
@@ -1185,7 +1186,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
+            cp is not None and isinstance(other, cp.ndarray)
+        ):
             other_array = other
         elif func.startswith("__r"):
             # The left operand's own method has already declined, so Python
@@ -1196,14 +1199,49 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
-        # CuPy refuses a host array as an operand, a 0-d one included, though it
-        # takes a NumPy scalar.
-        if cp is not None and get_array_module(self.array) is cp:
-            if isinstance(other_array, np.ndarray):
-                other_array = cp.asarray(other_array)
+        self_array = self.array
+        if (
+            cp is not None
+            and isinstance(other_array, (np.ndarray, cp.ndarray, da.core.Array))
+            and {get_array_module(self_array), get_array_module(other_array)}
+            == {np, cp}
+        ):
+            # CuPy refuses a host array as an operand, a 0-d one included,
+            # though it takes a NumPy scalar. The side on the host, measurement
+            # or operand, is moved to the device, so both operand orders give
+            # the same result there. A lazy host operand is copied to the device
+            # block by block when the result is computed.
+            if get_array_module(self_array) is cp:
+                other_array = copy_to_device(other_array, "gpu")
+            else:
+                self_array = copy_to_device(self_array, "gpu")
+
+        name = func.strip("_")
+        if isinstance(self_array, da.core.Array) or isinstance(
+            other_array, da.core.Array
+        ):
+            # CuPy raises on a dask operand instead of deferring to it, so the
+            # operation is carried out by the dask array's own method, which
+            # accepts NumPy and CuPy operands alike.
+            if isinstance(self_array, da.core.Array):
+                array = getattr(self_array, func)(other_array)
+            else:  # "__add__" is other.__radd__(self), "__rsub__" other.__sub__(self)
+                if func.startswith("__r"):
+                    reflected = "__" + func[3:]
+                else:
+                    reflected = "__r" + func[2:]
+                array = getattr(other_array, reflected)(self_array)
+        elif hasattr(operator, name):
+            # Through the operator module rather than a direct call of the method
+            # named by func, so that an operand that returns NotImplemented hands
+            # over to the other operand's reflected method, and a pair neither
+            # side supports raises TypeError.
+            array = getattr(operator, name)(self_array, other_array)
+        else:  # a reflected operation: "__rtruediv__" is other / self
+            array = getattr(operator, name[1:])(other_array, self_array)
 
         kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = getattr(self.array, func)(other_array)
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(
