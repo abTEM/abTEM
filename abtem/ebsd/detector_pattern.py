@@ -17,9 +17,10 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture
 from abtem.array import validate_lazy
 from abtem.core.axes import EnergyAxis
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+from abtem.distributions import BaseDistribution
 from abtem.ebsd.detectors import BackscatterDetector
 from abtem.ebsd.emission import configuration_atoms
 from abtem.ebsd.geometry import EBSDGeometry, bunge_rotation
@@ -112,9 +113,12 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
 
     The pixels are tiled into patches as a reference pattern tiles the
     hemisphere: each pixel belongs to its nearest of ``n_patches`` zone axes
-    and is calculated in a slab cut along it. With the uniform source the result
-    equals the reference pattern at those pixels. Pixels looking into the
-    southern hemisphere are calculated in patches of their own.
+    and is calculated in a slab cut along it. Pixels looking into the southern
+    hemisphere are calculated in patches of their own.
+
+    :meth:`build` lights every atom alike, which gives the reference pattern at
+    those pixels. :meth:`scan` lights them with an incident
+    :class:`~abtem.PlaneWave` or :class:`~abtem.Probe`, which can be scanned.
 
     Parameters
     ----------
@@ -132,17 +136,8 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
     slab_cell : tuple of three float
         Dimensions of each slab [Å]; the third entry is the thickness along the
         slab's axis. See :class:`~abtem.ebsd.reference.EBSDReferencePattern`.
-    energy : float, optional
-        Energy of the incident beam [eV]. Taken from the source when that is a
-        wave, and required otherwise.
-    source : 'uniform' or PlaneWave or Probe, optional
-        How the incident beam lights the emitting atoms. ``'uniform'``
-        (default) lights them evenly, as in a reference pattern. A
-        :class:`~abtem.PlaneWave` or :class:`~abtem.Probe` is propagated along
-        the beam direction through a slab of its own, cut about the same
-        `origin`, and lights each atom by its intensity there, normalized
-        within each slice; `depth_weight` sets how much each depth counts. A
-        probe can be scanned (see :meth:`build`).
+    energy : float
+        Energy of the incident beam [eV].
     n_patches : int or None, optional
         Zone axes tiling each hemisphere, as for a reference pattern (default
         400). Only the patches the pixels fall in are calculated. If None,
@@ -174,8 +169,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         geometry: EBSDGeometry,
         euler: Sequence[float],
         slab_cell: tuple[float, float, float],
-        energy: Optional[float] = None,
-        source: str | PlaneWave | Probe = "uniform",
+        energy: float,
         n_patches: Optional[int] = 400,
         degrees: bool = True,
         sampling: Optional[float] = None,
@@ -202,20 +196,8 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         if n_patches is not None and int(n_patches) < 1:
             raise ValueError(f"n_patches must be at least 1, got {n_patches}")
 
-        if isinstance(source, (PlaneWave, Probe)):
-            if energy is not None and float(energy) != float(source.energy):
-                raise ValueError(
-                    f"energy {energy} eV contradicts the source's {source.energy} "
-                    f"eV; leave energy out"
-                )
-            energy = source.energy
-        elif source != "uniform":
-            raise ValueError(
-                f"source must be 'uniform', a PlaneWave or a Probe, got {source!r}"
-            )
-
         if energy is None:
-            raise ValueError("give the beam energy, or a wave to take it from")
+            raise ValueError("give the energy of the incident beam [eV]")
 
         self._atoms, self._frozen_phonons = _crystal_and_displacements(atoms)
         self._geometry = geometry
@@ -223,7 +205,6 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         self._degrees = bool(degrees)
         self._slab_cell = slab_cell
         self._energy = float(energy)
-        self._source = source
         self._n_patches = None if n_patches is None else int(n_patches)
         self._slice_thickness = float(slice_thickness)
         self._repetitions = repetitions
@@ -267,11 +248,6 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
     def energy(self) -> float:
         """Energy of the incident beam [eV]."""
         return self._energy
-
-    @property
-    def source(self):
-        """How the atoms are lit: 'uniform', or the wave sent in to light them."""
-        return self._source
 
     @property
     def n_patches(self) -> Optional[int]:
@@ -344,9 +320,12 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         width = diagonal + 2.0 * _INCIDENT_MARGIN
         return (width, width, diagonal)
 
-    def _block_and_origin(self):
-        """The block every slab is cut from, its atoms tagged, and the anchor."""
-        cell = self._slab_cell if isinstance(self._source, str) else self.incident_cell
+    def _block_and_origin(self, lit: bool = False):
+        """The block every slab is cut from, its atoms tagged, and the anchor.
+
+        A block lit by an incident beam also holds the beam's slab.
+        """
+        cell = self.incident_cell if lit else self._slab_cell
         repetitions = (
             estimate_repetitions(self._atoms, cell)
             if self._repetitions is None
@@ -362,12 +341,14 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         )
         return block, origin
 
-    def _illumination(self, block: Atoms, origin, scan) -> np.ndarray:
-        """How brightly the incident beam lights every atom of the block.
+    def _illumination(
+        self, source: PlaneWave | Probe, block: Atoms, origin, scan
+    ) -> np.ndarray:
+        """How brightly `source` lights every atom of the block.
 
-        Returns an array of shape ``(sources, block atoms)``, one row per probe
-        position and normalized to a mean of one within each slice, and the
-        ensemble axes and shape of the positions.
+        Returns an array of shape ``(sources, block atoms)``, one row per member
+        of the source's ensemble and probe position, normalized to a mean of one
+        within each slice, and the ensemble axes and shape of the sources.
         """
         xp = get_array_module(self._device)
         slab, rotation = rotated_slab(
@@ -386,7 +367,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
             device=self._device,
         )
 
-        wave = self._source.copy()
+        wave = source.copy()
         wave.grid.match(potential)
         if isinstance(wave, Probe):
             incident = wave.build(scan=scan, lazy=False)
@@ -417,9 +398,8 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                 # the beam arriving at the slice, as in EBSD
                 atoms = sliced.get_atoms_in_slices(index)
                 if len(atoms) > 0:
-                    intensity = xp.abs(beam.array.reshape((-1,) + beam.shape[-2:])) ** 2
-                    intensity = np.asarray(
-                        intensity.get() if hasattr(intensity, "get") else intensity
+                    intensity = asnumpy(
+                        xp.abs(beam.array.reshape((-1,) + beam.shape[-2:])) ** 2
                     )
                     coordinates = (atoms.positions[:, :2] / sampling).T
 
@@ -449,20 +429,78 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
 
         return illumination, axes, shape
 
+    def _validate_source(self, source) -> PlaneWave | Probe:
+        """A copy of `source` at the beam energy."""
+        if not isinstance(source, (PlaneWave, Probe)):
+            raise ValueError(
+                f"source must be a PlaneWave or a Probe, got {type(source).__name__}"
+            )
+        source = source.copy()
+        if source.energy is None:
+            source.energy = self._energy
+        elif isinstance(source.energy, BaseDistribution):
+            raise ValueError(
+                "the incident beam has one energy, but the source has an energy "
+                "ensemble; give backscatter_energy for the backscattered electrons"
+            )
+        elif not np.isclose(float(source.energy), self._energy):
+            raise ValueError(
+                f"the source's energy ({float(source.energy):g} eV) differs from the "
+                f"beam energy ({self._energy:g} eV)"
+            )
+        return source
+
     def build(
         self,
+        max_batch_directions: int | str = "auto",
+        lazy: Optional[bool] = None,
+        pbar: bool = False,
+    ) -> EBSDPatternImages:
+        """Calculate the detector's pixels with every atom lit alike.
+
+        Parameters
+        ----------
+        max_batch_directions : int or str, optional
+            Directions propagated at once; passed to
+            :meth:`~abtem.ebsd.reciprocity.EBSD.build`.
+        lazy : bool, optional
+            If True, return a pattern backed by a dask graph with one task per
+            patch. Defaults to the abTEM configuration.
+        pbar : bool, optional
+            If True, show a progress bar over the patches.
+
+        Returns
+        -------
+        pattern : EBSDPatternImages
+            Of shape ``geometry.shape``, after an energy axis if there are
+            several backscattered energies.
+        """
+        return self._calculate(None, None, max_batch_directions, lazy, pbar)
+
+    def scan(
+        self,
+        source: PlaneWave | Probe,
         scan: Optional[BaseScan | Sequence] = None,
         max_batch_directions: int | str = "auto",
         lazy: Optional[bool] = None,
         pbar: bool = False,
     ) -> EBSDPatternImages:
-        """Calculate the detector's pixels.
+        """Calculate the detector's pixels with the atoms lit by an incident beam.
+
+        The source is propagated along the beam direction through a slab of its
+        own, cut about the same `origin`, and lights each atom by its intensity
+        there, normalized within each slice; `depth_weight` sets how much each
+        depth counts.
 
         Parameters
         ----------
+        source : PlaneWave or Probe
+            The incident beam. Its energy, if given, must be the beam energy;
+            its grid is matched to the incident slab. Ensemble axes of the
+            source, such as a defocus series, are kept.
         scan : BaseScan or array of xy-positions, optional
-            Positions of a probe source [Å], measured from `origin`. Each gives
-            a pattern, along leading axes of the result.
+            Positions of a probe [Å], measured from `origin`. Each gives a
+            pattern.
         max_batch_directions : int or str, optional
             Directions propagated at once; passed to
             :meth:`~abtem.ebsd.reciprocity.EBSD.build`.
@@ -476,25 +514,36 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         Returns
         -------
         pattern : EBSDPatternImages
-            Of shape ``geometry.shape``, with leading axes for any energies and
-            probe positions.
+            Of shape ``geometry.shape``, after an energy axis if there are
+            several backscattered energies, then the source's ensemble axes and
+            the scan's.
         """
-        lazy = validate_lazy(lazy)
-
-        if scan is not None and not isinstance(self._source, Probe):
+        source = self._validate_source(source)
+        if scan is not None and not isinstance(source, Probe):
             raise ValueError(
                 "only a probe source depends on where the probe is, so every "
                 "position would give the same pattern; give a Probe as the source"
             )
+        return self._calculate(source, scan, max_batch_directions, lazy, pbar)
+
+    def _calculate(
+        self,
+        source: Optional[PlaneWave | Probe],
+        scan: Optional[BaseScan | Sequence],
+        max_batch_directions: int | str,
+        lazy: Optional[bool],
+        pbar: bool,
+    ) -> EBSDPatternImages:
+        lazy = validate_lazy(lazy)
 
         rows, columns = self._geometry.shape
         directions = self.directions.reshape(-1, 3)
         axes, owner = self._assignment()
-        block, origin = self._block_and_origin()
+        block, origin = self._block_and_origin(lit=source is not None)
         gpts = self.potential_gpts
 
         illumination, ensemble_axes, output_shape = None, [], ()
-        if not isinstance(self._source, str):
+        if source is not None:
             shifted = None
             if scan is not None:
                 if not isinstance(scan, BaseScan):
@@ -505,13 +554,16 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                 shifted = CustomScan(positions + centre)
 
             illumination, ensemble_axes, output_shape = self._illumination(
-                block, origin, shifted
+                source, block, origin, shifted
             )
 
             if scan is not None:
-                # shaped and labelled as the scan was given, not as it was run
-                ensemble_axes = list(scan.ensemble_axes_metadata)
-                output_shape = tuple(scan.ensemble_shape)
+                # the source's own axes, then the scan's, shaped and labelled as
+                # the scan was given rather than as it was run
+                ensemble_axes = list(source.ensemble_axes_metadata) + list(
+                    scan.ensemble_axes_metadata
+                )
+                output_shape = tuple(source.ensemble_shape) + tuple(scan.ensemble_shape)
 
         energies, energy_weights = _validate_backscatter_energy(
             self._backscatter_energy, self._energy
@@ -527,7 +579,12 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         if lazy:
             import dask
 
-            shared_block = dask.delayed(block)
+            # one node each in the graph, shared by every patch
+            block_argument = dask.delayed(block)
+            if illumination is not None:
+                illumination = dask.delayed(illumination)
+        else:
+            block_argument = block
 
         pieces, order = [], []
         progress = TqdmWrapper(total=len(axes), enabled=pbar and not lazy, leave=False)
@@ -546,7 +603,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                 )
                 if lazy:
                     task = dask.delayed(_detector_patch, pure=True)(
-                        self, shared_block, **arguments
+                        self, block_argument, **arguments
                     )
                     pieces.append(
                         da.from_delayed(
@@ -556,7 +613,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                         )
                     )
                 else:
-                    pieces.append(_detector_patch(self, block, **arguments))
+                    pieces.append(_detector_patch(self, block_argument, **arguments))
                 order.append(indices)
                 progress.update_if_exists(1)
         finally:
@@ -577,11 +634,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         metadata = {
             **_energy_metadata(self._energy, energies, energy_weights),
             "label": "backscattered intensity",
-            "source": (
-                self._source
-                if isinstance(self._source, str)
-                else type(self._source).__name__
-            ),
+            "source": "uniform" if source is None else type(source).__name__,
             "euler": [float(a) for a in self._euler],
             "n_patches": self._n_patches,
             "num_configs": (

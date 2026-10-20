@@ -1608,9 +1608,9 @@ class TestDevices:
         def detector(on, lazy):
             # the incident beam on the device too, scanned
             probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
-            return detector_builder(
-                n_patches=None, sampling=0.25, source=probe, device=on
-            ).build(scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]), lazy=lazy)
+            return detector_builder(n_patches=None, sampling=0.25, device=on).scan(
+                probe, scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]), lazy=lazy
+            )
 
         self.agree(reference, device)
         self.agree(detector, device)
@@ -1921,17 +1921,22 @@ class TestEBSDDetectorPattern:
             assert np.asarray(alone.array)[0] == pytest.approx(image[i], rel=1e-5), i
 
     def test_sources_and_energies(self):
-        assert (
-            detector_builder(energy=None, source=abtem.PlaneWave(energy=20e3)).energy
-            == 20e3
+        builder = detector_builder(n_patches=None)
+        # a source without an energy is sent in at the beam's
+        lit = builder.scan(abtem.PlaneWave(), lazy=False)
+        assert lit.metadata["source"] == "PlaneWave"
+        assert np.array_equal(
+            lit.array, builder.scan(abtem.PlaneWave(energy=30e3), lazy=False).array
         )
-        for kwargs, match in [
-            ({"source": abtem.PlaneWave(energy=20e3)}, "contradicts the source"),
-            ({"energy": None}, "give the beam energy"),
-            ({"source": "beam"}, "source must be"),
+        for source, match in [
+            (abtem.PlaneWave(energy=20e3), "differs from the beam energy"),
+            (abtem.Probe(semiangle_cutoff=10, energy=[20e3, 30e3]), "one energy"),
+            ("beam", "source must be"),
         ]:
             with pytest.raises(ValueError, match=match):
-                detector_builder(**kwargs)
+                builder.scan(source)
+        with pytest.raises(ValueError, match="give the energy"):
+            detector_builder(energy=None)
         for euler in [(0.0, 0.0), (1.0, 2.0, 3.0, 4.0)]:
             with pytest.raises(ValueError, match="one orientation"):
                 EBSDDetectorPattern(
@@ -1945,9 +1950,9 @@ class TestEBSDDetectorPattern:
     def test_a_plane_wave_lights_the_atoms_unevenly(self, uniform):
         # it channels and lights some atoms more than others, normalized
         # within each slice
-        builder = detector_builder(source=abtem.PlaneWave(energy=30e3))
-        block, origin = builder._block_and_origin()
-        illumination, axes, shape = builder._illumination(block, origin, None)
+        builder, source = detector_builder(), abtem.PlaneWave(energy=30e3)
+        block, origin = builder._block_and_origin(lit=True)
+        illumination, axes, shape = builder._illumination(source, block, origin, None)
         assert illumination.shape == (1, len(block))
         assert shape == () and axes == []
         # the block holds more than the incident slab; the atoms outside it
@@ -1957,12 +1962,12 @@ class TestEBSDDetectorPattern:
         assert lit.mean() == pytest.approx(1.0, rel=1e-6)
         assert lit.std() > 0.05
 
-        pattern = builder.build(lazy=False)
+        pattern = builder.scan(source, lazy=False)
         assert pattern.metadata["source"] == "PlaneWave"
         assert not np.allclose(
             np.asarray(pattern.array), np.asarray(uniform.array), rtol=1e-3
         )
-        lazy = builder.build(lazy=True).compute()
+        lazy = builder.scan(source, lazy=True).compute()
         assert np.allclose(np.asarray(lazy.array), np.asarray(pattern.array), rtol=1e-6)
 
     def test_scans_a_probe(self):
@@ -1970,34 +1975,46 @@ class TestEBSDDetectorPattern:
         probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
         positions = [[0.0, 0.0], [1.0, 1.5]]
         for n_patches in (None, 2000):
-            builder = detector_builder(n_patches=n_patches, source=probe)
+            builder = detector_builder(n_patches=n_patches)
             together = np.asarray(
-                builder.build(scan=abtem.CustomScan(positions), lazy=False).array
+                builder.scan(probe, abtem.CustomScan(positions), lazy=False).array
             )
             assert together.shape == (2, 6, 6)
-            alone = builder.build(scan=abtem.CustomScan(positions[1:]), lazy=False)
+            alone = builder.scan(probe, abtem.CustomScan(positions[1:]), lazy=False)
             assert np.allclose(together[1], np.asarray(alone.array)[0], rtol=1e-4)
             assert not np.allclose(together[0], together[1], rtol=1e-3)
 
         # a grid scan keeps its shape, and positions are measured from the origin
-        builder = detector_builder(
-            n_patches=None, source=abtem.Probe(semiangle_cutoff=30, energy=30e3)
-        )
+        builder = detector_builder(n_patches=None)
+        probe = abtem.Probe(semiangle_cutoff=30, energy=30e3)
         scan = abtem.GridScan(start=(0, 0), end=(1.5, 1.0), gpts=(2, 3))
-        pattern = builder.build(scan=scan, lazy=False)
+        pattern = builder.scan(probe, scan, lazy=False)
         assert pattern.array.shape == (2, 3, 6, 6)
         position = np.asarray(scan.get_positions())[1, 1]
-        alone = builder.build(scan=abtem.CustomScan([position]), lazy=False)
+        alone = builder.scan(probe, abtem.CustomScan([position]), lazy=False)
         assert np.allclose(
             np.asarray(pattern.array)[1, 1], np.asarray(alone.array)[0], rtol=1e-4
         )
         assert np.allclose(alone.ensemble_axes_metadata[0].values, [position])
 
-        for source in ("uniform", abtem.PlaneWave(energy=30e3)):
-            with pytest.raises(ValueError, match="only a probe source depends"):
-                detector_builder(source=source).build(
-                    scan=abtem.CustomScan(positions), lazy=False
-                )
+        # a probe's own ensemble axes come before the scan's
+        series = abtem.Probe(semiangle_cutoff=30, defocus=[0.0, 50.0])
+        patterns = builder.scan(series, abtem.CustomScan(positions), lazy=True)
+        assert patterns.array.shape == (2, 2, 6, 6)
+        assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+            "ParameterAxis",
+            "PositionsAxis",
+        ]
+        member = abtem.Probe(semiangle_cutoff=30, defocus=50.0)
+        alone = builder.scan(member, abtem.CustomScan(positions[:1]), lazy=False)
+        assert np.allclose(
+            np.asarray(patterns.compute().array)[1, 0],
+            np.asarray(alone.array)[0],
+            rtol=1e-5,
+        )
+
+        with pytest.raises(ValueError, match="only a probe source depends"):
+            builder.scan(abtem.PlaneWave(), abtem.CustomScan(positions), lazy=False)
 
     def test_frozen_phonons_average_the_configurations(self, uniform):
         frozen = abtem.FrozenPhonons(SILICON, num_configs=2, sigmas=0.1, seed=3)
@@ -2012,8 +2029,10 @@ class TestEBSDDetectorPattern:
 
         # and so is the incident beam's lighting
         def illumination(atoms):
-            builder = detector_builder(atoms=atoms, source=abtem.PlaneWave(energy=30e3))
-            return builder._illumination(*builder._block_and_origin(), None)[0][0]
+            builder = detector_builder(atoms=atoms)
+            block, origin = builder._block_and_origin(lit=True)
+            source = abtem.PlaneWave(energy=30e3)
+            return builder._illumination(source, block, origin, None)[0][0]
 
         thermal, static = illumination(frozen), illumination(SILICON)
         lit = thermal != 1.0
