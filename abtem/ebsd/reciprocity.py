@@ -39,6 +39,7 @@ from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.array import validate_lazy
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, OrdinalAxis
 from abtem.core.backend import (
+    asnumpy,
     device_name_from_array_module,
     get_array_module,
     validate_device,
@@ -316,8 +317,7 @@ def _propagate_block_intensities(
     ebsd: "EBSD", prepared: tuple, arguments: dict
 ) -> np.ndarray:
     """One block of directions, as a dask task."""
-    intensities = ebsd._propagate_block(prepared=prepared, **arguments)
-    return np.asarray(intensities.get() if hasattr(intensities, "get") else intensities)
+    return asnumpy(ebsd._propagate_block(prepared=prepared, **arguments))
 
 
 def _envelope_propagator_array(
@@ -627,13 +627,19 @@ class EBSD(CopyMixin, EqualityMixin):
 
         blocks = self._direction_blocks(max_batch_directions, lazy=lazy)
 
-        def block_arguments(i, start, stop):
-            wave_vectors = xp.asarray(
-                self._detector.transverse_wave_vectors(backscatter_energies[i]),
+        # on the host, once per energy; each block moves its own slice to the
+        # device, so that a lazy graph holds only NumPy arrays
+        wave_vectors = [
+            np.asarray(
+                self._detector.transverse_wave_vectors(backscatter_energy),
                 dtype=get_dtype(complex=False),
-            )[start:stop]
+            )
+            for backscatter_energy in backscatter_energies
+        ]
+
+        def block_arguments(i, start, stop):
             return dict(
-                wave_vectors=wave_vectors,
+                wave_vectors=wave_vectors[i][start:stop],
                 weights=weights[i],
                 slice_bins=slice_bins,
                 depth_shape=depth_shape,
@@ -826,6 +832,7 @@ class EBSD(CopyMixin, EqualityMixin):
         """
         potential, emission = prepared
         xp = get_array_module(self._device)
+        wave_vectors = xp.asarray(wave_vectors, dtype=get_dtype(complex=False))
 
         # the periodic envelope of a plane wave is one (see the module docstring)
         reciprocity = Waves(
@@ -931,9 +938,7 @@ class EBSD(CopyMixin, EqualityMixin):
         if isinstance(intensities, da.core.Array):
             array = intensities
         else:
-            array = np.asarray(
-                intensities.get() if hasattr(intensities, "get") else intensities
-            )
+            array = asnumpy(intensities)
         metadata = {
             **_energy_metadata(self._energy, backscatter_energies, energy_weights),
             "label": "backscattered intensity",
