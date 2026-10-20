@@ -27,7 +27,7 @@ from abtem.atoms import (
     pad_atoms,
     plane_to_axes,
     rotate_atoms_to_plane,
-    wrap_and_snap_atoms,
+    _wrap_and_snap_atoms,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -826,9 +826,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # identity, so writing in place here mutates the object the
             # potential stores and ships into the task graph as ONE shared
             # node, and for a list of atoms or a pre-built frozen-phonons
-            # object it is the CALLER's own object. wrap_and_snap_atoms copies
+            # object it is the CALLER's own object. _wrap_and_snap_atoms copies
             # only when it has to change something.
-            atoms = wrap_and_snap_atoms(atoms)
+            atoms = _wrap_and_snap_atoms(atoms)
 
         if is_cut:
             # cut_cell already supplied exactly the margin padding would add.
@@ -2144,7 +2144,7 @@ class CrystalPotential(_PotentialBuilder):
         # unit stays lazy.
         if potentials.is_lazy:
             potentials = potentials.__class__(
-                potentials.array.compute(),
+                potentials.array.compute(scheduler="synchronous"),
                 **potentials._copy_kwargs(exclude=("array",)),
             )
 

@@ -1154,7 +1154,7 @@ def cut_cell(
     return new_atoms
 
 
-def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
+def _wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
     """Wrap atoms into their cell by modulo, snapping the boundary cases to zero.
 
     Wrapping is by ``np.mod`` rather than ``Atoms.wrap``, because ``wrap`` is a

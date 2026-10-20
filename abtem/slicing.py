@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
+from abtem.atoms import is_cell_orthogonal, _wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -341,7 +341,7 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         super().__init__(atoms, slice_thickness)
 
         if wrap:
-            self._atoms = wrap_and_snap_atoms(self.atoms)
+            self._atoms = _wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
