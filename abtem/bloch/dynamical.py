@@ -64,7 +64,7 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
-from abtem.measurements import IndexedDiffractionPatterns
+from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns, stack
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.slicing import _integrate_planes
@@ -72,7 +72,7 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Waves
+from abtem.waves import Probe, Waves
 
 if TYPE_CHECKING:
     pass
@@ -2286,6 +2286,158 @@ class BlochWaves:
             )
 
         return bloch_waves
+
+    @staticmethod
+    def _get_orientation_matrices_from_probe(probe: Probe):
+        ap = probe.aperture
+        ap.match_grid(probe)
+        alpha, phi = probe._angular_grid()
+        alpha = asnumpy(alpha)
+        phi = asnumpy(phi)
+
+        aperture = ap._evaluate_from_angular_grid(alpha, phi)
+        inds = np.where(aperture)
+        weights = aperture[inds]
+
+        alpha_x = alpha[inds] * np.cos(phi[inds])
+        alpha_y = alpha[inds] * np.sin(phi[inds])
+
+        theta_xy_cpu = np.stack((alpha_x, alpha_y), -1)
+
+        tilted_ZAs = np.array([0, 0, 1]) - np.insert(theta_xy_cpu, 2, 0, axis=1)
+        tilted_ZAs /= np.linalg.norm(tilted_ZAs, axis=1)[:, None]
+
+        orientation_matrices = np.array(
+            [
+                Rotation.align_vectors(
+                    np.array([0, 0, 1]),
+                    ZA,
+                )[0].as_matrix()
+                for ZA in tilted_ZAs
+            ]
+        )
+
+        return orientation_matrices, theta_xy_cpu, weights
+
+    @staticmethod
+    def _bin_diffraction_intensities(
+        probe: Probe,
+        intensities: list[np.ndarray],
+        angular_positions: np.ndarray,
+        xp=np,
+    ):
+        alpha, phi = probe._angular_grid()
+        alpha_xx = alpha * xp.cos(phi)
+        alpha_yy = alpha * xp.sin(phi)
+
+        all_intensities = xp.concatenate(intensities)
+        all_angular_positions = xp.concatenate(angular_positions)
+
+        def get_edges(centers):
+            d = centers[1] - centers[0]
+            return xp.concatenate((centers - d / 2, xp.array(centers[-1:] + d / 2)))
+
+        x_centers = xp.fft.fftshift(alpha_xx[:, 0])
+        y_centers = xp.fft.fftshift(alpha_yy[0, :])
+
+        x_edges = get_edges(x_centers)
+        y_edges = get_edges(y_centers)
+
+        griddata, _, _ = xp.histogram2d(
+            all_angular_positions[:, 0],
+            all_angular_positions[:, 1],
+            bins=[x_edges, y_edges],
+            weights=all_intensities,
+        )
+
+        return griddata / griddata.sum()  # note: normalized to unity
+
+    def calculate_CBED_patterns(
+        self,
+        probe: Probe,
+        thicknesses: float | Iterable[float],
+        pbar: Optional[bool] = None,
+    ) -> DiffractionPatterns:
+        """
+        Calculates a converged beam electron diffraction (CBED) pattern using a grid of
+        incident beam tilts.
+
+        Parameters
+        ----------
+        probe : abTEM.waves.Probe
+            The converged probe object to be simulated.
+        thickness : float
+            Sample thickness used in Bloch wave calculation.
+            Higher thickness will result in more dynamic scattering.
+        """
+        if pbar is None:
+            pbar = config.get("local_diagnostics.task_level_progress", False)
+
+        device = self.device
+        xp = get_array_module(device)
+
+        orientation_matrices, theta_xy_cpu, weights_cpu = (
+            self._get_orientation_matrices_from_probe(probe)
+        )
+
+        theta_xy = xp.asarray(theta_xy_cpu)
+        weights = xp.asarray(weights_cpu)
+
+        if not isinstance(thicknesses, Iterable):
+            thicknesses = [thicknesses]
+
+        intensities_all = [[] for thickness in thicknesses]
+        angular_positions = []
+
+        progressbar = TqdmWrapper(
+            enabled=pbar,
+            total=len(orientation_matrices),
+            desc="Calculating CBED patterns",
+            leave=False,
+        )
+
+        for i in range(len(orientation_matrices)):
+            bloch = BlochWaves(
+                structure_factor=self.structure_factor,
+                energy=self.energy,
+                sg_max=self.sg_max,
+                orientation_matrix=orientation_matrices[i],
+                device=device,
+            )
+            dps = bloch.calculate_diffraction_patterns(
+                thicknesses=thicknesses,
+                lazy=False,
+            )
+            angular_positions.append(
+                xp.asarray(dps[0].angular_positions[:, :2] * 1e-3) - theta_xy[i, None]
+            )
+            for intensities, dp in zip(intensities_all, dps):
+                intensities.append(dp.intensities * weights[i])
+
+            progressbar.update_if_exists(1)
+
+        measurements = []
+        for intensities in intensities_all:
+            griddata = self._bin_diffraction_intensities(
+                probe, intensities, angular_positions, xp
+            )
+            measurement = DiffractionPatterns(
+                array=griddata,
+                sampling=(1 / probe.extent[0], 1 / probe.extent[1]),
+                fftshift=True,
+                metadata={
+                    "semiangle_cutoff": probe.semiangle_cutoff,
+                    "energy": probe.energy,
+                },
+            )
+            measurements.append(measurement)
+
+        output = stack(measurements, ThicknessAxis(values=thicknesses))
+
+        progressbar.close_if_exists()
+
+        return output
+
 
 
 def is_base_distribution_tuple(
