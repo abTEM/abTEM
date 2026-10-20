@@ -101,6 +101,8 @@ def tiny_reference(atoms=SILICON, **kwargs):
     """One patch about the pole: the smallest reference pattern there is."""
     defaults = dict(n_patches=1, slab_cell=(6.0, 6.0, 4.0), gpts=8, direction_gpts=30)
     defaults["max_angle"] = 200.0
+    # known, so that only the tests of the symmetry search need spglib
+    defaults["centrosymmetric"] = atoms is not GAN
     return EBSDReferencePattern(atoms, 30e3, **{**defaults, **kwargs})
 
 
@@ -496,8 +498,13 @@ class TestOrientations:
             )
 
     def test_detects_an_inversion_centre(self):
+        pytest.importorskip("spglib")
         assert is_centrosymmetric(SILICON)
         assert not is_centrosymmetric(GAN)
+        # spglib finds no symmetry for atoms on top of each other
+        overlapping = ase.Atoms("Si2", positions=np.zeros((2, 3)), cell=[4.0] * 3)
+        with pytest.raises(ValueError, match="could not determine"):
+            is_centrosymmetric(overlapping)
 
 
 # --------------------------------------------------------------------------
@@ -1601,6 +1608,7 @@ class TestDevices:
                 direction_gpts=7,
                 max_angle=200.0,
                 hemisphere="both",
+                centrosymmetric=True,
                 device=on,
             ).build(lazy=lazy, pbar=False)
 
@@ -1797,9 +1805,9 @@ class TestHemispheres:
         # centres, is its own inversion image: a direction and its opposite
         # are the same calculation. GaN has none, and its hemispheres differ.
         bond_centre = np.full(3, 5.431 / 8)
-        silicon = self.reference(SILICON, "both", origin=bond_centre).build(
-            pbar=False, lazy=False
-        )
+        silicon = self.reference(
+            SILICON, "both", origin=bond_centre, centrosymmetric=True
+        ).build(pbar=False, lazy=False)
         directions = silicon.northern.directions
         assert np.allclose(
             silicon.interpolate_directions(directions),
@@ -1807,7 +1815,9 @@ class TestHemispheres:
             rtol=1e-4,
         )
 
-        gan = self.reference(GAN, "both").build(pbar=False, lazy=False)
+        gan = self.reference(GAN, "both", centrosymmetric=False).build(
+            pbar=False, lazy=False
+        )
         assert gan.hemisphere == "both"
         assert gan.metadata["hemisphere"] == "both"
         assert gan.metadata["centrosymmetric"] is False
@@ -1840,13 +1850,20 @@ class TestHemispheres:
         assert len(calls) == 1
 
     def test_without_spglib_the_symmetry_is_unknown(self, monkeypatch):
-        def missing(atoms):
-            raise ImportError("no spglib")
+        # without spglib, or when it cannot find the symmetry, the pattern is
+        # still built, and records the symmetry as unknown
+        for error, match in (
+            (ImportError("no spglib"), "spglib is not installed"),
+            (ValueError("no symmetry"), "spglib could not determine"),
+        ):
 
-        monkeypatch.setattr(reference_module, "is_centrosymmetric", missing)
-        with pytest.warns(UserWarning, match="spglib is not installed"):
-            pattern = self.reference(SILICON, "north").build(pbar=False, lazy=False)
-        assert pattern.metadata["centrosymmetric"] is None
+            def search(atoms, error=error):
+                raise error
+
+            monkeypatch.setattr(reference_module, "is_centrosymmetric", search)
+            with pytest.warns(UserWarning, match=match):
+                pattern = self.reference(SILICON, "north").build(pbar=False, lazy=False)
+            assert pattern.metadata["centrosymmetric"] is None
 
 
 # --------------------------------------------------------------------------

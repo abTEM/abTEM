@@ -351,17 +351,23 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         return self._centrosymmetric
 
     def _recorded_symmetry(self) -> Optional[bool]:
-        """:attr:`centrosymmetric`, or None with a warning if spglib is missing."""
+        """:attr:`centrosymmetric`, or None with a warning if it cannot be found.
+
+        It only fills the pattern's metadata, so a crystal whose symmetry spglib
+        cannot find, or a missing spglib, does not stop the build.
+        """
         try:
             return self.centrosymmetric
         except ImportError:
-            warnings.warn(
-                "spglib is not installed, so the pattern does not record whether "
-                "the crystal has an inversion centre, and the inversion image of "
-                "a calculated hemisphere stands in for the other without a "
-                "warning; install spglib or give centrosymmetric"
-            )
-            return None
+            reason, remedy = "spglib is not installed", "install spglib or give"
+        except ValueError:
+            reason, remedy = "spglib could not determine the symmetry", "give"
+        warnings.warn(
+            f"{reason}, so the pattern does not record whether the crystal has an "
+            f"inversion centre, and the inversion image of a calculated hemisphere "
+            f"stands in for the other without a warning; {remedy} centrosymmetric"
+        )
+        return None
 
     def _in_hemisphere(self, northern: np.ndarray, southern: np.ndarray) -> np.ndarray:
         if self._hemisphere == "north":
