@@ -186,7 +186,8 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         Multislice slice thickness [Å] (default 1.0).
     direction_gpts : int, optional
         Number of points per axis of the grid the directions are drawn from.
-        Defaults to ``ceil(1.15 * gpts)``.
+        Defaults to ``ceil(1.15 * gpts)``, made odd, so that a Lambert grid is
+        written to an EMsoft file as calculated.
     max_angle : float, optional
         Angular radius of each patch [mrad]; directions farther than this from
         their patch's axis are left out. Defaults to :func:`patch_half_angle`.
@@ -295,8 +296,9 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
             self._sampling = float(sampling)
             _warn_if_undersampled(self._atoms, self._sampling, "a")
 
+        # odd, so that the Lambert grid is one EMsoft stores, 2 * npx + 1 wide
         self._direction_gpts = (
-            int(np.ceil(_DIRECTION_OVERSAMPLING * self._gpts))
+            int(np.ceil(_DIRECTION_OVERSAMPLING * self._gpts)) | 1
             if direction_gpts is None
             else int(direction_gpts)
         )

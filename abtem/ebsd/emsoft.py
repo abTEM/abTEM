@@ -17,7 +17,12 @@ import numpy as np
 from ase import Atoms
 from ase.cell import Cell
 
-from abtem.ebsd.measurements import SparseProjectionWarning, SphericalPattern
+from abtem.ebsd.measurements import (
+    SparseProjectionWarning,
+    SphericalPattern,
+    _lambert_grid,
+)
+from abtem.ebsd.projections import SquareLambertProjection
 
 __all__ = ["write_emsoft_master_pattern"]
 
@@ -151,6 +156,16 @@ def _atom_data(
     return data, np.asarray(numbers, dtype=np.int32)
 
 
+def _default_npx(pattern: SphericalPattern) -> int:
+    """The half-width of the pattern's own square Lambert grid, which an odd
+    grid gives exactly; otherwise that of a grid about as fine."""
+    northern = pattern.northern
+    grid = _lambert_grid(SquareLambertProjection().project(northern.directions))
+    # N directions support a grid of about sqrt(N) on a side
+    gpts = grid[0] if grid is not None else np.sqrt(len(northern))
+    return max(1, int(np.ceil((gpts - 1) / 2)))
+
+
 def write_emsoft_master_pattern(
     path: str,
     pattern: SphericalPattern,
@@ -177,7 +192,9 @@ def write_emsoft_master_pattern(
         metadata a consumer needs to build a phase.
     npx : int, optional
         Half-width of the square Lambert grid; the stored arrays are
-        ``2 * npx + 1`` on a side. Defaults to the pattern's own sampling.
+        ``2 * npx + 1`` on a side. Defaults to the pattern's own Lambert grid,
+        whose values are then written as calculated when it has an odd number
+        of points per side, as a reference pattern's has by default.
     energy : float, optional
         Beam energy [eV]. Defaults to the pattern's metadata.
     space_group : int, optional
@@ -221,8 +238,7 @@ def write_emsoft_master_pattern(
             )
 
     if npx is None:
-        # N directions support a grid of about sqrt(N) on a side
-        npx = max(1, int(round((np.sqrt(len(pattern)) - 1) / 2)))
+        npx = _default_npx(pattern)
 
     space_group, lattice, scaled, numbers = _conventional_cell(atoms, space_group)
 

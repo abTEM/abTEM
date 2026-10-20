@@ -30,7 +30,6 @@ from abtem.ebsd import (
     pixel_centers,
     rotated_slab,
     validate_projection,
-    write_emsoft_master_pattern,
     zone_axis_rotation,
 )
 from abtem.ebsd.emission import EmissionSlices, backscatter_cross_section
@@ -2066,7 +2065,7 @@ class TestEMsoftWriter:
         h5py = pytest.importorskip("h5py")
         pytest.importorskip("spglib")
         path = str(tmp_path / "master.h5")
-        write_emsoft_master_pattern(path, pattern, atoms, **kwargs)
+        pattern.to_emsoft(path, atoms, **kwargs)
         return h5py.File(path)
 
     def test_follows_the_format(self, tmp_path, pattern):
@@ -2101,6 +2100,24 @@ class TestEMsoftWriter:
             # a pattern of one hemisphere fills the other with its inversion image
             north, south = master["mLPNH"][0, 0], master["mLPSH"][0, 0]
             assert np.array_equal(south, north[::-1, ::-1])
+
+    def test_writes_the_calculated_grid(self, tmp_path, pattern):
+        # By default, a pattern on an odd Lambert grid is written as calculated,
+        # also when it holds both hemispheres; the reference pattern's default
+        # grid is odd.
+        both = hemispheres("both", centrosymmetric=False)
+        both.metadata["energy"] = 30e3
+        for written, gpts in ((pattern, 81), (both, 21)):
+            with self.write(tmp_path, written, overwrite=True) as f:
+                north = np.asarray(f["EMData/EBSDmaster/mLPNH"]).squeeze()
+            assert north.shape == (gpts, gpts)
+            calculated = written.northern
+            expected = np.zeros((gpts, gpts))
+            xy = SquareLambertProjection().project(calculated.directions)
+            nodes = np.rint((xy + 1.0) / 2.0 * (gpts - 1)).astype(int)
+            expected[nodes[:, 0], nodes[:, 1]] = np.asarray(calculated.array)
+            assert np.allclose(north, expected.T, rtol=1e-6)
+        assert tiny_reference(direction_gpts=None, gpts=128)._direction_gpts == 149
 
     def test_writes_a_calculated_southern_hemisphere(self, tmp_path):
         pattern = hemispheres("both", centrosymmetric=False)

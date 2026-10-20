@@ -20,6 +20,8 @@ from abtem.ebsd.projections import (
 from abtem.measurements import Images
 
 if TYPE_CHECKING:
+    from ase import Atoms
+
     from abtem.ebsd.geometry import EBSDGeometry
 
 __all__ = [
@@ -657,6 +659,71 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         root.attrs["ensemble_axes_metadata"] = [
             axis_to_dict(axis) for axis in self._ensemble_axes_metadata
         ]
+
+    def to_emsoft(
+        self,
+        path: str,
+        atoms: Atoms,
+        npx: Optional[int] = None,
+        energy: Optional[float] = None,
+        space_group: Optional[int] = None,
+        sample_tilt: float = 70.0,
+        debye_waller: float | Sequence[float] = 0.005,
+        name: str = "abTEM reciprocity multislice",
+        overwrite: bool = False,
+    ) -> None:
+        """Write the pattern as an EMsoft EBSD master pattern file.
+
+        EMsoft and kikuchipy read the file. Writing it requires h5py, and
+        spglib unless `space_group` is given.
+
+        Parameters
+        ----------
+        path : str
+            Destination ``.h5`` file.
+        atoms : ase.Atoms
+            The unit cell the pattern was calculated from, for the crystal data
+            a reader needs to build a phase.
+        npx : int, optional
+            Half-width of the square Lambert grid; the stored arrays are
+            ``2 * npx + 1`` on a side. Defaults to the pattern's own Lambert
+            grid, whose values are then written as calculated when it has an
+            odd number of points per side, as a reference pattern's has by
+            default.
+        energy : float, optional
+            Beam energy [eV]. Defaults to the pattern's metadata.
+        space_group : int, optional
+            Space group number. Determined with spglib if not given.
+        sample_tilt : float, optional
+            Sample tilt [degrees] recorded in the file (default 70.0).
+        debye_waller : float or sequence of float, optional
+            Debye-Waller factor per atom [nm²] (default 0.005, i.e. 0.5 Å²),
+            recorded in the file. It does not change the pattern.
+        name : str, optional
+            Phase name recorded in the file.
+        overwrite : bool, optional
+            If True, replace an existing file.
+
+        Notes
+        -----
+        For a pattern of the northern hemisphere alone, the southern one is its
+        inversion image, which is only right for a centrosymmetric crystal;
+        build the pattern with ``hemisphere='both'`` otherwise.
+        """
+        from abtem.ebsd.emsoft import write_emsoft_master_pattern
+
+        write_emsoft_master_pattern(
+            path,
+            self,
+            atoms,
+            npx=npx,
+            energy=energy,
+            space_group=space_group,
+            sample_tilt=sample_tilt,
+            debye_waller=debye_waller,
+            name=name,
+            overwrite=overwrite,
+        )
 
     @classmethod
     def from_zarr(cls, url: str) -> "SphericalPattern":
