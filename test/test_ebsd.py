@@ -1442,6 +1442,12 @@ class TestDepth:
         weighted = make_ebsd(slab, detector, depth_weight=np.repeat(weights, 2)).build()
         assert np.allclose(recombined, weighted.array, rtol=1e-5)
 
+        # A callable sees the slices at the depths the bins do, their centres:
+        # a cut-off at a bin edge keeps exactly the bins above it.
+        shallow = make_ebsd(slab, detector, depth_weight=lambda z: z < 4.0).build()
+        recombined = np.tensordot(emission[:2], binned.array[:2], (0, 0))
+        assert np.allclose(recombined / emission[:2].sum(), shallow.array, rtol=1e-5)
+
         lazy = make_ebsd(slab, detector, depth_bins=4).build(lazy=True).compute()
         assert np.allclose(np.asarray(lazy.array), binned.array, rtol=1e-6)
         assert lazy.metadata["depth_emission"] == binned.metadata["depth_emission"]

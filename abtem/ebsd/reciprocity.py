@@ -146,10 +146,19 @@ def _depth_weights(
     return np.stack([row] * len(energies))
 
 
+def _slice_centres(slice_thickness) -> np.ndarray:
+    """The depth of each slice's centre [Å], the mean depth of its atoms.
+
+    The depth weights and the depth bins both take it as the slice's depth.
+    """
+    thickness = np.asarray(slice_thickness, dtype=float)
+    return np.cumsum(thickness) - thickness / 2.0
+
+
 def _depth_bins(depth_bins, slice_thickness) -> tuple[np.ndarray, np.ndarray]:
     """Edges of the depth bins [Å], and the bin of each slice (-1 if none)."""
     thickness = np.asarray(slice_thickness, dtype=float)
-    centres = np.cumsum(thickness) - thickness / 2.0
+    centres = _slice_centres(thickness)
 
     if np.isscalar(depth_bins):
         n = int(depth_bins)
@@ -401,9 +410,11 @@ class EBSD(CopyMixin, EqualityMixin):
         copy as the atom it came from. Only relative values matter. By default
         every atom is lit alike, as in EMsoft.
     depth_weight : float or array or callable, optional
-        How much the electrons generated at each depth count. A float weights
-        depth ``z`` by ``exp(-z / escape_depth)`` [Å]; an array gives one
-        weight per slice, and a callable maps depths to weights. With several
+        How much the electrons generated at each depth count. The depth of a
+        slice is that of its centre, the mean depth of its atoms, as for
+        `depth_bins`. A float weights depth ``z`` by ``exp(-z / escape_depth)``
+        [Å]; an array gives one weight per slice, and a callable maps the
+        slices' depths to weights. With several
         `backscatter_energy`, the weights may depend on the energy: a callable
         of ``(depths, energy)``, or one row per energy, as from a Monte Carlo
         simulation. Normalized to sum to one. By default every depth counts
@@ -590,7 +601,7 @@ class EBSD(CopyMixin, EqualityMixin):
         )
         n_energies = len(backscatter_energies)
 
-        depths = np.cumsum(np.asarray(self._potential.slice_thickness, dtype=float))
+        depths = _slice_centres(self._potential.slice_thickness)
         weights = _depth_weights(self._depth_weight, depths, backscatter_energies)
 
         if self._depth_bins is None:
