@@ -2309,6 +2309,12 @@ class BlochWaves:
         scan, the plane waves add coherently at each probe position, with the
         probe's aberrations, which gives the interference where discs overlap.
 
+        The probe may have ensemble axes. Members of an aberration or aperture
+        series, such as a defocus series, share the Bloch-wave solutions; members
+        of a tilt series or an energy ensemble are solved separately. A tilted
+        probe meets the crystal at its tilt, with the pattern centred on the beam,
+        as in multislice. Bloch waves of several energies give an energy axis.
+
         The probe's extent should be a whole number of unit cells, so that the
         reciprocal lattice falls on its grid; the crystal must then have an
         orthogonal cell. A beam that misses the grid is placed at the nearest
@@ -2319,7 +2325,8 @@ class BlochWaves:
         probe : Probe
             The probe. Its grid (extent and gpts or sampling) sets the detector:
             the patterns have its gpts and a sampling of 1 / extent [1/Å]. Its
-            energy, if given, must be that of the Bloch waves.
+            energies, if given, must be among those of the Bloch waves; if not
+            given, the Bloch waves' energies are used.
         thicknesses : float or sequence of floats
             The thicknesses of the sample [Å].
         scan : array of xy-positions or BaseScan, optional
@@ -2335,8 +2342,9 @@ class BlochWaves:
         Returns
         -------
         DiffractionPatterns
-            The CBED patterns, with the scan axes (if a scan is given) and a
-            thickness axis (if several thicknesses are given) as ensemble axes. For
+            The CBED patterns. Their ensemble axes are those of the probe (tilt,
+            aberrations, aperture), the scan's, an energy axis if there are several
+            energies, and a thickness axis if several thicknesses are given. For
             a single position, the intensities sum to the fraction of the probe
             that the beams carry onto the grid.
         """

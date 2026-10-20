@@ -1727,25 +1727,29 @@ def test_cbed_matches_multislice(silicon_cbed):
 
 
 @pytest.mark.usefixtures("float64")
-def test_cbed_of_a_rotated_crystal_matches_a_tilted_beam():
-    # Rotating the crystal by +tau about y sends the beam along -tau in x of the
-    # crystal: multislice with the probe tilted by -tau gives the same pattern,
-    # and the opposite tilt a mirrored one.
+def test_cbed_of_a_tilted_beam_matches_multislice():
+    # A probe tilted by -tau in x meets the crystal as in multislice, with the
+    # pattern centred on the beam. Rotating the crystal by +tau about y instead
+    # sends the beam along -tau in x of the crystal: the same pattern, unlike
+    # that of a tilt of +tau.
     bloch_waves, probe, potential = _cbed_silicon(semiangle_cutoff=4.0, cells=12)
-    result = bloch_waves.rotate("y", 0.01).calculate_cbed_patterns(
-        probe, potential.thickness
-    )
-    result = result.compute().array
-    r_factors = []
+    references = {}
     for tilt in (-10.0, 10.0):
         tilted = probe.copy()
         tilted.tilt = (tilt, 0.0)
         reference = tilted.multislice(potential, lazy=False)
-        r_factors.append(
-            _r_factor(result, reference.diffraction_patterns(max_angle=None).array)
-        )
-    assert r_factors[0] < 0.03
-    assert r_factors[1] > 0.1
+        references[tilt] = reference.diffraction_patterns(max_angle=None).array
+
+    tilted.tilt = (-10.0, 0.0)
+    result = bloch_waves.calculate_cbed_patterns(tilted, potential.thickness)
+    assert _r_factor(result.compute().array, references[-10.0]) < 0.03
+
+    rotated = bloch_waves.rotate("y", 0.01).calculate_cbed_patterns(
+        probe, potential.thickness
+    )
+    rotated = rotated.compute().array
+    assert _r_factor(rotated, references[-10.0]) < 0.03
+    assert _r_factor(rotated, references[10.0]) > 0.1
 
 
 def test_cbed_axes_and_laziness():
@@ -1773,26 +1777,66 @@ def test_cbed_axes_and_laziness():
             assert result.compute().array.dtype == np.dtype(precision)
 
 
-def test_cbed_rejects_unsupported_probes():
+def test_cbed_probe_ensembles_match_their_members():
+    # Aberration and aperture series share the Bloch-wave solutions, a tilt
+    # series and several energies do not; every member is the pattern of the
+    # probe with that member's values.
     bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
-    grid = dict(extent=probe.extent, gpts=probe.gpts)
-    for kwargs, match in (
-        (dict(energy=100e3), "differs"),
-        (dict(energy=200e3, tilt=(1.0, 0.0)), "tilt"),
-        (dict(energy=200e3, defocus=[0.0, 10.0]), "ensemble"),
-    ):
-        invalid = abtem.Probe(semiangle_cutoff=3.0, **grid, **kwargs)
-        with pytest.raises(ValueError, match=match):
-            bloch_waves.calculate_cbed_patterns(invalid, 20.0)
-
-    several_energies = BlochWaves(
+    bloch_waves = BlochWaves(
         structure_factor=bloch_waves.structure_factor,
-        energy=[100e3, 200e3],
+        energy=[150e3, 200e3],
         sg_max=0.3,
         g_max=1.5,
     )
-    with pytest.raises(ValueError, match="single energy"):
-        several_energies.calculate_cbed_patterns(probe, 20.0)
+    tilts = abtem.distributions.from_values([0.0, 2.0])
+    semiangles = abtem.distributions.from_values([2.5, 3.5])
+    ensemble = abtem.Probe(
+        semiangle_cutoff=semiangles,
+        defocus=[0.0, 40.0],
+        tilt=(tilts, 1.0),
+        extent=probe.extent,
+        gpts=probe.gpts,
+    )
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=(1, 2))
+    patterns = bloch_waves.calculate_cbed_patterns(ensemble, [10.0, 20.0], scan=scan)
+
+    assert patterns.ensemble_shape == (2, 2, 2, 1, 2, 2, 2)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "AxisAlignedTiltAxis",
+        "ParameterAxis",
+        "ParameterAxis",
+        "ScanAxis",
+        "ScanAxis",
+        "EnergyAxis",
+        "ThicknessAxis",
+    ]
+    assert patterns.metadata["energy"] is None
+
+    patterns = patterns.compute().array
+    for tilt, defocus, semiangle, energy in ((0, 1, 0, 1), (1, 0, 1, 0)):
+        member = abtem.Probe(
+            semiangle_cutoff=semiangles.values[semiangle],
+            defocus=[0.0, 40.0][defocus],
+            tilt=(tilts.values[tilt], 1.0),
+            energy=bloch_waves._energies[energy],
+            extent=probe.extent,
+            gpts=probe.gpts,
+        )
+        expected = bloch_waves.calculate_cbed_patterns(member, [10.0, 20.0], scan=scan)
+        np.testing.assert_allclose(
+            patterns[tilt, defocus, semiangle, :, :, energy],
+            expected.compute().array,
+            atol=1e-6,
+        )
+
+
+def test_cbed_rejects_invalid_inputs():
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    other_energy = abtem.Probe(
+        semiangle_cutoff=3.0, energy=100e3, extent=probe.extent, gpts=probe.gpts
+    )
+    with pytest.raises(ValueError, match="not among"):
+        bloch_waves.calculate_cbed_patterns(other_energy, 20.0)
 
     off_grid = abtem.Probe(semiangle_cutoff=3.0, energy=200e3, extent=15.0, gpts=48)
     with pytest.warns(UserWarning, match="projected lattice"):
