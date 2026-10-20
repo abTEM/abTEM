@@ -74,7 +74,7 @@ def _detector_patch(
 
     Returns an array of shape ``(sources, len(local))``.
     """
-    slab, _ = rotated_slab(
+    slab, rotation = rotated_slab(
         block, slab_axis, builder.slab_cell, repetitions=(1, 1, 1), origin=origin
     )
 
@@ -86,7 +86,7 @@ def _detector_patch(
         warnings.simplefilter("ignore", AntialiasLossWarning)
         result = EBSD(
             Potential(
-                _displaced(slab, builder._frozen_phonons),
+                _displaced(slab, rotation, builder._frozen_phonons),
                 gpts=gpts,
                 slice_thickness=builder._slice_thickness,
                 projection="finite",
@@ -370,7 +370,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         ensemble axes and shape of the positions.
         """
         xp = get_array_module(self._device)
-        slab, _ = rotated_slab(
+        slab, rotation = rotated_slab(
             block,
             self.beam_direction,
             self.incident_cell,
@@ -379,7 +379,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         )
 
         potential = Potential(
-            _displaced(slab, self._frozen_phonons),
+            _displaced(slab, rotation, self._frozen_phonons),
             gpts=fft_friendly_gpts(self.incident_cell[:2], self._sampling),
             slice_thickness=self._slice_thickness,
             projection="finite",

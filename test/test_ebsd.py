@@ -49,6 +49,7 @@ from abtem.ebsd.reference import (
     patch_half_angle,
 )
 from abtem.ebsd.sampling import potential_sampling, scattering_power_lost
+from abtem.inelastic.phonons import SOURCE_INDEX
 
 # The calculations here run on grids far coarser than a converged pattern
 # needs, to be quick, and the constructors warn about that; the tests of the
@@ -458,21 +459,42 @@ class TestOrientations:
         frozen = abtem.FrozenPhonons(SILICON, num_configs=2, sigmas=[0.0, 0.1], seed=3)
         crystal, frozen_phonons = _crystal_and_displacements(frozen)
         cell = (8.0, 8.0, 6.0)
-        slab, _ = rotated_slab(
+        slab, rotation = rotated_slab(
             bulk_block(crystal, cell), np.array([1.0, 1.0, 1.0]), cell, (1, 1, 1)
         )
-        displaced = _displaced(slab, frozen_phonons)
+        displaced = _displaced(slab, rotation, frozen_phonons)
         moved = np.linalg.norm(
-            displaced.randomize(slab).positions - slab.positions, axis=1
+            displaced._randomize_transformed(slab).positions - slab.positions, axis=1
         )
         assert np.array_equal(moved > 0, slab.arrays["cell_index"] == 1)
         assert (displaced.num_configs, displaced.seed) == (2, frozen_phonons.seed)
+
+        # Anisotropic displacements and restricted directions are the crystal's,
+        # whatever the slab's orientation: displaced only along the crystal's z,
+        # or only in its xy-plane, as seen back in the crystal frame.
+        for kwargs, kept in (
+            (dict(sigmas={"Si": (0.0, 0.0, 0.1)}), [False, False, True]),
+            (dict(sigmas=0.1, directions="xy"), [True, True, False]),
+        ):
+            _, frozen_phonons = _crystal_and_displacements(
+                abtem.FrozenPhonons(SILICON, num_configs=2, seed=3, **kwargs)
+            )
+            displaced = _displaced(slab, rotation, frozen_phonons)
+            shifts = displaced._randomize_transformed(slab).positions - slab.positions
+            in_crystal = np.abs(shifts @ rotation).max(axis=0)
+            assert np.array_equal(in_crystal > 1e-9, kept), kwargs
 
         # given per element, they apply to any slab
         _, by_element = _crystal_and_displacements(
             abtem.FrozenPhonons(SILICON, num_configs=2, sigmas=0.08, seed=3)
         )
-        assert _displaced(silicon_slab(), by_element).num_configs == 2
+        assert _displaced(silicon_slab(), rotation, by_element).num_configs == 2
+
+        # the configurations of a yield are averaged, whatever was asked
+        with pytest.warns(UserWarning, match="ensemble_mean=False is ignored"):
+            _crystal_and_displacements(
+                abtem.FrozenPhonons(SILICON, 2, sigmas=0.08, ensemble_mean=False)
+            )
 
     def test_detects_an_inversion_centre(self):
         assert is_centrosymmetric(SILICON)
@@ -1125,6 +1147,20 @@ class TestEBSD:
         for i in range(3):
             alone = make_ebsd(slab, detector, illumination=illumination[i]).build()
             assert np.allclose(together.array[i], alone.array, rtol=1e-5), i
+
+        # The values are for the atoms as given, also when the potential
+        # transforms them: the primitive cell is orthogonalized into copies of
+        # its two atoms, each lit as the atom it came from.
+        lit = make_ebsd(SILICON, detector, illumination=[1.0, 0.2]).build()
+        potential = abtem.Potential(SILICON, sampling=0.15)
+        source = potential._configuration()[0].arrays[SOURCE_INDEX]
+        expected = make_ebsd(
+            potential.get_transformed_atoms(),
+            detector,
+            illumination=np.array([1.0, 0.2])[source],
+        ).build()
+        assert len(source) == 4 * len(SILICON)
+        assert np.allclose(lit.array, expected.array, rtol=1e-5)
 
     def test_frozen_phonon_configurations_are_averaged(self):
         # A potential built on an ensemble carries a configuration axis the

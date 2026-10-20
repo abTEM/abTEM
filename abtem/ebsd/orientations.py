@@ -15,6 +15,7 @@ chooses the patch centres and :func:`rotated_slab` cuts the slabs.
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -330,6 +331,13 @@ def _crystal_and_displacements(
     """
     if isinstance(atoms, FrozenPhonons):
         frozen_phonons, atoms = atoms, atoms.atoms
+        if not frozen_phonons.ensemble_mean:
+            warnings.warn(
+                "a backscattered yield is an incoherent sum over the frozen-phonon "
+                "configurations, so they are averaged; ensemble_mean=False is "
+                "ignored",
+                UserWarning,
+            )
     elif isinstance(atoms, BaseFrozenPhonons):
         raise TypeError(
             f"slabs are cut from one crystal, and a {type(atoms).__name__} holds "
@@ -343,13 +351,73 @@ def _crystal_and_displacements(
     return atoms, frozen_phonons
 
 
+class _SlabFrozenPhonons(FrozenPhonons):
+    """Frozen phonons of a slab cut from a rotated crystal.
+
+    Anisotropic standard deviations and `directions` refer to the crystal's
+    axes, so the displacements are drawn along those and rotated into the slab.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The slab.
+    num_configs, sigmas, directions, ensemble_mean, seed :
+        As for :class:`~abtem.FrozenPhonons`, with the crystal's axes.
+    rotation : np.ndarray
+        The rotation taking the crystal frame to the slab frame, as returned by
+        :func:`rotated_slab`.
+    """
+
+    def __init__(
+        self,
+        atoms: Atoms,
+        num_configs: int,
+        sigmas,
+        directions: str = "xyz",
+        ensemble_mean: bool = True,
+        seed=None,
+        rotation: Optional[np.ndarray] = None,
+    ):
+        super().__init__(
+            atoms,
+            num_configs=num_configs,
+            sigmas=sigmas,
+            directions=directions,
+            ensemble_mean=ensemble_mean,
+            seed=seed,
+        )
+        self._rotation = np.eye(3) if rotation is None else np.asarray(rotation, float)
+
+    @property
+    def rotation(self) -> np.ndarray:
+        """The rotation taking the crystal frame to the slab frame."""
+        return self._rotation
+
+    def _randomize_transformed(
+        self,
+        atoms: Atoms,
+        frame: Optional[np.ndarray] = None,
+        directions_frame: Optional[np.ndarray] = None,
+    ) -> Atoms:
+        # maps on row vectors: crystal to slab is R^T, then the potential's frame
+        frame = self._rotation.T @ (np.eye(3) if frame is None else np.asarray(frame))
+        # the directions are the crystal's axes
+        if directions_frame is None:
+            directions_frame = np.linalg.inv(frame)
+        else:
+            directions_frame = np.asarray(directions_frame) @ self._rotation
+        return super()._randomize_transformed(
+            atoms, frame=frame, directions_frame=directions_frame
+        )
+
+
 def _displaced(
-    slab: Atoms, frozen_phonons: Optional[FrozenPhonons]
+    slab: Atoms, rotation: np.ndarray, frozen_phonons: Optional[FrozenPhonons]
 ) -> Atoms | FrozenPhonons:
     """The slab, displaced as `frozen_phonons` displaces the crystal it came from.
 
-    The same configurations and seeds, and each atom the displacements of its
-    site in the crystal.
+    The same configurations and seeds, each atom the displacements of its site
+    in the crystal, and anisotropic displacements along the crystal's axes.
     """
     if frozen_phonons is None:
         return slab
@@ -359,8 +427,9 @@ def _displaced(
         # given per atom of the crystal
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
-    return FrozenPhonons(
+    return _SlabFrozenPhonons(
         slab,
+        rotation=rotation,
         num_configs=frozen_phonons.num_configs,
         sigmas=sigmas,
         directions=frozen_phonons.directions,
@@ -385,8 +454,6 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     -------
     centrosymmetric : bool
     """
-    import warnings
-
     try:
         import spglib  # type: ignore[import-untyped]
     except ImportError:

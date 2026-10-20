@@ -121,7 +121,7 @@ def _patch_intensities(
     Returns one value per direction of `local`, after an energy axis if there
     are several backscattered energies.
     """
-    slab, _ = rotated_slab(
+    slab, rotation = rotated_slab(
         block, slab_axis, builder.slab_cell, repetitions=(1, 1, 1), origin=origin
     )
 
@@ -130,7 +130,7 @@ def _patch_intensities(
         warnings.simplefilter("ignore", AntialiasLossWarning)
         result = EBSD(
             Potential(
-                _displaced(slab, builder._frozen_phonons),
+                _displaced(slab, rotation, builder._frozen_phonons),
                 gpts=gpts,
                 slice_thickness=builder._slice_thickness,
                 projection="finite",

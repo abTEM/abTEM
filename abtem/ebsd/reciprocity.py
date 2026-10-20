@@ -396,8 +396,10 @@ class EBSD(CopyMixin, EqualityMixin):
     illumination : np.ndarray, optional
         How brightly the incident beam lights each atom of the potential, of
         shape ``(atoms,)``, or ``(sources, atoms)`` for several, which adds a
-        leading axis. Only relative values matter. By default every atom is lit
-        alike, as in EMsoft.
+        leading axis. The values are for the atoms as given; a potential that
+        transforms them, for example by orthogonalizing their cell, lights each
+        copy as the atom it came from. Only relative values matter. By default
+        every atom is lit alike, as in EMsoft.
     depth_weight : float or array or callable, optional
         How much the electrons generated at each depth count. A float weights
         depth ``z`` by ``exp(-z / escape_depth)`` [Å]; an array gives one

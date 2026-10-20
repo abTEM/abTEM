@@ -25,6 +25,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2, ifft2
 from abtem.core.utils import get_dtype
+from abtem.inelastic.phonons import SOURCE_INDEX
 from abtem.integrals import sinc, superpose_deltas
 from abtem.parametrizations import validate_parametrization
 from abtem.slicing import SliceIndexedAtoms
@@ -71,8 +72,13 @@ def backscatter_cross_section(
 
 
 def configuration_atoms(potential) -> Atoms:
-    """The atoms of a single-configuration potential, displaced as it displaces them."""
-    return potential.frozen_phonons.randomize(potential.get_transformed_atoms())
+    """The atoms of a single-configuration potential, placed as it places them.
+
+    They are transformed, displaced and wrapped exactly as the atoms that
+    scatter, and each carries, in the ``SOURCE_INDEX`` array, the index of the
+    atom of the potential's atoms it is a copy of.
+    """
+    return potential._configuration()[0]
 
 
 class EmissionSlices:
@@ -92,8 +98,10 @@ class EmissionSlices:
         Electron energy [eV], which sets the cross-sections.
     illumination : np.ndarray, optional
         How brightly the incident beam lights each atom, of shape ``(atoms,)``
-        or ``(sources, atoms)`` for several illuminations at once. Defaults to
-        one for every atom.
+        or ``(sources, atoms)`` for several illuminations at once. If the atoms
+        carry a ``SOURCE_INDEX`` array, as those of :func:`configuration_atoms`
+        do, the values are for the atoms they were transformed from. Defaults
+        to one for every atom.
     device : str, optional
         Device to build the slices on.
     """
@@ -114,7 +122,16 @@ class EmissionSlices:
             emission = emission[None]
         else:
             illumination = np.atleast_2d(np.asarray(illumination, dtype=float))
-            if illumination.shape[-1] != len(atoms):
+            if SOURCE_INDEX in atoms.arrays:
+                source_index = atoms.arrays[SOURCE_INDEX]
+                if illumination.shape[-1] <= source_index.max(initial=-1):
+                    raise ValueError(
+                        f"illumination has {illumination.shape[-1]} values per "
+                        f"source but the atoms were transformed from "
+                        f"{source_index.max() + 1}"
+                    )
+                illumination = illumination[:, source_index]
+            elif illumination.shape[-1] != len(atoms):
                 raise ValueError(
                     f"illumination has {illumination.shape[-1]} values per source "
                     f"but there are {len(atoms)} atoms"
