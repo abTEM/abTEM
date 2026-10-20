@@ -144,108 +144,74 @@ Planned for this release (not yet merged):
 
 ## 1.0.11
 
-A bugfix release on top of 1.0.10. Every fix was ported from `dev`. There are no
-new features, no new defaults, and none of the post-release algorithm changes.
-Plain potentials, plane-wave and probe multislice with default settings,
-ensembles of unweighted parameters, zarr round trips and the configuration
-defaults give bit-identical results to 1.0.10 at the default float32 precision
-(checked on 66 scenarios). At `precision='float64'` the atom snapping of [#390](https://github.com/abTEM/abTEM/pull/390) changes
-plain potentials by 1e-17 to 1e-15.
+A bugfix release on top of 1.0.10 with fixes ported from `dev`; no features and no new defaults.
+Plain potentials, plane-wave and probe multislice with default settings, ensembles of unweighted
+parameters, zarr round trips and the configuration defaults are bit-identical to 1.0.10 at the
+default float32 precision (checked on 66 scenarios).
 
 ### Fixed: results that change
 
-These corrections change numbers that 1.0.10 produced. The magnitudes quoted are
-from small test systems and vary with the data.
+Magnitudes are from small test systems and vary with the data.
 
-**4D-STEM and diffraction-pattern measurements**
-- Centre of mass and iCOM are divided by the captured intensity ([#417](https://github.com/abTEM/abTEM/pull/417)); an all-zero pattern now gives NaN instead of 0.
-- Default patterns from `Waves.diffraction_patterns` and `PixelatedDetector` are unshifted. Their coordinates, `azimuthal_average`, `bandlimit` and centre of mass applied centred coordinates to unshifted data and are now right ([#463](https://github.com/abTEM/abTEM/pull/463)): azimuthal averages differ by up to 80 %.
-- Radial binning and the default `FlexibleAnnularDetector` bins are exactly `step_size` wide ([#469](https://github.com/abTEM/abTEM/pull/469)): default ADF/HAADF values move by 0.2 to 0.8 %, `radial_binning` by 13 to 33 %, more on very coarse k grids.
-- `PolarMeasurements.integrate` azimuthal limits and bin selection ([#459](https://github.com/abTEM/abTEM/pull/459)); radian/degree conversions ([#458](https://github.com/abTEM/abTEM/pull/458), were off by 1e6); `depth_profile` z sampling and `Images.coordinates` spacing ([#461](https://github.com/abTEM/abTEM/pull/461)); `interpolate_line` near edges and on anisotropic grids ([#470](https://github.com/abTEM/abTEM/pull/470)); `Images` reflected division `2 / images` ([#470](https://github.com/abTEM/abTEM/pull/470)); periodic spline interpolation ([#506](https://github.com/abTEM/abTEM/pull/506), ~1e-4).
-- A `FlexibleAnnularDetector` without an explicit `outer` takes the cutoff angle of the waves of each call; it used to keep the angle of the first waves it saw, so reusing it for another energy or grid binned the new waves wrongly ([#434](https://github.com/abTEM/abTEM/pull/434)).
-- `AnnularDetector(offset=...)` is applied ([#324](https://github.com/abTEM/abTEM/pull/324)); `get_detector_region` returns percent as a float, as its label says ([#283](https://github.com/abTEM/abTEM/pull/283)).
-- `block_direct=True` blocks the whole bright-field disk instead of 1 mrad ([#484](https://github.com/abTEM/abTEM/pull/484)); `block_direct()` without a cutoff blocks only the zero-angle pixel ([#556](https://github.com/abTEM/abTEM/pull/556)).
-- Reciprocal-space waves measure like the same waves in real space ([#565](https://github.com/abTEM/abTEM/pull/565), [#566](https://github.com/abTEM/abTEM/pull/566)).
-- Lazy `gaussian_source_size` is periodic at the scan edges, as the eager path ([#485](https://github.com/abTEM/abTEM/pull/485)); `integrate_gradient` takes the minimum per image ([#556](https://github.com/abTEM/abTEM/pull/556)).
-- Seeded Poisson and scan noise give a different realisation for the same seed (same statistics; now independent of chunking) ([#464](https://github.com/abTEM/abTEM/pull/464), [#475](https://github.com/abTEM/abTEM/pull/475)).
-- Float32 data stays float32 in transfer functions, `integrate_gradient` and `center_of_mass` ([#604](https://github.com/abTEM/abTEM/pull/604), ~1e-7).
+**4D-STEM and measurements**
+- Centre of mass and iCOM are divided by the captured intensity ([#417](https://github.com/abTEM/abTEM/pull/417)); an all-zero pattern gives NaN instead of 0.
+- Default diffraction patterns are unshifted: their coordinates, `azimuthal_average`, `bandlimit` and centre of mass now agree with that ([#463](https://github.com/abTEM/abTEM/pull/463); azimuthal averages differ by up to 80 %).
+- Radial bins are exactly `step_size` wide ([#469](https://github.com/abTEM/abTEM/pull/469); default ADF/HAADF move by 0.2 to 0.8 %, `radial_binning` by 13 to 33 %).
+- A `FlexibleAnnularDetector` without `outer` follows the waves of each call, not the first ones it saw ([#434](https://github.com/abTEM/abTEM/pull/434)).
+- `PolarMeasurements.integrate` azimuthal limits ([#459](https://github.com/abTEM/abTEM/pull/459)), rad/deg conversions ([#458](https://github.com/abTEM/abTEM/pull/458), off by 1e6), `depth_profile` and `Images.coordinates` ([#461](https://github.com/abTEM/abTEM/pull/461)), `interpolate_line` and `2 / images` ([#470](https://github.com/abTEM/abTEM/pull/470)), periodic spline interpolation ([#506](https://github.com/abTEM/abTEM/pull/506)).
+- `AnnularDetector(offset=...)` is applied ([#324](https://github.com/abTEM/abTEM/pull/324)); `get_detector_region` returns percent as a float ([#283](https://github.com/abTEM/abTEM/pull/283)).
+- `block_direct=True` blocks the whole bright-field disk instead of 1 mrad ([#484](https://github.com/abTEM/abTEM/pull/484)); `block_direct()` without cutoff blocks only the zero-angle pixel ([#556](https://github.com/abTEM/abTEM/pull/556)).
+- Reciprocal-space waves measure like real-space ones ([#565](https://github.com/abTEM/abTEM/pull/565), [#566](https://github.com/abTEM/abTEM/pull/566)); lazy `gaussian_source_size` is periodic like the eager one ([#485](https://github.com/abTEM/abTEM/pull/485)); `integrate_gradient` takes the minimum per image ([#556](https://github.com/abTEM/abTEM/pull/556)).
+- Seeded Poisson and scan noise give another realisation for the same seed ([#464](https://github.com/abTEM/abTEM/pull/464), [#475](https://github.com/abTEM/abTEM/pull/475)). Float32 stays float32 in transfer functions, `integrate_gradient` and `center_of_mass` ([#604](https://github.com/abTEM/abTEM/pull/604)).
+- `PixelatedDetector(reciprocal_space=False)` has real-space axes, `WavesDetector(gpts=...)` declares the right shape, and `block_direct` no longer grows its metadata ([#499](https://github.com/abTEM/abTEM/pull/499)).
 
 **PRISM**
-- Aberrated `SMatrix.reduce`/`scan` results were wrong and now match `Probe` ([#318](https://github.com/abTEM/abTEM/pull/318); 17 to 75 % in the test cases).
-- An eager frozen-phonon reduce is averaged over configurations like the lazy path ([#576](https://github.com/abTEM/abTEM/pull/576)); PRISM no longer leaves its outer angle on the caller's detector ([#491](https://github.com/abTEM/abTEM/pull/491)). At `precision='float64'` PRISM builds change by 1e-8 to 5e-8 ([#556](https://github.com/abTEM/abTEM/pull/556)).
+- Aberrated `SMatrix.reduce`/`scan` match `Probe` ([#318](https://github.com/abTEM/abTEM/pull/318); 17 to 75 %). An eager frozen-phonon reduce is averaged like the lazy one ([#576](https://github.com/abTEM/abTEM/pull/576)), and eager `SMatrix.scan`/`reduce` reduce the `CTF` ensemble axes ([#466](https://github.com/abTEM/abTEM/pull/466)). PRISM no longer leaves its outer angle on the caller's detector ([#491](https://github.com/abTEM/abTEM/pull/491)).
 
 **Potentials and atoms**
-- `orthogonalize_cell` followed by `Potential` no longer loses atoms near cell faces ([#345](https://github.com/abTEM/abTEM/pull/345), [#390](https://github.com/abTEM/abTEM/pull/390), [#555](https://github.com/abTEM/abTEM/pull/555)): for wurtzite GaN 2 of 8 atoms were dropped (projected potential +33 % relative to 1.0.10).
-- Non-periodic potentials keep atoms displaced past a face, and transformed non-periodic cuts give the periodic result ([#460](https://github.com/abTEM/abTEM/pull/460), [#555](https://github.com/abTEM/abTEM/pull/555)).
-- `CrystalPotential` honours `first_slice`/`last_slice` ([#269](https://github.com/abTEM/abTEM/pull/269)); `GPAWPotential(repetitions=...)` values were wrong by about 100 % ([#494](https://github.com/abTEM/abTEM/pull/494)).
-- GPAW valence slices and Bloch projected potentials are integrated centred on their slices, which shifts each slice by dz/2 (5 % per slice for GPAW, 17 to 30 % for Bloch; whole-cell sums unchanged) ([#574](https://github.com/abTEM/abTEM/pull/574)). `ChargeDensityPotential` slices are sampled at midpoints ([#472](https://github.com/abTEM/abTEM/pull/472); error against fine slicing drops from 0.5 to 4.2 % to at most 0.55 %).
-- `GPAWParametrization` applies `charge` ([#329](https://github.com/abTEM/abTEM/pull/329); only cations raise, as in 1.0.10).
-- IAM magnetic fields change by ~1e-6 ([#543](https://github.com/abTEM/abTEM/pull/543)); field and vector-potential slices are labelled with the units of a slice integral (`ÅT`, `Å²T`).
+- `orthogonalize_cell` followed by `Potential` no longer drops atoms near cell faces ([#345](https://github.com/abTEM/abTEM/pull/345), [#390](https://github.com/abTEM/abTEM/pull/390), [#555](https://github.com/abTEM/abTEM/pull/555); wurtzite GaN lost 2 of 8 atoms, projected potential +33 %). Non-periodic cells keep displaced atoms ([#460](https://github.com/abTEM/abTEM/pull/460), [#555](https://github.com/abTEM/abTEM/pull/555)).
+- `CrystalPotential` honours `first_slice`/`last_slice` ([#269](https://github.com/abTEM/abTEM/pull/269)); `GPAWPotential(repetitions=...)` was wrong by about 100 % ([#494](https://github.com/abTEM/abTEM/pull/494)); `GPAWParametrization` applies `charge` ([#329](https://github.com/abTEM/abTEM/pull/329)).
+- GPAW and Bloch slices are integrated centred on their slices, which shifts each slice by dz/2 (5 % for GPAW, 17 to 30 % for Bloch; whole-cell sums unchanged) ([#574](https://github.com/abTEM/abTEM/pull/574)); `ChargeDensityPotential` slices are sampled at midpoints ([#472](https://github.com/abTEM/abTEM/pull/472)).
+- IAM magnetic fields change by ~1e-6 and their slices are labelled `ÅT`, `Å²T` ([#543](https://github.com/abTEM/abTEM/pull/543)); `projection="finite"` with sigmas for only some elements dropped the others ([#480](https://github.com/abTEM/abTEM/pull/480)); the GPAW magnetic `real_space` projection ignored `first_slice` ([#544](https://github.com/abTEM/abTEM/pull/544)); `wrapped_crop_2d` outside the cell ([#389](https://github.com/abTEM/abTEM/pull/389)); eager multislice of potentials with two or more ensemble axes scrambled the results ([#333](https://github.com/abTEM/abTEM/pull/333)).
 
 **Bloch waves**
-- Non-centrosymmetric structures were computed for the position-negated structure ([#379](https://github.com/abTEM/abTEM/pull/379)): exit waves change (wurtzite by up to 1.27), zone-axis patterns only at rounding; centrosymmetric results are unchanged.
-- The symmetrising metric of the eigenproblem is applied consistently ([#448](https://github.com/abTEM/abTEM/pull/448)). The eigendecomposition path (diffraction patterns, exit waves) and the matrix-exponential path (`calculate_scattering_matrix`) disagreed off the zone axis and now agree to rounding. The standard form (`use_wave_eq=False`, still the default) now solves the textbook generalised eigenproblem exactly, and `use_wave_eq=True` no longer carries the standard form's metric. For Si at 100 keV and thicknesses of 100 to 600 Å the intensities change by R = 1.5e-3 to 2.2e-3 on the zone axis and 3e-4 to 1.3e-3 for a 7° tilt (R = Σ|ΔI| / ΣI over the beams), for both forms.
-- Eager rotation ensembles return each orientation's own pattern ([#450](https://github.com/abTEM/abTEM/pull/450)); A/B/C centred cells keep the correct reflections ([#487](https://github.com/abTEM/abTEM/pull/487)). Scattering matrices on CuPy are accurate ([#449](https://github.com/abTEM/abTEM/pull/449)).
+- Non-centrosymmetric structures were computed for the negated structure ([#379](https://github.com/abTEM/abTEM/pull/379); wurtzite exit waves change by up to 1.27).
+- The symmetrising metric is applied consistently ([#448](https://github.com/abTEM/abTEM/pull/448)): the eigendecomposition and matrix-exponential paths now agree to rounding. For Si at 100 keV, default intensities change by R = 1.5e-3 to 2.2e-3 on the zone axis and 3e-4 to 1.3e-3 at a 7° tilt (R = Σ|ΔI| / ΣI).
+- Eager rotation ensembles ([#450](https://github.com/abTEM/abTEM/pull/450)), A/B/C centring ([#487](https://github.com/abTEM/abTEM/pull/487)) and CuPy scattering matrices ([#449](https://github.com/abTEM/abTEM/pull/449)).
 
 **HRTEM and CTF**
-- `set_aberrations` with `'scherzer'`: C10 sign and ordering ([#471](https://github.com/abTEM/abTEM/pull/471)). `apply_ctf` no longer writes the waves' energy into the CTF, so a CTF can be reused at another energy ([#489](https://github.com/abTEM/abTEM/pull/489)).
+- `set_aberrations('scherzer')` C10 sign and ordering ([#471](https://github.com/abTEM/abTEM/pull/471)); `apply_ctf` no longer writes the waves' energy into the CTF ([#489](https://github.com/abTEM/abTEM/pull/489)).
 
 **Core-loss**
-- Continuum normalisation ([#364](https://github.com/abTEM/abTEM/pull/364); for example K scan -5.8 % at 3 eV, several-fold below ~1 eV), the (2l+1) degeneracy double count ([#368](https://github.com/abTEM/abTEM/pull/368): L2,3 intensity drops 3×, M4,5 5×; K edges unchanged), site threshold and a spurious 1.02 radial factor ([#468](https://github.com/abTEM/abTEM/pull/468): K rises by 3 to 4 %, L2,3 falls by 22 to 27 %), and the vxc vacuum tail (-3.7 % K and -3.9 % L2,3 at 3 eV, +0.6 to +1.6 % at 10 eV).
-- Single-channel frozen-phonon core loss was `num_configs` times too large or zero ([#387](https://github.com/abTEM/abTEM/pull/387)).
+- Continuum normalisation ([#364](https://github.com/abTEM/abTEM/pull/364)), the (2l+1) double count ([#368](https://github.com/abTEM/abTEM/pull/368); L2,3 ÷3, M4,5 ÷5), site threshold and a spurious 1.02 factor ([#468](https://github.com/abTEM/abTEM/pull/468); K +3 to 4 %, L2,3 −22 to −27 %) and the vxc vacuum tail (−4 % at 3 eV). Single-channel frozen-phonon core loss was `num_configs` times too large or zero ([#387](https://github.com/abTEM/abTEM/pull/387)).
 
 **Backscattering**
-- Back-propagation of backscattered waves is corrected ([#562](https://github.com/abTEM/abTEM/pull/562), relative L2 0.4 at the entrance plane) and ensembles work ([#499](https://github.com/abTEM/abTEM/pull/499)).
+- Back-propagation is corrected ([#562](https://github.com/abTEM/abTEM/pull/562)) and ensembles work ([#499](https://github.com/abTEM/abTEM/pull/499)).
 
-**Weighted distributions (focal spread, tilt and other parameters)**
-- Distribution weights are probabilities applied when the ensemble is reduced ([#466](https://github.com/abTEM/abTEM/pull/466)). In 1.0.10 they multiplied the wave amplitude of each member: a STEM `Probe(defocus=gaussian(σ))` was normalised member by member, which erased the weights, so the focal spread was effectively a top-hat; an HRTEM Gaussian spread had an effective standard deviation of σ/√2 instead of σ; and the weights of tilt and aperture or envelope distributions were ignored. For a 200 kV, 25 mrad probe with `defocus=gaussian(σ, num_samples=11)`, the peak of the reduced intensity is 1.76 times the 1.0.10 value at σ = 25 Å and 2.21 times at σ = 50 Å (measurement from the PR). Frozen-phonon results are unchanged to the bit.
-- `.weights` of `gaussian` distributions now sum to one (they had a unit sum of squares). `normalize='intensity'` and `'amplitude'` are deprecated, emit a `FutureWarning` and behave as the new default `'probability'`; this never changes a reduced result.
-- `.sum()` and `.mean()` over an axis with distribution weights ignore the weights and now warn: use `reduce_ensemble()` for the weighted mean, or `reduce_ensemble(axis=...)` for an axis that was kept with `ensemble_mean=False`.
-- Eager `SMatrix.scan` and `SMatrix.reduce` reduce the `ensemble_mean` axes of a `CTF`, like the lazy path (they returned an extra axis).
-- Passing negative weights, or weights of the wrong length, to a distribution now raises `ValueError`.
-- The weights are not applied to the rotation spreads of Bloch waves or to noise axes, which carry none (unchanged from 1.0.10). A zarr file with a weighted axis written by 1.0.11 cannot be read by 1.0.10; files without one can.
-
-**Other results that change**
-- Eager multislice of potentials with two or more ensemble axes wrote its results to scrambled positions ([#333](https://github.com/abTEM/abTEM/pull/333)).
-- `wrapped_crop_2d` for probe and crop windows outside the cell, for example PRISM scan positions several periods away ([#389](https://github.com/abTEM/abTEM/pull/389)).
-- With `projection="finite"` and sigmas given for only some elements, the other elements were dropped from the potential ([#480](https://github.com/abTEM/abTEM/pull/480)).
-- The GPAW magnetic `real_space` projection ignored `first_slice` and truncated plane counts ([#544](https://github.com/abTEM/abTEM/pull/544)).
-- `Waves.phase_shift` relabelled reciprocal-space waves as real space and widened complex64 to complex128 ([#550](https://github.com/abTEM/abTEM/pull/550)); `tile(renormalize=True)` widened complex64 waves ([#414](https://github.com/abTEM/abTEM/pull/414)).
-- FFTW: `fftn` over three axes transformed the wrong axes, and strided input with `overwrite_x=True` raised ([#558](https://github.com/abTEM/abTEM/pull/558); FFTW results change by about 1e-7 on x86). A lazy `fft2_convolve` returned the wrong shape when the kernel axis was longer than a block ([#577](https://github.com/abTEM/abTEM/pull/577)).
-- `bandlimit` and `block_direct(radius=0)` kept the direct beam on some grids ([#506](https://github.com/abTEM/abTEM/pull/506)); 1D `interpolate` of float64 and complex profiles lost its dtype ([#427](https://github.com/abTEM/abTEM/pull/427)).
-- `StructureFactorArray.get_projected_potential` honours `sampling=` and an integer `gpts` and accepts sequences of slice thicknesses; `IndexedDiffractionPatterns.positions_dict` had only three entries ([#456](https://github.com/abTEM/abTEM/pull/456)).
-- `PixelatedDetector(reciprocal_space=False)` declares real-space axes, `WavesDetector(gpts=...)` declares the right shape, and `DiffractionPatterns.block_direct` no longer grows its metadata on each call ([#499](https://github.com/abTEM/abTEM/pull/499)).
+**Weighted distributions**
+- Distribution weights are probabilities applied when the ensemble is reduced ([#466](https://github.com/abTEM/abTEM/pull/466)). In 1.0.10 a STEM focal spread was effectively a top-hat, an HRTEM Gaussian spread had a standard deviation of σ/√2, and tilt and aperture weights were ignored. The peak of the reduced intensity of a 200 kV, 25 mrad probe with `gaussian(σ, num_samples=11)` defocus is 1.76 times the 1.0.10 value at σ = 25 Å and 2.21 times at 50 Å. Frozen-phonon results are unchanged.
+- New: `OrdinalAxis.weights`/`from_distribution` and `reduce_ensemble(axis=)`. `gaussian` weights sum to one; `normalize='intensity'` and `'amplitude'` are deprecated; `.sum()`/`.mean()` over a weighted axis warn; negative or wrong-length weights raise `ValueError`. Bloch rotation spreads and noise axes carry no weights, as before. Zarr files with a weighted axis cannot be read by 1.0.10.
 
 **Distributed computations**
-- The client's configuration reaches the workers of a `distributed` client ([#346](https://github.com/abTEM/abTEM/pull/346)). *ab*TEM resolves configuration inside each task, and worker processes started fresh and saw only the YAML defaults, so any distributed computation with a non-default configuration silently used the defaults: most importantly, `precision='float64'` runs were computed in `float32`. This applies to any distributed client, CPU clusters included, and now also to `to_tiff` and `to_zarr(compute=False)`. Distributed results obtained with a non-default configuration are worth repeating.
+- The client's configuration reaches the workers of a `distributed` client, also for `to_tiff` and `to_zarr(compute=False)` ([#346](https://github.com/abTEM/abTEM/pull/346)). Workers used to see only the YAML defaults, so for example `precision='float64'` runs were computed in `float32`. Distributed results obtained with a non-default configuration are worth repeating.
+
+**Other**
+- FFTW `fftn` over three axes transformed the wrong axes and strided input with `overwrite_x=True` raised ([#558](https://github.com/abTEM/abTEM/pull/558)); a lazy `fft2_convolve` had the wrong shape for long kernels ([#577](https://github.com/abTEM/abTEM/pull/577)).
+- `Waves.phase_shift` relabelled reciprocal-space waves and widened complex64 ([#550](https://github.com/abTEM/abTEM/pull/550)), as did `tile(renormalize=True)` ([#414](https://github.com/abTEM/abTEM/pull/414)); 1D `interpolate` lost float64/complex dtypes ([#427](https://github.com/abTEM/abTEM/pull/427)); `bandlimit` and `block_direct(radius=0)` kept the direct beam on some grids ([#506](https://github.com/abTEM/abTEM/pull/506)).
+- `StructureFactorArray.get_projected_potential` honours `sampling=` and an integer `gpts` and `IndexedDiffractionPatterns.positions_dict` is complete ([#456](https://github.com/abTEM/abTEM/pull/456)).
 
 ### Fixed: errors and crashes
 
-- `Images.scan_noise`, `apply_ctf` at a second energy, `number - Images`, lazy `gaussian_filter` with a constant boundary, lazy `normalize`, single-point `GridScan`, noisy near-orthogonal `Potential` cells, tilted eager Bloch exit waves with scalar thickness, `IndexedDiffractionPatterns.sort()`, core loss on 16 or 17 pixel grids, `AnnularDetector` over a `LineScan` with an extra ensemble axis, GPAW 26 new-style calculators, frozen-phonon `GPAWPotential`, ensemble backscattering, A/B/C centring, graphene repeated along c, and numba typing on some numba/numpy pairings no longer raise.
-- `excitations_weights` (the plasmon Poisson weights) no longer fails because `np.math` is gone in NumPy 2.
-- On CuPy 14.2, a lazy FFT in a dask worker thread no longer fails with `CUFFT_EXEC_FAILED` after an FFT of the same grid in another thread (see `cupy.fft-cache-size` below).
+- No longer raising: `Images.scan_noise`, `apply_ctf` at a second energy, `number - Images`, lazy `gaussian_filter` with a constant boundary, lazy `normalize`, single-point `GridScan`, noisy near-orthogonal `Potential` cells, tilted eager Bloch exit waves with scalar thickness, `IndexedDiffractionPatterns.sort()`, core loss on 16 or 17 pixel grids, `AnnularDetector` over a `LineScan` with an extra ensemble axis, GPAW 26 calculators, frozen-phonon `GPAWPotential`, ensemble backscattering, A/B/C centring, graphene repeated along c, and numba typing on some numba/numpy pairings.
+- `excitations_weights` fails no longer on NumPy 2 (`np.math`). On CuPy 14.2 a lazy FFT in a dask worker thread no longer fails with `CUFFT_EXEC_FAILED` (see `cupy.fft-cache-size`).
 
 ### Changed: behaviour
 
-- abTEM reads its own configuration files, `~/.config/abtem` and `$ABTEM_CONFIG`, as well as dask's ([#416](https://github.com/abTEM/abTEM/pull/416)); 1.0.10 ignored them. A copy of the default `abtem.yaml` kept there now takes effect, including `cupy.fft-cache-size: 0 MB`, which disables the cuFFT plan cache (see below).
-- A built `TransitionPotentialArray` whose energy or grid disagrees with the waves raises `RuntimeError`; a run at a mismatched energy used to complete silently ([#386](https://github.com/abTEM/abTEM/pull/386)). `PixelatedDetector(resample='uniform')` without reciprocal space raises `ValueError` ([#499](https://github.com/abTEM/abTEM/pull/499)); `transition_potential_scan` with `expansion_scope="full"` raises `NotImplementedError` ([#506](https://github.com/abTEM/abTEM/pull/506)).
-- Arrays over 512 MiB are written to zarr with a multi-chunk layout, and a failed write removes the partial file ([#363](https://github.com/abTEM/abTEM/pull/363), [#369](https://github.com/abTEM/abTEM/pull/369)). `GPAWParametrization` for Pm, Sm, Eu and Pu falls back to an unpolarised atom with a `UserWarning` instead of an `AssertionError` ([#467](https://github.com/abTEM/abTEM/pull/467)).
-- `LineScan.angle` reports degrees ([#470](https://github.com/abTEM/abTEM/pull/470)).
-- `SegmentedDetector(to_cpu=...)` defaults to `True`, as documented ([#371](https://github.com/abTEM/abTEM/pull/371); GPU runs return NumPy).
-- Backscattering with exit planes that do not start at the entrance plane, or are not after every slice, raises `ValueError` instead of returning a wrong result ([#562](https://github.com/abTEM/abTEM/pull/562), [#499](https://github.com/abTEM/abTEM/pull/499)).
-- Exploded `show()` grids use 0.25 in between panels ([#354](https://github.com/abTEM/abTEM/pull/354)).
-- The configuration key `cupy.fft-cache-size`, which 1.0.10 ignored, is read and defaults to `auto`: the cuFFT plans cached in each thread may hold up to 25 % of the device memory. Use `0 MB` to disable the cache, a size such as `"2 GB"` for a fixed bound, or `-1` for no bound. A plan larger than the bound runs uncached, with a warning.
-- Importing `abtem` no longer fails if `cupyx.scipy.ndimage` cannot be loaded ([#381](https://github.com/abTEM/abTEM/pull/381)).
-
-### Added: public names that the fixes needed
-
-`OrdinalAxis.weights` and `OrdinalAxis.from_distribution`, and `reduce_ensemble(axis=)` ([#466](https://github.com/abTEM/abTEM/pull/466)), `LinearAxis.__getitem__` ([#344](https://github.com/abTEM/abTEM/pull/344)), `SliceIndexedAtoms(wrap=)` ([#390](https://github.com/abTEM/abTEM/pull/390)), `WavesDetector.gpts` ([#482](https://github.com/abTEM/abTEM/pull/482)), `offset` on `FlexibleAnnularDetector`/`SegmentedDetector` ([#469](https://github.com/abTEM/abTEM/pull/469)), `ArrayObject.__radd__`/`__rsub__`/`__rpow__` and `__array_priority__` ([#507](https://github.com/abTEM/abTEM/pull/507)), `abtem.core.backend.push_config_to_workers` ([#346](https://github.com/abTEM/abTEM/pull/346)), a `use_wave_eq` argument (default `False`) of the module functions `calculate_dynamical_scattering` and `calculate_scattering_matrix` of `abtem.bloch.dynamical` ([#448](https://github.com/abTEM/abTEM/pull/448)), `CrystalPotential.match_grid`, `ScanNoiseTransform.apply` and `ReciprocalSpaceAxis.coordinates`. `StructureFactorArray.get_projected_potential(lazy=None)` ([#487](https://github.com/abTEM/abTEM/pull/487)) and the abstract `FieldIntegrator.integrate_on_grid(atoms=...)` signature ([#428](https://github.com/abTEM/abTEM/pull/428)) changed.
-
-### Not in this release
-
-These are on `dev` and are not part of a bugfix release because they change default results or add features: the exact propagator as the default ([#298](https://github.com/abTEM/abTEM/pull/298)), the Bloch-wave `use_wave_eq='exact'` form and default ([#447](https://github.com/abTEM/abTEM/pull/447), [#448](https://github.com/abTEM/abTEM/pull/448)) and Bloch waves honouring `precision` ([#449](https://github.com/abTEM/abTEM/pull/449)), the GPAW defaults (`rotate_field`, `integration_step`), the `exit_planes` output shape ([#516](https://github.com/abTEM/abTEM/pull/516)), and all new features.
-
-`SMatrix.scan` with a potential that has `exit_planes` still raises an error, as in 1.0.10 (fixed on `dev` in [#398](https://github.com/abTEM/abTEM/pull/398)).
+- abTEM reads `~/.config/abtem` and `$ABTEM_CONFIG` as well as dask's configuration files ([#416](https://github.com/abTEM/abTEM/pull/416)); 1.0.10 ignored them. A leftover `cupy.fft-cache-size: 0 MB` there now disables the cuFFT plan cache.
+- `cupy.fft-cache-size`, ignored in 1.0.10, is read and defaults to `auto` (25 % of the device memory per thread); `0 MB` disables the cache, `-1` removes the bound, and a plan larger than the bound runs uncached with a warning.
+- `LineScan.angle` reports degrees ([#470](https://github.com/abTEM/abTEM/pull/470)). `SegmentedDetector(to_cpu=...)` defaults to `True` as documented ([#371](https://github.com/abTEM/abTEM/pull/371)). Exploded `show()` grids use 0.25 between panels ([#354](https://github.com/abTEM/abTEM/pull/354)).
+- New errors instead of wrong results: backscattering with exit planes that do not start at the entrance plane or are not after every slice ([#562](https://github.com/abTEM/abTEM/pull/562), [#499](https://github.com/abTEM/abTEM/pull/499)); a built `TransitionPotentialArray` at another energy or grid ([#386](https://github.com/abTEM/abTEM/pull/386)); `PixelatedDetector(resample='uniform')` without reciprocal space ([#499](https://github.com/abTEM/abTEM/pull/499)); `transition_potential_scan` with `expansion_scope="full"` ([#506](https://github.com/abTEM/abTEM/pull/506)).
+- Zarr arrays over 512 MiB use a multi-chunk layout and a failed write removes the partial file ([#363](https://github.com/abTEM/abTEM/pull/363), [#369](https://github.com/abTEM/abTEM/pull/369)). `GPAWParametrization` for Pm, Sm, Eu and Pu falls back to an unpolarised atom with a warning ([#467](https://github.com/abTEM/abTEM/pull/467)). Importing `abtem` no longer fails if `cupyx.scipy.ndimage` cannot be loaded ([#381](https://github.com/abTEM/abTEM/pull/381)).
 
 ## 1.0.10
 
