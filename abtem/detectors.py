@@ -89,6 +89,10 @@ def validate_detectors(
                 # unrelated run (another energy, grid or algorithm) would reuse.
                 detector = detector.copy()
                 detector._match_waves(waves)
+                # Fixed for the rest of this run: a later match against other
+                # waves of the same run (PRISM reduces with cropped probes) must
+                # not size the detector again.
+                detector._outer_is_explicit = detector._outer is not None
             matched.append(detector)
         detectors = matched
 
@@ -327,7 +331,7 @@ class _AbstractRadialDetector(BaseDetector):
     def _outer_for(self, waves: WavesType) -> float:
         """The ``outer`` used to detect ``waves`` [mrad]: the given one, or
         else the antialias cutoff angle of ``waves`` (see `_match_waves`)."""
-        if self.outer is not None:
+        if self._has_explicit_outer:
             return self.outer
 
         return min(waves.cutoff_angles)
@@ -377,6 +381,12 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement._eager_array
 
+    @property
+    def _has_explicit_outer(self) -> bool:
+        # an object that predates the flag (an old pickle, a subclass that does
+        # not call the constructor) is explicit if it has an outer angle
+        return getattr(self, "_outer_is_explicit", self._outer is not None)
+
     def _match_waves(self, waves: WavesType) -> None:
         """Auto-size ``outer`` from ``waves``, unless the user gave one.
 
@@ -386,7 +396,7 @@ class _AbstractRadialDetector(BaseDetector):
         (for example the same instance reused for a scan at another energy).
         Matching on every call makes each call consistent with its own waves.
         """
-        if not self._outer_is_explicit:
+        if not self._has_explicit_outer:
             self._outer = min(waves.cutoff_angles)
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
@@ -678,7 +688,7 @@ class AnnularDetector(_AbstractRadialDetector):
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         inner = self.inner
 
-        if self.outer is not None:
+        if self._has_explicit_outer:
             outer = self.outer
         else:
             outer = min(waves.cutoff_angles)

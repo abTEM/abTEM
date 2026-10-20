@@ -590,3 +590,50 @@ def test_explicit_outer_angle_is_kept_for_every_waves():
     detector.outer = None
     detector.detect(abtem.PlaneWave(energy=100e3, gpts=64, extent=10).build())
     assert detector.outer != 40
+
+
+def test_angular_limits_and_regions_follow_the_waves_after_a_detection():
+    w100 = abtem.PlaneWave(energy=100e3, gpts=64, extent=10).build()
+    w300 = abtem.PlaneWave(energy=300e3, gpts=64, extent=10).build()
+
+    reused = abtem.FlexibleAnnularDetector(step_size=5, inner=10)
+    reused.detect(w100)
+    fresh = abtem.FlexibleAnnularDetector(step_size=5, inner=10)
+
+    assert reused.angular_limits(w300) == fresh.angular_limits(w300)
+    assert (
+        reused.get_detector_regions(w300).shape == fresh.get_detector_regions(w300).shape
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_prism_scan_sizes_an_automatic_outer_angle_once(lazy):
+    # PRISM validates the detectors twice, with the full grid and then with the
+    # cropped probes of the S-matrix; the angle of the first match must stay.
+    # Matching again (as a detector without a given outer angle does for any new
+    # waves) would shrink the range and change the result of the scan.
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms,
+        gpts=64,
+        slice_thickness=2.7,
+        projection="infinite",
+        parametrization="kirkland",
+    )
+    scan = abtem.GridScan(
+        (0, 0), (1, 1), gpts=(2, 2), fractional=True, potential=potential
+    )
+    detector = abtem.AnnularDetector(inner=20)
+
+    kwargs = dict(energy=60e3, semiangle_cutoff=20)
+    prism = abtem.SMatrix(potential=potential, interpolation=1, **kwargs).scan(
+        scan, detectors=detector, lazy=lazy
+    )
+    probe = abtem.Probe(**kwargs).scan(
+        potential, scan=scan, detectors=detector, lazy=lazy
+    )
+    prism, probe = (m.compute() if m.is_lazy else m for m in (prism, probe))
+
+    np.testing.assert_allclose(prism.array.sum(), probe.array.sum(), rtol=1e-3)

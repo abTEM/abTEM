@@ -187,6 +187,11 @@ def test_prism_scan(
     )
     scan.match_probe(probe)
     measurement_shape = detector._out_shape(probe)[0]
+    # Sizing the detector for these probes leaves the angle on it. Make it explicit,
+    # so the scan uses the angle the expected shape was computed with (a detector
+    # without a given outer angle takes the one of the waves it is applied to).
+    if hasattr(detector, "_outer_is_explicit"):
+        detector.outer = detector.outer
 
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=lazy)
 
