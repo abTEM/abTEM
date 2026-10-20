@@ -1,5 +1,6 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
+import threading
 import warnings
 from typing import Optional, Tuple, TypeVar, overload
 
@@ -232,6 +233,118 @@ def _fftw_dispatch(
 
 U = TypeVar("U", np.ndarray, da.core.Array)
 
+# The plan-cache state applied to CuPy, to skip the work when the config is
+# unchanged (the common case in a hot loop). CuPy's plan cache is per thread
+# (and per device), so the applied state must be thread-local as well: a
+# process-global slot would configure only the first dispatching thread and
+# leave every other dask worker thread's cache at CuPy's defaults.
+_CUFFT_CACHE_STATE = threading.local()
+
+
+def _reset_cufft_cache_state():
+    """Forget the applied plan-cache state for the calling thread (tests)."""
+    for attr in ("token", "limit"):
+        try:
+            delattr(_CUFFT_CACHE_STATE, attr)
+        except AttributeError:
+            pass
+
+
+def _configure_cufft_cache():
+    """Apply ``cupy.fft-cache-size`` from the abTEM config to the cuFFT plan cache.
+
+    Called on every GPU FFT dispatch, from the thread that runs the transform,
+    so that runtime config changes take effect and every dask worker thread has
+    its own plan cache bounded. The config value is a memory limit on the total
+    workspace held by cached plans:
+
+    * ``0 MB``     -- disable plan caching entirely (plans destroyed after each
+                      call, workspace freed immediately).
+    * positive     -- allow up to N bytes of cached workspace (``set_memsize``).
+    * ``-1`` or null -- unlimited (CuPy's own default).
+    * ``auto``     -- 25 % of the device's total memory, resolved per device.
+                      This is the default.
+
+    Without a bound, a transform in a worker thread can fail with
+    ``CUFFT_EXEC_FAILED`` after a transform of the same grid in another thread
+    (seen with CuPy 14.2, for example on a 160 x 147 grid).
+    """
+    raw = config.get("cupy.fft-cache-size", "auto")
+
+    # The plan cache and the resolved "auto" limit are per device, so the
+    # applied state is keyed on the current device as well as the raw value.
+    device = cp.cuda.Device()
+    if getattr(_CUFFT_CACHE_STATE, "token", None) == (raw, device.id):
+        return
+
+    if raw is None:
+        limit = -1
+    elif raw == "auto":
+        limit = device.mem_info[1] // 4
+    elif isinstance(raw, str):
+        from dask.utils import parse_bytes
+
+        limit = parse_bytes(raw)
+    else:
+        limit = int(raw)
+
+    cache = cp.fft.config.get_plan_cache()
+    if limit == 0:
+        cache.set_size(0)
+    else:
+        if cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
+        # An explicit -1 restores "unlimited": an earlier bound (e.g. from the
+        # "auto" default) must be undoable at runtime.
+        cache.set_memsize(limit if limit > 0 else -1)
+
+    _CUFFT_CACHE_STATE.token = (raw, device.id)
+    _CUFFT_CACHE_STATE.limit = limit
+
+
+_warned_plan_cache_bypass = False
+
+
+def _cupy_fft_with_cache_fallback(func, x, **kwargs):
+    """Run a CuPy FFT, bypassing the plan cache for oversized plans.
+
+    A bounded plan cache refuses to admit a single plan larger than its
+    memsize bound, and CuPy raises instead of running the transform uncached
+    (CUDA only; the ROCm path does not track plan memsize). Retry such calls
+    with the cache temporarily disabled: the plan is built, used and
+    discarded, costing replanning time per call instead of a crash.
+    """
+    global _warned_plan_cache_bypass
+    try:
+        return func(x, **kwargs)
+    except RuntimeError as exc:
+        if "plan memsize is too large" not in str(exc).lower():
+            raise
+    cache = cp.fft.config.get_plan_cache()
+    size = cache.get_size()
+    memsize = cache.get_memsize()
+    if not _warned_plan_cache_bypass:
+        _warned_plan_cache_bypass = True
+        # The exceeded bound is positive in practice (CuPy only raises the
+        # too-large error for bounded caches); guard the arithmetic anyway.
+        bound = f" of {memsize / 1e9:.1f} GB" if memsize > 0 else ""
+        suggested = f"{2 * memsize / 1e9:.0f} GB" if memsize > 0 else "32 GB"
+        warnings.warn(
+            f"A single cuFFT plan for shape {x.shape} exceeds the plan-cache "
+            f"bound{bound}; running the transform uncached, which replans on "
+            "every call for this shape. To avoid the replanning cost, either "
+            "raise the bound, e.g. abtem.config.set({'cupy.fft-cache-size': "
+            f"'{suggested}'"
+            "}) (-1 = unlimited), or reduce the wave-function batch size, "
+            "e.g. with max_batch=8."
+        )
+    cache.set_size(0)
+    try:
+        return func(x, **kwargs)
+    finally:
+        cache.set_size(size)
+        cache.set_memsize(memsize)
+
 
 def _fft_dispatch(
     x: U,
@@ -264,7 +377,8 @@ def _fft_dispatch(
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
-        return getattr(cp.fft, func_name)(x, **kwargs)
+        _configure_cufft_cache()
+        return _cupy_fft_with_cache_fallback(getattr(cp.fft, func_name), x, **kwargs)
 
 
 @overload

@@ -1,3 +1,6 @@
+import threading
+import types
+
 import numpy as np
 import pytest
 from utils import gpu
@@ -5,6 +8,7 @@ from utils import gpu
 import abtem
 from abtem.core import config
 from abtem.core import fft as abtem_fft
+from abtem.core.backend import cp
 from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.waves import Waves
 
@@ -346,3 +350,218 @@ def test_lazy_fft2_convolve_of_unknown_chunk_sizes(kernel_shape, device):
     np.testing.assert_allclose(
         result, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
+
+
+class _FakePlanCache:
+    def __init__(self):
+        self.size = 16
+        self.memsize = -1
+
+    def get_size(self):
+        return self.size
+
+    def set_size(self, size):
+        self.size = size
+
+    def get_memsize(self):
+        return self.memsize
+
+    def set_memsize(self, memsize):
+        self.memsize = memsize
+
+
+class _FakeCupy:
+    """As much of CuPy as the plan-cache configuration touches. Like CuPy's, the
+    plan cache is per thread."""
+
+    TOTAL_MEMORY = 8 * 10**9
+
+    class ndarray:
+        shape = (8, 8)
+
+    def __init__(self):
+        self._local = threading.local()
+        self.calls = []
+        self.cuda = types.SimpleNamespace(Device=self._device)
+        self.fft = types.SimpleNamespace(
+            config=types.SimpleNamespace(get_plan_cache=self._plan_cache),
+            fft2=self._fft2,
+        )
+
+    def _device(self):
+        return types.SimpleNamespace(
+            id=0, mem_info=(self.TOTAL_MEMORY // 2, self.TOTAL_MEMORY)
+        )
+
+    def _plan_cache(self):
+        if not hasattr(self._local, "cache"):
+            self._local.cache = _FakePlanCache()
+        return self._local.cache
+
+    def _fft2(self, x, **kwargs):
+        # what the cache looked like when the transform ran
+        self.calls.append((threading.current_thread().name, self._plan_cache().memsize))
+        return x
+
+
+@pytest.fixture
+def fake_cupy(monkeypatch):
+    fake = _FakeCupy()
+    monkeypatch.setattr(abtem_fft, "cp", fake)
+    monkeypatch.setattr(abtem_fft, "get_array_module", lambda x: np)
+    monkeypatch.setattr(abtem_fft, "check_cupy_is_installed", lambda: None)
+    monkeypatch.setattr(abtem_fft, "_warned_plan_cache_bypass", False)
+    abtem_fft._reset_cufft_cache_state()
+    yield fake
+    abtem_fft._reset_cufft_cache_state()
+
+
+def _in_a_thread(function):
+    outcome = {}
+
+    def run():
+        try:
+            outcome["value"] = function()
+        except BaseException as error:  # reported in the calling thread
+            outcome["error"] = error
+
+    thread = threading.Thread(target=run, name="worker")
+    thread.start()
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
+
+def test_cufft_cache_is_bounded_by_default():
+    assert config.get("cupy.fft-cache-size") == "auto"
+
+
+def test_cufft_cache_auto_is_a_quarter_of_the_device_memory(fake_cupy):
+    abtem_fft._configure_cufft_cache()
+
+    cache = fake_cupy.fft.config.get_plan_cache()
+    assert cache.get_memsize() == _FakeCupy.TOTAL_MEMORY // 4
+    assert cache.get_size() == 16  # the entry count is CuPy's own
+
+
+def test_cufft_cache_is_bounded_in_every_thread(fake_cupy):
+    # CuPy keeps one plan cache per thread, and the transforms of a lazy
+    # computation run in dask's worker threads, not in the thread that
+    # configured anything.
+    abtem_fft._configure_cufft_cache()
+    in_thread = _in_a_thread(
+        lambda: (
+            abtem_fft._configure_cufft_cache(),
+            fake_cupy.fft.config.get_plan_cache().get_memsize(),
+        )[1]
+    )
+
+    assert in_thread == _FakeCupy.TOTAL_MEMORY // 4
+
+
+@pytest.mark.parametrize(
+    "value, size, memsize",
+    [
+        ("1 GB", 16, 10**9),
+        (2 * 10**9, 16, 2 * 10**9),
+        ("0 MB", 0, -1),
+        (-1, 16, -1),
+        (None, 16, -1),
+    ],
+)
+def test_cufft_cache_config_values(fake_cupy, value, size, memsize):
+    with config.set({"cupy.fft-cache-size": value}):
+        abtem_fft._configure_cufft_cache()
+
+    cache = fake_cupy.fft.config.get_plan_cache()
+    assert (cache.get_size(), cache.get_memsize()) == (size, memsize)
+
+
+def test_cufft_cache_follows_the_config_at_runtime(fake_cupy):
+    cache = fake_cupy.fft.config.get_plan_cache()
+
+    with config.set({"cupy.fft-cache-size": "0 MB"}):
+        abtem_fft._configure_cufft_cache()
+    assert cache.get_size() == 0
+
+    # a bound re-enables a cache that was disabled
+    with config.set({"cupy.fft-cache-size": "1 GB"}):
+        abtem_fft._configure_cufft_cache()
+    assert (cache.get_size(), cache.get_memsize()) == (16, 10**9)
+
+    # and "unlimited" undoes a bound
+    with config.set({"cupy.fft-cache-size": -1}):
+        abtem_fft._configure_cufft_cache()
+    assert cache.get_memsize() == -1
+
+
+def test_cufft_cache_is_left_alone_while_the_config_is_unchanged(fake_cupy):
+    abtem_fft._configure_cufft_cache()
+    cache = fake_cupy.fft.config.get_plan_cache()
+    cache.set_memsize(123)  # tuned through CuPy's own API after the first call
+
+    abtem_fft._configure_cufft_cache()
+
+    assert cache.get_memsize() == 123
+
+
+def test_cupy_fft_dispatch_bounds_the_cache_in_the_thread_that_transforms(fake_cupy):
+    x = fake_cupy.ndarray()
+    bound = _FakeCupy.TOTAL_MEMORY // 4
+
+    abtem_fft.fft2(x)
+    _in_a_thread(lambda: abtem_fft.fft2(x))
+
+    assert fake_cupy.calls == [("MainThread", bound), ("worker", bound)]
+
+
+def test_oversized_plan_bypasses_the_cache(fake_cupy):
+    cache = fake_cupy.fft.config.get_plan_cache()
+    cache.set_memsize(10**9)
+    calls = []
+
+    def fft(x, **kwargs):
+        calls.append(cache.get_size())
+        if len(calls) == 1:
+            raise RuntimeError("The plan memsize is too large.")
+        return x
+
+    x = fake_cupy.ndarray()
+    with pytest.warns(UserWarning, match="uncached"):
+        out = abtem_fft._cupy_fft_with_cache_fallback(fft, x)
+
+    assert out is x
+    assert calls == [16, 0]  # the retry ran with the cache disabled
+    assert (cache.get_size(), cache.get_memsize()) == (16, 10**9)  # and it was restored
+
+
+def test_unrelated_runtime_error_propagates(fake_cupy):
+    def fft(x, **kwargs):
+        raise RuntimeError("something else entirely")
+
+    with pytest.raises(RuntimeError, match="something else"):
+        abtem_fft._cupy_fft_with_cache_fallback(fft, fake_cupy.ndarray())
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+@pytest.mark.parametrize("gpts", [(160, 147), (128, 128), (256, 256)])
+def test_cupy_fft_in_a_worker_thread_after_one_in_the_main_thread(gpts):
+    # With CuPy's default plan cache, cuFFT (CuPy 14.2) fails with
+    # CUFFT_EXEC_FAILED for the transform in the worker thread, which is what
+    # dask runs a lazy computation in.
+    rng = np.random.default_rng(0)
+    array = (rng.standard_normal(gpts) + 1j * rng.standard_normal(gpts)).astype(
+        np.complex64
+    )
+    x = cp.asarray(array)
+
+    abtem_fft.fft2(x)
+    cp.cuda.Stream.null.synchronize()
+
+    def transform():
+        y = abtem_fft.fft2(x)
+        cp.cuda.Stream.null.synchronize()
+        return y
+
+    assert np.allclose(_in_a_thread(transform).get(), np.fft.fft2(array), atol=1e-2)
