@@ -203,6 +203,7 @@ from small test systems and vary with the data.
 - `.sum()` and `.mean()` over an axis with distribution weights ignore the weights and now warn: use `reduce_ensemble()` for the weighted mean, or `reduce_ensemble(axis=...)` for an axis that was kept with `ensemble_mean=False`.
 - Eager `SMatrix.scan` and `SMatrix.reduce` reduce the `ensemble_mean` axes of a `CTF`, like the lazy path (they returned an extra axis).
 - Passing negative weights, or weights of the wrong length, to a distribution now raises `ValueError`.
+- The weights are not applied to the rotation spreads of Bloch waves or to noise axes, which carry none (unchanged from 1.0.10). A zarr file with a weighted axis written by 1.0.11 cannot be read by 1.0.10; files without one can.
 
 **Other results that change**
 - Eager multislice of potentials with two or more ensemble axes wrote its results to scrambled positions (#333).
