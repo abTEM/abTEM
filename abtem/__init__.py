@@ -24,7 +24,13 @@ from abtem.detectors import (
     SpectralSlitDetector,
     WavesDetector,
 )
-from abtem.ebsd import EBSD, BackscatterDetector, EBSDReferencePattern
+from abtem.ebsd import (
+    EBSD,
+    BackscatterDetector,
+    EBSDPatternImages,
+    EBSDReferencePattern,
+    ReferencePatternImages,
+)
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -124,5 +130,7 @@ __all__ = [
     "EBSD",
     "EBSDReferencePattern",
     "BackscatterDetector",
+    "EBSDPatternImages",
+    "ReferencePatternImages",
     "StructureFactorArray",
 ]
