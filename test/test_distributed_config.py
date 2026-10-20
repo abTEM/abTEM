@@ -47,6 +47,28 @@ def test_push_config_to_workers():
             assert backend._pushed_config_token is token
 
 
+def test_config_plugin_does_not_overwrite_the_clients_own_config():
+    # In-process workers (LocalCluster(processes=False)) share the client's
+    # config dict. A worker that joins later runs the plugin's setup, which must
+    # not replay the old snapshot over configuration changed after the push.
+    import copy
+
+    from abtem.core.config import config as config_dict
+
+    snapshot = copy.deepcopy(config_dict)
+    snapshot["precision"] = "float64"
+    plugin = backend._make_config_plugin(snapshot)
+
+    with config.set({"precision": "float32"}):
+        plugin.setup()
+        assert config.get("precision") == "float32"
+
+        # A worker in another process still receives the snapshot.
+        plugin._origin_pid = -1
+        plugin.setup()
+        assert config.get("precision") == "float64"
+
+
 def test_workers_see_identical_config():
     from abtem.core.config import config as client_config_dict
 
