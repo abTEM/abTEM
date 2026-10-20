@@ -219,6 +219,11 @@ class _AbstractRadialDetector(BaseDetector):
     ):
         self._inner = inner
         self._outer = outer
+        # Whether `outer` was ever given explicitly (constructor or setter), as
+        # opposed to auto-matched from waves in `_match_waves`. `outer is None`
+        # alone cannot tell these apart once a value has been auto-matched, which
+        # made `_match_waves` latch onto the first waves it ever saw.
+        self._outer_is_explicit = outer is not None
         self._rotation = rotation
         self._offset = offset
         super().__init__(to_cpu=to_cpu, url=url)
@@ -240,6 +245,7 @@ class _AbstractRadialDetector(BaseDetector):
     @outer.setter
     def outer(self, value: float):
         self._outer = value
+        self._outer_is_explicit = value is not None
 
     @property
     def rotation(self):
@@ -372,7 +378,15 @@ class _AbstractRadialDetector(BaseDetector):
         return measurement._eager_array
 
     def _match_waves(self, waves: WavesType) -> None:
-        if self.outer is None:
+        """Auto-size ``outer`` from ``waves``, unless the user gave one.
+
+        This used to be guarded by ``if self.outer is None``, which conflated "the
+        user never gave an outer" with "not matched yet": once matched, the detector
+        kept the angle of the first waves it saw, also for a later, unrelated call
+        (for example the same instance reused for a scan at another energy).
+        Matching on every call makes each call consistent with its own waves.
+        """
+        if not self._outer_is_explicit:
             self._outer = min(waves.cutoff_angles)
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
@@ -628,6 +642,7 @@ class AnnularDetector(_AbstractRadialDetector):
     @outer.setter
     def outer(self, value: float):
         self._outer = value
+        self._outer_is_explicit = value is not None
 
     @property
     def offset(self) -> tuple[float, float]:

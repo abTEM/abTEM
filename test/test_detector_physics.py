@@ -554,3 +554,39 @@ def test_offset_detector_reaching_past_nyquist_does_not_wrap(
         np.testing.assert_allclose(got, full, rtol=1e-5)
     else:
         assert got < 1e-9 * full
+
+
+@pytest.mark.parametrize(
+    "make_detector",
+    [
+        lambda **kw: abtem.FlexibleAnnularDetector(step_size=5, inner=10, **kw),
+        lambda **kw: abtem.AnnularDetector(inner=10, **kw),
+    ],
+    ids=["flexible", "annular"],
+)
+def test_detector_reused_for_waves_at_another_energy_matches_its_own_waves(
+    make_detector,
+):
+    # Without an explicit outer angle the detector takes the antialias cutoff of the
+    # waves it detects. It used to keep the angle of the first waves it ever saw, so
+    # the same detector gave a different (wrong) result for waves at another energy.
+    waves_100 = abtem.PlaneWave(energy=100e3, gpts=64, extent=10).build()
+    waves_300 = abtem.PlaneWave(energy=300e3, gpts=64, extent=10).build()
+
+    reused = make_detector()
+    reused.detect(waves_100)
+    after = _values(reused.detect(waves_300))
+    fresh = _values(make_detector().detect(waves_300))
+
+    np.testing.assert_array_equal(after, fresh)
+
+
+def test_explicit_outer_angle_is_kept_for_every_waves():
+    detector = abtem.FlexibleAnnularDetector(step_size=5, inner=10, outer=40)
+    for energy in (100e3, 300e3):
+        detector.detect(abtem.PlaneWave(energy=energy, gpts=64, extent=10).build())
+        assert detector.outer == 40
+
+    detector.outer = None
+    detector.detect(abtem.PlaneWave(energy=100e3, gpts=64, extent=10).build())
+    assert detector.outer != 40
