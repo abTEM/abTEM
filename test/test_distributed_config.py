@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import abtem
+import abtem.array
 from abtem.core import backend, config
 
 distributed = pytest.importorskip("distributed")
@@ -123,3 +124,63 @@ def test_distributed_to_zarr_pushes_config(tmp_path):
             loaded = abtem.from_zarr(str(tmp_path / "waves.zarr")).compute()
 
             assert loaded.array.dtype == np.complex128
+
+
+def test_distributed_to_zarr_compute_false_pushes_config(tmp_path):
+    backend._pushed_config_token = None
+    with _process_cluster() as cluster, distributed.Client(cluster) as client:
+        with config.set({"precision": "float64"}):
+            waves = abtem.PlaneWave(energy=100e3, gpts=32, extent=5).build(lazy=True)
+            delayed = waves.to_zarr(str(tmp_path / "waves.zarr"), compute=False)
+
+            # The workers hold the configuration of the call, not of whenever the
+            # delayed object happens to be computed.
+            assert set(client.run(_worker_precision).values()) == {"float64"}
+            delayed.compute()
+
+        loaded = abtem.from_zarr(str(tmp_path / "waves.zarr")).compute()
+        assert loaded.array.dtype == np.complex128
+
+
+class _RecordingTifffile:
+    """Stands in for tifffile, which abTEM does not install, and records what
+    ``imwrite`` is given."""
+
+    def __init__(self):
+        self.written = {}
+
+    def imwrite(self, filename, data, **kwargs):
+        self.written[filename] = data
+
+    def imread(self, filename):
+        return self.written[filename]
+
+
+@pytest.fixture(params=["recorded", "tifffile"])
+def tifffile_module(request, monkeypatch):
+    if request.param == "tifffile":
+        if abtem.array.tifffile is None:
+            pytest.skip("requires tifffile")
+        return abtem.array.tifffile
+
+    recorder = _RecordingTifffile()
+    monkeypatch.setattr(abtem.array, "tifffile", recorder)
+    return recorder
+
+
+def test_distributed_to_tiff_pushes_config(tmp_path, tifffile_module):
+    backend._pushed_config_token = None
+    path = str(tmp_path / "intensity.tiff")
+    with _process_cluster() as cluster, distributed.Client(cluster):
+        with config.set({"precision": "float64"}):
+            intensity = (
+                abtem.PlaneWave(energy=100e3, gpts=32, extent=5)
+                .build(lazy=True)
+                .intensity()
+            )
+            assert intensity.array.dtype == np.float64
+
+            with pytest.warns(UserWarning, match="computed in memory"):
+                intensity.to_tiff(path)
+
+    assert tifffile_module.imread(path).dtype == np.float64

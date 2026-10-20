@@ -515,6 +515,9 @@ class ComputableList(list):
             )
 
         if not compute:
+            # The arrays are computed later, inside a task on the client's
+            # workers, which must then hold the configuration of this call.
+            _push_config_to_active_client()
             return delayed_write
 
         _push_config_to_active_client()
@@ -1599,6 +1602,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = self.array
         if self.is_lazy:
             warnings.warn("Lazy arrays are computed in memory before writing to tiff.")
+            _push_config_to_active_client()
             array = self._lazy_array.compute()
 
         return tifffile.imwrite(
