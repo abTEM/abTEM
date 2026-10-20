@@ -35,6 +35,11 @@ def pytest_configure(config):
         getattr(config.option, "dist", None) == "load"
     ):
         config.option.dist = "loadgroup"
+    # The workers parse the original command line again, so the scheduler chosen
+    # above does not reach them; xdist reads the group of a test from the marker
+    # only if the worker was told to use loadgroup.
+    if hasattr(config, "workerinput"):
+        config.option.loadgroup = True
 
 
 # How many xdist workers may run GPU tests at the same time. 1 (the default) is
@@ -54,6 +59,7 @@ def _gpu_group(item) -> str:
     return f"gpu{zlib.crc32(function.encode()) % _GPU_WORKERS}"
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Confine the tests on the GPU to a single pytest-xdist worker.
 
@@ -64,6 +70,9 @@ def pytest_collection_modifyitems(config, items):
     launch (``CUFFT_EXEC_FAILED``), not a clean skip. Routing every such test
     into one ``xdist_group`` runs at most one at a time whatever ``-n`` is,
     while the CPU tests still fan out over all workers.
+
+    ``tryfirst``: xdist's own hook builds the group suffix of the node ids from
+    the markers, so the marker must be added before it runs.
     """
     if cp is None or not config.pluginmanager.hasplugin("xdist"):
         return
