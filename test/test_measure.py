@@ -197,10 +197,12 @@ def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
 
 
 class _DaskRefusingArray(np.ndarray):
-    """Treats a dask array operand the way CuPy does: it raises ``TypeError``
-    instead of returning ``NotImplemented``, so a dask array can only take part
-    in an operation through its own methods. Lets the CPU run the code path of
-    an eager device measurement."""
+    """Stands in for CuPy on the CPU. As observed on a CUDA machine, CuPy's
+    forward methods accept a dask operand (``cupy_array - dask_array`` works),
+    but its reflected methods raise ``TypeError`` instead of returning
+    ``NotImplemented`` (``cupy_array.__rsub__(dask_array)``), so a direct call
+    of the reflected method fails. Lets the CPU run the code path of an eager
+    device measurement."""
 
     __array_priority__ = 100.0
 
@@ -217,8 +219,9 @@ def _refuse_dask_operands(name):
 
 
 for _name in ["add", "sub", "mul", "truediv", "pow"]:
-    for _method in (f"__{_name}__", f"__r{_name}__"):
-        setattr(_DaskRefusingArray, _method, _refuse_dask_operands(_method))
+    setattr(
+        _DaskRefusingArray, f"__r{_name}__", _refuse_dask_operands(f"__r{_name}__")
+    )
 
 
 @pytest.mark.parametrize("dask_side", ["left", "right"])
