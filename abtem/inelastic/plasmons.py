@@ -1,4 +1,5 @@
 import itertools
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -127,7 +128,7 @@ def draw_azimuthal_angle(num_samples, num_depths, rng=None) -> Tuple[float]:
 def excitations_weights(n: int, thickness: float, mean_free_path: float) -> float:
     return (
         1
-        / np.math.factorial(n)
+        / math.factorial(n)
         * (thickness / mean_free_path) ** n
         * np.exp(-thickness / mean_free_path)
     )
@@ -157,17 +158,19 @@ class PlasmonAxis(OrdinalAxis):
 
     @property
     def tilt(self):
+        # The deflections of the excitations so far add as 2D vectors
+        # (theta_i cos phi_i, theta_i sin phi_i) [mrad].
         tilt = ()
         for radial_angles, azimuthal_angles, excitations in zip(
             self.radial_angles, self.azimuthal_angles, self.excitations
         ):
-            radial_angle = sum(radial_angles[:excitations])
-            azimuthal_angle = sum(radial_angles[:excitations])
-
+            events = tuple(
+                zip(radial_angles[:excitations], azimuthal_angles[:excitations])
+            )
             tilt += (
                 (
-                    radial_angle * np.cos(azimuthal_angle),
-                    radial_angle * np.sin(azimuthal_angle),
+                    float(sum(theta * math.cos(phi) for theta, phi in events)),
+                    float(sum(theta * math.sin(phi) for theta, phi in events)),
                 ),
             )
 
