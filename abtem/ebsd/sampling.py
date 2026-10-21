@@ -51,8 +51,16 @@ def _scattering_power(number: int) -> tuple[np.ndarray, np.ndarray]:
         positions=[(extent / 2, extent / 2, thickness / 2)],
         cell=(extent, extent, thickness),
     )
+    # on the host, whatever device abTEM is configured for: a one-off grid,
+    # cached per element
     projected = (
-        Potential(atoms, gpts=gpts, slice_thickness=thickness, projection="finite")
+        Potential(
+            atoms,
+            gpts=gpts,
+            slice_thickness=thickness,
+            projection="finite",
+            device="cpu",
+        )
         .build(lazy=False)
         .array[0]
     )

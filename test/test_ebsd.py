@@ -2271,6 +2271,17 @@ class TestSampling:
         potential_sampling(SILICON)
         assert _scattering_power.cache_info().hits > hits
 
+    def test_is_found_on_the_host_whatever_the_configured_device(self):
+        # The default sampling is found for any device, so a configured
+        # accelerator, even one that is not installed, must not reach the
+        # probe potential.
+        from abtem.ebsd.sampling import _scattering_power
+
+        expected = potential_sampling(SILICON)
+        _scattering_power.cache_clear()
+        with abtem.config.set({"device": "gpu"}):
+            assert potential_sampling(SILICON) == expected
+
     def test_the_power_lost(self):
         lost = [scattering_power_lost(SILICON, s) for s in (0.2, 0.1, 0.05)]
         assert lost == sorted(lost, reverse=True)
