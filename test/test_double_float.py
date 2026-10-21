@@ -108,6 +108,32 @@ def test_inverse_fft2_undoes_fft2(double_float, shape):
     )
 
 
+@pytest.mark.parametrize("shape", [(3, 16, 24), (2, 45, 8), (2, 8, 1280), (1, 1280, 8)])
+def test_fft2_applies_its_factors_like_separate_products(double_float, shape):
+    rng = np.random.default_rng(sum(shape))
+    x = double_float.from_numpy(_random_complex(rng, shape))
+    pre = double_float.from_numpy(_random_complex(rng, shape[-2:]))
+    post = double_float.from_numpy(_random_complex(rng, shape[-2:]))
+
+    fused = double_float.fft2(x, pre=pre, post=post)
+    separate = double_float.multiply(
+        double_float.fft2(double_float.multiply(x, pre)), post
+    )
+
+    assert (
+        _relative_error(double_float.to_numpy(fused), double_float.to_numpy(separate))
+        < 1e-13
+    )
+
+
+def test_fft2_rejects_a_factor_of_the_wrong_shape(double_float):
+    x = double_float.from_numpy(np.ones((2, 8, 8), dtype=np.complex128))
+    factor = double_float.from_numpy(np.ones((8, 4), dtype=np.complex128))
+
+    with pytest.raises(ValueError, match="does not fit"):
+        double_float.fft2(x, pre=factor)
+
+
 def test_fft2_leaves_its_input_untouched(double_float):
     rng = np.random.default_rng(3)
     x = double_float.from_numpy(_random_complex(rng, (2, 16, 16)))

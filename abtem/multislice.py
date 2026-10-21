@@ -503,10 +503,12 @@ class _EmulatedDoubleMultislice:
         t = df.fft2(df.from_numpy(array))
         t = df.fft2(df.multiply(t, self._aperture), inverse=True)
 
-        self._psi = df.multiply(self._psi, t)
+        # The product with the transmission function and with the propagator ride
+        # on the loads of the forward transform and on its stores.
         thickness = transmission.slice_thickness[0]
-        self._psi = df.fft2(self._psi)
-        self._psi = df.multiply(self._psi, self._propagator_array(waves, thickness))
+        self._psi = df.fft2(
+            self._psi, pre=t, post=self._propagator_array(waves, thickness)
+        )
         self._psi = df.fft2(self._psi, inverse=True)
         self._stale = True
         return waves
