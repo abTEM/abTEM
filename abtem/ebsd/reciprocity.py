@@ -362,12 +362,15 @@ class _EnvelopePropagator(FresnelPropagator):
     def __init__(self, wave_vectors):
         super().__init__()
         self._wave_vectors = wave_vectors
-        self._kernels: dict = {}
+        self._thickness: Optional[float] = None
+        self._kernel = None
 
     def get_array(self, waves: Waves, thickness: float, order="exact"):
-        kernel = self._kernels.get(thickness)
-        if kernel is None:
-            kernel = _envelope_propagator_array(
+        # One kernel at a time, as _direction_blocks budgets: a thinner last
+        # slice replaces it rather than adding a second.
+        if self._kernel is None or thickness != self._thickness:
+            self._kernel = None
+            self._kernel = _envelope_propagator_array(
                 self._wave_vectors,
                 waves._valid_gpts,
                 waves._valid_sampling,
@@ -375,8 +378,8 @@ class _EnvelopePropagator(FresnelPropagator):
                 thickness,
                 get_array_module(waves.device),
             )
-            self._kernels[thickness] = kernel
-        return kernel
+            self._thickness = thickness
+        return self._kernel
 
 
 class EBSD(CopyMixin, EqualityMixin):
