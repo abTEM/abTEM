@@ -458,15 +458,17 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
 
         return (array,)
 
-    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
+    def _calculate_new_array(self, waves: "Waves") -> np.ndarray:
         xp = get_array_module(waves.device)
+        array = waves._eager_array[(None,) * len(self.ensemble_shape)]
+        return xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
 
-        array = waves.array[(None,) * len(self.ensemble_shape)]
-
+    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
         if waves.is_lazy:
+            array = waves.array[(None,) * len(self.ensemble_shape)]
             array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
         else:
-            array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
+            array = self._calculate_new_array(waves)
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array

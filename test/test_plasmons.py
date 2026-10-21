@@ -4,9 +4,15 @@ import math
 
 import numpy as np
 import pytest
+from ase.build import bulk
+from utils import gpu
 
+import abtem
+from abtem.core.backend import asnumpy
 from abtem.inelastic.plasmons import (
+    MonteCarloPlasmons,
     PlasmonAxis,
+    PlasmonScatteringEvents,
     excitations_weights,
 )
 
@@ -52,3 +58,66 @@ def test_excitations_weights_are_poisson(n):
     x = thickness / mean_free_path
     expected = x**n * math.exp(-x) / math.factorial(n)
     assert excitations_weights(n, thickness, mean_free_path) == pytest.approx(expected)
+
+
+def test_draw_events_weights_are_poisson():
+    potential = abtem.Potential(bulk("Si", cubic=True), gpts=16, slice_thickness=2)
+    waves = abtem.PlaneWave(energy=100e3, gpts=16, extent=potential.extent)
+    plasmons = MonteCarloPlasmons(
+        mean_free_path=10.0,
+        excitation_energy=15.0,
+        critical_angle=10.0,
+        num_excitations=2,
+        num_samples=3,
+        seed=0,
+    )
+    events = plasmons.draw_events(waves, potential)
+
+    x = potential.thickness / plasmons.mean_free_path
+    expected = [math.exp(-x)] + [x * math.exp(-x)] * 3 + [x**2 * math.exp(-x) / 2] * 3
+    np.testing.assert_allclose(events.weights, expected)
+    assert [len(depths) for depths in events.depths] == [0, 1, 1, 1, 2, 2, 2]
+    assert events.ensemble_shape == (7,)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmon_deflection_in_multislice(device, lazy):
+    potential = abtem.Potential(
+        bulk("Si", cubic=True) * (1, 1, 2),
+        gpts=24,
+        slice_thickness=2,
+        device=device,
+    ).build(lazy=False)
+    waves = abtem.PlaneWave(
+        energy=100e3, gpts=24, extent=potential.extent, device=device
+    ).build(lazy=lazy)
+    thickness = potential.thickness
+    theta, phi = 5.0, 0.3
+    # The deflection applies from the first slice boundary below the event.
+    k = potential.num_slices // 2
+    depth = sum(potential.slice_thickness[:k]) - 1e-3
+
+    events = PlasmonScatteringEvents(
+        depths=((), (thickness + 1.0,), (depth,), (depth, depth)),
+        radial_angles=((), (theta,), (theta,), (theta, theta)),
+        azimuthal_angles=((), (phi,), (phi,), (phi, phi + math.pi)),
+        weights=(1.0,) * 4,
+        ensemble_mean=False,
+    )
+    exit_waves = events.apply(waves).multislice(potential).compute()
+    assert isinstance(exit_waves.ensemble_axes_metadata[0], PlasmonAxis)
+    zero_loss, beyond_exit, single, opposite_pair = asnumpy(exit_waves.array)
+
+    upper = waves.multislice(potential[:k]).compute()
+    upper.metadata.update(
+        base_tilt_x=theta * math.cos(phi), base_tilt_y=theta * math.sin(phi)
+    )
+    expected_single = asnumpy(upper.multislice(potential[k:]).compute().array)
+
+    # An event below the exit surface never happens.
+    np.testing.assert_array_equal(beyond_exit, zero_loss)
+    # Equal and opposite deflections cancel.
+    np.testing.assert_allclose(opposite_pair, zero_loss, atol=1e-5)
+    assert np.abs(single - zero_loss).max() > 1e-2
+    np.testing.assert_allclose(single, expected_single, atol=1e-5)
