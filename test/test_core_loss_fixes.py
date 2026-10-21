@@ -460,26 +460,60 @@ class TestFilterByIntensity:
 
 
 class TestFilterSites:
-    """The survival mask was built over the element-subset array but applied to
-    the caller's object."""
+    """The survival mask is built over the element-subset array; it is applied to
+    that subset of the caller's atoms, and the result has the form of the input."""
+
+    @staticmethod
+    def _waves():
+        return abtem.Probe(
+            energy=ENERGY, extent=(8.0, 8.0), gpts=(32, 32), semiangle_cutoff=30
+        ).build(lazy=False)
+
+    @staticmethod
+    def _atoms(symbols="SiNSi"):
+        positions = [(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)]
+        return ase.Atoms(symbols, positions=positions, cell=(8, 8, 4))
 
     def test_mask_is_aligned_with_mixed_element_atoms(self):
         potential = _synthetic_transition_potential((8.0, 8.0), (32, 32))
-        waves = abtem.Probe(
-            energy=ENERGY, extent=(8.0, 8.0), gpts=(32, 32), semiangle_cutoff=30
-        ).build(lazy=False)
-        atoms = ase.Atoms(
-            "SiNSi",
-            positions=[(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)],
-            cell=(8, 8, 4),
-        )
+        atoms = self._atoms()
 
-        filtered = potential.filter_sites(waves, atoms, threshold=1e-12)
+        filtered = potential.filter_sites(self._waves(), atoms, threshold=1e-12)
+
+        # the atoms of the element of the transition potential that are kept
+        assert isinstance(filtered, ase.Atoms)
+        assert set(filtered.numbers) == {14}
+        silicon = atoms[atoms.numbers == 14].positions
+        assert all(np.isclose(silicon, atom.position).all(axis=1).any() for atom in filtered)
+
+    def test_atoms_of_one_element_give_the_kept_atoms(self):
+        # as in the core-loss tutorial: the atoms of a single element, filtered
+        potential = _synthetic_transition_potential((8.0, 8.0), (32, 32))
+        atoms = self._atoms("SiSiSi")
+        waves = self._waves()
+
+        none_kept = potential.filter_sites(waves, atoms, threshold=1e30)
+        all_kept = potential.filter_sites(waves, atoms, threshold=1e-30)
+
+        assert isinstance(none_kept, ase.Atoms) and len(none_kept) == 0
+        assert isinstance(all_kept, ase.Atoms) and len(all_kept) == 3
+        assert np.allclose(all_kept.positions, atoms.positions)
+
+    def test_positions_give_positions(self):
+        potential = _synthetic_transition_potential((8.0, 8.0), (32, 32))
+        positions = self._atoms("SiSiSi").positions[:, :2]
+
+        filtered = potential.filter_sites(self._waves(), positions, threshold=1e-30)
 
         assert isinstance(filtered, np.ndarray)
-        assert filtered.shape[1:] == (2,)
-        silicon = atoms[atoms.numbers == 14].positions[:, :2]
-        assert all(np.isclose(silicon, site).all(axis=1).any() for site in filtered)
+        assert filtered.shape == (3, 2)
+        assert np.allclose(filtered, positions)
+
+    def test_without_a_threshold_the_sites_are_returned_as_given(self):
+        potential = _synthetic_transition_potential((8.0, 8.0), (32, 32))
+        atoms = self._atoms()
+
+        assert potential.filter_sites(self._waves(), atoms, threshold=None) is atoms
 
 
 class TestPotentialEnsembleAccumulation:

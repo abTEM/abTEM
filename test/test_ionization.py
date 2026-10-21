@@ -526,7 +526,7 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
 
     for t in (0.001, 0.1, 0.5, 0.9, 0.99, 0.999):
         kept = tp.filter_sites(waves, sites, threshold=tp.absolute_threshold(waves, t))
-        kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+        kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
         kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
         assert len(kept) < len(ij), f"t={t}: no site was dropped"
         assert (
@@ -548,7 +548,7 @@ def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     assert overlaps.max() / overlaps.sum() > 1e-3
 
     kept = tp.filter_sites(waves, sites, threshold=tp.absolute_threshold(waves, 1e-3))
-    kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+    kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
     kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
     # The top pixel is unique (the next-ranked group of four ties sits ~15%
     # below it), so it survives alone.
