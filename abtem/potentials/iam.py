@@ -1784,7 +1784,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # arbitrary frame is meaningless. Just use the target sampling
                 # directly, rounded up to a fast FFT size (no commensurability
                 # constrains the grid here, so rounding is free).
-                from abtem.core.fft import next_fast_fft_size
+                from abtem.core.fft import next_preferred_fft_size
 
                 # The extent the builder gives the potential: the box, else the
                 # cell rotated to the plane and made orthogonal when it needs a
@@ -1799,7 +1799,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
                 gpts = tuple(safe_ceiling_int(extent[i] / 0.05) for i in range(2))
                 if round_auto_derived_gpts():
-                    gpts = tuple(next_fast_fft_size(n) for n in gpts)
+                    gpts = tuple(next_preferred_fft_size(n, device) for n in gpts)
             elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
                 if not isinstance(plane, str):
                     raise NotImplementedError
@@ -1815,6 +1815,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     _auto_atoms.positions,
                     target_sampling=0.05,
                     round_to_fast_fft=round_auto_derived_gpts(),
+                    device=device,
                 )
             else:
                 if box is not None:
@@ -1828,6 +1829,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     _auto_atoms.positions,
                     target_sampling=0.05,
                     round_to_fast_fft=round_auto_derived_gpts(),
+                    device=device,
                 )
             sampling = None
 

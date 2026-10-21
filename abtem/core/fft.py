@@ -106,6 +106,121 @@ def next_fast_fft_size(n: int) -> int:
     return n
 
 
+_METAL_DEVICES = ("mps", "metal", "torch")
+
+# Relative cost per pixel of a transform on Metal, against a power of two,
+# measured on Apple silicon: Metal's FFT runs powers of two 2-4x faster per
+# pixel than any other length (float32: 0.38 ns/pixel against 0.72-1.5), and the
+# emulated double precision FFT (abtem.core._double_float) is fastest there too.
+# One number for every other fast length, as what separates them is smaller than
+# what separates them from a power of two.
+_METAL_NON_POWER_OF_TWO_COST = 2.5
+
+
+def prefers_powers_of_two(device: Optional[str] = None) -> bool:
+    """
+    Whether FFTs are fastest on powers of two on the device.
+
+    True on Metal, and for the emulated float64 multislice (the
+    ``torch.emulate-float64`` option), whose kernels run on Metal too.
+
+    Parameters
+    ----------
+    device : str, optional
+        The device, defaults to the configured one.
+    """
+    if device is None:
+        device = config.get("device")
+    return str(device).lower() in _METAL_DEVICES or bool(
+        config.get("torch.emulate-float64", False)
+    )
+
+
+def _is_power_of_two(n: int) -> bool:
+    return n > 0 and n & (n - 1) == 0
+
+
+def _pixel_cost(n: int) -> float:
+    """The relative time of a 2D transform of an ``n`` by ``n`` grid on Metal."""
+    return n * n * (1.0 if _is_power_of_two(n) else _METAL_NON_POWER_OF_TWO_COST)
+
+
+def next_preferred_fft_size(n: int, device: Optional[str] = None) -> int:
+    """
+    The length >= ``n`` that is cheapest to transform on the device.
+
+    Where all fast lengths cost alike (CPU and CUDA) this is
+    :func:`next_fast_fft_size`. On Metal a power of two is much faster per pixel
+    than any other length, so it is chosen unless a fast length leaves out so
+    much of the way to it that the saved pixels outweigh the difference: for
+    ``n = 300`` that is 300 itself, for ``n = 330`` it is 512 rather than 336.
+    The result is never below ``n``, so the sampling is never coarser than the
+    plain fast length would give.
+
+    Parameters
+    ----------
+    n : int
+        The minimum transform length.
+    device : str, optional
+        The device, defaults to the configured one.
+
+    Returns
+    -------
+    int
+        The preferred transform length.
+    """
+    fast = next_fast_fft_size(n)
+    if not prefers_powers_of_two(device):
+        return fast
+
+    n = max(1, int(n))
+    power = 1 << (n - 1).bit_length()
+    best = fast
+    # Only lengths up to the next power of two can beat it.
+    candidate = fast
+    while candidate < power:
+        if _pixel_cost(candidate) < _pixel_cost(best):
+            best = candidate
+        candidate = next_fast_fft_size(candidate + 1)
+    return power if _pixel_cost(power) <= _pixel_cost(best) else best
+
+
+def next_preferred_fft_multiplier(
+    start: int, period: int, device: Optional[str] = None
+) -> int:
+    """
+    The multiplier ``q >= start`` for which ``q * period`` is cheapest to
+    transform on the device, among those that are fast lengths.
+
+    ``period`` must itself be a fast length, so that ``q * period`` is fast
+    exactly when ``q`` is. Where all fast lengths cost alike this is the next
+    fast ``q``. On Metal, a ``period`` that is a power of two lets ``q * period``
+    be one too, and then :func:`next_preferred_fft_size` decides among them.
+
+    Parameters
+    ----------
+    start : int
+        The minimum multiplier.
+    period : int
+        The length that ``q * period`` is a multiple of.
+    device : str, optional
+        The device, defaults to the configured one.
+    """
+    multiplier = next_fast_fft_size(start)
+    if not (prefers_powers_of_two(device) and _is_power_of_two(period)):
+        return multiplier
+    # The smallest length that is a multiple of the period and cheapest, by the
+    # same rule as for a plain length; only the multiples of the period count.
+    best = multiplier
+    power = 1 << (start * period - 1).bit_length()
+    candidate = multiplier
+    while candidate * period < power:
+        if _pixel_cost(candidate * period) < _pixel_cost(best * period):
+            best = candidate
+        candidate = next_fast_fft_size(candidate + 1)
+    return power // period if _pixel_cost(power) <= _pixel_cost(best * period) else best
+
+
 _warned_slow_fft_shapes: set = set()
 # _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
 # on the shape set must be atomic or the same shape can warn more than once.
