@@ -98,6 +98,11 @@ def lightings(atoms):
     }
 
 
+# A single patch of 200 mrad covers only the directions about its pole, and
+# says so; the tests that use one ignore that.
+PARTIAL = "ignore:.*farther than max_angle:UserWarning"
+
+
 def tiny_reference(atoms=SILICON, **kwargs):
     """One patch about the pole: the smallest reference pattern there is."""
     defaults = dict(n_patches=1, slab_cell=(6.0, 6.0, 4.0), gpts=8, direction_gpts=30)
@@ -1618,6 +1623,7 @@ class TestDevices:
 
         self.agree(build, device, lazies=(False, True))
 
+    @pytest.mark.filterwarnings(PARTIAL)
     def test_the_builders(self, device):
         def reference(on, lazy):
             return EBSDReferencePattern(
@@ -1649,6 +1655,7 @@ class TestDevices:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings(PARTIAL)
 class TestEBSDReferencePattern:
     def test_patch_geometry(self):
         # solid angle per patch goes as 1 / n, so the radius as 1 / sqrt(n),
@@ -1704,6 +1711,12 @@ class TestEBSDReferencePattern:
             EBSDReferencePattern(
                 abtem.AtomsEnsemble([SILICON, SILICON]), 30e3, slab_cell=(6.0, 6.0, 4.0)
             )
+
+    def test_warns_about_directions_no_patch_covers(self):
+        builder = tiny_reference(direction_gpts=13)
+        with pytest.warns(UserWarning, match="farther than max_angle"):
+            pattern = builder.build(pbar=False, lazy=False)
+        assert 0 < len(pattern) < len(builder.directions)
 
     def test_every_direction_is_assigned_exactly_once(self):
         builder = EBSDReferencePattern(

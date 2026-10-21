@@ -190,7 +190,8 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         written to an EMsoft file as calculated.
     max_angle : float, optional
         Angular radius of each patch [mrad]; directions farther than this from
-        their patch's axis are left out. Defaults to :func:`patch_half_angle`.
+        their patch's axis are left out, with a warning. Defaults to
+        :func:`patch_half_angle`, which covers every direction.
     repetitions : tuple of three int, optional
         Repetitions of `atoms` in the block the slabs are cut from; see
         :func:`~abtem.ebsd.orientations.rotated_slab`.
@@ -500,6 +501,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         progress = TqdmWrapper(
             total=len(zone_axes), enabled=pbar and not lazy, leave=False
         )
+        dropped = 0
         try:
             for centre, indices in zip(zone_axes, assignment):
                 south = bool(centre[2] < 0.0)
@@ -510,6 +512,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                 local = -sign * directions[indices] @ zone_axis_rotation(slab_axis).T
                 keep = local[:, 2] > cutoff
                 local, indices = local[keep], indices[keep]
+                dropped += int(np.count_nonzero(~keep))
 
                 if len(local) == 0:
                     continue
@@ -546,6 +549,14 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                 )
         finally:
             progress.close_if_exists()
+
+        if dropped:
+            warnings.warn(
+                f"{dropped} of {dropped + sum(len(p) for p in patterns)} "
+                f"directions are farther than max_angle ({self._max_angle:g} mrad) "
+                f"from their patch's axis and are left out, so the pattern has "
+                f"holes; raise max_angle or n_patches to cover them"
+            )
 
         if not patterns:
             raise RuntimeError("no directions were assigned to any patch")
