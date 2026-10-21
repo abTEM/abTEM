@@ -48,7 +48,10 @@ def test_round_trip_keeps_float64_precision(double_float):
     assert _relative_error(y, x) < 1e-14
 
 
-@pytest.mark.parametrize("shape", [(8, 8), (3, 8, 16), (2, 64, 128), (1, 256, 256)])
+@pytest.mark.parametrize(
+    "shape",
+    [(8, 8), (3, 8, 16), (2, 64, 128), (1, 256, 256), (4, 24, 24), (2, 45, 100)],
+)
 def test_fft2_matches_numpy_float64(double_float, shape):
     rng = np.random.default_rng(1)
     x = _random_complex(rng, shape)
@@ -60,7 +63,23 @@ def test_fft2_matches_numpy_float64(double_float, shape):
     assert _relative_error(forward, np.fft.fft2(seen)) < 1e-13
 
 
-@pytest.mark.parametrize("shape", [(4, 32, 32), (2, 128, 64)])
+@pytest.mark.parametrize(
+    "length",
+    [2, 3, 5, 6, 7, 9, 10, 12, 15, 21, 25, 35, 49, 60, 120, 245, 343, 360, 500, 1000],
+)
+def test_fft2_is_accurate_for_every_supported_length(double_float, length):
+    rng = np.random.default_rng(length)
+    # Both axes get the length in turn, so the row and the column kernels run.
+    for shape in [(2, 4, length), (2, length, 4)]:
+        x = _random_complex(rng, shape)
+        seen = double_float.to_numpy(double_float.from_numpy(x))
+
+        out = double_float.to_numpy(double_float.fft2(double_float.from_numpy(x)))
+
+        assert _relative_error(out, np.fft.fft2(seen)) < 1e-13
+
+
+@pytest.mark.parametrize("shape", [(4, 32, 32), (2, 128, 64), (2, 45, 100)])
 def test_inverse_fft2_undoes_fft2(double_float, shape):
     rng = np.random.default_rng(2)
     x = double_float.from_numpy(_random_complex(rng, shape))
@@ -94,26 +113,27 @@ def test_multiply_broadcasts_a_kernel_over_the_batch(double_float):
     assert _relative_error(product, seen_x * seen_k) < 1e-13
 
 
-@pytest.mark.parametrize("shape", [(24, 24), (16, 20), (2048, 8), (1, 8)])
+@pytest.mark.parametrize("shape", [(11, 8), (16, 13), (2048, 8), (1, 8), (8, 22)])
 def test_unsupported_sizes_raise(double_float, shape):
     x = double_float.from_numpy(np.ones(shape, dtype=np.complex128))
 
-    with pytest.raises(ValueError, match="power of two"):
+    with pytest.raises(ValueError, match="no prime factor above 7"):
         double_float.fft2(x)
 
 
-def _exit_wave(emulate):
+def _exit_wave(emulate, gpts):
     atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 8)
     with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
-        potential = abtem.Potential(atoms, gpts=64, slice_thickness=1.0)
+        potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0)
         wave = abtem.PlaneWave(energy=200e3)
         wave.grid.match(potential)
         return np.asarray(wave.multislice(potential).compute().array)
 
 
-def test_emulated_multislice_matches_float64_on_the_cpu():
-    reference = _exit_wave(False)
-    emulated = _exit_wave(True)
+@pytest.mark.parametrize("gpts", [64, 60, 72, 75])
+def test_emulated_multislice_matches_float64_on_the_cpu(gpts):
+    reference = _exit_wave(False, gpts)
+    emulated = _exit_wave(True, gpts)
 
     assert emulated.dtype == np.complex128
     # The float32 multislice is off by ~1e-6 at this depth; emulated double

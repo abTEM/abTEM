@@ -66,9 +66,9 @@ torch:
   device: mps
   # Run the multislice of float64 waves on the Metal GPU in emulated double precision
   # (pairs of float32, ~1e-14 relative accuracy), while the data stay on the host as
-  # float64. Needs device 'cpu', precision 'float64' and power-of-two grids up to
-  # 1024. Experimental; only the Fourier multislice of waves without tilt or
-  # ensemble axes is supported, anything else raises.
+  # float64. Needs device 'cpu', precision 'float64' and grids whose sides have no
+  # prime factor above 7, up to 1024. Experimental; only the Fourier multislice of
+  # waves without tilt or ensemble axes is supported, anything else raises.
   emulate-float64: false
 mkl:
   # The number of threads to use for mkl
