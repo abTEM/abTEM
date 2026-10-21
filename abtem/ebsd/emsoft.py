@@ -22,7 +22,8 @@ from abtem.ebsd.measurements import (
     SphericalPattern,
     _lambert_grid,
 )
-from abtem.ebsd.projections import SquareLambertProjection
+from abtem.ebsd.orientations import _spglib_errors
+from abtem.ebsd.projections import SquareLambertProjection, validate_projection
 
 __all__ = ["write_emsoft_master_pattern"]
 
@@ -65,9 +66,23 @@ def _field(dataset, name: str):
     return getattr(dataset, name)
 
 
+def _emsoft_frame(lattice: np.ndarray) -> np.ndarray:
+    """The rotation into EMsoft's Cartesian frame of a lattice.
+
+    EMsoft builds the frame from the lattice parameters alone: ``a`` along
+    ``x`` and ``b`` in the ``xy``-plane. The rows of the returned matrix are
+    its axes, in the frame `lattice` is given in.
+    """
+    a, b = np.asarray(lattice[0], dtype=float), np.asarray(lattice[1], dtype=float)
+    x = a / np.linalg.norm(a)
+    z = np.cross(a, b)
+    z /= np.linalg.norm(z)
+    return np.stack([x, np.cross(z, x), z])
+
+
 def _conventional_cell(
     atoms: Atoms, space_group: Optional[int]
-) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Space group, conventional lattice, and the symmetry-unique sites.
 
     EMsoft expects the lattice in the space group's conventional setting and
@@ -77,6 +92,10 @@ def _conventional_cell(
     Returns
     -------
     space_group, lattice, scaled_positions, numbers
+    rotation : np.ndarray
+        The rotation taking a direction in the frame of `atoms` to EMsoft's
+        frame of the written lattice. Standardizing the cell may rotate it, or
+        change the setting of its axes.
     """
     if space_group is not None and not 1 <= int(space_group) <= 230:
         raise ValueError(f"space group must be between 1 and 230, got {space_group}")
@@ -94,33 +113,37 @@ def _conventional_cell(
             "than in the conventional setting of the space group; this may "
             "disagree with the space group number recorded alongside it"
         )
+        lattice = np.asarray(atoms.cell[:], dtype=float)
         return (
             space_group,
-            np.asarray(atoms.cell[:], dtype=float),
+            lattice,
             np.asarray(atoms.get_scaled_positions(), dtype=float),
             np.asarray(atoms.numbers, dtype=int),
+            _emsoft_frame(lattice),
         )
 
-    cell = (atoms.cell[:], atoms.get_scaled_positions(), atoms.numbers)
+    def dataset_of(cell):
+        with warnings.catch_warnings():
+            # spglib warns about its own internal error handling
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                return spglib.get_symmetry_dataset(cell)  # type: ignore[arg-type]
+            except _spglib_errors():
+                return None
 
-    with warnings.catch_warnings():
-        # spglib warns about its own internal error handling
-        warnings.simplefilter("ignore", DeprecationWarning)
-        standardized = spglib.standardize_cell(cell, to_primitive=False)
-    if standardized is None:
+    given = dataset_of((atoms.cell[:], atoms.get_scaled_positions(), atoms.numbers))
+    if given is None:
         raise ValueError(
             "spglib could not standardize the cell; pass space_group=... and "
             "supply an already conventional cell"
         )
-    lattice = np.asarray(standardized[0], dtype=float)
-    positions = np.asarray(standardized[1], dtype=float)
-    numbers = np.asarray(standardized[2], dtype=int)
+    lattice = np.asarray(_field(given, "std_lattice"), dtype=float)
+    positions = np.asarray(_field(given, "std_positions"), dtype=float)
+    numbers = np.asarray(_field(given, "std_types"), dtype=int)
+    # from the frame of the given cell to that of the idealized standard one
+    idealization = np.asarray(_field(given, "std_rotation_matrix"), dtype=float)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        dataset = spglib.get_symmetry_dataset(
-            (lattice, positions, numbers)  # type: ignore[arg-type]
-        )
+    dataset = dataset_of((lattice, positions, numbers))
     if dataset is None:
         raise ValueError("spglib could not determine the symmetry of the cell")
 
@@ -133,8 +156,9 @@ def _conventional_cell(
         found = int(space_group)
 
     unique = np.unique(_field(dataset, "equivalent_atoms"))
+    rotation = _emsoft_frame(lattice) @ idealization
 
-    return found, lattice, positions[unique], numbers[unique]
+    return found, lattice, positions[unique], numbers[unique], rotation
 
 
 def _atom_data(
@@ -240,26 +264,31 @@ def write_emsoft_master_pattern(
     if npx is None:
         npx = _default_npx(pattern)
 
-    space_group, lattice, scaled, numbers = _conventional_cell(atoms, space_group)
+    space_group, lattice, scaled, numbers, rotation = _conventional_cell(
+        atoms, space_group
+    )
+    # the pattern's directions are those of `atoms`; laid out in the frame
+    # EMsoft builds from the written lattice, unless the two coincide
+    if np.allclose(rotation, np.eye(3), atol=1e-12):
+        rotation = None
 
-    # EMsoft's square Lambert grid is SquareLambertProjection's, transposed:
-    # EMsoft swaps the two coordinates when it looks a direction up
-    # (CalcEBSDPatternSingleFull) and stores arrays in Fortran order.
-    northern = np.asarray(pattern.interpolate(2 * npx + 1, "lambert").array).T
-    southern = np.asarray(
-        pattern.interpolate(2 * npx + 1, "lambert", hemisphere="south").array
-    ).T
+    def nodes(projection: str, hemisphere: str) -> np.ndarray:
+        # EMsoft's square Lambert grid is SquareLambertProjection's, transposed:
+        # EMsoft swaps the two coordinates when it looks a direction up
+        # (CalcEBSDPatternSingleFull) and stores arrays in Fortran order.
+        return pattern._interpolate_nodes(
+            2 * npx + 1, validate_projection(projection), hemisphere, rotation
+        ).T
+
+    northern = nodes("lambert", "north")
+    southern = nodes("lambert", "south")
 
     # The stereographic arrays are only for display, and a Lambert-sampled
     # pattern cannot fill a stereographic grid exactly.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SparseProjectionWarning)
-        stereographic_n = np.asarray(
-            pattern.interpolate(2 * npx + 1, "stereographic").array
-        ).T
-        stereographic_s = np.asarray(
-            pattern.interpolate(2 * npx + 1, "stereographic", hemisphere="south").array
-        ).T
+        stereographic_n = nodes("stereographic", "north")
+        stereographic_s = nodes("stereographic", "south")
 
     if np.any(northern < 0.0):
         warnings.warn(

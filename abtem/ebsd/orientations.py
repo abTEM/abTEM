@@ -437,6 +437,19 @@ def _displaced(
     )
 
 
+def _spglib_errors() -> tuple[type[Exception], ...]:
+    """The errors spglib raises where it used to return None.
+
+    spglib 2.5 added an error mode, the default from spglib 3, in which a
+    failure raises a ``SpglibError`` rather than returning None.
+    """
+    try:
+        from spglib.error import SpglibError  # type: ignore[import-untyped]
+    except ImportError:
+        return ()
+    return (SpglibError,)
+
+
 def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     """Whether a crystal has a centre of inversion.
 
@@ -466,7 +479,10 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     with warnings.catch_warnings():
         # spglib warns about its own internal error handling
         warnings.simplefilter("ignore", DeprecationWarning)
-        symmetry = spglib.get_symmetry(cell, symprec=symprec)
+        try:
+            symmetry = spglib.get_symmetry(cell, symprec=symprec)
+        except _spglib_errors():
+            symmetry = None
     if symmetry is None:
         raise ValueError("spglib could not determine the symmetry of the crystal")
     inversion = -np.eye(3, dtype=int)

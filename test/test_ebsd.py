@@ -33,6 +33,7 @@ from abtem.ebsd import (
     zone_axis_rotation,
 )
 from abtem.ebsd.emission import EmissionSlices, backscatter_cross_section
+from abtem.ebsd.emsoft import _conventional_cell
 from abtem.ebsd.orientations import (
     _crystal_and_displacements,
     _displaced,
@@ -501,10 +502,19 @@ class TestOrientations:
         pytest.importorskip("spglib")
         assert is_centrosymmetric(SILICON)
         assert not is_centrosymmetric(GAN)
-        # spglib finds no symmetry for atoms on top of each other
+        # spglib finds no symmetry for atoms on top of each other, and either
+        # returns None or, in its newer error mode, raises
+        spglib = pytest.importorskip("spglib")
         overlapping = ase.Atoms("Si2", positions=np.zeros((2, 3)), cell=[4.0] * 3)
-        with pytest.raises(ValueError, match="could not determine"):
-            is_centrosymmetric(overlapping)
+        for old_error_handling in (True, False):
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setattr(
+                    spglib.error, "OLD_ERROR_HANDLING", old_error_handling
+                )
+                with pytest.raises(ValueError, match="could not determine"):
+                    is_centrosymmetric(overlapping)
+                with pytest.raises(ValueError, match="could not standardize"):
+                    _conventional_cell(overlapping, None)
 
 
 # --------------------------------------------------------------------------
@@ -2141,6 +2151,37 @@ class TestEMsoftWriter:
             expected[nodes[:, 0], nodes[:, 1]] = np.asarray(calculated.array)
             assert np.allclose(north, expected.T, rtol=1e-6)
         assert tiny_reference(direction_gpts=None, gpts=128)._direction_gpts == 149
+
+    def test_writes_the_pattern_in_the_frame_of_the_written_cell(self, tmp_path):
+        # EMsoft builds its frame from the lattice parameters, with a along x and
+        # b in the xy-plane. A crystal given in another orientation, with its
+        # pattern turned with it, gives the same file.
+        def written(atoms, values):
+            pattern = SphericalPattern(
+                values,
+                self.directions,
+                metadata={"energy": 30e3, "centrosymmetric": True},
+            )
+            with self.write(tmp_path, pattern, atoms, overwrite=True) as f:
+                master = f["EMData/EBSDmaster"]
+                return np.asarray(master["mLPNH"]), np.asarray(master["mLPSH"])
+
+        def even(d):
+            return 1.0 + 0.3 * d[:, 0] ** 2 + 0.2 * d[:, 1] * d[:, 2]
+
+        cubic = ase.build.bulk("Si", "diamond", a=5.431, cubic=True)
+        expected = written(cubic, even(self.directions))
+        # about z, and about x, which mixes the hemispheres
+        for axis, angle in (("z", 30.0), ("x", 20.0)):
+            rotated = cubic.copy()
+            rotated.rotate(angle, axis, rotate_cell=True)
+            turn = rotated.cell[:].T @ np.linalg.inv(cubic.cell[:].T)
+            for result, reference in zip(
+                written(rotated, even(self.directions @ turn)), expected
+            ):
+                assert np.allclose(result, reference, atol=3e-3), (axis, angle)
+
+    directions = SquareLambertProjection().grid(81)
 
     def test_writes_a_calculated_southern_hemisphere(self, tmp_path):
         pattern = hemispheres("both", centrosymmetric=False)

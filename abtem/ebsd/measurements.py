@@ -454,6 +454,30 @@ class SphericalPattern(CopyMixin, EqualityMixin):
             Nodes outside the projection's domain are zero.
         """
         projection = validate_projection(projection)
+        return ReferencePatternImages(
+            self._interpolate_nodes(gpts, projection, hemisphere),
+            sampling=2.0 / (gpts - 1),
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata={
+                **self._metadata,
+                "projection": projection.name,
+                "hemisphere": hemisphere,
+            },
+        )
+
+    def _interpolate_nodes(
+        self,
+        gpts: int,
+        projection: HemisphereProjection,
+        hemisphere: str,
+        rotation: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """The values at the nodes of :meth:`interpolate`'s grid.
+
+        With a `rotation`, the grid is laid out in the frame it rotates the
+        pattern's directions into: a node's direction ``g`` is evaluated at
+        ``rotation.T @ g``.
+        """
         if hemisphere not in ("north", "south"):
             raise ValueError(
                 f"hemisphere must be 'north' or 'south', got {hemisphere!r}"
@@ -468,22 +492,13 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         if hemisphere == "south":
             # -0.0 on the equator, so that it counts as southern
             directions = directions * np.array([1.0, 1.0, -1.0])
+        if rotation is not None:
+            directions = directions @ np.asarray(rotation, dtype=float)
         values = self.interpolate_directions(directions)
 
         images = np.zeros(self.ensemble_shape + (gpts * gpts,))
         images[..., inside] = values
-        images = images.reshape(self.ensemble_shape + (gpts, gpts))
-
-        return ReferencePatternImages(
-            images,
-            sampling=2.0 / (gpts - 1),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata={
-                **self._metadata,
-                "projection": projection.name,
-                "hemisphere": hemisphere,
-            },
-        )
+        return images.reshape(self.ensemble_shape + (gpts, gpts))
 
     def bin(
         self,
