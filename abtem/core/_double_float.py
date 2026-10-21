@@ -14,10 +14,12 @@ meets this module only at the boundaries, through :func:`from_numpy` and
 :func:`to_numpy`.
 
 The FFT is a mixed-radix (2, 3, 4, 5, 7) Stockham transform that runs a whole 1D
-transform in one threadgroup, in threadgroup memory. That bounds the transformed
-axes to lengths with no prime factor above 7, up to :data:`MAX_FFT_SIZE`;
-anything else raises, as the alternative is a silent fall back to float32
-accuracy.
+transform in one threadgroup, in threadgroup memory, which holds up to
+:data:`MAX_FFT_SIZE` points; a longer axis is split into two such transforms
+(Bailey's four-step algorithm). Axes are limited to lengths with no prime factor
+above 7 that split in two, which is every such length up to
+:data:`MAX_FFT_SIZE` squared; anything else raises, as the alternative is a
+silent fall back to float32 accuracy.
 """
 
 from __future__ import annotations
@@ -210,27 +212,37 @@ def _fft_source(n: int) -> str:
     return _HELPERS + _MULTIPLY + _COMPLEX + butterflies + f"""
 #define N {n}u
 // A Stockham mixed-radix FFT of one line per threadgroup, {threads} threads
-// wide. Lines are addressed as base + i * es with base = b * bs + m * ms, so
-// one kernel transforms the rows (es = 1) and the columns (es = row length) of
-// a batch of images without a transpose. sign < 0 is the forward transform.
-// `scale`, a double-float constant, multiplies the output. The
-// twiddle table holds exp(-2 pi i k / N) for k < N.
+// wide. A line is addressed as base + i * es, with the base of line number
+// tgid = (b * C + c) * J + j being b * bs + c * cs + j * js, and the input and
+// the output addressed apart. So one kernel transforms the rows (es = 1) and
+// the columns (es = row length) of a batch of images without a transpose, and,
+// with J > 1, a pass of a four-step transform. sign < 0 is the forward
+// transform. `scale`, a double-float constant, multiplies the output; with
+// tw_on, element i of line j is also multiplied by exp(-2 pi i i j / N') from
+// the table v, N' the length of the whole four-step axis. The table w holds
+// exp(-2 pi i k / N) for k < N.
 kernel void fft_df(
     device const float* xrh, device const float* xrl,
     device const float* xih, device const float* xil,
     device float* yrh, device float* yrl, device float* yih, device float* yil,
     device const float* wrh, device const float* wrl,
     device const float* wih, device const float* wil,
-    constant uint& M, constant uint& bs, constant uint& ms, constant uint& es,
+    device const float* vrh, device const float* vrl,
+    device const float* vih, device const float* vil, constant uint& tw_on,
+    constant uint& C, constant uint& J, constant uint& bs, constant uint& cs,
+    constant uint& js_in, constant uint& js_out,
+    constant uint& es_in, constant uint& es_out,
     constant float& sign, constant float& scale_hi, constant float& scale_lo,
     uint tgid [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]]) {{
   threadgroup float buf_a[4 * N];
   threadgroup float buf_b[4 * N];
-  uint b = tgid / M, m = tgid - b * M;
-  uint base = b * bs + m * ms;
+  uint j = tgid % J, rest = tgid / J;
+  uint c = rest % C, b = rest / C;
+  uint base_in = b * bs + c * cs + j * js_in;
+  uint base_out = b * bs + c * cs + j * js_out;
   for (uint i = t; i < N; i += {threads}u) {{
-    uint g = base + i * es;
+    uint g = base_in + i * es_in;
     buf_a[0*N+i] = xrh[g]; buf_a[1*N+i] = xrl[g];
     buf_a[2*N+i] = xih[g]; buf_a[3*N+i] = xil[g];
   }}
@@ -239,10 +251,17 @@ kernel void fft_df(
   threadgroup float* dst = buf_b;
 {"".join(body)}
   for (uint i = t; i < N; i += {threads}u) {{
-    uint g = base + i * es;
+    uint g = base_out + i * es_out;
+    cdf v = cdf{{float2(src[0*N+i], src[1*N+i]), float2(src[2*N+i], src[3*N+i])}};
+    if (tw_on != 0u) {{
+      uint w = i * j;
+      cdf tw = cdf{{float2(vrh[w], vrl[w]), float2(vih[w], vil[w])}};
+      if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
+      v = cmul(v, tw);
+    }}
     float2 sc = float2(scale_hi, scale_lo);
-    float2 re = df_mul(float2(src[0*N+i], src[1*N+i]), sc);
-    float2 im = df_mul(float2(src[2*N+i], src[3*N+i]), sc);
+    float2 re = df_mul(v.re, sc);
+    float2 im = df_mul(v.im, sc);
     yrh[g] = re.x; yrl[g] = re.y; yih[g] = im.x; yil[g] = im.y;
   }}
 }}
@@ -315,13 +334,25 @@ def _width(n: int) -> int:
     return min(n // min(radices(n)), _MAX_THREADS)
 
 
+def _split_axis(n: int) -> tuple[int, int] | None:
+    """The factors ``n = n1 * n2`` of a four-step transform of an axis too long
+    for one threadgroup, as close to ``sqrt(n)`` as the divisors allow, or None
+    when no split leaves both within :data:`MAX_FFT_SIZE`."""
+    best = None
+    for d in range(2, MAX_FFT_SIZE + 1):
+        if n % d == 0 and 2 <= n // d <= MAX_FFT_SIZE:
+            if best is None or abs(d - n**0.5) < abs(best - n**0.5):
+                best = d
+    return None if best is None else (best, n // best)
+
+
 def _check_axis(n: int) -> None:
-    if radices(n) is None or n > MAX_FFT_SIZE:
+    if radices(n) is None or (n > MAX_FFT_SIZE and _split_axis(n) is None):
         raise ValueError(
             "emulated double precision on Metal transforms axes whose length "
-            f"has no prime factor above 7 and is at most {MAX_FFT_SIZE}, got "
-            f"{n}. Choose a grid of that size, or use the 'cpu' or 'gpu' device "
-            "for other sizes."
+            "has no prime factor above 7 and is at most "
+            f"{MAX_FFT_SIZE * MAX_FFT_SIZE}, got {n}. Choose a grid of that "
+            "size, or use the 'cpu' or 'gpu' device for other sizes."
         )
 
 
@@ -365,6 +396,90 @@ def multiply(x: DoubleFloatArray, kernel: DoubleFloatArray) -> DoubleFloatArray:
     return y
 
 
+def _launch(
+    n, src, dst, *, sign, scale, lines, strides, twiddle_length=None, tw_on=False
+):
+    """One kernel launch: ``lines = (C, J)`` lines per image of length ``n`` with
+    the strides ``(bs, cs, js_in, js_out, es_in, es_out)``."""
+    batch = src.shape[0]
+    scale_hi = float(np.float32(scale))
+    scale_lo = float(np.float32(scale - scale_hi))
+    tables = _twiddles(n)
+    # The table of the whole axis, for the twiddle step of a four-step pass.
+    fused = _twiddles(twiddle_length) if tw_on else tables
+    c, j = lines
+    _library(n).fft_df(
+        *src.planes,
+        *dst.planes,
+        *tables,
+        *fused,
+        1 if tw_on else 0,
+        c,
+        j,
+        *strides,
+        sign,
+        scale_hi,
+        scale_lo,
+        threads=batch * c * j * _width(n),
+        group_size=_width(n),
+    )
+
+
+def _transform_axis(src, dst, length, element, lines, image, sign, scale):
+    """Transform ``lines`` lines of ``length`` points per image, each element of
+    a line ``element`` apart and the lines laid out by ``lines = (count, stride)``.
+
+    A length too long for one threadgroup is done in four steps (Bailey): with
+    ``length = n1 * n2``, ``n1``-point transforms down the columns of the line
+    seen as an ``n1`` by ``n2`` matrix, a twiddle multiply, then ``n2``-point
+    transforms along its rows, written transposed. The twiddle multiply rides on
+    the first pass.
+    """
+    count, line_stride = lines
+    split = _split_axis(length) if length > MAX_FFT_SIZE else None
+    flat = lambda x: DoubleFloatArray(  # noqa: E731
+        tuple(p.reshape(-1, image) for p in x.planes)
+    )
+    src, dst = flat(src), flat(dst)
+
+    if split is None:
+        _launch(
+            length,
+            src,
+            dst,
+            sign=sign,
+            scale=scale,
+            lines=(count, 1),
+            strides=(image, line_stride, 0, 0, element, element),
+        )
+        return
+
+    n1, n2 = split
+    middle = flat(DoubleFloatArray(tuple(torch.empty_like(p) for p in src.planes)))
+    # Step 1: for each n2, the n1 points {n1' * n2 + n2'} ...
+    _launch(
+        n1,
+        src,
+        middle,
+        sign=sign,
+        scale=1.0,
+        lines=(count, n2),
+        strides=(image, line_stride, element, element, n2 * element, n2 * element),
+        twiddle_length=length,
+        tw_on=True,
+    )
+    # Step 2: for each k1, the n2 points, to k1 + n1 * k2.
+    _launch(
+        n2,
+        middle,
+        dst,
+        sign=sign,
+        scale=scale,
+        lines=(count, n1),
+        strides=(image, line_stride, n2 * element, element, element, n1 * element),
+    )
+
+
 @_serialized
 def fft2(x: DoubleFloatArray, inverse: bool = False) -> DoubleFloatArray:
     """The 2D FFT over the last two axes, normalised like ``numpy.fft``.
@@ -375,44 +490,16 @@ def fft2(x: DoubleFloatArray, inverse: bool = False) -> DoubleFloatArray:
     _check_axis(n0)
     _check_axis(n1)
 
-    batch = int(np.prod(batch_shape)) if batch_shape else 1
     sign = 1.0 if inverse else -1.0
     # 1 / (n0 n1) is not a float32 unless the grid is a power of two: scale in
     # double-float too, or the inverse would be good to float32 only.
     scale = 1.0 / (n0 * n1) if inverse else 1.0
-    scale_hi = float(np.float32(scale))
-    scale_lo = float(np.float32(scale - scale_hi))
 
     rows = x.empty_like()
     out = x.empty_like()
+    image = n0 * n1
     # Along the last axis: n0 lines per image, contiguous.
-    _library(n1).fft_df(
-        *x.planes,
-        *rows.planes,
-        *_twiddles(n1),
-        n0,
-        n0 * n1,
-        n1,
-        1,
-        sign,
-        1.0,
-        0.0,
-        threads=batch * n0 * _width(n1),
-        group_size=_width(n1),
-    )
+    _transform_axis(x, rows, n1, 1, (n0, n1), image, sign, 1.0)
     # Along the first: n1 lines per image, strided by the row length.
-    _library(n0).fft_df(
-        *rows.planes,
-        *out.planes,
-        *_twiddles(n0),
-        n1,
-        n0 * n1,
-        1,
-        n1,
-        sign,
-        scale_hi,
-        scale_lo,
-        threads=batch * n1 * _width(n0),
-        group_size=_width(n0),
-    )
+    _transform_axis(rows, out, n0, n1, (n1, 1), image, sign, scale)
     return out

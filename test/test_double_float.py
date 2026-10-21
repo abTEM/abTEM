@@ -79,6 +79,23 @@ def test_fft2_is_accurate_for_every_supported_length(double_float, length):
         assert _relative_error(out, np.fft.fft2(seen)) < 1e-13
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [(2, 4, 1280), (2, 1280, 4), (1, 8, 2048), (1, 2048, 8), (1, 1050, 1050)],
+)
+def test_axes_beyond_one_threadgroup_use_a_four_step_transform(double_float, shape):
+    rng = np.random.default_rng(sum(shape))
+    x = _random_complex(rng, shape)
+    seen = double_float.to_numpy(double_float.from_numpy(x))
+    transformed = double_float.fft2(double_float.from_numpy(x))
+
+    out = double_float.to_numpy(transformed)
+    back = double_float.to_numpy(double_float.fft2(transformed, inverse=True))
+
+    assert _relative_error(out, np.fft.fft2(seen)) < 1e-13
+    assert _relative_error(back, seen) < 1e-13
+
+
 @pytest.mark.parametrize("shape", [(4, 32, 32), (2, 128, 64), (2, 45, 100)])
 def test_inverse_fft2_undoes_fft2(double_float, shape):
     rng = np.random.default_rng(2)
@@ -113,7 +130,7 @@ def test_multiply_broadcasts_a_kernel_over_the_batch(double_float):
     assert _relative_error(product, seen_x * seen_k) < 1e-13
 
 
-@pytest.mark.parametrize("shape", [(11, 8), (16, 13), (2048, 8), (1, 8), (8, 22)])
+@pytest.mark.parametrize("shape", [(11, 8), (16, 13), (2**21, 4), (1, 8), (8, 22)])
 def test_unsupported_sizes_raise(double_float, shape):
     x = double_float.from_numpy(np.ones(shape, dtype=np.complex128))
 
