@@ -132,6 +132,72 @@ def _fresnel_propagator_array(
     return f
 
 
+def _tilted_exact_fresnel_propagator_array(
+    thickness: float,
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    energy: float,
+    tilt: np.ndarray,
+    device: str,
+) -> np.ndarray:
+    """Exact (non-paraxial) propagator in the frame co-moving with tilted beams.
+
+    A beam tilted by (theta_x, theta_y) travels along (tan theta_x, tan theta_y, 1),
+    so its transverse and longitudinal wave numbers are k_t = K (tan theta_x,
+    tan theta_y) / N and k_zt = K / N, with N = sqrt(1 + tan^2 theta_x +
+    tan^2 theta_y) and K = 1 / lambda. Its wave is stored without the carrier
+    exp(2 pi i (k_t . r + k_zt z)), so the stored component k is the plane wave
+    k + k_t, which advances by
+
+        exp(2 pi i dz [sqrt(K^2 - |k + k_t|^2) - k_zt])
+
+    and is evanescent where |k + k_t| > K. To first order in k this is the
+    translation exp(-2 pi i dz k . tan(theta)) of the paraxial tilt model.
+
+    Parameters
+    ----------
+    thickness : float
+        Distance to propagate [Å].
+    gpts : two int
+        Number of grid points.
+    sampling : two float
+        Real-space sampling [Å].
+    energy : float
+        Electron energy [eV].
+    tilt : np.ndarray
+        Tilts [mrad] of shape (n, 2).
+    device : str
+        Device of the returned array.
+
+    Returns
+    -------
+    np.ndarray
+        Propagators of shape (n, *gpts).
+    """
+    xp = get_array_module(device)
+    complex_dtype = get_dtype(complex=True)
+    K = 1 / energy2wavelength(energy)
+
+    real_dtype = get_dtype(complex=False)
+    tan = np.tan(np.asarray(tilt).reshape(-1, 2) / 1e3)
+    norm = np.sqrt(1.0 + (tan**2).sum(-1))
+    ktx = xp.asarray(K * tan[:, 0] / norm, dtype=real_dtype)[:, None, None]
+    kty = xp.asarray(K * tan[:, 1] / norm, dtype=real_dtype)[:, None, None]
+    kzt = xp.asarray(K / norm, dtype=real_dtype)[:, None, None]
+
+    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+    kx, ky = kx[None, :, None], ky[None, None]
+
+    # sqrt(a) - sqrt(b) = (a - b) / (sqrt(a) + sqrt(b)), with a - b = -(|k + k_t|^2
+    # - |k_t|^2), is stable for small k; the principal branch of the complex root
+    # makes the evanescent components decay
+    dk2 = kx * (kx + 2 * ktx) + ky * (ky + 2 * kty)
+    kz = xp.sqrt((K**2 - (kx + ktx) ** 2 - (ky + kty) ** 2).astype(complex_dtype))
+    phase = -(2.0 * np.pi * thickness) * dk2 / (kz + kzt)
+
+    return complex_exponential(phase.astype(complex_dtype))
+
+
 def _apply_tilt_to_fresnel_propagator_array(
     array: np.ndarray,
     sampling: tuple[float, float],
@@ -169,6 +235,11 @@ class FresnelPropagator:
     """
     The Fresnel propagator is used for propagating wave functions using the near-field
     approximation (Fresnel diffraction).
+
+    With ``order="exact"`` every plane-wave component advances with its exact
+    longitudinal wave number, also for tilted beams, whose components are the plane
+    waves k + k_t; ``order=1`` and ``2`` are the paraxial expansions, with tilt
+    applied as a translation.
     """
 
     def __init__(self):
@@ -225,6 +296,10 @@ class FresnelPropagator:
         thickness: float,
         order: Literal[1, 2, "exact"] = "exact",
     ) -> np.ndarray:
+        tilted = waves.base_tilt != (0.0, 0.0) or bool(_get_tilt_axes(waves))
+        if order == "exact" and tilted:
+            return FresnelPropagator._calculate_tilted_exact_array(waves, thickness)
+
         array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves._valid_gpts,
@@ -268,6 +343,40 @@ class FresnelPropagator:
                 array = array[..., None, :, :]
 
         return array
+
+    @staticmethod
+    def _calculate_tilted_exact_array(waves: Waves, thickness: float) -> np.ndarray:
+        # The exact kernel is not a product of per-axis factors, so it is built from
+        # the total tilt of every ensemble member: the base tilt plus the values of
+        # each tilt axis [mrad], broadcast over the ensemble axes in their order
+        # (other ensemble axes get length 1, as in the paraxial branch).
+        tilt = np.asarray(waves.base_tilt)
+        tilt_axes = _get_tilt_axes(waves)
+        if tilt_axes:
+            ensemble_axes = waves.ensemble_axes_metadata
+            n = len(ensemble_axes)
+            tilt = tilt.reshape((1,) * n + (2,))
+            for i, axis in enumerate(ensemble_axes):
+                if hasattr(axis, "tilt"):
+                    values = np.asarray(axis.tilt).reshape(-1, 2)
+                    shape = [1] * n + [2]
+                    shape[i] = len(values)
+                    tilt = tilt + values.reshape(shape)
+
+        array = _tilted_exact_fresnel_propagator_array(
+            thickness=thickness,
+            gpts=waves._valid_gpts,
+            sampling=waves._valid_sampling,
+            energy=waves._valid_energy,
+            tilt=tilt.reshape(-1, 2),
+            device=waves.device,
+        )
+        array *= antialias_aperture(
+            waves._valid_gpts,
+            waves._valid_sampling,
+            get_array_module(waves.device),
+        )
+        return array.reshape(tilt.shape[:-1] + array.shape[-2:])
 
     def propagate(
         self,
@@ -595,7 +704,9 @@ class FourierMultislice:
     Parameters
     ----------
     order : int, optional
-        Propagator order, one of 1, 2, or 'exact' (default 'exact')
+        Propagator order, one of 1, 2, or 'exact' (default 'exact'). With 'exact',
+        tilted beams are propagated exactly as well; orders 1 and 2 apply the tilt as
+        the paraxial translation by tan(theta) per unit depth.
     expansion_scope: str
         Specified for compatibility. Must be "propagator" (default "propagator")
     conjugate : bool, optional
