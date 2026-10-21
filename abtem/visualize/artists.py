@@ -201,6 +201,7 @@ class LinesArtist(Artist1D):
     ):
         super().__init__(ax=ax, measurement=measurement)
 
+        is_complex = np.iscomplexobj(measurement.array)
         y = self._reshape_data(measurement.array)
 
         x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
@@ -219,7 +220,8 @@ class LinesArtist(Artist1D):
             labels = list(itertools.product(*labels))
             label = [", ".join(l) for l in labels]
 
-        if np.iscomplexobj(y):
+        # y is real by now (_reshape_data puts the imaginary parts after the real parts)
+        if is_complex:
             if label is not None:
                 label = [l + "(real)" for l in label] + [l + "(imag)" for l in label]
             else:

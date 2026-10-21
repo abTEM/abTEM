@@ -1132,7 +1132,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         -------
         Atoms or numpy.ndarray
             The sites that are kept, in the form they were given: the atoms of the
-            transition potential's element for `Atoms`, positions otherwise.
+            transition potential's element for `Atoms`, positions otherwise. Without
+            a threshold nothing is filtered and an `Atoms` or `Atom` is returned as
+            it is; with a threshold a single `Atom` gives an array of positions.
         """
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)

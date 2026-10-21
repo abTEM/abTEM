@@ -1790,3 +1790,38 @@ def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
     assert [line.get_label() for line in lines] == ["channel = single", "channel = double"]
     for line, row in zip(lines, array):
         np.testing.assert_allclose(line.get_ydata(), row)
+
+
+def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import ThicknessAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    rng = np.random.default_rng(1)
+    array = (rng.random((2, 40)) + 1j * rng.random((2, 40))).astype(np.complex64)
+    measurements = MeasurementsEnsemble(
+        array,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="channel", values=("single", "double")),
+            ThicknessAxis(label="z", units="Å", values=tuple(np.linspace(1, 40, 40))),
+        ],
+    )
+
+    try:
+        measurements.show(overlay=True, legend=True)
+        lines = plt.gcf().axes[0].get_lines()
+    finally:
+        plt.close("all")
+
+    assert [line.get_label() for line in lines] == [
+        "channel = single(real)",
+        "channel = double(real)",
+        "channel = single(imag)",
+        "channel = double(imag)",
+    ]
+    np.testing.assert_allclose(lines[0].get_ydata(), array[0].real)
+    np.testing.assert_allclose(lines[3].get_ydata(), array[1].imag)
