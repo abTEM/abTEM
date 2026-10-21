@@ -205,9 +205,14 @@ class LinesArtist(Artist1D):
 
         x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
 
-        if label is None and measurement.ensemble_shape:
+        # One line per index of the axes before the last one, which is the x axis of
+        # the plot. These are the ensemble axes of a line profile, but also all axes
+        # but the last of a measurement without base axes (an ensemble that is plotted
+        # along its last axis). Matplotlib refuses a number of labels that differs
+        # from the number of lines.
+        if label is None and len(measurement.shape) > 1:
             labels = []
-            for n, axis in zip(measurement.shape, measurement.ensemble_axes_metadata):
+            for n, axis in zip(measurement.shape[:-1], measurement.axes_metadata[:-1]):
                 axis = axis.to_ordinal_axis(n)
                 labels.append([l.format_title(".3g") for l in axis])
 

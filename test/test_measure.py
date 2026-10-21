@@ -1758,3 +1758,35 @@ def test_azimuthal_average_on_a_device_equals_the_reference(
 
     assert_array_matches_device(result.array, device)
     np.testing.assert_allclose(asnumpy(result.array), expected, rtol=1e-5, atol=1e-7)
+
+
+def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
+    # An ensemble is plotted along its last axis. The line labels came from every
+    # axis, including that one, so there were more labels than lines, which
+    # matplotlib refuses (matplotlib before 3.11 took the whole list as the label).
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import ThicknessAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    array = np.random.default_rng(0).random((2, 40)).astype(np.float32)
+    measurements = MeasurementsEnsemble(
+        array,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="channel", values=("single", "double")),
+            ThicknessAxis(label="z", units="Å", values=tuple(np.linspace(1, 40, 40))),
+        ],
+    )
+
+    try:
+        measurements.show(overlay=True, legend=True)
+        lines = plt.gcf().axes[0].get_lines()
+    finally:
+        plt.close("all")
+
+    assert [line.get_label() for line in lines] == ["channel = single", "channel = double"]
+    for line, row in zip(lines, array):
+        np.testing.assert_allclose(line.get_ydata(), row)
