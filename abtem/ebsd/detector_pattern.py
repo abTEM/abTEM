@@ -24,7 +24,7 @@ from abtem.distributions import BaseDistribution
 from abtem.ebsd.detectors import BackscatterDetector
 from abtem.ebsd.emission import configuration_atoms
 from abtem.ebsd.geometry import EBSDGeometry, bunge_rotation
-from abtem.ebsd.measurements import EBSDPatternImages
+from abtem.ebsd.measurements import EBSDPatternImages, _detector_to_image
 from abtem.ebsd.orientations import (
     _crystal_and_displacements,
     _displaced,
@@ -472,8 +472,9 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         Returns
         -------
         pattern : EBSDPatternImages
-            Of shape ``geometry.shape``, after an energy axis if there are
-            several backscattered energies.
+            Of shape ``(columns, rows)`` of ``geometry.shape`` (see
+            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after an
+            energy axis if there are several backscattered energies.
         """
         return self._calculate(None, None, max_batch_directions, lazy, pbar)
 
@@ -514,9 +515,10 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         Returns
         -------
         pattern : EBSDPatternImages
-            Of shape ``geometry.shape``, after an energy axis if there are
-            several backscattered energies, then the source's ensemble axes and
-            the scan's.
+            Of shape ``(columns, rows)`` of ``geometry.shape`` (see
+            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after an
+            energy axis if there are several backscattered energies, then the
+            source's ensemble axes and the scan's.
         """
         source = self._validate_source(source)
         if scan is not None and not isinstance(source, Probe):
@@ -629,7 +631,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         if isinstance(array, da.core.Array):
             # the base axes have to be one chunk
             array = array.rechunk(array.chunks[:-1] + (-1,))
-        array = array.reshape(output_shape + (rows, columns))
+        array = _detector_to_image(array.reshape(output_shape + (rows, columns)))
 
         metadata = {
             **_energy_metadata(self._energy, energies, energy_weights),

@@ -919,14 +919,19 @@ class TestSphericalPattern:
 
         patches = pattern.project(geometry, euler)
         assert isinstance(patches, EBSDPatternImages)
-        assert patches.array.shape == (3, 10, 12)
+        # x across the 12 columns and y up the 10 rows, as the scintillator's
+        # coordinates, so that it shows as the detector sees it
+        assert patches.array.shape == (3, 12, 10)
+        assert patches.detector_array.shape == (3, 10, 12)
         assert [axis.units for axis in patches.base_axes_metadata] == ["µm", "µm"]
         assert patches.sampling == (50.0, 50.0)
         # it is the geometry plus interpolate_directions, nothing else
         for i, angles in enumerate(euler):
             rays = geometry.rotated_directions(angles).reshape(-1, 3)
             direct = pattern.interpolate_directions(rays).reshape(10, 12)
-            assert np.allclose(np.asarray(patches.array)[i], direct), angles
+            assert np.allclose(np.asarray(patches.detector_array)[i], direct)
+            # the top row, at the largest y
+            assert np.allclose(np.asarray(patches.array)[i][:, -1], direct[0])
         assert not np.allclose(patches.array[0], patches.array[1])
 
         # Shot noise belongs on the detector; these values sit near one, so
@@ -1933,7 +1938,7 @@ class TestEBSDDetectorPattern:
         # calculated patch by patch and put back in order; alone, in its own
         # patch's slab, each pixel must agree
         builder = detector_builder()
-        image = np.asarray(uniform.array).ravel()
+        image = np.asarray(uniform.detector_array).ravel()
         directions = builder.directions.reshape(-1, 3)
         axes = np.concatenate([fibonacci_hemisphere(2000), -fibonacci_hemisphere(2000)])
         block = bulk_block(SILICON, builder.slab_cell)

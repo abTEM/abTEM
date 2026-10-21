@@ -55,12 +55,28 @@ class ReferencePatternImages(Images):
         ]
 
 
+def _detector_to_image(array):
+    """A detector's ``(rows, columns)``, row 0 at the top, as an image's
+    ``(x, y)``: x across the columns and y up the rows."""
+    return array[..., ::-1, :].swapaxes(-1, -2)
+
+
 class EBSDPatternImages(Images):
     """A pattern projected onto an EBSD detector.
 
     Like :class:`~abtem.measurements.Images`, with the detector pixels in
-    micrometres as base axes.
+    micrometres as base axes: x across the detector's columns and y up its
+    rows, as :meth:`~abtem.ebsd.geometry.EBSDGeometry.scintillator_coordinates`.
+    A detector of shape ``(rows, columns)`` therefore gives images of shape
+    ``(columns, rows)``, which show as the detector sees them.
+    :attr:`detector_array` lays them out as EMsoft and kikuchipy store
+    patterns.
     """
+
+    @property
+    def detector_array(self):
+        """The patterns as the detector's rows and columns, row 0 at the top."""
+        return self.array[..., ::-1].swapaxes(-1, -2)
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
@@ -593,7 +609,8 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         Returns
         -------
         images : EBSDPatternImages
-            Of shape ``geometry.shape``, with leading axes for any orientations
+            Of shape ``(columns, rows)`` of ``geometry.shape`` (see
+            :class:`EBSDPatternImages`), with leading axes for any orientations
             and for this pattern's own ensemble.
         """
 
@@ -605,8 +622,8 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         rows, columns = geometry.shape
 
         values = self.interpolate_directions(directions.reshape(-1, 3))
-        values = values.reshape(
-            self.ensemble_shape + orientation_shape + (rows, columns)
+        values = _detector_to_image(
+            values.reshape(self.ensemble_shape + orientation_shape + (rows, columns))
         )
 
         axes: list[AxisMetadata] = list(self.ensemble_axes_metadata)
