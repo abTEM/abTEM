@@ -369,6 +369,13 @@ Bugfixes:
       `FlexibleAnnularDetector` no longer fail to broadcast, the shape a lazy scan declares equals the
       computed one, and a `WavesDetector` no longer raises `AttributeError: 'Waves' object has no
       attribute 'reduce_ensemble'`
+- Monte Carlo plasmons: `MonteCarloPlasmons.draw_events` runs again (it raised `TypeError` because
+  `PlasmonScatteringEvents` was abstract) and `excitations_weights` no longer raises `AttributeError` on
+  NumPy 2 ([PR #617](https://github.com/abTEM/abTEM/pull/617))
+    - **Behaviour change:** the combined deflection of several plasmon excitations is the 2D vector sum of
+      the individual deflections, where the polar angles were summed and the sum was also used as the
+      azimuth
+    - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
 
 Documentation:
 
