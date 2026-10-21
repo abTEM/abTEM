@@ -11,6 +11,12 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- Emulated float64 on Apple Metal: with `device: cpu`, `precision: float64` and `torch.emulate-float64: true`
+  the Fourier multislice and the infinite-projection potential run their FFTs on the GPU in double-float
+  arithmetic (pairs of float32, ~1e-14 relative accuracy), several times faster than the CPU in float64.
+  Grid sides must have no prime factor above 7, and on Metal (and with the option on) the automatic grid
+  prefers a power of two, which Metal's FFT runs 2-4x faster per pixel
+  ([PR #620](https://github.com/abTEM/abTEM/pull/620))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
