@@ -422,6 +422,103 @@ def allocate_multislice_measurements(
     return measurements
 
 
+class _EmulatedDoubleMultislice:
+    """The Fourier multislice of float64 waves on the Metal GPU, by double-float.
+
+    The waves live on the device for the whole of one pass through the potential
+    and come back to the host only where a detector needs them (:meth:`sync`),
+    so the host-to-device copies are paid once per pass, not once per slice. The
+    transmission function is formed on the host in float64, and everything the
+    slice loop adds (the antialiasing aperture, the Fresnel propagator) is
+    uploaded from float64 arrays, so the only approximation is the arithmetic
+    of :mod:`abtem.core._double_float`.
+    """
+
+    def __init__(self, waves: Waves, propagator, antialias_aperture, order):
+        from abtem.core import _double_float as double_float
+
+        self._df = double_float
+        self._propagator = propagator
+        self._order = order
+        self._psi = double_float.from_numpy(waves._array)
+        self._aperture = double_float.from_numpy(
+            np.asarray(antialias_aperture.get_array(waves), dtype=np.float64)
+        )
+        self._propagators: dict = {}
+        self._stale = False
+
+    @staticmethod
+    def check_supported(waves: Waves, algorithm) -> None:
+        """Raise unless this class can run ``waves`` through ``algorithm``."""
+        problems = []
+        if not isinstance(algorithm, FourierMultislice):
+            problems.append("only the Fourier multislice is supported")
+        elif algorithm.conjugate or algorithm.transpose:
+            problems.append("conjugate and transpose multislice are not supported")
+        if not (
+            isinstance(waves._array, np.ndarray) and waves._array.dtype == np.complex128
+        ):
+            problems.append("the waves must be a complex128 NumPy array on the host")
+        elif len(_get_tilt_axes(waves)) > 0:
+            problems.append("waves with a tilt axis are not supported")
+        if problems:
+            raise NotImplementedError(
+                "torch.emulate-float64 is set, but " + "; ".join(problems) + "."
+            )
+
+    def _propagator_array(self, waves: Waves, thickness: float):
+        if thickness not in self._propagators:
+            array = self._propagator.get_array(waves, thickness, order=self._order)
+            if np.ndim(array) != 2:
+                raise NotImplementedError(
+                    "torch.emulate-float64 supports a single propagator per grid, "
+                    f"got an array of shape {np.shape(array)}."
+                )
+            self._propagators[thickness] = self._df.from_numpy(
+                np.asarray(array, dtype=np.complex128)
+            )
+        return self._propagators[thickness]
+
+    def step(self, waves: Waves, potential_slice) -> Waves:
+        """Transmit through and propagate across one slice; ``waves`` itself is
+        not updated until :meth:`sync`."""
+        df = self._df
+
+        if isinstance(potential_slice, TransmissionFunction):
+            transmission = potential_slice
+        else:
+            transmission = potential_slice.transmission_function(
+                energy=waves._valid_energy
+            )
+        array = np.asarray(transmission.array)
+        if array.shape != waves._array.shape[-2:] and array.shape[0] != 1:
+            raise NotImplementedError(
+                "torch.emulate-float64 supports a single potential configuration "
+                f"per slice, got a transmission function of shape {array.shape}."
+            )
+        array = array.reshape(waves._array.shape[-2:]).astype(np.complex128)
+
+        # Band-limit on the device: the same two transforms as the host would
+        # take, but on one image, where the GPU is cheap.
+        t = df.fft2(df.from_numpy(array))
+        t = df.fft2(df.multiply(t, self._aperture), inverse=True)
+
+        self._psi = df.multiply(self._psi, t)
+        thickness = transmission.slice_thickness[0]
+        self._psi = df.fft2(self._psi)
+        self._psi = df.multiply(self._psi, self._propagator_array(waves, thickness))
+        self._psi = df.fft2(self._psi, inverse=True)
+        self._stale = True
+        return waves
+
+    def sync(self, waves: Waves) -> Waves:
+        """Bring the waves on the device back to the host."""
+        if self._stale:
+            waves._array = self._df.to_numpy(self._psi)
+            self._stale = False
+        return waves
+
+
 def conventional_multislice_step(
     waves: Waves,
     potential_slice: PotentialArray | TransmissionFunction,
@@ -768,6 +865,14 @@ def multislice_and_detect(
     # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
     waves_input = waves
 
+    emulate_float64 = bool(config.get("torch.emulate-float64"))
+    if emulate_float64:
+        if return_backscattered:
+            raise NotImplementedError(
+                "torch.emulate-float64 does not support return_backscattered."
+            )
+        _EmulatedDoubleMultislice.check_supported(waves, algorithm)
+
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
@@ -776,6 +881,14 @@ def multislice_and_detect(
         # in-place multislice steps must operate on a copy.
         waves = waves_input.copy()
         exit_plane_index = 0
+
+        emulated = (
+            _EmulatedDoubleMultislice(
+                waves, propagator, antialias_aperture, algorithm.order
+            )
+            if emulate_float64
+            else None
+        )
 
         # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
@@ -805,7 +918,9 @@ def multislice_and_detect(
         )
 
         for potential_slice, next_slice in lookahead(potential_slices):
-            if algorithm.expansion_scope == "full":
+            if emulated is not None:
+                waves = emulated.step(waves, potential_slice)
+            elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
@@ -826,6 +941,9 @@ def multislice_and_detect(
                     potential_index, exit_plane_index, potential
                 )
 
+                if emulated is not None:
+                    emulated.sync(waves)
+
                 if measurements is not None:
                     if algorithm.expansion_scope == "full" and return_backscattered:
                         _update_measurements(
@@ -845,6 +963,9 @@ def multislice_and_detect(
                             waves, detectors, measurements, measurement_index
                         )
                 exit_plane_index += 1
+
+        if emulated is not None:
+            emulated.sync(waves)
 
         if return_backscattered:
             _back_propagate_backscattered_waves(
