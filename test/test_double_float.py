@@ -186,3 +186,33 @@ def test_emulation_without_float64_waves_raises():
 
         with pytest.raises(NotImplementedError, match="complex128"):
             wave.multislice(potential).compute()
+
+
+def test_emulated_potential_matches_float64_on_the_host():
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 4)
+
+    def build(emulate):
+        with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
+            potential = abtem.Potential(atoms, gpts=96, slice_thickness=1.0)
+            return np.asarray(potential.build().compute().array)
+
+    reference, emulated = build(False), build(True)
+
+    assert emulated.dtype == np.float64
+    assert np.abs(emulated - reference).max() < 1e-12 * np.abs(reference).max()
+
+
+def test_emulated_potential_keeps_its_cache_out_of_the_pickle():
+    import pickle
+
+    from abtem.integrals import ScatteringFactorProjectionIntegrals
+
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True)
+    integrator = ScatteringFactorProjectionIntegrals()
+    with config.set({"precision": "float64", "torch.emulate-float64": True}):
+        integrator.integrate_on_grid(atoms, 0.0, 1.0, (32, 32), (0.17, 0.17))
+        assert len(integrator._emulated_kernels) == 1
+
+        restored = pickle.loads(pickle.dumps(integrator))
+
+    assert len(restored._emulated_kernels) == 0
