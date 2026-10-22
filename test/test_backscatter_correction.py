@@ -148,3 +148,44 @@ def test_the_corrected_forward_wave_has_more_intensity_than_the_incident_wave():
     }
     assert total[False] == pytest.approx(0.9998, abs=5e-4)
     assert total[True] > 1.005
+
+
+def _graphene_ring_flux(correction):
+    """Flux of the Bragg beams at 1.72-5.4 1/Å (120-377 mrad at 30 keV)."""
+    atoms = abtem.orthogonalize_cell(ase.build.graphene(a=2.46, vacuum=1.0))
+    atoms.center(vacuum=6.0, axis=2)
+    potential = abtem.Potential(
+        atoms,
+        gpts=(64, 112),
+        slice_thickness=0.05,
+        projection="finite",
+        periodic=True,
+    )
+    algorithm = RealSpaceMultislice(
+        order=2, expansion_scope="full", backscatter_correction=correction
+    )
+    array = to_host_array(
+        abtem.PlaneWave(energy=30e3).multislice(
+            potential, algorithm=algorithm, lazy=False
+        )
+    )
+    nx, ny = array.shape
+    intensity = np.abs(np.fft.fft2(array) / (nx * ny)) ** 2
+    fx = np.fft.fftfreq(nx, 2.46 / nx)[:, None]
+    fy = np.fft.fftfreq(ny, 4.2608 / ny)[None]
+    radius = np.hypot(fx, fy)
+    ring = (radius >= 1.72) & (radius < 5.4)
+    return intensity[ring].sum()
+
+
+def test_the_correction_raises_the_high_angle_intensity_above_the_exact_one_at_30_kev():
+    # Oracle: the exact two-way solution of the Bragg beams of graphene at 30 keV
+    # between 1.72 and 5.4 1/Å (120-377 mrad): a flux of 3.7329e-4 (Numerov, 0.0033 Å
+    # steps, cutoff 5.4 1/Å), which the intensity of the multislice wave corresponds to.
+    # The series is 0.6 % above it, the correction adds 1.5 %.
+    exact = 3.73285e-4
+    without = _graphene_ring_flux(False) / exact - 1
+    with_correction = _graphene_ring_flux(True) / exact - 1
+    assert abs(without) < 0.012
+    assert with_correction > 0.015
+    assert with_correction - without > 0.01

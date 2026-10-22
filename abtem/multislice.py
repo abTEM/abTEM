@@ -766,8 +766,9 @@ class RealSpaceMultislice:
         series, and against an exact two-way solution of graphene it makes the strong
         beams less accurate between 1 and 5 keV (for example 16 % against 7 % at 1 keV
         and order 1) and the transmitted intensity exceed 1 (1.014 at 1 keV), while it
-        makes no difference above about 30 keV. ``return_backscattered=True`` still
-        returns the backscattered component. Before this option existed, the
+        leaves the strong beams unchanged at 30 keV but raises the beams between 120
+        and 377 mrad by 1.5 % above the exact solution. ``return_backscattered=True``
+        still returns the backscattered component. Before this option existed, the
         correction was always applied.
     """
 
