@@ -1305,15 +1305,27 @@ def exctinction_distances(
     return np.pi * V / (xp.abs(structure_factor) * energy2wavelength(energy) + 1e-12)
 
 
-def plane_wave_basis(
-    g: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray
+def plane_wave_expansion(
+    amplitudes: np.ndarray,
+    g: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
 ) -> np.ndarray:
     """
-    Calculate a plane wave basis for a given set of reciprocal space vectors
-    at a set of real space positions.
+    Sum a plane wave expansion on a real space grid,
+
+    ``wave[..., t, x, y] = sum_g amplitudes[..., t, g] exp(2 pi i g . r)``,
+
+    where ``r = (x, y, z_t)``. The plane waves are separable in x, y and z, so the sum is
+    evaluated as a matrix product over the beams and the (beams x pixels x thicknesses)
+    array of plane waves is never formed.
 
     Parameters
     ----------
+    amplitudes : numpy.ndarray
+        The expansion coefficients, with beams on the last axis and, unless `z` is a
+        scalar, the thicknesses on the axis before it. Any leading axes are kept.
     g : numpy.ndarray
         The reciprocal space vectors as an Nx3 array [1 / Å].
     x : numpy.ndarray
@@ -1321,31 +1333,24 @@ def plane_wave_basis(
     y : numpy.ndarray
         The y positions as a 1D array [Å].
     z : numpy.ndarray
-        The z positions as a 1D array [Å].
+        The z positions (thicknesses) as a 1D array or a scalar [Å].
 
     Returns
     -------
     numpy.ndarray
-        The plane wave basis at the given positions.
+        The wave function, with the shape of `amplitudes` without the beam axis,
+        followed by the x and y axes.
     """
-    g = get_array_module(x).asarray(g)  # on the device of the positions
-    plane_waves_x = complex_exponential(
-        2 * np.pi * g[None, :, 0, None, None] * x[None, None, :, None]
-    )
-    plane_waves_y = complex_exponential(
-        2 * np.pi * g[None, :, 1, None, None] * y[None, None, None, :]
-    )
-    plane_waves_z = complex_exponential(
-        2 * np.pi * g[None, :, 2, None, None] * z[..., None, None, None]
-    )
-    plane_waves = plane_waves_x * plane_waves_y * plane_waves_z
-    return plane_waves
+    xp = get_array_module(amplitudes)
+    g = xp.asarray(g)
 
+    # phase factors of the beams, with the beam axis last for z and first for x and y
+    exp_x = complex_exponential(2 * np.pi * x[:, None] * g[None, :, 0])  # (nx, G)
+    exp_y = complex_exponential(2 * np.pi * g[:, 1, None] * y[None, :])  # (G, ny)
+    exp_z = complex_exponential(2 * np.pi * z[..., None] * g[:, 2])  # (..., G)
 
-def reduce_plane_wave_expansion(values, plane_waves):
-    wave = values[..., None, None] * plane_waves
-    wave = wave.sum(-3)
-    return wave
+    weights = amplitudes * exp_z
+    return xp.matmul(exp_x, weights[..., None] * exp_y)
 
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
@@ -1359,9 +1364,7 @@ def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
     )
     z = xp.asarray(thicknesses, dtype=get_dtype())
 
-    basis = plane_wave_basis(g_vec, x, y, z)
-    wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
-    return wave_functions
+    return plane_wave_expansion(amplitudes, g_vec, x, y, z)
 
 
 AllowedRotations = Union[BaseDistribution, np.ndarray, SupportsFloat]
@@ -2042,13 +2045,7 @@ class BlochWaves:
         y = xp.asarray(y, dtype=get_dtype())
         z = xp.asarray(z, dtype=get_dtype())
 
-        basis = plane_wave_basis(g_vec, x, y, z)
-
-        if not z.ndim:
-            basis = basis[0]
-
-        wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
-        return wave_functions
+        return plane_wave_expansion(amplitudes, g_vec, x, y, z)
 
     def calculate_exit_waves(
         self,
@@ -2175,12 +2172,6 @@ class BlochWaves:
             )
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
-
-            if thicknesses.ndim == 0:
-                # a scalar thickness has no ensemble (thickness) axis; drop the spurious
-                # leading size-1 axis so the array matches the empty axis metadata (the
-                # lazy path already returns a 2D array in this case).
-                array = array[0]
 
         ensemble_axes_metadata: list[AxisMetadata] = []
 

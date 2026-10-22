@@ -771,12 +771,17 @@ class RealSpaceMultislice:
         and 377 mrad by 1.5 % above the exact solution. ``return_backscattered=True``
         still returns the backscattered component. Before this option existed, the
         correction was always applied.
+    tolerance: float, optional
+        Amplitude below which the exponent Taylor series is truncated
+        (default 1e-16). Raise it to stop the expansion early at the cost of
+        accuracy; the series also stops at `max_terms` regardless.
     """
 
     order: int = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
+    tolerance: float = 1e-16
     backscatter_correction: bool = False
 
     def check_potential(self, potential) -> None:
@@ -900,6 +905,7 @@ def multislice_and_detect(
                 potential_slice=potential_slice,
                 next_slice=next_slice if look_ahead else None,
                 laplace=laplace_operator,
+                tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
@@ -1195,6 +1201,7 @@ def transition_potential_multislice_and_detect(
                 potential_slice=potential_slice,
                 next_slice=None,
                 laplace=laplace_operator,
+                tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=False,
