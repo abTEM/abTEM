@@ -723,7 +723,11 @@ class SphericalPattern(CopyMixin, EqualityMixin):
             odd number of points per side, as a reference pattern's has by
             default.
         energy : float, optional
-            Beam energy [eV]. Defaults to the pattern's metadata.
+            Beam energy [eV], recorded as the Monte Carlo ``EkeV``. Defaults to
+            ``metadata["energy"]``. The master pattern's energy bin, ``EkeVs``,
+            is its backscattered electrons' energy,
+            ``metadata["backscatter_energy"]``, or the beam energy if it has
+            none.
         space_group : int, optional
             Space group number. Determined with spglib if not given.
         sample_tilt : float, optional

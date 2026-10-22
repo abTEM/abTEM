@@ -16,7 +16,6 @@ from ase import Atoms
 
 from abtem.antialias import AntialiasAperture
 from abtem.array import validate_lazy
-from abtem.core.axes import EnergyAxis
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
@@ -38,6 +37,7 @@ from abtem.ebsd.orientations import (
 from abtem.ebsd.reciprocity import (
     EBSD,
     DepthWeight,
+    _averaged,
     _energy_metadata,
     _potential_configurations,
     _validate_backscatter_energy,
@@ -158,7 +158,9 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         beam's.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
-        energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
+        :class:`~abtem.core.axes.BackscatterEnergyAxis`, or are averaged over
+        when a distribution asks for it. See
+        :class:`~abtem.ebsd.reciprocity.EBSD`.
     depth_weight, device :
         Passed to :class:`~abtem.ebsd.reciprocity.EBSD`.
     """
@@ -473,8 +475,9 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         -------
         pattern : EBSDPatternImages
             Of shape ``(columns, rows)`` of ``geometry.shape`` (see
-            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after an
-            energy axis if there are several backscattered energies.
+            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after a
+            backscatter-energy axis if several backscattered energies are kept
+            apart.
         """
         return self._calculate(None, None, max_batch_directions, lazy, pbar)
 
@@ -516,9 +519,9 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         -------
         pattern : EBSDPatternImages
             Of shape ``(columns, rows)`` of ``geometry.shape`` (see
-            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after an
-            energy axis if there are several backscattered energies, then the
-            source's ensemble axes and the scan's.
+            :class:`~abtem.ebsd.measurements.EBSDPatternImages`), after a
+            backscatter-energy axis if several backscattered energies are kept
+            apart, then the source's ensemble axes and the scan's.
         """
         source = self._validate_source(source)
         if scan is not None and not isinstance(source, Probe):
@@ -567,14 +570,13 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                 )
                 output_shape = tuple(source.ensemble_shape) + tuple(scan.ensemble_shape)
 
-        energies, energy_weights = _validate_backscatter_energy(
+        # every patch averages over the energies itself when that is asked for
+        energies, energy_axis = _validate_backscatter_energy(
             self._backscatter_energy, self._energy
         )
-        if len(energies) > 1:
+        if energy_axis is not None and not _averaged(energy_axis):
             output_shape = (len(energies),) + tuple(output_shape)
-            ensemble_axes = [
-                EnergyAxis(values=tuple(float(e) for e in energies))
-            ] + list(ensemble_axes)
+            ensemble_axes = [energy_axis] + list(ensemble_axes)
 
         n_sources = int(np.prod(output_shape)) if output_shape else 1
 
@@ -634,7 +636,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         array = _detector_to_image(array.reshape(output_shape + (rows, columns)))
 
         metadata = {
-            **_energy_metadata(self._energy, energies, energy_weights),
+            **_energy_metadata(self._energy, energies),
             "label": "backscattered intensity",
             "source": "uniform" if source is None else type(source).__name__,
             "euler": [float(a) for a in self._euler],

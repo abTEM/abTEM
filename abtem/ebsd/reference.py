@@ -15,7 +15,6 @@ import numpy as np
 from ase import Atoms
 
 from abtem.array import validate_lazy
-from abtem.core.axes import EnergyAxis
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.ebsd.detectors import BackscatterDetector
@@ -35,6 +34,7 @@ from abtem.ebsd.projections import HemisphereProjection, validate_projection
 from abtem.ebsd.reciprocity import (
     EBSD,
     DepthWeight,
+    _averaged,
     _energy_metadata,
     _validate_backscatter_energy,
 )
@@ -213,7 +213,9 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         the pattern records it as unknown.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
-        energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
+        :class:`~abtem.core.axes.BackscatterEnergyAxis`, or are averaged over
+        when a distribution asks for it. See
+        :class:`~abtem.ebsd.reciprocity.EBSD`.
     depth_weight, device :
         Passed to :class:`~abtem.ebsd.reciprocity.EBSD`.
 
@@ -481,15 +483,13 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
 
         cutoff = np.cos(self._max_angle * 1e-3)
 
-        energies, energy_weights = _validate_backscatter_energy(
+        # every patch averages over the energies itself when that is asked for
+        energies, energy_axis = _validate_backscatter_energy(
             self._backscatter_energy, self._energy
         )
-        ensemble_shape: tuple[int, ...] = (len(energies),) if len(energies) > 1 else ()
-        ensemble_axes = (
-            [EnergyAxis(values=tuple(float(e) for e in energies))]
-            if ensemble_shape
-            else []
-        )
+        kept = energy_axis is not None and not _averaged(energy_axis)
+        ensemble_shape: tuple[int, ...] = (len(energies),) if kept else ()
+        ensemble_axes = [energy_axis] if kept else []
 
         patterns: list[SphericalPattern] = []
 
@@ -564,7 +564,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         pattern = SphericalPattern.concatenate(patterns)
         pattern.metadata.update(
             {
-                **_energy_metadata(self._energy, energies, energy_weights),
+                **_energy_metadata(self._energy, energies),
                 "label": "backscattered intensity",
                 "n_patches": self._n_patches,
                 "max_angle": self._max_angle,

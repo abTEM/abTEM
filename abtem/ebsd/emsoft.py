@@ -220,7 +220,10 @@ def write_emsoft_master_pattern(
         whose values are then written as calculated when it has an odd number
         of points per side, as a reference pattern's has by default.
     energy : float, optional
-        Beam energy [eV]. Defaults to the pattern's metadata.
+        Beam energy [eV], recorded as the Monte Carlo ``EkeV``. Defaults to
+        ``metadata["energy"]``. The master pattern's energy bin, ``EkeVs``, is
+        its backscattered electrons' energy, ``metadata["backscatter_energy"]``,
+        or the beam energy if it has none.
     space_group : int, optional
         Space group number. Determined with spglib if not given.
     sample_tilt : float, optional
@@ -254,12 +257,13 @@ def write_emsoft_master_pattern(
         )
 
     if energy is None:
-        # patterns without "beam_energy" record the beam energy as "energy"
-        energy = pattern.metadata.get("beam_energy", pattern.metadata.get("energy"))
+        energy = pattern.metadata.get("energy")
         if energy is None:
             raise ValueError(
                 "the pattern carries no beam energy in its metadata; pass energy=..."
             )
+    # the energy bin of the master pattern is that of the backscattered electrons
+    backscatter_energy = float(pattern.metadata.get("backscatter_energy", energy))
 
     if npx is None:
         npx = _default_npx(pattern)
@@ -296,7 +300,7 @@ def write_emsoft_master_pattern(
             "should not; check the calculation before indexing against it"
         )
 
-    energies_kev = np.array([energy / 1e3], dtype=np.float32)
+    energies_kev = np.array([backscatter_energy / 1e3], dtype=np.float32)
     atom_data, atom_types = _atom_data(scaled, numbers, debye_waller)
 
     conventional = Cell(lattice)
@@ -355,7 +359,7 @@ def write_emsoft_master_pattern(
         mc_nml.create_dataset(
             "Ehistmin", data=_scalar(float(energies_kev[0]), np.float64)
         )
-        mc_nml.create_dataset("EkeV", data=_scalar(float(energies_kev[0]), np.float64))
+        mc_nml.create_dataset("EkeV", data=_scalar(energy / 1e3, np.float64))
         mc_nml.create_dataset("MCmode", data=_string("CSDA"))
         mc_nml.create_dataset("dataname", data=_string(path))
         mc_nml.create_dataset("depthmax", data=_scalar(100.0, np.float64))

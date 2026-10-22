@@ -8,7 +8,7 @@ from utils import gpu
 import abtem
 import abtem.ebsd.reciprocity as reciprocity
 import abtem.ebsd.reference as reference_module
-from abtem.core.axes import EnergyAxis, OrdinalAxis
+from abtem.core.axes import BackscatterEnergyAxis, OrdinalAxis
 from abtem.core.energy import energy2wavelength
 from abtem.ebsd import (
     EBSD,
@@ -1483,12 +1483,18 @@ class TestDepth:
 
 class TestBackscatterEnergy:
     def test_resolving_the_energies(self):
-        from abtem.distributions import uniform
+        from abtem.distributions import from_values
 
-        energies, weights = _validate_backscatter_energy(None, 30e3)
-        assert (list(energies), list(weights)) == ([30e3], [1.0])
-        _, weights = _validate_backscatter_energy(uniform(28e3, 30e3, 4), 30e3)
-        assert weights.sum() == pytest.approx(1.0)
+        energies, axis = _validate_backscatter_energy(None, 30e3)
+        assert list(energies) == [30e3] and axis is None
+        # several energies have their own axis; a distribution keeps its
+        # weights and its ensemble_mean flag on it
+        _, axis = _validate_backscatter_energy([30e3, 26e3], 30e3)
+        assert isinstance(axis, BackscatterEnergyAxis)
+        assert axis.weights is None and not axis._ensemble_mean
+        spread = from_values([30e3, 26e3], weights=[0.8, 0.2], ensemble_mean=True)
+        _, axis = _validate_backscatter_energy(spread, 30e3)
+        assert axis.weights == pytest.approx((0.8, 0.2)) and axis._ensemble_mean
         # a backscattered electron has lost energy; it cannot have gained any
         for energies, match in [
             ([30e3, 31e3], "cannot carry more than the beam"),
@@ -1509,7 +1515,7 @@ class TestBackscatterEnergy:
         several = make_ebsd(slab, detector, backscatter_energy=[30e3, 26e3]).build()
         assert several.array.shape == (2, 4, 4)
         axis = several.ensemble_axes_metadata[0]
-        assert isinstance(axis, EnergyAxis) and axis.values == (30e3, 26e3)
+        assert isinstance(axis, BackscatterEnergyAxis) and axis.values == (30e3, 26e3)
         assert np.allclose(several.array[0], default.array, rtol=1e-5)
         alone = make_ebsd(slab, detector, backscatter_energy=26e3).build()
         assert np.allclose(several.array[1], alone.array, rtol=1e-5)
@@ -1521,30 +1527,75 @@ class TestBackscatterEnergy:
         binned = make_ebsd(
             slab, detector, depth_bins=2, backscatter_energy=[30e3, 26e3]
         ).build()
-        assert [a.label for a in binned.ensemble_axes_metadata] == ["Energy", "depth"]
+        assert [a.label for a in binned.ensemble_axes_metadata] == [
+            "backscatter energy",
+            "depth",
+        ]
 
     def test_energy_metadata_and_calibration(self):
-        # `energy` is abTEM's: that of the electrons counted, unset beside an
-        # EnergyAxis; `beam_energy` is the beam's. A grid detector's angles
-        # are the same at every energy, and read back as such.
+        # `energy` is the beam's, as everywhere in abTEM, and that of the
+        # backscattered electrons is `backscatter_energy`, or the values of its
+        # own axis. A grid detector's angles are the same at every energy, and
+        # read back as such.
         slab = silicon_slab()
         detector = BackscatterDetector(max_angle=50, gpts=4)
         step = detector.reciprocal_sampling(30e3) * energy2wavelength(30e3) * 1e3
 
         single = make_ebsd(slab, detector, backscatter_energy=26e3).build()
-        assert (single.metadata["energy"], single.metadata["beam_energy"]) == (
-            26e3,
-            30e3,
-        )
+        metadata = single.metadata
+        assert (metadata["energy"], metadata["backscatter_energy"]) == (30e3, 26e3)
 
         several = make_ebsd(slab, detector, backscatter_energy=[30e3, 26e3]).build()
-        assert "energy" not in several.metadata
-        assert several.metadata["beam_energy"] == 30e3
-        assert several.metadata["backscatter_energies"] == [30e3, 26e3]
-        assert several.metadata["energy_weights"] == pytest.approx([0.5, 0.5])
+        assert several.metadata["energy"] == 30e3
+        assert not {
+            "beam_energy",
+            "backscatter_energy",
+            "backscatter_energies",
+            "energy_weights",
+        } & set(several.metadata)
+        # indexing out an energy records it, and leaves the beam's alone
+        member = several[1]
+        metadata = member.metadata
+        assert (metadata["energy"], metadata["backscatter_energy"]) == (30e3, 26e3)
 
-        for patterns in (single, several):
+        for patterns in (single, several, member):
             assert patterns.angular_sampling == pytest.approx((step, step))
+
+    def test_a_distribution_is_averaged_with_its_weights(self):
+        # as abTEM averages any ensemble_mean axis, with the distribution's
+        # weights; kept apart, the weights stay on the axis
+        from abtem.distributions import from_values
+
+        slab = silicon_slab()
+        detector = BackscatterDetector(max_angle=50, gpts=4)
+        energies, weights = [30e3, 28e3, 26e3], np.array([0.1, 0.8, 0.1])
+        apart = make_ebsd(slab, detector, backscatter_energy=energies).build()
+        expected = np.tensordot(weights, apart.array, (0, 0))
+
+        spread = from_values(energies, weights=weights, ensemble_mean=True)
+        for lazy in (False, True):
+            averaged = make_ebsd(slab, detector, backscatter_energy=spread)
+            averaged = averaged.build(lazy=lazy).compute()
+            assert averaged.ensemble_shape == ()
+            assert averaged.metadata["energy"] == 30e3
+            assert np.allclose(averaged.array, expected, rtol=1e-5), lazy
+
+        kept = make_ebsd(
+            slab, detector, backscatter_energy=from_values(energies, weights=weights)
+        ).build()
+        assert kept.ensemble_shape == (3,)
+        assert np.allclose(kept.reduce_ensemble(axis=0).array, expected, rtol=1e-5)
+
+        # depth bins can be recombined over the average only with one depth
+        # weighting for every energy
+        with pytest.raises(ValueError, match="one depth weighting"):
+            make_ebsd(
+                slab,
+                detector,
+                backscatter_energy=spread,
+                depth_bins=2,
+                depth_weight=lambda z, energy: np.exp(-z * energy / 1e5),
+            ).build()
 
     def test_depth_weights_per_energy(self):
         slab = silicon_slab()
@@ -1751,7 +1802,7 @@ class TestEBSDReferencePattern:
 
         metadata = si_reference.metadata
         assert (metadata["n_patches"], metadata["max_angle"]) == (1, 200.0)
-        assert (metadata["energy"], metadata["beam_energy"]) == (30e3, 30e3)
+        assert (metadata["energy"], metadata["backscatter_energy"]) == (30e3, 30e3)
         assert (metadata["projection"], metadata["source"]) == ("lambert", "uniform")
 
         lazy = builder.build(lazy=True)
@@ -1788,9 +1839,8 @@ class TestEBSDReferencePattern:
             pbar=False, lazy=False
         )
         assert pattern.array.shape[0] == 2
-        assert isinstance(pattern.ensemble_axes_metadata[0], EnergyAxis)
-        assert "energy" not in pattern.metadata
-        assert pattern.metadata["beam_energy"] == 30e3
+        assert isinstance(pattern.ensemble_axes_metadata[0], BackscatterEnergyAxis)
+        assert pattern.metadata["energy"] == 30e3
         assert np.allclose(pattern.array[0], si_reference.array, rtol=1e-5)
         assert not np.allclose(pattern.array[1], si_reference.array, rtol=1e-3)
 
@@ -2093,9 +2143,8 @@ class TestEBSDDetectorPattern:
         builder = detector_builder(backscatter_energy=[30e3, 26e3])
         pattern = builder.build(lazy=False)
         assert pattern.array.shape == (2, 6, 6)
-        assert isinstance(pattern.ensemble_axes_metadata[0], EnergyAxis)
-        assert "energy" not in pattern.metadata
-        assert pattern.metadata["beam_energy"] == 30e3
+        assert isinstance(pattern.ensemble_axes_metadata[0], BackscatterEnergyAxis)
+        assert pattern.metadata["energy"] == 30e3
         lazy = builder.build(lazy=True).compute()
         assert np.allclose(np.asarray(lazy.array), np.asarray(pattern.array), rtol=1e-6)
 
@@ -2213,11 +2262,14 @@ class TestEMsoftWriter:
         assert np.allclose(south, expected, atol=1e-5)
         assert not np.allclose(south, north[::-1, ::-1], atol=1e-2)
 
-    def test_the_beam_energy_is_the_beams(self, tmp_path, pattern):
-        # not that of the backscattered electrons the pattern counts
-        pattern.metadata.update({"energy": 26e3, "beam_energy": 30e3})
+    def test_records_the_beam_and_the_backscattered_energies(self, tmp_path, pattern):
+        # EMsoft's energy bins are those of the backscattered electrons; its
+        # Monte Carlo EkeV is the beam's
+        pattern.metadata.update({"energy": 30e3, "backscatter_energy": 26e3})
         with self.write(tmp_path, pattern, npx=10) as f:
-            assert f["EMData/EBSDmaster/EkeVs"][()] == pytest.approx([30.0])
+            assert f["EMData/EBSDmaster/EkeVs"][()] == pytest.approx([26.0])
+            ekev = f["NMLparameters/MCCLNameList/EkeV"][()]
+            assert np.asarray(ekev).ravel() == pytest.approx([30.0])
 
     def test_refuses_what_it_cannot_write(self, tmp_path, pattern):
         directions = pattern.directions
