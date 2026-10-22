@@ -41,6 +41,7 @@ benchmarks/results/, which is git-ignored):
 import argparse
 import json
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -194,6 +195,11 @@ def stage(name, function, results, warm_up=False):
             record["seconds"] = round(time.perf_counter() - start, 3)
     except Exception as error:  # out of memory has a different class per backend
         record["failed"] = f"{type(error).__name__}: {str(error)[:200]}"
+        # where in the stage it failed: the innermost frames, file:line function
+        record["where"] = [
+            f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+            for frame in traceback.extract_tb(error.__traceback__)[-6:]
+        ]
         value = None
     print(f"  {name:<28} {record}", flush=True)
     return value
