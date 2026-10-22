@@ -97,6 +97,20 @@ Features:
   `get_kinematical_diffraction_pattern()` returns patterns with an `EnergyAxis`, and the new
   `select_energy(energy)` returns the single-energy Bloch waves; `calculate_structure_matrix` and
   `calculate_scattering_matrix` still need a single energy and point to it ([PR #456](https://github.com/abTEM/abTEM/pull/456))
+- `abtem.config["angles"]`, the relation between the angles that you give and spatial frequencies: `"paraxial"`
+  (default, unchanged) takes an angle as `wavelength * k`, `"exact"` as the scattering angle,
+  `arcsin(wavelength * k)`. The two differ by 0.2 % at 100 mrad, 19 % at 1000 mrad, and matter for wide-angle
+  scattering at low energies: at 200 eV the {200} reflection of graphene is at 951 mrad, not the 814 mrad of
+  `wavelength * k`. With `"exact"`, detector limits and offsets, `PixelatedDetector(max_angle=...)`, `crop`,
+  `downsample` and `diffraction_patterns` angles, aperture cutoffs (also of `Probe` and PRISM) and the radial
+  bins of polar detectors, which are then uniform in the angle, are scattering angles, and a detector
+  without an outer limit counts the propagating beams only. The axes of patterns stay uniform in
+  `wavelength * k` and are labelled so; `DiffractionPatterns.scattering_angles()` returns the angle of every
+  pixel (NaN for evanescent beams). `SpectralSlitDetector` raises with `"exact"`; the CTF, its envelopes, the
+  PRISM blend angle and core-loss momentum transfer stay paraxial
+  ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
+    - A detector, aperture, or `crop` with an explicit angle above 250 mrad now warns while `angles` is
+      `"paraxial"`
 - Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
   plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
   position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so

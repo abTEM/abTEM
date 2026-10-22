@@ -54,7 +54,14 @@ from abtem.core.backend import (
     get_scipy_module,
 )
 from abtem.core.complex import abs2
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import (
+    angle_convention,
+    energy2wavelength,
+    to_grid_angle,
+    to_scattering_angle,
+    to_scattering_angle_limit,
+    warn_if_paraxial_angle_is_large,
+)
 from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
@@ -328,6 +335,7 @@ def _radial_weight_map(
         xp,
         tuple(float(o) for o in offset),
         get_dtype(complex=False),
+        angle_convention(),
     )
 
 
@@ -340,12 +348,13 @@ def _radial_weight_map_cached(
     xp: ModuleType,
     offset: tuple[float, float],
     dtype,
+    convention: str,
 ) -> np.ndarray:
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
     )
 
-    alpha = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+    alpha = to_scattering_angle(xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2), convention)
 
     weights = xp.asarray(sensitivity(alpha), dtype=dtype)
     if xp is np:
@@ -354,7 +363,9 @@ def _radial_weight_map_cached(
         weights = np.array(weights, dtype=dtype)
 
     if np.any(np.array(offset) != 0.0):
-        weights = _shift_bins_without_wrap(weights, offset, sampling, fill=0.0)
+        weights = _shift_bins_without_wrap(
+            weights, to_grid_angle(np.array(offset), convention), sampling, fill=0.0
+        )
 
     if fftshift:
         weights = xp.fft.fftshift(weights)
@@ -379,7 +390,11 @@ def _annular_detector_mask(
     if k2 is None:
         k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
-    bins = (k2 >= inner**2) & (k2 < outer**2)
+    if angle_convention() == "paraxial":
+        bins = (k2 >= inner**2) & (k2 < outer**2)
+    else:
+        alpha = to_scattering_angle(xp.sqrt(k2))
+        bins = (alpha >= inner) & (alpha < outer)
 
     if sensitivity is not None:
         # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
@@ -398,7 +413,9 @@ def _annular_detector_mask(
         bins = xp.where(bins, weights, 0.0)
 
     if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
+        bins = _shift_bins_without_wrap(
+            bins, to_grid_angle(np.array(offset)), sampling, fill=False
+        )
 
     if fftshift:
         bins = xp.fft.fftshift(bins)
@@ -458,6 +475,7 @@ def _polar_bins_key(
         tuple(float(o) for o in offset),
         bool(fftshift),
         bool(return_indices),
+        angle_convention(),
     )
 
 
@@ -552,6 +570,7 @@ def _polar_detector_bins_cached(
     offset: tuple[float, float],
     fftshift: bool,
     return_indices: bool,
+    convention: str,
 ):
     """Cached bin geometry; see ``_polar_detector_bins``.
 
@@ -579,6 +598,7 @@ def _polar_detector_bins_cached(
         offset=offset,
         fftshift=fftshift,
         return_indices=return_indices,
+        convention=convention,
     )
     if return_indices:
         for array in result:
@@ -627,10 +647,12 @@ def _polar_detector_bins_uncached(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
+    convention: str = "paraxial",
 ) -> np.ndarray | list[np.ndarray]:
     alpha, phi = polar_spatial_frequencies(
         gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
     )
+    alpha = to_scattering_angle(alpha, convention)
     phi = (phi - rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
@@ -645,7 +667,9 @@ def _polar_detector_bins_uncached(
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
     if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=-1)
+        bins = _shift_bins_without_wrap(
+            bins, to_grid_angle(np.array(offset), convention), sampling, fill=-1
+        )
 
     if fftshift:
         bins = np.fft.fftshift(bins)
@@ -4519,11 +4543,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def max_angles(self) -> tuple[float, float]:
-        """Maximum scattering angle in `x` and `y` [mrad]. For diffraction patterns of
-        several energies, that of the highest energy (see `angular_sampling`)."""
+        """Maximum scattering angle in `x` and `y` [mrad], in the convention of the
+        ``angles`` configuration. For diffraction patterns of several energies, that of
+        the highest energy (see `angular_sampling`)."""
         return (
-            self.shape[-2] // 2 * self.angular_sampling[0],
-            self.shape[-1] // 2 * self.angular_sampling[1],
+            to_scattering_angle_limit(self.shape[-2] // 2 * self.angular_sampling[0]),
+            to_scattering_angle_limit(self.shape[-1] // 2 * self.angular_sampling[1]),
         )
 
     @property
@@ -4561,12 +4586,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         limits = self.limits
         wavelength = energy2wavelength(self._get_energy())
         limits[0] = (
-            limits[0][0] * wavelength * 1e3,
-            limits[0][1] * wavelength * 1e3,
+            to_scattering_angle_limit(limits[0][0] * wavelength * 1e3),
+            to_scattering_angle_limit(limits[0][1] * wavelength * 1e3),
         )
         limits[1] = (
-            limits[1][0] * wavelength * 1e3,
-            limits[1][1] * wavelength * 1e3,
+            to_scattering_angle_limit(limits[1][0] * wavelength * 1e3),
+            to_scattering_angle_limit(limits[1][1] * wavelength * 1e3),
         )
         return limits
 
@@ -4599,8 +4624,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
-        """Scattering angle coordinates [mrad]. For diffraction patterns of several
-        energies, those of the highest energy (see `angular_sampling`)."""
+        """Coordinates of the angular grid, ``1e3 * wavelength * k`` [mrad], the
+        scattering angle only with the paraxial convention (see the ``angles``
+        configuration). For diffraction patterns of several energies, those of the
+        highest energy (see `angular_sampling`)."""
 
         # Derived from `coordinates` so the storage order (shifted or
         # unshifted, even or odd n) is handled in one place.
@@ -4610,6 +4637,24 @@ class DiffractionPatterns(_BaseMeasurement2D):
         alpha_x = xp.asarray(k_x, dtype=get_dtype()) * (wavelength * 1e3)
         alpha_y = xp.asarray(k_y, dtype=get_dtype()) * (wavelength * 1e3)
         return alpha_x, alpha_y
+
+    def scattering_angles(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        The scattering angle of every pixel along `x` and `y` [mrad], arcsin of
+        ``wavelength * k`` whatever the ``angles`` configuration is. Beams with
+        ``wavelength * k > 1`` are evanescent and have no scattering angle: they
+        are NaN. For diffraction patterns of several energies, those of the highest
+        energy (see `angular_sampling`).
+
+        The axes of the diffraction patterns are uniform in ``wavelength * k``
+        (see `angular_coordinates`), so the scattering angles are not uniformly
+        spaced.
+        """
+        alpha_x, alpha_y = self.angular_coordinates
+        return (
+            to_scattering_angle(alpha_x, "exact"),
+            to_scattering_angle(alpha_y, "exact"),
+        )
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
@@ -5131,6 +5176,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Radially binned polar measurement(s).
         """
 
+        warn_if_paraxial_angle_is_large(inner, outer)
         if outer is None:
             outer = min(self.max_angles)
 
@@ -5213,6 +5259,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             return measurements
 
+        warn_if_paraxial_angle_is_large(inner, outer)
         if outer is None:
             outer = min(self.max_angles)
 
@@ -5342,7 +5389,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         angular_coordinates: tuple[np.ndarray, np.ndarray],
     ):
         alpha_x, alpha_y = angular_coordinates
-        alpha = np.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2)
+        alpha = to_scattering_angle(np.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2))
 
         block = alpha > inner
 
@@ -5435,13 +5482,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 "provide exactly one of 'max_angle', 'max_frequency' or 'gpts'"
             )
 
+        warn_if_paraxial_angle_is_large(max_angle)
         if max_angle is not None:
             _refuse_max_angle_for_several_energies(self, "`max_frequency` or `gpts`")
 
         if gpts is None and max_angle is not None:
+            grid_angle = to_grid_angle(max_angle)
             gpts = (
-                int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
-                int(2 * np.round(max_angle / self.angular_sampling[1])) + 1,
+                int(2 * np.round(grid_angle / self.angular_sampling[0])) + 1,
+                int(2 * np.round(grid_angle / self.angular_sampling[1])) + 1,
             )
         elif gpts is None and max_frequency is not None:
             gpts = (
@@ -5736,7 +5785,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if max_angle is None:
             max_angle = -min(c.min() for c in coordinates)
         else:
-            max_angle = max_angle / unit
+            max_angle = to_grid_angle(max_angle) / unit
 
         num_bins = safe_ceiling_int(max_angle / radial_sampling)
         centers = np.arange(num_bins) * radial_sampling
@@ -7079,7 +7128,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         if max_angle is not None and k_max is None:
             _refuse_max_angle_for_several_energies(self, "`k_max`")
             wavelength = energy2wavelength(self._get_energy())
-            k_max = max_angle / wavelength / 1e3
+            k_max = to_grid_angle(max_angle) / wavelength / 1e3
 
         elif not k_max or max_angle:
             raise ValueError("Either 'max_angle' or 'k_max' must be given.")

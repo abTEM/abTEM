@@ -18,6 +18,8 @@ from abtem.core.energy import (
     HasAcceleratorMixin,
     energy2wavelength,
     reciprocal_space_sampling_to_angular_sampling,
+    to_grid_angle,
+    warn_if_paraxial_angle_is_large,
 )
 from abtem.core.fft import fft_crop
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
@@ -309,7 +311,8 @@ class BaseTransferFunction(
             elif max_angle is None:
                 raise RuntimeError()
 
-            sampling = 1 / (max_angle * 1e-3) / 2 * self._valid_wavelength
+            grid_angle = to_grid_angle(max_angle)
+            sampling = 1 / (grid_angle * 1e-3) / 2 * self._valid_wavelength
         else:
             sampling = self.sampling
 
@@ -398,7 +401,9 @@ class BaseAperture(BaseTransferFunction):
         aperture [Å]. Raises a ValueError for a zero semiangle cutoff (a parallel
         beam)."""
         _raise_if_parallel_beam(self._max_semiangle_cutoff, "The Nyquist sampling")
-        return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
+        return 1 / (
+            4 * to_grid_angle(self._max_semiangle_cutoff) / self.wavelength * 1e-3
+        )
 
     @property
     def semiangle_cutoff(self) -> float | BaseDistribution:
@@ -416,6 +421,9 @@ class BaseAperture(BaseTransferFunction):
         leaves no open area. None (not set) passes through."""
         if semiangle_cutoff is None:
             return semiangle_cutoff
+
+        if not isinstance(semiangle_cutoff, BaseDistribution):
+            warn_if_paraxial_angle_is_large(semiangle_cutoff)
 
         if isinstance(semiangle_cutoff, BaseDistribution):
             values = np.asarray(semiangle_cutoff.values, dtype=float)
@@ -439,9 +447,10 @@ class BaseAperture(BaseTransferFunction):
         if self._max_semiangle_cutoff == np.inf:
             return self
 
+        grid_cutoff = to_grid_angle(self._max_semiangle_cutoff)
         gpts = (
-            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[0] + 1)),
-            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[1] + 1)),
+            int(2 * np.ceil(grid_cutoff / self.angular_sampling[0] + 1)),
+            int(2 * np.ceil(grid_cutoff / self.angular_sampling[1] + 1)),
         )
 
         cropped_aperture = self.copy()
@@ -614,7 +623,7 @@ class Aperture(BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        semiangle_cutoff = xp.asarray(self.semiangle_cutoff) * 1e-3
+        semiangle_cutoff = to_grid_angle(xp.asarray(self.semiangle_cutoff)) * 1e-3
 
         if (
             self.soft
@@ -793,7 +802,7 @@ class Bullseye(BaseAperture):
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
-        semiangle_cutoff = self.semiangle_cutoff / 1e3
+        semiangle_cutoff = to_grid_angle(self.semiangle_cutoff) / 1e3
 
         ds = semiangle_cutoff * self.ring_width / (self.ring_width + self.num_rings - 1)
         d0 = ds * (1.0 - self.ring_width) / self.ring_width   
@@ -933,7 +942,7 @@ class Vortex(BaseAperture):
 
         semiangle_cutoff = self.semiangle_cutoff
         assert isinstance(semiangle_cutoff, SupportsFloat)
-        semiangle_cutoff = semiangle_cutoff / 1e3
+        semiangle_cutoff = to_grid_angle(semiangle_cutoff) / 1e3
         if self._soft:
             array = soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
         else:
@@ -1043,8 +1052,8 @@ class AnnularAperture(BaseAperture):
                 f"{type(semiangle_cutoff).__name__}."
             )
 
-        semiangle_cutoff = semiangle_cutoff / 1e3
-        inner_cutoff = inner_cutoff / 1e3
+        semiangle_cutoff = to_grid_angle(semiangle_cutoff) / 1e3
+        inner_cutoff = to_grid_angle(inner_cutoff) / 1e3
 
         return xp.asarray((alpha > inner_cutoff) * (alpha < semiangle_cutoff), dtype=get_dtype(complex=False))
 
@@ -1124,8 +1133,8 @@ class Zernike(BaseAperture):
         semiangle_cutoff = self.semiangle_cutoff
         assert isinstance(semiangle_cutoff, SupportsFloat)
 
-        semiangle_cutoff = semiangle_cutoff / 1e3
-        center_hole_cutoff = self.center_hole_cutoff / 1e3
+        semiangle_cutoff = to_grid_angle(semiangle_cutoff) / 1e3
+        center_hole_cutoff = to_grid_angle(self.center_hole_cutoff) / 1e3
         phase_shift = self.phase_shift
 
         amplitude = xp.asarray(alpha < semiangle_cutoff, dtype=get_dtype(complex=False))
@@ -1198,9 +1207,9 @@ class RadialPhasePlate(BaseAperture):
 
         semiangle_cutoff = self.semiangle_cutoff
         assert isinstance(semiangle_cutoff, SupportsFloat)
-        max_alpha = semiangle_cutoff / 1e3
+        max_alpha = to_grid_angle(semiangle_cutoff) / 1e3
 
-        min_alpha = self.shift_central_semiangle / 1e3
+        min_alpha = to_grid_angle(self.shift_central_semiangle) / 1e3
 
         alpha_normed = xp.zeros_like(alpha)
         alpha_normed[alpha > max_alpha] = max_alpha
@@ -2261,7 +2270,8 @@ class CTF(_HasAberrations, BaseAperture):
             self.accelerator.check_is_defined()
 
         # Spatial frequencies [1/Å] of the profile points
-        k = np.linspace(0, max_angle * 1e-3 / self._valid_wavelength, gpts)
+        k_max = to_grid_angle(max_angle) * 1e-3 / self._valid_wavelength
+        k = np.linspace(0, k_max, gpts)
         sampling = k[1] - k[0]
 
         phi = np.array(phi)
@@ -2374,7 +2384,7 @@ def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
             f"semiangle_cutoff must be positive, got {semiangle_cutoff!r}."
         )
     wavelength = energy2wavelength(energy)
-    return 1 / (4 * semiangle_cutoff / wavelength * 1e-3)
+    return 1 / (4 * to_grid_angle(semiangle_cutoff) / wavelength * 1e-3)
 
 
 def scherzer_defocus(Cs: float, energy: float) -> float:
