@@ -8,7 +8,7 @@ Two measurements per precision:
      patched in for the "old" rows.
 
 Time is the minimum over repeats, after a warm-up call and a device synchronisation.
-Peak memory is tracemalloc (cpu), the CuPy memory pool size (gpu) or not measured (mps).
+Peak memory is tracemalloc (cpu), the peak of the CuPy memory pool in use (gpu) or not measured (mps).
 The difference column is the largest absolute difference between old and new relative to
 the largest value, which in float32 is dominated by the rounding of the phases.
 
@@ -85,10 +85,22 @@ def peak_memory(function):
         import cupy as cp
 
         pool = cp.get_default_memory_pool()
-        pool.free_all_blocks()
-        function()
+
+        class PeakHook(cp.cuda.MemoryHook):
+            peak = 0
+
+            def malloc_postprocess(self, **kwargs):
+                self.peak = max(self.peak, pool.used_bytes())
+
         synchronize()
-        return pool.total_bytes() / 1e6
+        pool.free_all_blocks()
+        baseline = pool.used_bytes()  # the inputs, which both versions hold
+        hook = PeakHook()
+        hook.peak = baseline
+        with hook:
+            function()
+            synchronize()
+        return (hook.peak - baseline) / 1e6
     return float("nan")
 
 
@@ -124,7 +136,11 @@ for precision in ("float64", "float32"):
 
     with abtem.config.set({"precision": precision}):
         structure_factor = StructureFactor(
-            atoms, g_max=g_max, parametrization="lobato", centering="F"
+            atoms,
+            g_max=g_max,
+            parametrization="lobato",
+            centering="F",
+            device=device,
         )
         bloch_waves = BlochWaves(
             structure_factor=structure_factor,
