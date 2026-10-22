@@ -123,7 +123,7 @@ Performance:
   beams are separable in x, y and z, instead of forming and reducing the (thickness, beam, x, y) array of
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
-  ([PR #PRNUM](https://github.com/abTEM/abTEM/pull/PRNUM))
+  ([PR #630](https://github.com/abTEM/abTEM/pull/630))
 
 Dependencies:
 
