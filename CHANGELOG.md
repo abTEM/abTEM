@@ -16,7 +16,7 @@ Features:
   Helmholtz equation in a basis of beams (evanescent ones included) by the Numerov method and a block-tridiagonal solve, and
   returns the transmitted and the reflected wave. The basis is reduced by the translation and point symmetry of the structure.
   Normal incidence, on the CPU, without absorption
-  ([PR #631](https://github.com/abTEM/abTEM/pull/631))
+  ([PR #633](https://github.com/abTEM/abTEM/pull/633))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
