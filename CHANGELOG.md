@@ -127,6 +127,10 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
+  beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
+  ensembles) without any message, in both expansion scopes and in the core-loss multislice
+  ([Issue #627](https://github.com/abTEM/abTEM/issues/627), [PR #628](https://github.com/abTEM/abTEM/pull/628))
 - `block_direct=True` in `Waves.diffraction_patterns` blocked a fixed 1 mrad radius. It now blocks the
   bright-field disk plus a margin for a probe with a semiangle cutoff, as `DiffractionPatterns.block_direct()`
   does. For a plane wave, or a cutoff below half a pixel, it blocks the zero-frequency pixel only, now also

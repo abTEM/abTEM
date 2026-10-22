@@ -165,6 +165,54 @@ def _apply_tilt_to_fresnel_propagator_array(
     return array
 
 
+def _apply_tilt_of_waves(array: np.ndarray, waves: Waves, thickness: float):
+    """Multiply a Fourier-space array by the translation of the beams of ``waves`` by
+    ``tan(tilt) * thickness``, for the base tilt and every tilt axis. The array gets
+    the ensemble axes of the tilts; without tilt it is returned as it is."""
+    if waves.base_tilt != (0.0, 0.0):
+        array = _apply_tilt_to_fresnel_propagator_array(
+            array,
+            sampling=waves._valid_sampling,
+            thickness=thickness,
+            tilt=waves.base_tilt,
+        )
+
+    xp = get_array_module(waves.device)
+
+    tilt_axes = _get_tilt_axes(waves)
+    if not tilt_axes:
+        return array
+
+    for axis in reversed(waves.ensemble_axes_metadata):
+        if hasattr(axis, "tilt"):
+            tilt = xp.asarray(axis.tilt)
+            array = _apply_tilt_to_fresnel_propagator_array(
+                array,
+                sampling=waves._valid_sampling,
+                tilt=tilt,
+                thickness=thickness,
+            )
+
+        else:
+            array = array[..., None, :, :]
+
+    return array
+
+
+def _translate_tilted_waves(waves: Waves, thickness: float) -> Waves:
+    """Translate the beams of tilted ``waves`` by ``tan(tilt) * thickness``, the
+    tilt of the paraxial propagator (orders 1 and 2), for algorithms that do not
+    apply it in a propagator. Untilted waves are returned as they are."""
+    if waves.base_tilt == (0.0, 0.0) and not _get_tilt_axes(waves):
+        return waves
+
+    xp = get_array_module(waves.device)
+    ones = xp.ones(waves._valid_gpts, dtype=get_dtype(complex=True))
+    factor = _apply_tilt_of_waves(ones, waves, thickness)
+    waves._array = fft2_convolve(waves._array, factor, overwrite_x=True)
+    return waves
+
+
 class FresnelPropagator:
     """
     The Fresnel propagator is used for propagating wave functions using the near-field
@@ -240,34 +288,7 @@ class FresnelPropagator:
             get_array_module(waves.device),
         )
 
-        if waves.base_tilt != (0.0, 0.0):
-            array = _apply_tilt_to_fresnel_propagator_array(
-                array,
-                sampling=waves._valid_sampling,
-                thickness=thickness,
-                tilt=waves.base_tilt,
-            )
-
-        xp = get_array_module(waves.device)
-
-        tilt_axes = _get_tilt_axes(waves)
-        if not tilt_axes:
-            return array
-
-        for axis in reversed(waves.ensemble_axes_metadata):
-            if hasattr(axis, "tilt"):
-                tilt = xp.asarray(axis.tilt)
-                array = _apply_tilt_to_fresnel_propagator_array(
-                    array,
-                    sampling=waves._valid_sampling,
-                    tilt=tilt,
-                    thickness=thickness,
-                )
-
-            else:
-                array = array[..., None, :, :]
-
-        return array
+        return _apply_tilt_of_waves(array, waves, thickness)
 
     def propagate(
         self,
@@ -730,7 +751,7 @@ def multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
-            return realspace_multislice_step(
+            result = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=next_slice,
@@ -739,6 +760,13 @@ def multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
             )
+            # the stencil knows nothing of the tilt of the beams, which the Fourier
+            # propagator applies as a translation
+            if isinstance(result, tuple):
+                _translate_tilted_waves(result[0], potential_slice.thickness)
+            else:
+                _translate_tilted_waves(result, potential_slice.thickness)
+            return result
 
     (
         extra_ensemble_axes_shape,
@@ -1017,7 +1045,7 @@ def transition_potential_multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice):
-            return realspace_multislice_step(
+            waves = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=None,
@@ -1026,6 +1054,7 @@ def transition_potential_multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=False,
             )
+            return _translate_tilted_waves(waves, potential_slice.thickness)
 
     if detectors is None:
         detectors = [WavesDetector()]
