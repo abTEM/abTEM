@@ -400,7 +400,7 @@ def test_the_device_gives_the_waves_of_the_cpu(device, tilt):
 
 
 @pytest.mark.parametrize("tilt", [(60.0, 0.0), (0.0, -45.0), (50.0, 30.0)])
-def test_the_symmetry_that_a_tilted_wave_keeps_gives_the_waves_of_the_full_basis(tilt):
+def test_the_symmetry_of_a_tilted_wave_gives_the_waves_of_the_full_basis(tilt):
     # Oracle: the full beam basis. A wave tilted along a mirror axis of the lattice keeps
     # the mirror, a wave in a general direction only the translations; either way the
     # reduced basis must reproduce the amplitudes and phases of the full one.
