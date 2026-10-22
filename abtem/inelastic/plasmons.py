@@ -158,17 +158,19 @@ class PlasmonAxis(OrdinalAxis):
 
     @property
     def tilt(self):
+        # The deflections of the excitations so far add as 2D vectors
+        # (theta_i cos phi_i, theta_i sin phi_i) [mrad].
         tilt = ()
         for radial_angles, azimuthal_angles, excitations in zip(
             self.radial_angles, self.azimuthal_angles, self.excitations
         ):
-            radial_angle = sum(radial_angles[:excitations])
-            azimuthal_angle = sum(radial_angles[:excitations])
-
+            events = tuple(
+                zip(radial_angles[:excitations], azimuthal_angles[:excitations])
+            )
             tilt += (
                 (
-                    radial_angle * np.cos(azimuthal_angle),
-                    radial_angle * np.sin(azimuthal_angle),
+                    float(sum(theta * math.cos(phi) for theta, phi in events)),
+                    float(sum(theta * math.sin(phi) for theta, phi in events)),
                 ),
             )
 
@@ -456,15 +458,17 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
 
         return (array,)
 
-    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
+    def _calculate_new_array(self, waves: "Waves") -> np.ndarray:
         xp = get_array_module(waves.device)
+        array = waves._eager_array[(None,) * len(self.ensemble_shape)]
+        return xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
 
-        array = waves.array[(None,) * len(self.ensemble_shape)]
-
+    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
         if waves.is_lazy:
+            array = waves.array[(None,) * len(self.ensemble_shape)]
             array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
         else:
-            array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
+            array = self._calculate_new_array(waves)
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
