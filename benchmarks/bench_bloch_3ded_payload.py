@@ -241,10 +241,12 @@ def stage(name, function, results, warm_up=False):
             record["seconds"] = round(time.perf_counter() - start, 3)
     except Exception as error:  # out of memory has a different class per backend
         record["failed"] = f"{type(error).__name__}: {str(error)[:200]}"
-        # where in the stage it failed: the innermost frames, file:line function
+        # where in the stage it failed: the abtem frames (the innermost frames of an
+        # out-of-memory error are the allocator's), then the innermost frame
+        frames = traceback.extract_tb(error.__traceback__)
+        keep = [f for f in frames if "/abtem/" in f.filename.replace("\\", "/")]
         record["where"] = [
-            f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
-            for frame in traceback.extract_tb(error.__traceback__)[-6:]
+            f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in keep[-8:] + frames[-1:]
         ]
         value = None
     print(f"  {name:<28} {record}", flush=True)
