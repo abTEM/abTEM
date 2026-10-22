@@ -186,13 +186,26 @@ def test_krylov_for_a_vanishing_tilt_is_the_untilted_step():
     np.testing.assert_array_equal(result, reference)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_krylov_ensemble_of_tilts_is_the_tilts_one_by_one(lazy):
+    # Oracle: each member of the ensemble is the exit wave of that tilt alone.
+    potential = graphene_potential(0.1)
+    tilts_x, tilts_y = [0.0, 80.0, 120.0], [0.0, 30.0]
+    ensemble = abtem.PlaneWave(energy=1000.0, tilt=(tilts_x, tilts_y)).multislice(
+        potential, algorithm=KrylovMultislice(), lazy=lazy
+    )
+    array = to_host_array(ensemble.compute() if lazy else ensemble)
+    assert array.shape == (3, 2, 48, 84)
+    for i, tx in enumerate(tilts_x):
+        for j, ty in enumerate(tilts_y):
+            single = abtem.PlaneWave(energy=1000.0, tilt=(tx, ty)).multislice(
+                potential, algorithm=KrylovMultislice(), lazy=False
+            )
+            np.testing.assert_allclose(array[i, j], to_host_array(single), atol=2e-5)
+
+
 def test_krylov_refuses_unsupported_input():
     potential = graphene_potential(0.05)
-    with pytest.raises(NotImplementedError, match="tilt ensembles"):
-        abtem.PlaneWave(energy=1000.0, tilt=([5.0, 10.0], 0.0)).multislice(
-            potential, algorithm=KrylovMultislice(), lazy=False
-        )
-
     waves = abtem.PlaneWave(energy=1000.0).match_grid(potential).build(lazy=False)
     step = KrylovMultislice().make_step(waves)
     transmission = potential.build(lazy=False)[0].transmission_function(energy=1000.0)

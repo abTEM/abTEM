@@ -41,10 +41,26 @@ from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
 from abtem.integrals import ScatteringFactorProjectionIntegrals
 from abtem.potentials.iam import TransmissionFunction
-from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
+
+
+def _member_tilts(waves: Waves) -> np.ndarray:
+    """The total tilt [mrad] of every member of the ensemble of ``waves``: the base tilt
+    plus the value of each tilt axis, in the order of the axes. Shape (..., 2)."""
+    axes = waves.ensemble_axes_metadata
+    shape = waves.shape[:-2]
+    tilts = np.broadcast_to(
+        np.asarray(waves.base_tilt, dtype=float), shape + (2,)
+    ).copy()
+    for i, axis in enumerate(axes):
+        if hasattr(axis, "tilt"):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            extent = [1] * len(axes) + [2]
+            extent[i] = len(values)
+            tilts += values.reshape(extent)
+    return tilts
 
 
 @dataclass(frozen=True)
@@ -69,7 +85,7 @@ class KrylovMultislice:
     projected potential of an atom in one slice, so the potential per unit thickness
     grows as 1 / thickness and the result does not converge (a warning is given).
     A tilted wave function is propagated in the frame of its direction, as in
-    ``FourierMultislice``; tilt ensembles are not supported.
+    ``FourierMultislice``, and so are ensembles of tilts.
 
     Parameters
     ----------
@@ -119,21 +135,24 @@ class KrylovMultislice:
 
     def make_step(self, waves: Waves, return_backscattered: bool = False) -> Callable:
         """The per-slice step: ``exp(i dz F(O))`` applied by a Lanczos iteration."""
-        if _get_tilt_axes(waves):
-            raise NotImplementedError(
-                "KrylovMultislice does not support tilt ensembles: propagate one tilt "
-                "at a time."
+        xp = get_array_module(waves.device)
+        tilts = _member_tilts(waves)  # (..., 2) mrad, one per member of the ensemble
+
+        def make_band(tilt):
+            return _Band(
+                waves._valid_gpts,
+                waves._valid_sampling,
+                waves._valid_energy,
+                self.propagating_cutoff,
+                xp,
+                tilt=tilt,
             )
 
-        xp = get_array_module(waves.device)
-        band = _Band(
-            waves._valid_gpts,
-            waves._valid_sampling,
-            waves._valid_energy,
-            self.propagating_cutoff,
-            xp,
-            tilt=waves.base_tilt,
-        )
+        # the members of an ensemble of tilts have a band each: the members of every
+        # distinct tilt are advanced together
+        unique, inverse = np.unique(tilts.reshape(-1, 2), axis=0, return_inverse=True)
+        bands = [make_band(tuple(tilt)) for tilt in unique]
+        groups = [np.flatnonzero(inverse.ravel() == i) for i in range(len(unique))]
 
         def step(waves, potential_slice, next_slice=None):
             if isinstance(potential_slice, TransmissionFunction):
@@ -148,13 +167,24 @@ class KrylovMultislice:
             sigma_v = (
                 potential_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
             )
-            waves._array = band.advance(
-                waves._array,
-                sigma_v,
-                thickness,
-                self.tolerance,
-                self.max_iterations,
-            )
+            array = waves._array
+            if len(bands) == 1:
+                waves._array = bands[0].advance(
+                    array, sigma_v, thickness, self.tolerance, self.max_iterations
+                )
+                return waves
+
+            members = array.reshape((-1,) + array.shape[-2:])
+            advanced = xp.empty_like(members)
+            for band, group in zip(bands, groups):
+                advanced[xp.asarray(group)] = band.advance(
+                    members[xp.asarray(group)],
+                    sigma_v,
+                    thickness,
+                    self.tolerance,
+                    self.max_iterations,
+                )
+            waves._array = advanced.reshape(array.shape)
             return waves
 
         return step
