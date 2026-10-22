@@ -749,8 +749,18 @@ class RealSpaceMultislice:
 
     Parameters
     ----------
-    order : int, optional
-        Propagator and/or transmission operator order (default 1)
+    order : int or "exact", optional
+        Propagator and/or transmission operator order (default 1). ``"exact"`` (only
+        for ``expansion_scope="full"``) evaluates the one-way root of the full
+        operator, ``sqrt(k^2 + laplacian + 2 k sigma V) - k``, without a Taylor series,
+        by a Lanczos iteration with the finite-difference Laplacian, on the
+        propagating band (``|k| < propagating_cutoff / wavelength``, within the
+        antialiasing aperture). The series diverges where ``2 sigma V / k`` reaches 1,
+        which is the case at the nuclei of heavy atoms at any energy that the grid
+        resolves, and at low energies for the whole band, so that its result for
+        higher orders is not that of the root. It costs about 5 to 10 applications of
+        the operator (and two Fourier transforms) per slice, more with the
+        correction. The potential must have finite projection, as for the full scope.
     expansion_scope: str
         If "propagator" (default) only the propagator operator is expanded to order
         If "full" both the propagator and transmission operators are expanded to order
@@ -771,18 +781,44 @@ class RealSpaceMultislice:
         and 377 mrad by 1.5 % above the exact solution. ``return_backscattered=True``
         still returns the backscattered component. Before this option existed, the
         correction was always applied.
+    propagating_cutoff : float, optional
+        For ``order="exact"``: fraction of the wave number 1 / wavelength kept
+        (default 0.95). Beams beyond it, evanescent and grazing, are removed.
+    lanczos_tolerance : float, optional
+        For ``order="exact"``: change of the coefficients of the Lanczos iteration
+        below which a function of the operator is converged (default 1e-8).
+    max_iterations : int, optional
+        For ``order="exact"``: maximum number of Lanczos iterations (default 60).
     tolerance: float, optional
         Amplitude below which the exponent Taylor series is truncated
         (default 1e-16). Raise it to stop the expansion early at the cost of
         accuracy; the series also stops at `max_terms` regardless.
     """
 
-    order: int = 1
+    order: int | Literal["exact"] = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
     tolerance: float = 1e-16
     backscatter_correction: bool = False
+    propagating_cutoff: float = 0.95
+    lanczos_tolerance: float = 1e-8
+    max_iterations: int = 60
+
+    def __post_init__(self):
+        if self.order == "exact":
+            if self.expansion_scope != "full":
+                raise ValueError('order="exact" requires expansion_scope="full"')
+        elif not isinstance(self.order, (int, np.integer)) or self.order < 1:
+            raise ValueError(
+                f'order must be a positive integer or "exact", got {self.order!r}'
+            )
+        if not 0.0 < self.propagating_cutoff < 1.0:
+            raise ValueError("propagating_cutoff must be between 0 and 1")
+        if self.lanczos_tolerance <= 0.0:
+            raise ValueError("lanczos_tolerance must be positive")
+        if self.max_iterations < 2:
+            raise ValueError("max_iterations must be at least 2")
 
     def check_potential(self, potential) -> None:
         """Warn about an infinite projection with ``expansion_scope="full"``."""
@@ -910,6 +946,9 @@ def multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
                 correct_forward=algorithm.backscatter_correction,
+                propagating_cutoff=algorithm.propagating_cutoff,
+                lanczos_tolerance=algorithm.lanczos_tolerance,
+                max_iterations=algorithm.max_iterations,
             )
             # the stencil knows nothing of the tilt of the beams, which the Fourier
             # propagator applies as a translation
@@ -1454,16 +1493,14 @@ def transition_potential_multislice_and_detect(
                     # FFT across them (see Waves._share_diffraction_pattern_fft).
                     with scattered_waves._share_diffraction_pattern_fft():
                         for i, detector in enumerate(detectors):
-                            new_measurement = detector.detect(scattered_waves).sum(
-                                (0,)
-                            )
+                            new_measurement = detector.detect(scattered_waves).sum((0,))
                             # Only the plane axis is a slice and so survives
                             # the indexing; the ensemble axes are integers and
                             # are dropped, so broadcast over the plane axis
                             # alone.
-                            measurements[i].array[measurement_indices] += (
-                                new_measurement.array[(None,) * n_slice_axes]
-                            )
+                            measurements[i].array[
+                                measurement_indices
+                            ] += new_measurement.array[(None,) * n_slice_axes]
 
     tqdm_pbar.close_if_exists()
 
@@ -1728,9 +1765,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         # these (unlike anything baked into the partial below) and keeps a
         # single copy in the graph. See shared_constant_arg.
         for key in self._graph_node_keys():
-            args += (
-                shared_constant_arg(self._multislice_func_kwargs[key], lazy=lazy),
-            )
+            args += (shared_constant_arg(self._multislice_func_kwargs[key], lazy=lazy),)
 
         return args
 

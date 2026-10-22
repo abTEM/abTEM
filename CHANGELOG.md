@@ -11,6 +11,13 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- `RealSpaceMultislice(order="exact", expansion_scope="full")` evaluates the one-way root of the full operator without a
+  Taylor series, by a Lanczos iteration with the finite-difference Laplacian on the propagating band (new parameters
+  `propagating_cutoff`, `lanczos_tolerance` and `max_iterations`). The series diverges where `2 sigma V / k` reaches 1, which
+  is the case for the whole band at low energies and at the nuclei of heavy atoms at any energy: on graphene at 1 keV the
+  exact root is within 2 % of an exact two-way solution where the series of order 1 is 7 % and the split step 8 % off, and
+  it works at the orders and grids where the series fails. It works with `backscatter_correction=True`
+  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
