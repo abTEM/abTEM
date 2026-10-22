@@ -11,6 +11,12 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- `abtem.twoway.TwoWaySolver`, an exact two-way (forward and backward) solution of the elastic scattering of a plane wave by a
+  periodic slab, as a reference for the multislice algorithms at low energies. It solves the relativistically corrected
+  Helmholtz equation in a basis of beams (evanescent ones included) by the Numerov method and a block-tridiagonal solve, and
+  returns the transmitted and the reflected wave. The basis is reduced by the translation and point symmetry of the structure.
+  Normal incidence, on the CPU, without absorption
+  ([PR #631](https://github.com/abTEM/abTEM/pull/631))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
