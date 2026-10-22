@@ -391,8 +391,22 @@ def _twiddles(n: int):
 
 
 def _upload(x: np.ndarray) -> "DoubleFloatArray":
-    planes = (*_split(x.real), *_split(x.imag))
-    return DoubleFloatArray(torch.from_numpy(np.stack(planes)).to("mps"))
+    """Split a float64 or complex128 array into its four float32 planes.
+
+    One pass per plane, and no temporaries: the ufuncs convert on the fly
+    (``dtype=float64`` computes in float64, ``out`` takes it as float32), where
+    ``astype`` and the arithmetic around it made seven passes and as many
+    arrays, which was half the time of a thickness series.
+    """
+    planes = np.zeros((4, *x.shape), dtype=np.float32)
+    for part, (high, low) in zip(
+        (x.real, x.imag) if np.iscomplexobj(x) else (x,), ((0, 1), (2, 3))
+    ):
+        np.copyto(planes[high], part, casting="same_kind")
+        np.subtract(
+            part, planes[high], out=planes[low], dtype=np.float64, casting="same_kind"
+        )
+    return DoubleFloatArray(torch.from_numpy(planes).to("mps"))
 
 
 class DoubleFloatArray:
@@ -506,8 +520,12 @@ def from_numpy(x: np.ndarray) -> DoubleFloatArray:
 @_on_metal
 def to_numpy(x: DoubleFloatArray) -> np.ndarray:
     """Download as a complex128 array."""
-    rh, rl, ih, il = (p.astype(np.float64) for p in x.data.cpu().numpy())
-    return (rh + rl) + 1j * (ih + il)
+    planes = x.data.cpu().numpy()
+    out = np.empty(planes.shape[1:], dtype=np.complex128)
+    # Straight into the real and imaginary parts of the result, one pass each.
+    np.add(planes[0], planes[1], out=out.real, dtype=np.float64)
+    np.add(planes[2], planes[3], out=out.imag, dtype=np.float64)
+    return out
 
 
 @_on_metal

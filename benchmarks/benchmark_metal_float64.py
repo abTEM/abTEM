@@ -149,12 +149,15 @@ def benchmark_fft(torch, grids, repeats):
     )
 
 
-def simulation(grid, probes, slices):
+def simulation(grid, probes, slices, exit_planes=None):
     """The simulation, unbuilt, so that building the potential is part of it, and
-    its number of slices."""
+    its number of slices. With ``exit_planes`` set, a thickness series: the probes
+    are detected after every ``exit_planes`` slices."""
     repeats = max(1, round(slices / 5.431))
     cell = ase.build.bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, repeats)
-    potential = abtem.Potential(cell, gpts=grid, slice_thickness=1.0)
+    potential = abtem.Potential(
+        cell, gpts=grid, slice_thickness=1.0, exit_planes=exit_planes
+    )
     probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, defocus=50)
     probe.grid.match(potential)
     side = int(round(probes**0.5))
@@ -175,17 +178,17 @@ def timed(function):
     return result, time.perf_counter() - start
 
 
-def benchmark_multislice(grids, probe_counts, slices, repeats):
+def benchmark_multislice(grids, probe_counts, slices, repeats, exit_planes=None):
     """The table, and the number of slices the crystal came out with."""
     rows, num_slices = [], slices
     for grid in grids:
         for probes in probe_counts:
             with config.set({"precision": "float64", "torch.emulate-float64": False}):
-                run, num_slices = simulation(grid, probes, slices)
+                run, num_slices = simulation(grid, probes, slices, exit_planes)
                 reference, _ = timed(run)  # warm FFTW plans, caches
                 t_cpu = min(timed(run)[1] for _ in range(repeats))
             with config.set({"precision": "float64", "torch.emulate-float64": True}):
-                run, _ = simulation(grid, probes, slices)
+                run, _ = simulation(grid, probes, slices, exit_planes)
                 emulated, t_cold = timed(run)
                 t_warm = min(timed(run)[1] for _ in range(repeats))
             difference = np.abs(emulated - reference).max() / np.abs(reference).max()
@@ -233,6 +236,7 @@ def main():
     parser.add_argument("--repeats", type=int, help="repetitions, the best is reported")
     parser.add_argument("--skip-fft", action="store_true")
     parser.add_argument("--skip-multislice", action="store_true")
+    parser.add_argument("--skip-series", action="store_true")
     parser.add_argument("--output", help="also write the report to this Markdown file")
     args = parser.parse_args()
 
@@ -268,6 +272,16 @@ def main():
             "`PixelatedDetector`, unbuilt potential. Warm times are the best of "
             f"{repeats} runs; the first call at a grid size also compiles the Metal "
             "kernels for it, unless macOS has them cached.\n\n" + result
+        )
+    if not (args.skip_series or args.skip_multislice):
+        series_grids = [grids[0]] if args.quick else [256]
+        _, result = benchmark_multislice(
+            series_grids, [16], args.slices, 1, exit_planes=1
+        )
+        sections.append(
+            "## Thickness series\n\nThe same, detected after every slice "
+            f"({num_slices + 1} exit planes), 16 probes, one repetition: each plane "
+            "brings the waves back to the host for the detector.\n\n" + result
         )
     if not args.skip_fft:
         sections.append(
