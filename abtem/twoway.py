@@ -32,7 +32,6 @@ from abtem.core import config
 from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.potentials.iam import PotentialArray
-from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
     from ase import Atoms
@@ -437,8 +436,8 @@ class TwoWaySolver:
     almost all of it through evanescent beams) and change the transmitted beams by tens
     of percent. The cost grows with the cube of the number of beams: use it for the
     small cells of crystals and 2D materials. A plane wave of any direction is
-    supported (one direction at a time), on the CPU and on CUDA devices, in single or
-    double precision, without absorption.
+    supported, with ensembles of tilts (the directions are solved one after the other),
+    on the CPU and on CUDA devices, in single or double precision, without absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -497,8 +496,8 @@ class TwoWaySolver:
         Parameters
         ----------
         plane_wave : PlaneWave
-            The incident wave. Its energy and its tilt are used (a single tilt, not an
-            ensemble), and its grid is matched to the potential. A tilted wave travels
+            The incident wave. Its energy and its tilt, or its ensemble of tilts, are
+            used, and its grid is matched to the potential. A tilted wave travels
             along (tan x, tan y, 1) and, as in multislice, is stored without the carrier
             of its direction: the beam g of the result is the plane wave g + k_t, the
             incident one is g = 0, and the result carries the tilt in its metadata.
@@ -518,10 +517,10 @@ class TwoWaySolver:
         from abtem.waves import Waves
 
         waves = plane_wave.match_grid(potential).build(lazy=False)
-        if _get_tilt_axes(waves):
+        if any(not hasattr(axis, "tilt") for axis in waves.ensemble_axes_metadata):
             raise NotImplementedError(
-                "TwoWaySolver does not support tilt ensembles: scatter one tilt at a "
-                "time."
+                "TwoWaySolver supports ensembles of tilts only, not of other "
+                "parameters."
             )
         if potential.ensemble_shape:
             raise NotImplementedError(
@@ -553,55 +552,24 @@ class TwoWaySolver:
         nz, nx, ny = projected.shape
         sampling = tuple(waves._valid_sampling)
 
-        # The incident wave travels along (tan x, tan y, 1), and is stored without its
-        # carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored beam g
-        # is the plane wave g + k_t, and the incident one is g = 0.
-        tangent = np.tan(np.asarray(waves.base_tilt, dtype=float) / 1e3)
-        norm = np.sqrt(1.0 + np.sum(tangent**2))
-        in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
-        tilted = any(in_plane)
-        incident_kz = 2 * np.pi / (wavelength * norm)
-
-        if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
-            raise ValueError(
-                f"The potential is sampled too coarsely for cutoff={self.cutoff}: use "
-                f"a sampling of at most "
-                f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a lower "
-                "cutoff."
-            )
-
-        origin, operations, translations = (0.0, 0.0), [("rot0", np.eye(2))], []
+        origin, all_operations, translations = (
+            (0.0, 0.0),
+            [("rot0", np.eye(2))],
+            [],
+        )
         if self.symmetry:
             try:
                 atoms = potential.frozen_phonons.atoms  # type: ignore[attr-defined]
             except AttributeError:
                 atoms = None
             if atoms is not None and len(atoms) > 0:
-                origin, operations, translations = structure_symmetry(
+                origin, all_operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
                 )
-                if tilted:
-                    # a tilted wave is invariant under the translations and under the
-                    # point operations that leave its in-plane wave vector unchanged,
-                    # the mirror along its direction, for example
-                    operations = [
-                        (name, matrix)
-                        for name, matrix in operations
-                        if np.allclose(matrix @ np.array(in_plane), in_plane, atol=1e-6)
-                    ]
 
         wave_number = 2 * np.pi / wavelength
         sigma = energy2sigma(energy)
         _check_step(h, wave_number, self.cutoff)
-        basis = _BeamBasis(
-            (nx, ny),
-            sampling,
-            self.cutoff,
-            origin,
-            operations,
-            translations,
-            shift=in_plane,
-        )
 
         # the potential's Fourier coefficients, with the origin moved onto the symmetry
         # axis
@@ -612,55 +580,115 @@ class TwoWaySolver:
         fourier = (fourier * xp.asarray(shift.astype(complex_dtype))[None]).astype(
             complex_dtype
         )
-        coupling = basis.coupling_function(fourier, wave_number, sigma, xp)
-        itemsize = np.dtype(complex_dtype).itemsize
-        if nz * basis.number_of_orbits**2 * itemsize < _memory_budget(
-            xp, _COUPLING_CACHE_BYTES
-        ):
-            cache = xp.stack([coupling(n) for n in range(nz)])
-            coupling = lambda n: cache[n]  # noqa: E731
 
-        qx, qy = basis.qx, basis.qy
-        if basis.reduced:
-            qx, qy = qx[basis.representatives], qy[basis.representatives]
-        kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
-        exact = np.sqrt(kz2.astype(np.complex128))
-        kappa = _numerov_wave_numbers(kz2, h)
-        incident = np.zeros(len(kz2), np.complex128)
-        incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
+        def solve(tilt):
+            """The transmitted and the reflected wave [arrays of the grid, on the host]
+            of the wave of this tilt [mrad]."""
+            # The incident wave travels along (tan x, tan y, 1), and is stored without
+            # its carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored
+            # beam g is the plane wave g + k_t, and the incident one is g = 0.
+            tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+            norm = np.sqrt(1.0 + np.sum(tangent**2))
+            in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
+            incident_kz = 2 * np.pi / (wavelength * norm)
 
-        phi = asnumpy(
-            _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp, complex_dtype)
-        ).astype(np.complex128)
-        half = np.exp(1j * kappa * h / 2)
-        reflected = (phi[0] - incident * half) * half  # at the entrance plane z = 0
-        # The vacuum phase is removed with the exact wave number of the incident beam,
-        # and each beam's Numerov dispersion over the slab's thickness with it (exact in
-        # the vacuum parts of the slab, very nearly so in the rest).
-        thickness = nz * h
-        dispersion = np.where(
-            np.abs(exact.imag) < 1e-12, np.exp(-1j * (kappa - exact) * thickness), 1.0
-        )
-        vacuum_phase = np.exp(-1j * incident_kz * thickness)
-        transmitted = phi[-1] * half * dispersion * vacuum_phase
+            if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
+                raise ValueError(
+                    f"The potential is sampled too coarsely for cutoff={self.cutoff}: "
+                    f"use a sampling of at most "
+                    f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
+                    "lower cutoff."
+                )
 
-        def to_waves(amplitudes):
-            """Real-space wave from per-orbit (or per-beam) amplitudes."""
+            # a tilted wave is invariant under the translations and under the point
+            # operations that leave its in-plane wave vector unchanged, the mirror along
+            # its direction, for example
+            operations = [
+                (name, matrix)
+                for name, matrix in all_operations
+                if np.allclose(matrix @ np.array(in_plane), in_plane, atol=1e-6)
+            ]
+            basis = _BeamBasis(
+                (nx, ny),
+                sampling,
+                self.cutoff,
+                origin,
+                operations,
+                translations,
+                shift=in_plane,
+            )
+            coupling = basis.coupling_function(fourier, wave_number, sigma, xp)
+            itemsize = np.dtype(complex_dtype).itemsize
+            if nz * basis.number_of_orbits**2 * itemsize < _memory_budget(
+                xp, _COUPLING_CACHE_BYTES
+            ):
+                cache = xp.stack([coupling(n) for n in range(nz)])
+                coupling = lambda n: cache[n]  # noqa: E731
+
+            qx, qy = basis.qx, basis.qy
             if basis.reduced:
-                beam_amplitudes = np.zeros(len(basis.indices), np.complex128)
-                for o, members in enumerate(basis.members):
-                    beam_amplitudes[members] = amplitudes[o] / np.sqrt(len(members))
-            else:
-                beam_amplitudes = amplitudes
-            beam_amplitudes = beam_amplitudes * np.exp(
-                -2j * np.pi * (basis.gx * origin[0] + basis.gy * origin[1])
+                qx, qy = qx[basis.representatives], qy[basis.representatives]
+            kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
+            exact = np.sqrt(kz2.astype(np.complex128))
+            kappa = _numerov_wave_numbers(kz2, h)
+            incident = np.zeros(len(kz2), np.complex128)
+            incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
+
+            phi = asnumpy(
+                _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp, complex_dtype)
+            ).astype(np.complex128)
+            half = np.exp(1j * kappa * h / 2)
+            reflected = (phi[0] - incident * half) * half  # at the entrance plane z = 0
+            # The vacuum phase is removed with the exact wave number of the incident
+            # beam, and each beam's Numerov dispersion over the slab's thickness with it
+            # (exact in the vacuum parts of the slab, very nearly so in the rest).
+            thickness = nz * h
+            dispersion = np.where(
+                np.abs(exact.imag) < 1e-12,
+                np.exp(-1j * (kappa - exact) * thickness),
+                1.0,
             )
-            spectrum = np.zeros((nx, ny), np.complex128)
-            spectrum[basis.indices[:, 0], basis.indices[:, 1]] = beam_amplitudes
-            array = np.fft.ifft2(spectrum) * (nx * ny)
-            array = get_array_module(waves.device).asarray(
-                array.astype(waves.array.dtype)
+            vacuum_phase = np.exp(-1j * incident_kz * thickness)
+            transmitted = phi[-1] * half * dispersion * vacuum_phase
+
+            def to_array(amplitudes):
+                """Real-space wave from per-orbit (or per-beam) amplitudes."""
+                if basis.reduced:
+                    beam_amplitudes = np.zeros(len(basis.indices), np.complex128)
+                    for o, members in enumerate(basis.members):
+                        beam_amplitudes[members] = amplitudes[o] / np.sqrt(len(members))
+                else:
+                    beam_amplitudes = amplitudes
+                beam_amplitudes = beam_amplitudes * np.exp(
+                    -2j * np.pi * (basis.gx * origin[0] + basis.gy * origin[1])
+                )
+                spectrum = np.zeros((nx, ny), np.complex128)
+                spectrum[basis.indices[:, 0], basis.indices[:, 1]] = beam_amplitudes
+                return np.fft.ifft2(spectrum) * (nx * ny)
+
+            return to_array(transmitted), to_array(reflected)
+
+        # the total tilt of every member of the ensemble: the base tilt plus the value
+        # of each tilt axis, broadcast over the ensemble axes in their order
+        axes = waves.ensemble_axes_metadata
+        ensemble_shape = waves.shape[:-2]
+        tilts = np.broadcast_to(
+            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
+        ).copy()
+        for i, axis in enumerate(axes):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            shape = [1] * len(axes) + [2]
+            shape[i] = len(values)
+            tilts += values.reshape(shape)
+
+        results = [solve(tilt) for tilt in tilts.reshape(-1, 2)]
+        module = get_array_module(waves.device)
+
+        def to_waves(index):
+            array = np.stack([result[index] for result in results]).reshape(
+                ensemble_shape + (nx, ny)
             )
+            array = module.asarray(array.astype(waves.array.dtype))
             return Waves(array, **waves._copy_kwargs(exclude=("array",)))
 
-        return to_waves(transmitted), to_waves(reflected)
+        return to_waves(0), to_waves(1)

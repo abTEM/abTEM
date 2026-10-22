@@ -425,6 +425,39 @@ def test_the_symmetry_of_a_tilted_wave_gives_the_waves_of_the_full_basis(tilt):
         np.testing.assert_allclose(reduced, full, atol=2e-6)
 
 
+@pytest.mark.float64
+def test_an_ensemble_of_tilts_is_the_tilts_one_by_one():
+    # Oracle: each member of the ensemble is the solution of that tilt alone; the
+    # axes of the ensemble keep their order and their metadata.
+    tilts_x, tilts_y = [0.0, 40.0, 80.0], [0.0, 25.0]
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    solver = TwoWaySolver(cutoff=1.5)
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = solver.scatter(
+            abtem.PlaneWave(energy=1000.0, tilt=(tilts_x, tilts_y)), potential
+        )
+        assert transmitted.shape == (3, 2, 48, 84)
+        assert reflected.shape == (3, 2, 48, 84)
+        assert len(transmitted.ensemble_axes_metadata) == 2
+        for i, tx in enumerate(tilts_x):
+            for j, ty in enumerate(tilts_y):
+                single_t, single_r = solver.scatter(
+                    abtem.PlaneWave(energy=1000.0, tilt=(tx, ty)), potential
+                )
+                np.testing.assert_allclose(
+                    transmitted.array[i, j], single_t.array, atol=1e-9
+                )
+                np.testing.assert_allclose(
+                    reflected.array[i, j], single_r.array, atol=1e-9
+                )
+
+
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
@@ -472,10 +505,8 @@ def test_the_solver_refuses_unsupported_input():
     potential = abtem.Potential(
         graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
     )
-    with pytest.raises(NotImplementedError, match="tilt ensembles"):
-        TwoWaySolver().scatter(
-            abtem.PlaneWave(energy=1000.0, tilt=([5.0, 10.0], 0.0)), potential
-        )
+    with pytest.raises(NotImplementedError, match="ensembles of tilts only"):
+        TwoWaySolver().scatter(abtem.PlaneWave(energy=[1000.0, 2000.0]), potential)
 
     coarse = abtem.Potential(
         graphene_atoms(), gpts=(24, 42), slice_thickness=0.01, projection="finite"
