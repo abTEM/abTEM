@@ -127,6 +127,14 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice(expansion_scope="full")` no longer subtracts the backscattered wave of each slice from the
+  forward wave (Eq. 10 of Micron 190 (2025) 103778) unless `backscatter_correction=True` is given.
+    - **Behaviour change:** the correction used to be always applied. The authors validated it at 30 and 200 keV
+      with a converged series. Against an exact two-way solution of graphene it makes the strong beams less
+      accurate between 1 and 5 keV (16 % against 7 % at 1 keV and order 1, 5.5 % against 1.2 % at 2 keV and order 2)
+      and the transmitted intensity exceed 1 (1.014 at 1 keV, where the exact solution gives 0.9999); above about
+      30 keV it makes no difference. `return_backscattered=True` still returns the backscattered wave
+      ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
