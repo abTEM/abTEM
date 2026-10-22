@@ -108,7 +108,7 @@ Features:
   `wavelength * k` and are labelled so; `DiffractionPatterns.scattering_angles()` returns the angle of every
   pixel (NaN for evanescent beams). `SpectralSlitDetector` raises with `"exact"`; the CTF, its envelopes, the
   PRISM blend angle and core-loss momentum transfer stay paraxial
-  ([Issue #623](https://github.com/abTEM/abTEM/issues/623))
+  ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
     - A detector, aperture, or `crop` with an explicit angle above 250 mrad now warns while `angles` is
       `"paraxial"`
 
