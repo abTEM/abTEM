@@ -12,10 +12,11 @@ in a basis of the beams g with |g| < cutoff, psi = sum_g phi_g(z) exp(2 pi i g.r
 coupled equations for phi_g(z) are integrated with the Numerov method (fourth order) on
 the potential's slices, with outgoing boundary conditions in the vacuum on both sides,
 by a block-tridiagonal solve. Backscattering and evanescent beams are exact; the only
-truncations are the beam set and the z step. For a normally incident wave the basis is
-reduced to the beams that couple to it: the reciprocal lattice of the structure's
-primitive translations, and one combination per orbit of its point symmetries (see
-:func:`structure_symmetry`).
+truncations are the beam set and the z step. For a plane wave of any direction the
+beams are the plane waves k_t + g of the reciprocal lattice, reduced to the sublattice
+that the structure's primitive translations leave coupled; for a normally incident wave
+the basis is further reduced to one combination per orbit of the structure's point
+symmetries (see :func:`structure_symmetry`).
 """
 
 from __future__ import annotations
@@ -156,9 +157,22 @@ def structure_symmetry(atoms: Atoms, tolerance: float = 1e-4):
 
 
 class _BeamBasis:
-    """The beams of a normally incident wave and their reduction by symmetry."""
+    """The beams of the incident wave and their reduction by symmetry.
 
-    def __init__(self, gpts, sampling, cutoff, origin, operations, translations):
+    ``shift`` is the in-plane wave vector of the incident wave [1/Å]: the beams are the
+    plane waves g + shift of the reciprocal lattice with |g + shift| < cutoff.
+    """
+
+    def __init__(
+        self,
+        gpts,
+        sampling,
+        cutoff,
+        origin,
+        operations,
+        translations,
+        shift=(0.0, 0.0),
+    ):
         nx, ny = gpts
         lx, ly = nx * sampling[0], ny * sampling[1]
         ix = np.fft.fftfreq(nx, 1 / nx).round().astype(int)[:, None] * np.ones(
@@ -172,10 +186,11 @@ class _BeamBasis:
         lattice = np.ones((nx, ny), bool)
         for tx, ty in translations:
             lattice &= np.abs(np.exp(2j * np.pi * (ix * tx + iy * ty)) - 1) < 1e-9
-        keep = lattice & (np.hypot(gx, gy) < cutoff)
+        keep = lattice & (np.hypot(gx + shift[0], gy + shift[1]) < cutoff)
         self.gpts, self.origin = gpts, origin
         self.indices = np.argwhere(keep)  # (n_beams, 2): the grid indices of the beams
         self.gx, self.gy = gx[keep], gy[keep]
+        self.qx, self.qy = self.gx + shift[0], self.gy + shift[1]
         index = {
             (int(a), int(b)): i for i, (a, b) in enumerate(zip(ix[keep], iy[keep]))
         }
@@ -375,8 +390,8 @@ class TwoWaySolver:
     which at low energies carry most of the reflection (graphene at 200 eV reflects 7 %,
     almost all of it through evanescent beams) and change the transmitted beams by tens
     of percent. The cost grows with the cube of the number of beams: use it for the
-    small cells of crystals and 2D materials. A normally incident plane wave is
-    supported, on the CPU, without absorption.
+    small cells of crystals and 2D materials. A plane wave of any direction is
+    supported (one direction at a time), on the CPU, without absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -394,7 +409,8 @@ class TwoWaySolver:
         propagating beams only.
     symmetry : bool, optional
         Reduce the basis by the translation and point symmetry of the structure, found
-        from the atoms of the potential (default True). The results agree with the full
+        from the atoms of the potential (default True). A tilted wave is only invariant
+        under the translations, which are used alone. The results agree with the full
         basis to the asymmetry of the sampled potential; a distorted structure is not
         symmetrised. A built :class:`.PotentialArray` carries no atoms and is solved in
         the full basis.
@@ -415,13 +431,16 @@ class TwoWaySolver:
         self, plane_wave: PlaneWave, potential: BasePotential
     ) -> tuple[Waves, Waves]:
         """
-        Scatter a normally incident plane wave from the slab.
+        Scatter a plane wave from the slab.
 
         Parameters
         ----------
         plane_wave : PlaneWave
-            The incident wave. Its energy is used, and its grid is matched to the
-            potential.
+            The incident wave. Its energy and its tilt are used (a single tilt, not an
+            ensemble), and its grid is matched to the potential. A tilted wave travels
+            along (tan x, tan y, 1) and, as in multislice, is stored without the carrier
+            of its direction: the beam g of the result is the plane wave g + k_t, the
+            incident one is g = 0, and the result carries the tilt in its metadata.
         potential : BasePotential
             The slab. A :class:`.Potential` or a built :class:`.PotentialArray`, without
             an ensemble axis.
@@ -438,8 +457,11 @@ class TwoWaySolver:
         from abtem.waves import Waves
 
         waves = plane_wave.match_grid(potential).build(lazy=False)
-        if waves.base_tilt != (0.0, 0.0) or _get_tilt_axes(waves):
-            raise NotImplementedError("TwoWaySolver supports normal incidence only.")
+        if _get_tilt_axes(waves):
+            raise NotImplementedError(
+                "TwoWaySolver does not support tilt ensembles: scatter one tilt at a "
+                "time."
+            )
         if potential.ensemble_shape:
             raise NotImplementedError(
                 "TwoWaySolver does not support ensemble potentials."
@@ -459,10 +481,21 @@ class TwoWaySolver:
         projected = np.asarray(asnumpy(built.array), dtype=np.float64)
         nz, nx, ny = projected.shape
         sampling = tuple(waves._valid_sampling)
-        if 1 / (2 * max(sampling)) < 2 * self.cutoff:
+
+        # The incident wave travels along (tan x, tan y, 1), and is stored without its
+        # carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored beam g
+        # is the plane wave g + k_t, and the incident one is g = 0.
+        tangent = np.tan(np.asarray(waves.base_tilt, dtype=float) / 1e3)
+        norm = np.sqrt(1.0 + np.sum(tangent**2))
+        in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
+        tilted = any(in_plane)
+        incident_kz = 2 * np.pi / (wavelength * norm)
+
+        if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
             raise ValueError(
                 f"The potential is sampled too coarsely for cutoff={self.cutoff}: use "
-                f"a sampling of at most {1 / (4 * self.cutoff):.4f} Å or a lower "
+                f"a sampling of at most "
+                f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a lower "
                 "cutoff."
             )
 
@@ -476,12 +509,21 @@ class TwoWaySolver:
                 origin, operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
                 )
+                if tilted:
+                    # a tilted wave is invariant under the translations only
+                    origin, operations = (0.0, 0.0), [("rot0", np.eye(2))]
 
         wave_number = 2 * np.pi / wavelength
         sigma = energy2sigma(energy)
         _check_step(h, wave_number, self.cutoff)
         basis = _BeamBasis(
-            (nx, ny), sampling, self.cutoff, origin, operations, translations
+            (nx, ny),
+            sampling,
+            self.cutoff,
+            origin,
+            operations,
+            translations,
+            shift=in_plane,
         )
 
         # the potential's Fourier coefficients, with the origin moved onto the symmetry
@@ -495,15 +537,14 @@ class TwoWaySolver:
             cache = np.stack([coupling(n) for n in range(nz)])
             coupling = lambda n: cache[n]  # noqa: E731
 
-        gx, gy = basis.gx[basis.representatives], basis.gy[basis.representatives]
+        qx, qy = basis.qx, basis.qy
         if basis.reduced:
-            kz2 = wave_number**2 - 4 * np.pi**2 * (gx**2 + gy**2)
-        else:
-            kz2 = wave_number**2 - 4 * np.pi**2 * (basis.gx**2 + basis.gy**2)
+            qx, qy = qx[basis.representatives], qy[basis.representatives]
+        kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
         exact = np.sqrt(kz2.astype(_COMPLEX))
         kappa = _numerov_wave_numbers(kz2, h)
         incident = np.zeros(len(kz2), _COMPLEX)
-        incident[int(np.argmin(np.abs(exact - wave_number)))] = 1.0
+        incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
 
         phi = _solve_blocks(coupling, kz2, kappa, h, nz, incident)
         half = np.exp(1j * kappa * h / 2)
@@ -515,7 +556,7 @@ class TwoWaySolver:
         dispersion = np.where(
             np.abs(exact.imag) < 1e-12, np.exp(-1j * (kappa - exact) * thickness), 1.0
         )
-        vacuum_phase = np.exp(-1j * wave_number * thickness)
+        vacuum_phase = np.exp(-1j * incident_kz * thickness)
         transmitted = phi[-1] * half * dispersion * vacuum_phase
 
         def to_waves(amplitudes):

@@ -205,6 +205,106 @@ def test_agrees_with_multislice_where_multislice_is_accurate():
     assert np.abs(reflected.array).max() < 1e-4
 
 
+def tilted_beam_geometry(shape, extent, energy, tilt):
+    """kz of every beam of a wave stored without the carrier of a beam of this tilt
+    [mrad], and the kz of that beam: the stored beam g is the plane wave g + k_t."""
+    tangent = np.tan(np.asarray(tilt) / 1e3)
+    norm = np.sqrt(1 + np.sum(tangent**2))
+    k = 2 * np.pi / energy2wavelength(energy)
+    nx, ny = shape
+    qx = np.fft.fftfreq(nx, extent[0] / nx)[:, None] + k * tangent[0] / norm / (
+        2 * np.pi
+    )
+    qy = np.fft.fftfreq(ny, extent[1] / ny)[None, :] + k * tangent[1] / norm / (
+        2 * np.pi
+    )
+    kz = np.sqrt(np.maximum(k**2 - 4 * np.pi**2 * (qx**2 + qy**2), 0.0))
+    return kz, k / norm
+
+
+@pytest.mark.float64
+def test_a_tilted_empty_slab_transmits_the_wave_unchanged():
+    # Oracle: no potential, no scattering, at any direction: the wave, stored without
+    # the carrier of its direction, has unit amplitude and zero phase after the slab,
+    # and nothing is reflected.
+    potential = abtem.Potential(
+        ase.Atoms(cell=[2.46, 4.2608, 8.0]), gpts=(48, 84), slice_thickness=0.016
+    )
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = TwoWaySolver(cutoff=1.5).scatter(
+            abtem.PlaneWave(energy=1000.0, tilt=(150.0, -60.0)), potential
+        )
+    np.testing.assert_allclose(transmitted.array, 1.0, atol=1e-8)
+    np.testing.assert_allclose(reflected.array, 0.0, atol=1e-8)
+    assert transmitted.base_tilt == (150.0, -60.0)
+
+
+@pytest.mark.parametrize("tilt", [(80.0, 0.0), (40.0, -60.0)])
+def test_flux_is_conserved_for_a_tilted_wave(tilt):
+    # Oracle: without absorption the transmitted and reflected fluxes add up to the
+    # incident one, at any direction of the incident wave: the flux of a beam is its
+    # kz, over that of the incident beam.
+    energy = 1000.0
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = TwoWaySolver(cutoff=2.5).scatter(
+            abtem.PlaneWave(energy=energy, tilt=tilt), potential
+        )
+    kz, incident_kz = tilted_beam_geometry(
+        transmitted.array.shape, potential.extent, energy, tilt
+    )
+    flux = (
+        (
+            np.abs(beam_amplitudes(transmitted)) ** 2
+            + np.abs(beam_amplitudes(reflected)) ** 2
+        )
+        * kz
+    ).sum() / incident_kz
+    assert abs(flux - 1.0) < 1e-4
+
+
+@pytest.mark.float64
+def test_agrees_with_multislice_for_a_tilted_wave():
+    # Oracle: as without tilt, at 20 keV with slices much thinner than the wavelength
+    # the exact-order multislice is accurate: in the frame of the tilted beam (the
+    # wave is stored without the carrier of its direction) both give the same
+    # amplitudes and phases on the strong beams, which checks the frame and the
+    # vacuum phase of the oblique wave.
+    energy, cutoff, gpts, tilt = 20e3, 1.4, (16, 28), (30.0, 10.0)
+    with abtem.config.set({"precision": "float64"}):
+        potential = abtem.Potential(
+            graphene_atoms(vacuum=3.0),
+            gpts=gpts,
+            slice_thickness=0.0035,
+            projection="finite",
+            periodic=True,
+        ).build(lazy=False)
+        transmitted, reflected = TwoWaySolver(cutoff=cutoff).scatter(
+            abtem.PlaneWave(energy=energy, tilt=tilt), potential
+        )
+        reference = abtem.PlaneWave(energy=energy, tilt=tilt).multislice(
+            potential, algorithm=FourierMultislice(), lazy=False
+        )
+    a, b = beam_amplitudes(transmitted), beam_amplitudes(reference)
+    wavelength = energy2wavelength(energy)
+    tangent = np.tan(np.asarray(tilt) / 1e3)
+    k_t = tangent / (wavelength * np.sqrt(1 + np.sum(tangent**2)))
+    q = np.hypot(
+        np.fft.fftfreq(gpts[0], 2.46 / gpts[0])[:, None] + k_t[0],
+        np.fft.fftfreq(gpts[1], 4.2608 / gpts[1])[None] + k_t[1],
+    )
+    strong = (np.abs(b) > 1e-3) & (q < cutoff)
+    assert strong.sum() > 15
+    assert np.abs(a - b)[strong].max() < 1e-3
+    assert np.abs(reflected.array).max() < 1e-4
+
+
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
@@ -252,9 +352,9 @@ def test_the_solver_refuses_unsupported_input():
     potential = abtem.Potential(
         graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
     )
-    with pytest.raises(NotImplementedError, match="normal incidence"):
+    with pytest.raises(NotImplementedError, match="tilt ensembles"):
         TwoWaySolver().scatter(
-            abtem.PlaneWave(energy=1000.0, tilt=(5.0, 0.0)), potential
+            abtem.PlaneWave(energy=1000.0, tilt=([5.0, 10.0], 0.0)), potential
         )
 
     coarse = abtem.Potential(
