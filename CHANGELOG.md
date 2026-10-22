@@ -97,6 +97,12 @@ Features:
   `get_kinematical_diffraction_pattern()` returns patterns with an `EnergyAxis`, and the new
   `select_energy(energy)` returns the single-energy Bloch waves; `calculate_structure_matrix` and
   `calculate_scattering_matrix` still need a single energy and point to it ([PR #456](https://github.com/abTEM/abTEM/pull/456))
+- Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
+  plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
+  position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so
+  overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
+  ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
+  `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 Performance:
 
@@ -395,7 +401,6 @@ Planned for this release (not yet merged):
 - Support for skewed pixels (non-orthogonal x,y,z cell axes) ([PR #282](https://github.com/abTEM/abTEM/pull/282))
 - Radially variable detector sensitivity ([PR #283](https://github.com/abTEM/abTEM/pull/283))
 - Plasmons: fast `PhaseScramblePlasmons` for multislice and PRISM, and `MonteCarloPlasmons` for Bloch wave
-- CBED patterns for Bloch waves ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 ## 1.0.11
 
