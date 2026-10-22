@@ -456,8 +456,9 @@ class TwoWaySolver:
         propagating beams only.
     symmetry : bool, optional
         Reduce the basis by the translation and point symmetry of the structure, found
-        from the atoms of the potential (default True). A tilted wave is only invariant
-        under the translations, which are used alone. The results agree with the full
+        from the atoms of the potential (default True). A tilted wave keeps the
+        translations and the point operations that leave its in-plane wave vector
+        unchanged. The results agree with the full
         basis to the asymmetry of the sampled potential; a distorted structure is not
         symmetrised. A built :class:`.PotentialArray` carries no atoms and is solved in
         the full basis.
@@ -580,8 +581,14 @@ class TwoWaySolver:
                     atoms, self.symmetry_tolerance
                 )
                 if tilted:
-                    # a tilted wave is invariant under the translations only
-                    origin, operations = (0.0, 0.0), [("rot0", np.eye(2))]
+                    # a tilted wave is invariant under the translations and under the
+                    # point operations that leave its in-plane wave vector unchanged,
+                    # the mirror along its direction, for example
+                    operations = [
+                        (name, matrix)
+                        for name, matrix in operations
+                        if np.allclose(matrix @ np.array(in_plane), in_plane, atol=1e-6)
+                    ]
 
         wave_number = 2 * np.pi / wavelength
         sigma = energy2sigma(energy)

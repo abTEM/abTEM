@@ -399,6 +399,32 @@ def test_the_device_gives_the_waves_of_the_cpu(device, tilt):
         )
 
 
+@pytest.mark.parametrize("tilt", [(60.0, 0.0), (0.0, -45.0), (50.0, 30.0)])
+def test_the_symmetry_that_a_tilted_wave_keeps_gives_the_waves_of_the_full_basis(tilt):
+    # Oracle: the full beam basis. A wave tilted along a mirror axis of the lattice keeps
+    # the mirror, a wave in a general direction only the translations; either way the
+    # reduced basis must reproduce the amplitudes and phases of the full one.
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    amplitudes = {}
+    for symmetry in (True, False):
+        with abtem.config.set({"precision": "float64"}):
+            transmitted, reflected = TwoWaySolver(
+                cutoff=2.5, symmetry=symmetry
+            ).scatter(abtem.PlaneWave(energy=1000.0, tilt=tilt), potential)
+        amplitudes[symmetry] = (
+            beam_amplitudes(transmitted),
+            beam_amplitudes(reflected),
+        )
+    for reduced, full in zip(amplitudes[True], amplitudes[False]):
+        np.testing.assert_allclose(reduced, full, atol=2e-6)
+
+
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
