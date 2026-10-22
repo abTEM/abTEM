@@ -2,7 +2,7 @@ import ase
 import ase.build
 import numpy as np
 import pytest
-from utils import devices, to_host_array
+from utils import devices, synthetic_transition_potential, to_host_array
 
 import abtem
 from abtem.antialias import AntialiasAperture
@@ -185,3 +185,91 @@ def test_any_object_with_the_step_protocol_runs_through_multislice(device):
     )
     assert algorithm.steps == potential.num_slices
     np.testing.assert_array_equal(to_host_array(waves), to_host_array(reference))
+
+
+def si_setup(slice_thickness=2.0):
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, projection="finite"
+    )
+    return atoms, potential
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_krylov_agrees_with_split_step_where_both_converge_for_a_scanned_probe(lazy):
+    # Oracle: at 100 keV the nonparaxial terms are small, so the Krylov step and the
+    # split step differ by 1-2 % (obliquity of the potential). The grid is far too
+    # coarse for the propagating band, so this also guards the antialiasing limit:
+    # without it the signal at 30-100 mrad is off by 4-12 %.
+    _, potential = si_setup()
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = np.array([[0.0, 0.0], [1.0, 1.5]])
+    detector = abtem.AnnularDetector(inner=30, outer=100)
+
+    def adf(algorithm):
+        return probe.scan(
+            potential, scan=scan, detectors=detector, algorithm=algorithm, lazy=lazy
+        )
+
+    result, reference = adf(KrylovMultislice()), adf(FourierMultislice())
+    if lazy:
+        result, reference = result.compute(), reference.compute()
+    result, reference = np.asarray(result.array), np.asarray(reference.array)
+    assert result.shape == reference.shape == (2,)
+    np.testing.assert_allclose(result, reference, rtol=3e-2)
+
+
+def test_krylov_lazy_and_eager_agree_for_a_frozen_phonon_energy_ensemble():
+    atoms, _ = si_setup()
+    potential = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+        gpts=(32, 32),
+        slice_thickness=2.0,
+        projection="finite",
+    )
+    waves = abtem.PlaneWave(energy=[50e3, 100e3])
+
+    def run(lazy):
+        result = waves.multislice(potential, algorithm=KrylovMultislice(), lazy=lazy)
+        return to_host_array(result.compute() if lazy else result)
+
+    eager, lazy = run(False), run(True)
+    assert eager.shape == (2, 2, 32, 32)
+    np.testing.assert_allclose(lazy, eager, atol=1e-5)
+
+
+def test_krylov_runs_in_the_core_loss_multislice():
+    # Oracle: the single-channel core-loss signal at 100 keV, where the Krylov and the
+    # split step agree to 4 % on this 32 x 32 grid (both are limited by it; the elastic
+    # signal of the two converges to each other with the grid).
+    atoms = list(
+        abtem.FrozenPhonons(ase.build.bulk("Si", cubic=True), 1, sigmas=0.1, seed=1)
+    )[0]
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 3
+    )
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+
+    def signal(algorithm, lazy):
+        measurement = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            detectors=abtem.AnnularDetector(inner=0.0, outer=None),
+            algorithm=algorithm,
+            lazy=lazy,
+            sites=atoms,
+        )
+        return np.asarray(
+            measurement.compute(progress_bar=False).array if lazy else measurement.array
+        )
+
+    reference = signal(FourierMultislice(), False)
+    for lazy in (False, True):
+        result = signal(KrylovMultislice(), lazy)
+        assert result.shape == reference.shape
+        assert np.abs(result - reference).max() < 6e-2 * np.abs(reference).max()

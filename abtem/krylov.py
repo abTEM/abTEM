@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 
 import numpy as np
 
+from abtem.core import config
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
@@ -69,6 +70,9 @@ class KrylovMultislice:
     propagating_cutoff : float, optional
         Fraction of the wave number 1 / wavelength kept (default 0.95). Beams beyond it,
         evanescent and grazing, are removed from the wave.
+        On grids too coarse for the band (high energies, where the band reaches far
+        beyond the grid) the band is limited by the antialiasing aperture instead, as in
+        the other algorithms.
     tolerance : float, optional
         Relative change of the Lanczos update at which a slice is converged (default
         1e-8).
@@ -145,11 +149,18 @@ class _Band:
         lx, ly = nx * sampling[0], ny * sampling[1]
         kc = cutoff / wavelength
 
-        # The band |k| < kc and the potential components that couple it, |q| < 2 kc, fit
-        # a grid whose Nyquist frequency is 2 kc. It is never larger than the grid
-        # given.
-        mx = min(nx, 2 * int(np.ceil(2 * kc * lx)))
-        my = min(ny, 2 * int(np.ceil(2 * kc * ly)))
+        # On a grid too coarse for the propagating band (high energies) the band is
+        # limited as in the other algorithms, by the antialiasing aperture. A product
+        # of the wave and the potential then lands outside the band when the potential
+        # is limited to 2 nyquist - 2 kc, which is kc itself at the aperture.
+        nyquist = 1 / (2 * max(sampling))
+        kc = min(kc, config.get("antialias.cutoff") * nyquist)
+        kv = min(2 * kc, 2 * nyquist - 2 * kc)
+
+        # The band |k| < kc and the potential components that couple it, |q| < kv, fit
+        # a grid whose Nyquist frequency is kv. It is never larger than the grid given.
+        mx = min(nx, 2 * int(np.ceil(kv * lx)))
+        my = min(ny, 2 * int(np.ceil(kv * ly)))
         self.fine_gpts, self.coarse_gpts = (nx, ny), (mx, my)
         ix = np.fft.fftfreq(mx, 1 / mx).round().astype(int)
         iy = np.fft.fftfreq(my, 1 / my).round().astype(int)
@@ -158,7 +169,7 @@ class _Band:
 
         k2 = (ix[:, None] / lx) ** 2 + (iy[None, :] / ly) ** 2
         self.projector = xp.asarray(k2 < kc**2)
-        self.potential_window = xp.asarray(k2 < (2 * kc) ** 2)
+        self.potential_window = xp.asarray(k2 < kv**2)
         # laplacian / (4 pi K) = -pi k^2 / K in Fourier space, in the band
         self.kinetic = xp.asarray(-np.pi * k2 * wavelength * (k2 < kc**2))
 
