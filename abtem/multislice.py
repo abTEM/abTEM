@@ -759,22 +759,29 @@ class RealSpaceMultislice:
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
     backscatter_correction : bool, optional
-        Only for ``expansion_scope="full"``. If True, the backscattered component of
-        each slice, calculated from the next slice, is subtracted from the forward
-        wave (Eq. 10 in Micron 190 (2025) 103778, as published). The default is
+        Only for ``expansion_scope="full"``, at every ``order`` (``"propagator"`` has no
+        such correction). If True, the backscattered component of each slice,
+        calculated from the next slice, is subtracted from the forward wave (Eq. 10 in
+        Micron 190 (2025) 103778, as published). The default is
         False: the authors validated the correction at 30 and 200 keV with a converged
         series, and against an exact two-way solution of graphene it makes the strong
         beams less accurate between 1 and 5 keV (for example 16 % against 7 % at 1 keV
         and order 1) and the transmitted intensity exceed 1 (1.014 at 1 keV), while it
-        makes no difference above about 30 keV. ``return_backscattered=True`` still
-        returns the backscattered component. Before this option existed, the
+        leaves the strong beams unchanged at 30 keV but raises the beams between 120
+        and 377 mrad by 1.5 % above the exact solution. ``return_backscattered=True``
+        still returns the backscattered component. Before this option existed, the
         correction was always applied.
+    tolerance: float, optional
+        Amplitude below which the exponent Taylor series is truncated
+        (default 1e-16). Raise it to stop the expansion early at the cost of
+        accuracy; the series also stops at `max_terms` regardless.
     """
 
     order: int = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
+    tolerance: float = 1e-16
     backscatter_correction: bool = False
 
 
@@ -881,6 +888,7 @@ def multislice_and_detect(
                 potential_slice=potential_slice,
                 next_slice=next_slice if look_ahead else None,
                 laplace=laplace_operator,
+                tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
@@ -1184,6 +1192,7 @@ def transition_potential_multislice_and_detect(
                 potential_slice=potential_slice,
                 next_slice=None,
                 laplace=laplace_operator,
+                tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=False,
