@@ -909,3 +909,66 @@ def test_lazy_fft2_convolve_of_unknown_chunk_sizes(kernel_shape, device):
     np.testing.assert_allclose(
         result, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
+
+
+@pytest.mark.parametrize(
+    "lengths, expected",
+    [
+        ((360, 360), (512, 512)),  # a power of two wins despite 2x the pixels
+        ((480, 512), (512, 512)),
+        ((1000, 1000), (1024, 1024)),
+        ((300, 300), None),  # 512^2 would be 2.9x the pixels: not worth it
+        ((600, 600), None),
+        ((512, 512), None),
+        ((272, 272), (280, 280)),  # 2^4 * 17 is off Metal's fast path entirely
+    ],
+)
+def test_metal_fft_advice(lengths, expected):
+    from abtem.core.fft import metal_fft_advice
+
+    assert metal_fft_advice(lengths) == expected
+
+
+@pytest.mark.parametrize(
+    "lengths, slow",
+    [
+        ((360, 360), False),  # powers of two are no faster in double-float
+        ((448, 448), True),  # 7 * 64
+        ((490, 512), True),  # 7^2 * 10
+        ((2100, 64), True),  # beyond one threadgroup
+        ((2048, 2048), False),
+    ],
+)
+def test_emulated_fft_advice(lengths, slow):
+    from abtem.core.fft import emulated_fft_advice
+
+    assert (emulated_fft_advice(lengths) is not None) == slow
+
+
+def test_emulated_fft_advice_suggests_lengths_without_a_seven():
+    from abtem.core.fft import emulated_fft_advice
+
+    assert "450 x 512" in emulated_fft_advice((448, 512))
+
+
+def test_metal_and_emulated_warnings_warn_once_per_grid():
+    from abtem.core.fft import (
+        SlowFFTSizeWarning,
+        _warn_slow_metal_fft_size,
+        warn_if_slow_emulated_fft,
+    )
+
+    _warned_slow_fft_shapes.clear()
+    with pytest.warns(SlowFFTSizeWarning, match="512 x 512"):
+        _warn_slow_metal_fft_size((4, 360, 360))
+    with pytest.warns(SlowFFTSizeWarning, match="factor 7"):
+        warn_if_slow_emulated_fft((448, 448))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_slow_metal_fft_size((4, 360, 360))
+        warn_if_slow_emulated_fft((448, 448))
+        # Good grids, and grids too small to matter, never warn.
+        _warn_slow_metal_fft_size((4, 512, 512))
+        _warn_slow_metal_fft_size((4, 200, 200))
+        warn_if_slow_emulated_fft((360, 360))
+        warn_if_slow_emulated_fft((7, 7))

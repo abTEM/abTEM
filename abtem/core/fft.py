@@ -201,6 +201,147 @@ def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
     )
 
 
+class SlowFFTSizeWarning(UserWarning):
+    """A transform runs on a length the device is markedly slower at, where a
+    nearby length would be faster.
+
+    abTEM chooses the same grids on every device; this tells the user when the
+    device at hand would prefer another one (see :func:`metal_fft_advice` and
+    :func:`emulated_fft_advice`).
+    """
+
+
+# Metal's FFT (float32, the 'mps' device) runs powers of two 2-4x faster per
+# pixel than any other fast length, 0.38 against 0.72-1.5 ns/pixel on Apple M2,
+# and lengths with a prime factor above 7 slower still (a 272^2 grid, 2^4 * 17,
+# ran no faster than the CPU). Relative costs per pixel, for the advice below.
+_METAL_COST_FAST = 2.5
+_METAL_COST_SLOW = 10.0
+
+# Smaller transforms are dominated by launch overheads; a different grid would
+# not help enough to be worth a warning.
+_METAL_WARN_MIN_ELEMENTS = 256 * 256
+
+# The emulated float64 FFT (abtem.core._double_float) takes two passes, and is
+# about twice as slow per pixel, on lines longer than one threadgroup holds.
+_EMULATED_MAX_LINE = 2048
+
+
+def _next_power_of_two(n: int) -> int:
+    return 1 << (max(1, int(n)) - 1).bit_length()
+
+
+def _metal_cost(lengths) -> float:
+    def per_pixel(n):
+        if n & (n - 1) == 0:
+            return 1.0
+        return _METAL_COST_FAST if is_fast_fft_size(n) else _METAL_COST_SLOW
+
+    return math.prod(lengths) * max(per_pixel(n) for n in lengths)
+
+
+def metal_fft_advice(lengths) -> Optional[tuple[int, ...]]:
+    """
+    A grid at least as fine that Metal's float32 FFT transforms faster, or None.
+
+    A power of two is much faster per pixel than any other length, so it can win
+    despite its extra pixels; for a 360 x 360 grid 512 x 512 does, for 300 x 300
+    it does not.
+
+    Parameters
+    ----------
+    lengths : tuple of int
+        The transformed lengths.
+    """
+    lengths = tuple(int(n) for n in lengths)
+    candidates = [
+        tuple(_next_power_of_two(n) for n in lengths),
+        tuple(next_fast_fft_size(n) for n in lengths),
+    ]
+    best = min(candidates, key=_metal_cost)
+    return best if _metal_cost(best) < _metal_cost(lengths) else None
+
+
+def _next_fast_without_seven(n: int) -> int:
+    n = next_fast_fft_size(n)
+    while n % 7 == 0:
+        n = next_fast_fft_size(n + 1)
+    return n
+
+
+def emulated_fft_advice(lengths) -> Optional[str]:
+    """
+    What makes the emulated float64 FFT (``torch.emulate-float64``) markedly
+    slower on these lengths, and the remedy, or None.
+
+    Its radix-7 passes cost 1.3-3.6x more per pixel than lengths with factors 2,
+    3 and 5 only, and lines longer than 2048 points take two passes. Powers of two
+    are no faster than other lengths here.
+
+    Parameters
+    ----------
+    lengths : tuple of int
+        The transformed lengths.
+    """
+    lengths = tuple(int(n) for n in lengths)
+    if any(n > _EMULATED_MAX_LINE for n in lengths):
+        return (
+            f"lines longer than {_EMULATED_MAX_LINE} points take two passes and "
+            "are about twice as slow per pixel; a grid of at most "
+            f"{_EMULATED_MAX_LINE} points per side, or the CPU, is faster"
+        )
+    if any(n % 7 == 0 for n in lengths):
+        suggestion = " x ".join(str(_next_fast_without_seven(n)) for n in lengths)
+        return (
+            "a factor 7 makes the transform 1.3-3.6x slower per pixel; "
+            f"{suggestion}, without one, is faster"
+        )
+    return None
+
+
+def _warn_once(key, message: str) -> None:
+    with _warned_slow_fft_shapes_lock:
+        if key in _warned_slow_fft_shapes:
+            return
+        _warned_slow_fft_shapes.add(key)
+    warnings.warn(message, SlowFFTSizeWarning)
+
+
+def _warn_slow_metal_fft_size(shape, func_name: str = "fft2", kwargs=None):
+    """Warn once per large Metal transform that another grid would speed up."""
+    lengths = _transform_lengths(shape, func_name, kwargs)
+    if not lengths or math.prod(lengths) < _METAL_WARN_MIN_ELEMENTS:
+        return
+    if all(n & (n - 1) == 0 for n in lengths):
+        return
+    advice = metal_fft_advice(lengths)
+    if advice is None:
+        return
+    shown = " x ".join(str(n) for n in lengths)
+    _warn_once(
+        ("metal", lengths),
+        f"FFT size {shown} is slow on Metal, whose FFT runs powers of two 2-4x "
+        f"faster per pixel: a {' x '.join(str(n) for n in advice)} grid would be "
+        "faster despite its extra pixels. Consider setting gpts explicitly.",
+    )
+
+
+def warn_if_slow_emulated_fft(lengths) -> None:
+    """Warn once per grid that the emulated float64 FFT is markedly slow on."""
+    lengths = tuple(int(n) for n in lengths)
+    if math.prod(lengths) < _METAL_WARN_MIN_ELEMENTS:
+        return
+    advice = emulated_fft_advice(lengths)
+    if advice is None:
+        return
+    shown = " x ".join(str(n) for n in lengths)
+    _warn_once(
+        ("emulated", lengths),
+        f"FFT size {shown} is slow in the emulated float64 on Metal "
+        f"(torch.emulate-float64): {advice}. Consider setting gpts explicitly.",
+    )
+
+
 def warn_if_slow_gpu_fft(x, func_name: str = "fft2", **kwargs):
     """
     Emit the slow-FFT diagnostic for a transform run outside ``_fft_dispatch``.
@@ -646,6 +787,73 @@ def _fft_dtype(dtype: np.dtype) -> np.dtype:
     return np.result_type(dtype, np.complex64)
 
 
+# The smallest transforms worth the round trip to the GPU in the emulated float64,
+# measured on Apple M2: below these the host FFT is faster than the two copies.
+# A single 256 x 256 image breaks even (3.1 ms on the host, 2.3 on the GPU), a
+# batch of 16 images of 128 x 128 wins (7.9 against 5.3 ms), a single 192 x 192
+# or 16 images of 64 x 64 does not.
+_EMULATED_FFT_MIN_IMAGE = 128 * 128
+_EMULATED_FFT_MIN_TOTAL = 256 * 256
+
+
+def _emulated_fft_applies(x, kwargs) -> bool:
+    """Whether a host transform of ``x`` runs on the GPU in emulated float64.
+
+    That is for float64 and complex128 arrays of at least
+    ``_EMULATED_FFT_MIN_IMAGE`` elements per image and ``_EMULATED_FFT_MIN_TOTAL``
+    in all, transformed over their
+    last two axes, whose lengths the emulation handles, when
+    ``torch.emulate-float64`` is on. Everything else, and so every caller that
+    names axes, a shape or a normalisation, keeps the host library.
+    """
+    if kwargs or x.ndim < 2 or x.dtype not in (np.complex128, np.float64):
+        return False
+    if not config.get("torch.emulate-float64", False):
+        return False
+    if x.shape[-1] * x.shape[-2] < _EMULATED_FFT_MIN_IMAGE:
+        return False
+    if x.size < _EMULATED_FFT_MIN_TOTAL:
+        return False
+
+    from abtem.core import _double_float
+
+    try:
+        _double_float.check_transform(x.shape)
+    except ValueError:
+        return False
+    # Lengths the emulation is markedly slow at stay on the host, where they
+    # are as fast as any, rather than warn about a path the user did not choose.
+    return emulated_fft_advice(x.shape[-2:]) is None
+
+
+def _emulated_fft2(x: np.ndarray, inverse: bool) -> np.ndarray:
+    """The 2D transform of ``x`` on the GPU, in emulated float64."""
+    from abtem.core import _double_float
+
+    return _double_float.to_numpy(
+        _double_float.fft2(_double_float.from_numpy(x), inverse=inverse)
+    )
+
+
+def _emulated_fft2_convolve(x: np.ndarray, kernel: np.ndarray):
+    """``ifft2(fft2(x) * kernel)`` in one trip to the GPU, or None when the
+    emulation does not apply: the kernel is one image, broadcast over ``x``."""
+    if (
+        not _emulated_fft_applies(x, {})
+        or kernel.ndim < 2
+        or kernel.shape[:-2] != (1,) * (kernel.ndim - 2)
+        or kernel.shape[-2:] != x.shape[-2:]
+        or kernel.dtype not in (np.complex128, np.float64)
+    ):
+        return None
+
+    from abtem.core import _double_float
+
+    factor = _double_float.from_numpy(kernel.reshape(kernel.shape[-2:]))
+    spectrum = _double_float.fft2(_double_float.from_numpy(x), post=factor)
+    return _double_float.to_numpy(_double_float.fft2(spectrum, inverse=True))
+
+
 def _fft_dispatch(
     x: U,
     func_name: str,
@@ -655,6 +863,8 @@ def _fft_dispatch(
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
+        if func_name in ("fft2", "ifft2") and _emulated_fft_applies(x, kwargs):
+            return _emulated_fft2(x, inverse=func_name == "ifft2")
         if config.get("fft") == "mkl":
             return _mkl_fft_dispatch(x, func_name, overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
@@ -675,6 +885,7 @@ def _fft_dispatch(
         )
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        _warn_slow_metal_fft_size(x.shape, func_name, kwargs)
         return getattr(backend.tp.fft, func_name)(x, **kwargs)
 
     check_cupy_is_installed()  # type: ignore
@@ -836,6 +1047,10 @@ def ifftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
 
 
 def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
+    if isinstance(x, np.ndarray) and isinstance(kernel, np.ndarray):
+        convolved = _emulated_fft2_convolve(x, kernel)
+        if convolved is not None:
+            return convolved
     x = fft2(x, overwrite_x=overwrite_x)
     # In place, keeping the dtype of the transform, unless x is the side that
     # broadcasts: the product is then larger than x. Decided from the shapes, as

@@ -17,7 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
-from abtem.core import backend
+from abtem.core import backend, config
 from abtem.core.backend import (
     asnumpy,
     cp,
@@ -671,6 +671,16 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         return ifft2(array / sinc_array).real
 
 
+def _emulates_float64_on_metal(xp) -> bool:
+    """Whether float64 work on the host is to run on the Metal GPU, in emulated
+    double precision (the ``torch.emulate-float64`` option)."""
+    return (
+        xp is np
+        and bool(config.get("torch.emulate-float64", False))
+        and get_dtype(complex=False) == np.float64
+    )
+
+
 def sinc(
     gpts: tuple[int, int], sampling: tuple[float, float], device: str = "cpu"
 ) -> np.ndarray:
@@ -756,11 +766,11 @@ def superpose_deltas(
 
     if weights is not None:
         v = v * weights[None]
-    
+
     try:
         xp.add.at(array, (i, j), v)
     except AttributeError:
-        
+
         if device_name_from_array_module(xp) == "gpu":
             cupyx.scatter_add(array, (i, j), v)
         else:
@@ -787,12 +797,13 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     doi:10.1016/j.ultramic.2015.07.005.
     """
 
-    _cache_attributes = ("_scattering_factors",)
+    _cache_attributes = ("_scattering_factors", "_emulated_kernels")
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
         # See _DeviceArrayCache for why this is not a functools.lru_cache.
         self._scattering_factors = _DeviceArrayCache()
+        self._emulated_kernels = _DeviceArrayCache()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -888,6 +899,48 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         device."""
         return self._scattering_factors
 
+    def _emulated_kernel(self, symbol: str, gpts, sampling):
+        """The Fourier-space factor ``scattering_factor / sinc`` of an element,
+        in float64 on the host, as a double-float array on the device."""
+        from abtem.core import _double_float as double_float
+
+        key = (symbol, tuple(gpts), tuple(sampling))
+        kernel = self._emulated_kernels.get(key)
+        if kernel is None:
+            factor = self.get_scattering_factor(
+                symbol, gpts, sampling, "cpu", like=np.zeros(gpts)
+            )
+            kernel = self._emulated_kernels.put(
+                key,
+                double_float.from_numpy(
+                    np.asarray(factor, dtype=np.float64)
+                    / np.asarray(sinc(gpts, sampling, "cpu"), dtype=np.float64)
+                ),
+            )
+        return kernel
+
+    def _integrate_on_grid_emulated(self, atoms: Atoms, gpts, sampling) -> np.ndarray:
+        """The same projection as :meth:`integrate_on_grid` on the host, with the
+        two transforms of each element run in emulated double precision on the
+        Metal GPU. The atoms are placed on the host, where float64 is native."""
+        from abtem.core import _double_float as double_float
+
+        array = np.zeros(gpts, dtype=np.float64)
+        for number in np.unique(atoms.numbers):
+            positions = atoms.positions[atoms.numbers == number]
+            positions = (positions[:, :2] / sampling).astype(np.float64)
+            deltas = superpose_deltas(positions, np.zeros(gpts, dtype=np.float64))
+
+            # The factor rides on the stores of the forward transform.
+            spectrum = double_float.fft2(
+                double_float.from_numpy(deltas),
+                post=self._emulated_kernel(chemical_symbols[number], gpts, sampling),
+            )
+            array += double_float.to_numpy(
+                double_float.fft2(spectrum, inverse=True)
+            ).real
+        return array
+
     def integrate_on_grid(
         self,
         atoms: Atoms,
@@ -900,6 +953,9 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
+
+        if _emulates_float64_on_metal(xp):
+            return self._integrate_on_grid_emulated(atoms, gpts, sampling)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
