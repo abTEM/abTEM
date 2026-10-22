@@ -14,7 +14,8 @@ Features:
 - Emulated float64 on Apple Metal: with `device: cpu`, `precision: float64` and `torch.emulate-float64: true`
   the Fourier multislice and the infinite-projection potential run their FFTs on the GPU in double-float
   arithmetic (pairs of float32, ~1e-14 relative accuracy), up to ~12x faster than float64 on the CPU.
-  Grid sides must have no prime factor above 7. A `SlowFFTSizeWarning` now says when a grid is markedly
+  The core-loss multislice runs on the GPU too, and the host FFTs of large float64 arrays (detectors,
+  convolutions, PRISM reductions) are routed there. Grid sides must have no prime factor above 7. A `SlowFFTSizeWarning` now says when a grid is markedly
   slow on Metal, whose FFT runs powers of two 2-4x faster per pixel, or in the emulation, and which grid
   would be faster; the automatic grids stay the same on every device
   ([PR #620](https://github.com/abTEM/abTEM/pull/620))

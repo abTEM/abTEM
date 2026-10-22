@@ -787,6 +787,73 @@ def _fft_dtype(dtype: np.dtype) -> np.dtype:
     return np.result_type(dtype, np.complex64)
 
 
+# The smallest transforms worth the round trip to the GPU in the emulated float64,
+# measured on Apple M2: below these the host FFT is faster than the two copies.
+# A single 256 x 256 image breaks even (3.1 ms on the host, 2.3 on the GPU), a
+# batch of 16 images of 128 x 128 wins (7.9 against 5.3 ms), a single 192 x 192
+# or 16 images of 64 x 64 does not.
+_EMULATED_FFT_MIN_IMAGE = 128 * 128
+_EMULATED_FFT_MIN_TOTAL = 256 * 256
+
+
+def _emulated_fft_applies(x, kwargs) -> bool:
+    """Whether a host transform of ``x`` runs on the GPU in emulated float64.
+
+    That is for float64 and complex128 arrays of at least
+    ``_EMULATED_FFT_MIN_IMAGE`` elements per image and ``_EMULATED_FFT_MIN_TOTAL``
+    in all, transformed over their
+    last two axes, whose lengths the emulation handles, when
+    ``torch.emulate-float64`` is on. Everything else, and so every caller that
+    names axes, a shape or a normalisation, keeps the host library.
+    """
+    if kwargs or x.ndim < 2 or x.dtype not in (np.complex128, np.float64):
+        return False
+    if not config.get("torch.emulate-float64", False):
+        return False
+    if x.shape[-1] * x.shape[-2] < _EMULATED_FFT_MIN_IMAGE:
+        return False
+    if x.size < _EMULATED_FFT_MIN_TOTAL:
+        return False
+
+    from abtem.core import _double_float
+
+    try:
+        _double_float.check_transform(x.shape)
+    except ValueError:
+        return False
+    # Lengths the emulation is markedly slow at stay on the host, where they
+    # are as fast as any, rather than warn about a path the user did not choose.
+    return emulated_fft_advice(x.shape[-2:]) is None
+
+
+def _emulated_fft2(x: np.ndarray, inverse: bool) -> np.ndarray:
+    """The 2D transform of ``x`` on the GPU, in emulated float64."""
+    from abtem.core import _double_float
+
+    return _double_float.to_numpy(
+        _double_float.fft2(_double_float.from_numpy(x), inverse=inverse)
+    )
+
+
+def _emulated_fft2_convolve(x: np.ndarray, kernel: np.ndarray):
+    """``ifft2(fft2(x) * kernel)`` in one trip to the GPU, or None when the
+    emulation does not apply: the kernel is one image, broadcast over ``x``."""
+    if (
+        not _emulated_fft_applies(x, {})
+        or kernel.ndim < 2
+        or kernel.shape[:-2] != (1,) * (kernel.ndim - 2)
+        or kernel.shape[-2:] != x.shape[-2:]
+        or kernel.dtype not in (np.complex128, np.float64)
+    ):
+        return None
+
+    from abtem.core import _double_float
+
+    factor = _double_float.from_numpy(kernel.reshape(kernel.shape[-2:]))
+    spectrum = _double_float.fft2(_double_float.from_numpy(x), post=factor)
+    return _double_float.to_numpy(_double_float.fft2(spectrum, inverse=True))
+
+
 def _fft_dispatch(
     x: U,
     func_name: str,
@@ -796,6 +863,8 @@ def _fft_dispatch(
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
+        if func_name in ("fft2", "ifft2") and _emulated_fft_applies(x, kwargs):
+            return _emulated_fft2(x, inverse=func_name == "ifft2")
         if config.get("fft") == "mkl":
             return _mkl_fft_dispatch(x, func_name, overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
@@ -978,6 +1047,10 @@ def ifftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
 
 
 def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
+    if isinstance(x, np.ndarray) and isinstance(kernel, np.ndarray):
+        convolved = _emulated_fft2_convolve(x, kernel)
+        if convolved is not None:
+            return convolved
     x = fft2(x, overwrite_x=overwrite_x)
     # In place, keeping the dtype of the transform, unless x is the side that
     # broadcasts: the product is then larger than x. Decided from the shapes, as

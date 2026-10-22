@@ -446,6 +446,15 @@ def _split_axis(n: int) -> tuple[int, int] | None:
     return None if best is None else (best, n // best)
 
 
+def check_transform(shape) -> None:
+    """Raise a ``ValueError`` unless :func:`fft2` can transform images of the last
+    two lengths of ``shape``, in arrays of the whole shape."""
+    _check_axis(int(shape[-2]))
+    _check_axis(int(shape[-1]))
+    if int(np.prod(shape)) > _MAX_ELEMENTS:
+        raise ValueError(f"an array of shape {tuple(shape)} is too large")
+
+
 def _check_axis(n: int) -> None:
     if radices(n) is None or (n > MAX_FFT_SIZE and _split_axis(n) is None):
         raise ValueError(

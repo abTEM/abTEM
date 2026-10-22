@@ -322,3 +322,122 @@ def test_the_emulated_fft_warns_on_a_slow_grid(double_float):
 
     with pytest.warns(SlowFFTSizeWarning, match="448 x 448"):
         double_float.fft2(x)
+
+
+def _count_fft2(monkeypatch, double_float):
+    calls = []
+    original = double_float.fft2
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(double_float, "fft2", counted)
+    return calls
+
+
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_emulated_core_loss_multislice_matches_float64_on_the_host(
+    double_channel, monkeypatch
+):
+    import ase
+    from utils import synthetic_transition_potential
+
+    from abtem.multislice import _EmulatedDoubleMultislice
+
+    atoms = ase.Atoms(
+        "Si2", positions=[(2.0, 2.0, 1.0), (5.0, 5.0, 3.0)], cell=(8, 8, 6), pbc=True
+    )
+    gpts = (64, 64)
+    forks = []
+    original_fork = _EmulatedDoubleMultislice.fork
+
+    def fork(self, waves):
+        forks.append(1)
+        return original_fork(self, waves)
+
+    monkeypatch.setattr(_EmulatedDoubleMultislice, "fork", fork)
+
+    def run(emulate):
+        with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
+            potential = abtem.Potential(
+                atoms, gpts=gpts, slice_thickness=1.0, exit_planes=2
+            )
+            transition = synthetic_transition_potential(
+                Z=14, gpts=gpts, extent=(8.0, 8.0), energy=100e3
+            )
+            waves = abtem.PlaneWave(energy=100e3, gpts=gpts, extent=(8.0, 8.0)).build(
+                lazy=False
+            )
+            result = waves.transition_potential_multislice(
+                potential,
+                transition,
+                detectors=abtem.WavesDetector(),
+                double_channel=double_channel,
+            )
+            return np.asarray(result.compute().array)
+
+    reference, emulated = run(False), run(True)
+
+    assert emulated.dtype == np.complex128
+    assert np.abs(emulated - reference).max() < 1e-12 * np.abs(reference).max()
+    # The scattered waves of the double channel go on through the slices on the
+    # device, one fork per site batch.
+    assert bool(forks) == double_channel
+
+
+@pytest.mark.parametrize("shape", [(4, 128, 128), (1, 256, 256), (3, 160, 192)])
+def test_host_ffts_run_on_the_gpu_when_large_enough(double_float, monkeypatch, shape):
+    from abtem.core.fft import fft2, fft2_convolve, ifft2
+
+    rng = np.random.default_rng(sum(shape))
+    x = _random_complex(rng, shape)
+    kernel = np.exp(1j * rng.standard_normal((1, *shape[-2:])))
+    calls = _count_fft2(monkeypatch, double_float)
+
+    with config.set({"precision": "float64", "torch.emulate-float64": True}):
+        forward, inverse = fft2(x), ifft2(x)
+        convolved = fft2_convolve(x, kernel)
+
+    # fft2 and ifft2 are one transform each, the convolution is two.
+    assert len(calls) == 1 + 1 + 2
+    assert _relative_error(forward, np.fft.fft2(x)) < 1e-13
+    assert _relative_error(inverse, np.fft.ifft2(x)) < 1e-13
+    reference = np.fft.ifft2(np.fft.fft2(x) * kernel)
+    assert _relative_error(convolved, reference) < 1e-13
+
+
+@pytest.mark.parametrize(
+    "shape, kwargs",
+    [
+        ((1, 64, 64), {}),  # too small for the round trip to pay
+        ((16, 64, 64), {}),  # too little in all, though many images
+        ((2, 192, 192), {"axes": (0, 1)}),  # asked for other axes
+        ((2, 448, 448), {}),  # factors of 7, where the emulation is slow
+        ((2, 11, 22000), {}),  # lengths it cannot do
+    ],
+)
+def test_host_ffts_stay_on_the_host_where_the_gpu_does_not_pay(
+    double_float, monkeypatch, shape, kwargs
+):
+    from abtem.core.fft import fft2
+
+    x = _random_complex(np.random.default_rng(0), shape)
+    calls = _count_fft2(monkeypatch, double_float)
+
+    with config.set({"precision": "float64", "torch.emulate-float64": True}):
+        fft2(x, **kwargs)
+
+    assert not calls
+
+
+def test_host_ffts_are_untouched_without_the_option(double_float, monkeypatch):
+    from abtem.core.fft import fft2
+
+    calls = _count_fft2(monkeypatch, double_float)
+    x = _random_complex(np.random.default_rng(0), (4, 256, 256))
+
+    with config.set({"precision": "float64", "torch.emulate-float64": False}):
+        fft2(x)
+
+    assert not calls
