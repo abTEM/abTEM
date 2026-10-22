@@ -30,13 +30,18 @@ def _check_propagating(argument: np.ndarray) -> None:
         )
 
 
-def exponential_of_root(k: float, thickness: float) -> Callable:
-    """``t -> exp(i dz k (sqrt(1 + 2 t / k) - 1))``, the step of one slice."""
+def exponential_of_root(
+    k: float, thickness: float, reference: float | None = None
+) -> Callable:
+    """``t -> exp(i dz (k sqrt(1 + 2 t / k) - reference))``, the step of one slice;
+    the reference wave number is ``k`` unless a tilted wave, stored without the carrier
+    of its direction, takes out its own."""
+    reference = k if reference is None else reference
 
     def function(values):
         argument = 1.0 + 2.0 * values / k
         _check_propagating(argument)
-        return np.exp(1j * thickness * k * (np.sqrt(argument) - 1.0))
+        return np.exp(1j * thickness * (k * np.sqrt(argument) - reference))
 
     return function
 

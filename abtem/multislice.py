@@ -759,8 +759,11 @@ class RealSpaceMultislice:
         which is the case at the nuclei of heavy atoms at any energy that the grid
         resolves, and at low energies for the whole band, so that its result for
         higher orders is not that of the root. It costs about 5 to 10 applications of
-        the operator (and two Fourier transforms) per slice, more with the
-        correction. The potential must have finite projection, as for the full scope.
+                correction. The potential must have finite projection, as for the full scope.
+        A tilted wave is propagated in the frame of its direction, as in
+        ``FourierMultislice`` (the operator has the first derivative of the tilt in
+        it), not with the paraxial translation of the series.
+
     expansion_scope: str
         If "propagator" (default) only the propagator operator is expanded to order
         If "full" both the propagator and transmission operators are expanded to order
@@ -951,7 +954,10 @@ def multislice_and_detect(
                 max_iterations=algorithm.max_iterations,
             )
             # the stencil knows nothing of the tilt of the beams, which the Fourier
-            # propagator applies as a translation
+            # propagator applies as a translation; the exact root has it in its
+            # operator
+            if algorithm.order == "exact":
+                return result
             if isinstance(result, tuple):
                 _translate_tilted_waves(result[0], potential_slice.thickness)
             else:

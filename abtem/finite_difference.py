@@ -687,18 +687,58 @@ def full_series(
     return series * 1.0j * thickness
 
 
-def _propagating_band(waves: Waves, propagating_cutoff: float, xp):
+def _member_tilts(waves: Waves) -> np.ndarray:
+    """The total tilt [mrad] of every member of the ensemble of ``waves``: the base tilt
+    plus the value of each tilt axis, in the order of the axes. Shape (..., 2)."""
+    axes = waves.ensemble_axes_metadata
+    shape = waves.shape[:-2]
+    tilts = np.broadcast_to(
+        np.asarray(waves.base_tilt, dtype=float), shape + (2,)
+    ).copy()
+    for i, axis in enumerate(axes):
+        if hasattr(axis, "tilt"):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            extent = [1] * len(axes) + [2]
+            extent[i] = len(values)
+            tilts += values.reshape(extent)
+    return tilts
+
+
+def _propagating_band(waves: Waves, propagating_cutoff: float, shift, xp):
     """Mask of the Fourier components that the exact root keeps: the propagating band
-    ``|k| < propagating_cutoff / wavelength``, within the antialiasing aperture."""
+    ``|q + k_t| < propagating_cutoff / wavelength`` around the in-plane wave vector of
+    a tilted wave (``shift`` = k_t), within the antialiasing aperture ``|q|``."""
     nx, ny = waves._valid_gpts
     dx, dy = waves._valid_sampling
-    kx = xp.asarray(np.fft.fftfreq(nx, dx))[:, None]
-    ky = xp.asarray(np.fft.fftfreq(ny, dy))[None, :]
-    radius = min(
-        propagating_cutoff / energy2wavelength(waves._valid_energy),
-        config.get("antialias.cutoff") / (2 * max(dx, dy)),
+    qx = xp.asarray(np.fft.fftfreq(nx, dx))[:, None]
+    qy = xp.asarray(np.fft.fftfreq(ny, dy))[None, :]
+    antialias = config.get("antialias.cutoff") / (2 * max(dx, dy))
+    band = propagating_cutoff / energy2wavelength(waves._valid_energy)
+    return ((qx + shift[0]) ** 2 + (qy + shift[1]) ** 2 < band**2) & (
+        qx**2 + qy**2 < antialias**2
     )
-    return (kx**2 + ky**2) < radius**2
+
+
+def _gradient(laplace: LaplaceOperator, sampling, xp):
+    """The centred finite-difference gradient (d/dx, d/dy) of the accuracy of
+    ``laplace``, for arrays (..., nx, ny) with periodic boundaries."""
+    coefficients = _calculate_finite_difference_coefficient(1, laplace._accuracy)
+    half = len(coefficients) // 2
+
+    def derivative(array, axis, step):
+        return (
+            sum(
+                float(coefficients[k + half]) * xp.roll(array, -k, axis=axis)
+                for k in range(-half, half + 1)
+                if coefficients[k + half] != 0.0
+            )
+            / step
+        )
+
+    return (
+        lambda a: derivative(a, -2, sampling[0]),
+        lambda a: derivative(a, -1, sampling[1]),
+    )
 
 
 def _exact_root_step(
@@ -712,7 +752,12 @@ def _exact_root_step(
     correct_forward: bool,
 ) -> Sequence[Waves]:
     """A multislice step with the exact one-way root of the full operator, and the
-    backscattered wave of the next slice, by Lanczos iterations (no Taylor series)."""
+    backscattered wave of the next slice, by Lanczos iterations (no Taylor series).
+
+    A tilted wave travels along (tan x, tan y, 1) and, as in multislice, is stored
+    without its carrier exp(2 pi i (k_t . r + k_zt z)): with K_t = 2 pi k_t the
+    operator acting on the stored wave is (laplacian + 2 i K_t . gradient - |K_t|^2) /
+    (2 k) + sigma V, on the band around -k_t, and the step removes the phase of k_zt."""
     xp = get_array_module(waves.array)
 
     if waves.device != potential_slice.device:
@@ -725,53 +770,85 @@ def _exact_root_step(
     wavelength = energy2wavelength(waves._valid_energy)
     k = 2 * np.pi / wavelength
     laplace_stencil = laplace.get_stencil(waves, device=waves.device)
-    band = _propagating_band(waves, propagating_cutoff, xp)
-
-    def project(array):
-        return ifft2(fft2(array) * band)
-
-    def operator(potential):
-        # laplacian / (4 pi K) + sigma V on the band, a Hermitian operator
-        def apply(a):
-            return project(laplace_stencil(a) / (2 * k) + potential * a)
-
-        return apply
-
-    current = operator(potential_slice.array[0] * sigma / thickness)
-
-    shape = waves._array.shape
-    batch = project(waves._array).reshape((-1,) + shape[-2:])
-    batch = lanczos_function(
-        batch,
-        current,
-        exponential_of_root(k, thickness),
-        tolerance,
-        max_iterations,
-        xp,
-    )
-
-    backscatter = xp.zeros_like(batch)
+    gradient_x, gradient_y = _gradient(laplace, waves._valid_sampling, xp)
+    potentials = [potential_slice.array[0] * sigma / thickness]
     if next_slice is not None:
-        following = operator(next_slice.array[0] * sigma / thickness)
-        # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
-        # (2025) 103778 with the operators of both slices
-        difference = lanczos_function(
-            batch, following, wave_number(k), tolerance, max_iterations, xp
-        ) - lanczos_function(
-            batch, current, wave_number(k), tolerance, max_iterations, xp
-        )
-        backscatter = 0.5 * lanczos_function(
-            difference,
-            following,
-            inverse_wave_number(k),
+        potentials.append(next_slice.array[0] * sigma / thickness)
+
+    def advance(batch, tilt):
+        """The forward and the backscattered wave of a batch of one tilt."""
+        tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+        norm = np.sqrt(1.0 + np.sum(tangent**2))
+        shift = tangent / (wavelength * norm)  # k_t [1/Å]
+        reference = k / norm  # k_zt
+        momentum = 2 * np.pi * shift  # K_t
+        tilted = bool(np.any(shift))
+        band = _propagating_band(waves, propagating_cutoff, shift, xp)
+
+        def project(array):
+            return ifft2(fft2(array) * band)
+
+        def operator(potential):
+            def apply(a):
+                kinetic = laplace_stencil(a)
+                if tilted:
+                    kinetic = (
+                        kinetic
+                        + 2j
+                        * (momentum[0] * gradient_x(a) + momentum[1] * gradient_y(a))
+                        - float(np.sum(momentum**2)) * a
+                    )
+                return project(kinetic / (2 * k) + potential * a)
+
+            return apply
+
+        current = operator(potentials[0])
+        batch = lanczos_function(
+            project(batch),
+            current,
+            exponential_of_root(k, thickness, reference),
             tolerance,
             max_iterations,
             xp,
         )
-        if correct_forward:
-            batch = batch - backscatter
 
-    waves._array = batch.reshape(shape)
+        backscatter = xp.zeros_like(batch)
+        if next_slice is not None:
+            following = operator(potentials[1])
+            # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
+            # (2025) 103778 with the operators of both slices
+            difference = lanczos_function(
+                batch, following, wave_number(k), tolerance, max_iterations, xp
+            ) - lanczos_function(
+                batch, current, wave_number(k), tolerance, max_iterations, xp
+            )
+            backscatter = 0.5 * lanczos_function(
+                difference,
+                following,
+                inverse_wave_number(k),
+                tolerance,
+                max_iterations,
+                xp,
+            )
+            if correct_forward:
+                batch = batch - backscatter
+        return batch, backscatter
+
+    shape = waves._array.shape
+    members = waves._array.reshape((-1,) + shape[-2:])
+    # the members of an ensemble of tilts have a band and an operator each
+    unique, inverse = np.unique(
+        _member_tilts(waves).reshape(-1, 2), axis=0, return_inverse=True
+    )
+    if len(unique) == 1:
+        forward, backscatter = advance(members, tuple(unique[0]))
+    else:
+        forward, backscatter = xp.empty_like(members), xp.empty_like(members)
+        for number, tilt in enumerate(unique):
+            group = xp.asarray(np.flatnonzero(inverse.ravel() == number))
+            forward[group], backscatter[group] = advance(members[group], tuple(tilt))
+
+    waves._array = forward.reshape(shape)
     kwargs = waves._copy_kwargs(exclude=("array",))
     return waves, waves.__class__(backscatter.reshape(shape), **kwargs)
 

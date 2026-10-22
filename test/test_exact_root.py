@@ -166,3 +166,59 @@ def test_the_exact_root_agrees_with_the_converged_series_at_high_energy():
 def test_parameters_are_validated(kwargs):
     with pytest.raises(ValueError):
         RealSpaceMultislice(**kwargs)
+
+
+# The strong beams of a graphene monolayer for a wave tilted by (80, 30) mrad, at 1 keV:
+# the flux that the exact two-way solution (Numerov, 0.01 Å steps, propagating beams
+# only; the beam g of a wave stored without the carrier of its direction is the plane
+# wave g + k_t) puts in the beam at the grid index (i, j) of the 48 x 84 grid.
+TILTED_EXACT_FLUX = {
+    (0, 0): 0.8911565,
+    (0, 82): 0.0075034,
+    (47, 1): 0.0074885,
+    (0, 2): 0.0074791,
+    (1, 83): 0.0074624,
+    (1, 1): 0.0074409,
+    (47, 83): 0.0074407,
+    (47, 81): 0.0066886,
+}
+
+
+def test_the_exact_root_follows_the_exact_solution_for_a_tilted_wave():
+    # Oracle: the exact two-way solution (stored above). The series of order 1 with
+    # the paraxial translation of the tilt is 1-8 % off on these beams; the exact root
+    # in the frame of the tilted wave is within 1.5 %.
+    wave = abtem.PlaneWave(energy=1000.0, tilt=(80.0, 30.0))
+
+    def errors(algorithm):
+        array = to_host_array(
+            wave.multislice(graphene_potential(), algorithm=algorithm, lazy=False)
+        )
+        intensity = np.abs(np.fft.fft2(array) / array.size) ** 2
+        return np.array(
+            [intensity[index] / flux - 1 for index, flux in TILTED_EXACT_FLUX.items()]
+        )
+
+    assert np.abs(errors(exact_algorithm())).max() < 0.015
+    assert (
+        np.abs(errors(RealSpaceMultislice(order=1, expansion_scope="full"))).max()
+        > 0.05
+    )
+
+
+def test_an_ensemble_of_tilts_is_the_tilts_one_by_one_for_the_exact_root():
+    # Oracle: each member is the exit wave of its tilt alone.
+    potential = graphene_potential(0.1)
+    tilts_x, tilts_y = [0.0, 80.0], [0.0, 30.0]
+    ensemble = to_host_array(
+        abtem.PlaneWave(energy=1000.0, tilt=(tilts_x, tilts_y)).multislice(
+            potential, algorithm=exact_algorithm(), lazy=False
+        )
+    )
+    assert ensemble.shape == (2, 2, 48, 84)
+    for i, tx in enumerate(tilts_x):
+        for j, ty in enumerate(tilts_y):
+            single = abtem.PlaneWave(energy=1000.0, tilt=(tx, ty)).multislice(
+                potential, algorithm=exact_algorithm(), lazy=False
+            )
+            np.testing.assert_allclose(ensemble[i, j], to_host_array(single), atol=2e-5)
