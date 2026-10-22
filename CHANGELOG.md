@@ -119,6 +119,11 @@ Performance:
   9.2 GB to 1.3 GB; an integer `max_batch*`, and a potential with one exit plane and no ensemble, are
   batched as before. Where a batch changes, values move by float32 rounding of the reduction only
   ([PR #563](https://github.com/abTEM/abTEM/pull/563))
+- `BlochWaves.calculate_exit_waves` sums the plane-wave expansion as two matrix products, using that the
+  beams are separable in x, y and z, instead of forming and reducing the (thickness, beam, x, y) array of
+  plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
+  256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
+  ([PR #PRNUM](https://github.com/abTEM/abTEM/pull/PRNUM))
 
 Dependencies:
 

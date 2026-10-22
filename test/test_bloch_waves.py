@@ -12,7 +12,11 @@ from utils import gpu, requires_gpu
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
-from abtem.bloch.dynamical import BlochwaveEnsemble, calculate_structure_factors
+from abtem.bloch.dynamical import (
+    BlochwaveEnsemble,
+    calculate_structure_factors,
+    plane_wave_expansion,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
     get_reflection_condition,
@@ -1893,3 +1897,95 @@ def test_cbed_matches_cpu(device):
         bloch_waves.calculate_cbed_patterns(probe, **kwargs).compute().array
     )
     np.testing.assert_allclose(result, reference, atol=1e-5 * reference.max())
+
+
+def _direct_plane_wave_sum(amplitudes, g, x, y, z):
+    # the sum over the full (thickness, beam, x, y) array of plane waves
+    phase = (
+        g[:, 0, None, None] * x[None, :, None]
+        + g[:, 1, None, None] * y[None, None, :]
+        + g[:, 2, None, None] * np.asarray(z)[..., None, None, None]
+    )
+    return (amplitudes[..., None, None] * np.exp(2j * np.pi * phase)).sum(-3)
+
+
+@pytest.mark.parametrize("precision, tol", [("float64", 1e-12), ("float32", 1e-5)])
+@pytest.mark.parametrize("shape", [(), (3,), (2, 3)], ids=["scalar", "z", "batch-z"])
+def test_plane_wave_expansion_matches_direct_summation(precision, tol, shape):
+    rng = np.random.default_rng(0)
+    n_beams, gpts = 40, (24, 20)
+    g = rng.uniform(-1, 1, (n_beams, 3))
+    x = np.linspace(0, 5.4, gpts[0], endpoint=False)
+    y = np.linspace(0, 3.1, gpts[1], endpoint=False)
+    z = rng.uniform(0, 10, shape[-1:])  # a scalar z has no thickness axis
+    amplitudes = rng.normal(size=shape + (n_beams,)) + 1j * rng.normal(
+        size=shape + (n_beams,)
+    )
+    amplitudes /= np.sqrt(n_beams)
+
+    dtype = np.dtype(precision)
+    cdtype = np.result_type(dtype, np.complex64)
+    amplitudes = amplitudes.astype(cdtype)
+    with abtem.config.set({"precision": precision}):
+        result = plane_wave_expansion(
+            amplitudes,
+            g.astype(dtype),
+            x.astype(dtype),
+            y.astype(dtype),
+            z.astype(dtype),
+        )
+    assert result.dtype == cdtype
+
+    # the reference sees the inputs rounded to the working precision
+    cast = lambda a: a.astype(dtype).astype(np.float64)
+    reference = _direct_plane_wave_sum(
+        amplitudes.astype(complex), cast(g), cast(x), cast(y), cast(z)
+    )
+    assert result.shape == shape + gpts
+    np.testing.assert_allclose(result, reference, atol=tol * np.abs(reference).max())
+
+
+def test_plane_wave_expansion_does_not_form_the_plane_wave_basis():
+    import tracemalloc
+
+    rng = np.random.default_rng(1)
+    n_beams, n_z, gpts = 200, 4, (128, 128)
+    g = rng.uniform(-3, 3, (n_beams, 3))
+    x = np.linspace(0, 5, gpts[0], endpoint=False)
+    y = np.linspace(0, 5, gpts[1], endpoint=False)
+    z = np.linspace(10, 40, n_z)
+    amplitudes = rng.normal(size=(n_z, n_beams)) + 0j
+
+    tracemalloc.start()
+    plane_wave_expansion(amplitudes, g, x, y, z)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+
+    basis_bytes = n_z * n_beams * gpts[0] * gpts[1] * 16
+    assert peak < basis_bytes / 10
+
+
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("thicknesses", [50.0, [20.0, 50.0, 80.0]])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_exit_waves_match_direct_summation(device, thicknesses, lazy):
+    bloch_waves = _silicon_bloch_waves(device)
+    gpts = (32, 28)
+    with abtem.config.set({"precision": "float64" if device == "cpu" else "float32"}):
+        waves = bloch_waves.calculate_exit_waves(thicknesses, gpts=gpts, lazy=lazy)
+        result = asnumpy(waves.compute().array if lazy else waves.array)
+        z = np.array(thicknesses)
+        amplitudes = asnumpy(
+            bloch_waves._calculate_array(z.astype(abtem.core.utils.get_dtype()), lazy=False)
+        )
+
+    extent = waves.extent
+    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
+    reference = _direct_plane_wave_sum(
+        amplitudes.astype(complex), np.asarray(bloch_waves.g_vec), x, y, z
+    )
+
+    assert result.shape == z.shape + gpts
+    tol = 1e-12 if device == "cpu" else 1e-5
+    np.testing.assert_allclose(result, reference, atol=tol * np.abs(reference).max())
