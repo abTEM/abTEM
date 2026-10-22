@@ -127,6 +127,10 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
+  beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
+  ensembles) without any message, in both expansion scopes and in the core-loss multislice
+  ([Issue #627](https://github.com/abTEM/abTEM/issues/627), [PR #628](https://github.com/abTEM/abTEM/pull/628))
 - `FresnelPropagator(order="exact")`, the default of `FourierMultislice`, propagates tilted beams exactly: it applied
   tilt as the first-order translation `tan(theta) * dz`, so the wave was propagated paraxially about the beam
   direction (a phase error of 0.015 rad per 1 Å slice at 100 mrad and 200 eV, 0.09 rad at 300 mrad). Results for
