@@ -141,6 +141,15 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
+  beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
+  ensembles) without any message, in both expansion scopes and in the core-loss multislice
+  ([Issue #627](https://github.com/abTEM/abTEM/issues/627), [PR #628](https://github.com/abTEM/abTEM/pull/628))
+- `FresnelPropagator(order="exact")`, the default of `FourierMultislice`, propagates tilted beams exactly: it applied
+  tilt as the first-order translation `tan(theta) * dz`, so the wave was propagated paraxially about the beam
+  direction (a phase error of 0.015 rad per 1 Å slice at 100 mrad and 200 eV, 0.09 rad at 300 mrad). Results for
+  tilted beams change, growing with the tilt; untilted beams and `order=1` and `2` are unchanged
+  ([PR #626](https://github.com/abTEM/abTEM/pull/626))
 - `block_direct=True` in `Waves.diffraction_patterns` blocked a fixed 1 mrad radius. It now blocks the
   bright-field disk plus a margin for a probe with a semiangle cutoff, as `DiffractionPatterns.block_direct()`
   does. For a plane wave, or a cutoff below half a pixel, it blocks the zero-frequency pixel only, now also
@@ -389,6 +398,12 @@ Bugfixes:
       `FlexibleAnnularDetector` no longer fail to broadcast, the shape a lazy scan declares equals the
       computed one, and a `WavesDetector` no longer raises `AttributeError: 'Waves' object has no
       attribute 'reduce_ensemble'`
+- Monte Carlo plasmons: `MonteCarloPlasmons.draw_events` runs again, where it raised `TypeError` because
+  `PlasmonScatteringEvents` was abstract ([PR #617](https://github.com/abTEM/abTEM/pull/617))
+    - **Behaviour change:** the combined deflection of several plasmon excitations is the 2D vector sum of
+      the individual deflections, where the polar angles were summed and the sum was also used as the
+      azimuth
+    - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
 
 Documentation:
 
@@ -477,6 +492,8 @@ Magnitudes are from small test systems and vary with the data.
 ### Fixed: errors and crashes
 
 - No longer raising: `Images.scan_noise`, `apply_ctf` at a second energy, `number - Images`, lazy `gaussian_filter` with a constant boundary, lazy `normalize`, single-point `GridScan`, noisy near-orthogonal `Potential` cells, tilted eager Bloch exit waves with scalar thickness, `IndexedDiffractionPatterns.sort()`, core loss on 16 or 17 pixel grids, `AnnularDetector` over a `LineScan` with an extra ensemble axis, GPAW 26 calculators, frozen-phonon `GPAWPotential`, ensemble backscattering, A/B/C centring, graphene repeated along c, and numba typing on some numba/numpy pairings.
+- `TransitionPotentialArray.filter_sites` with `Atoms` of several elements and a threshold no longer raises `IndexError`; it returns the kept atoms of the element of the transition potential, as `Atoms` for `Atoms` input and as positions for positions ([#375](https://github.com/abTEM/abTEM/pull/375)).
+- `show(overlay=...)` of an ensemble that has no base axes, such as the integrated core-loss measurements of the core-loss tutorial, gave more line labels than lines, and an ensemble of complex lines fewer. Matplotlib 3.11 raises an error for this ("label must be scalar or have the same length as the input data"); older versions took the whole list as the label. The lines are now labelled by the axes that are overlaid.
 - `excitations_weights` fails no longer on NumPy 2 (`np.math`). On CuPy 14.2 a lazy FFT in a dask worker thread no longer fails with `CUFFT_EXEC_FAILED` (see `cupy.fft-cache-size`).
 
 ### Changed: behaviour

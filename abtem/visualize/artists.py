@@ -201,28 +201,27 @@ class LinesArtist(Artist1D):
     ):
         super().__init__(ax=ax, measurement=measurement)
 
+        is_complex = np.iscomplexobj(measurement.array)
         y = self._reshape_data(measurement.array)
 
         x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
 
-        if label is None and measurement.ensemble_shape:
-            # a measurement without base axes (a MeasurementsEnsemble) is drawn along
-            # its last axis, which is the x axis and not a set of lines
-            n_labelled = len(measurement.ensemble_shape) - (
-                0 if measurement.base_shape else 1
-            )
+        # One line per index of the axes before the last one, which is the x axis of
+        # the plot. These are the ensemble axes of a line profile, but also all axes
+        # but the last of a measurement without base axes (an ensemble that is plotted
+        # along its last axis). Matplotlib refuses a number of labels that differs
+        # from the number of lines.
+        if label is None and len(measurement.shape) > 1:
             labels = []
-            for n, axis in zip(
-                measurement.shape[:n_labelled],
-                measurement.ensemble_axes_metadata[:n_labelled],
-            ):
+            for n, axis in zip(measurement.shape[:-1], measurement.axes_metadata[:-1]):
                 axis = axis.to_ordinal_axis(n)
                 labels.append([l.format_title(".3g") for l in axis])
 
             labels = list(itertools.product(*labels))
             label = [", ".join(l) for l in labels]
 
-        if np.iscomplexobj(y):
+        # y is real by now (_reshape_data puts the imaginary parts after the real parts)
+        if is_complex:
             if label is not None:
                 label = [l + "(real)" for l in label] + [l + "(imag)" for l in label]
             else:

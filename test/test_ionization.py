@@ -1386,9 +1386,35 @@ def test_filter_sites_aligns_mask_with_mixed_element_atoms(device):
     # (normalised, unit-intensity) probe is O(1) >> 1e-12: the B site must
     # survive, and the N site must never appear. A mask misaligned with the
     # original Atoms (length 2) would raise or return the N position (1, 1);
-    # a filter that drops everything returns an empty array.
-    assert isinstance(filtered, np.ndarray)
-    np.testing.assert_array_equal(filtered, np.array([[4.0, 4.0]]))
+    # a filter that drops everything returns an empty Atoms. The kept atoms are
+    # returned as Atoms for Atoms input, as in 1.0.10.
+    assert isinstance(filtered, ase.Atoms)
+    assert list(filtered.numbers) == [5]
+    np.testing.assert_array_equal(filtered.positions[:, :2], np.array([[4.0, 4.0]]))
+
+
+@devices
+def test_filter_sites_returns_the_form_of_its_input(device):
+    """Atoms give the kept atoms, positions give positions, and nothing is
+    filtered without a threshold."""
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2, device=device,
+    )
+    waves = _probe_waves(device=device)
+    positions = [(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)]
+    atoms = ase.Atoms("BBB", positions=positions, cell=(8, 8, 4))
+
+    kept_all = tp.filter_sites(waves, atoms, threshold=1e-30)
+    kept_none = tp.filter_sites(waves, atoms, threshold=1e30)
+    kept_array = tp.filter_sites(waves, atoms.positions[:, :2], threshold=1e-30)
+    unfiltered = tp.filter_sites(waves, atoms, threshold=None)
+
+    assert isinstance(kept_all, ase.Atoms) and len(kept_all) == 3
+    np.testing.assert_allclose(kept_all.positions, atoms.positions)
+    assert isinstance(kept_none, ase.Atoms) and len(kept_none) == 0
+    assert isinstance(kept_array, np.ndarray)
+    np.testing.assert_allclose(kept_array, atoms.positions[:, :2])
+    assert unfiltered is atoms
 
 
 def _symmetric_gaussian_transition_potential(gpts, extent, width=0.5, device="cpu"):
@@ -1473,7 +1499,7 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
         kept = tp.filter_sites(
             waves, sites, threshold=tp.absolute_threshold(waves, t)
         )
-        kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+        kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
         kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
         assert len(kept) < len(ij), f"t={t}: no site was dropped"
         assert kept_overlap >= t * total, (
@@ -1497,7 +1523,7 @@ def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     kept = tp.filter_sites(
         waves, sites, threshold=tp.absolute_threshold(waves, 1e-3)
     )
-    kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+    kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
     kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
     # The top pixel is unique (the next-ranked group of four ties sits ~15%
     # below it), so it survives alone.
