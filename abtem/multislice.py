@@ -734,7 +734,7 @@ def multislice_and_detect(
                 order=algorithm.order,
             )
 
-    else:
+    elif isinstance(algorithm, RealSpaceMultislice):
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
         # The next slice is only needed to calculate the backscattered component.
         look_ahead = algorithm.backscatter_correction or return_backscattered
@@ -750,6 +750,12 @@ def multislice_and_detect(
                 fully_corrected=algorithm.expansion_scope == "full",
                 correct_forward=algorithm.backscatter_correction,
             )
+
+    else:
+        # any other algorithm provides its own step
+        multislice_step = algorithm.make_step(
+            waves, return_backscattered=return_backscattered
+        )
 
     (
         extra_ensemble_axes_shape,
@@ -1024,7 +1030,7 @@ def transition_potential_multislice_and_detect(
                 order=algorithm.order,
             )
 
-    else:
+    elif isinstance(algorithm, RealSpaceMultislice):
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice):
@@ -1037,6 +1043,9 @@ def transition_potential_multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=False,
             )
+
+    else:
+        multislice_step = algorithm.make_step(waves)
 
     if detectors is None:
         detectors = [WavesDetector()]
