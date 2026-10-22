@@ -184,7 +184,11 @@ def test_any_object_with_the_step_protocol_runs_through_multislice(device):
         potential, algorithm=FourierMultislice(), lazy=False
     )
     assert algorithm.steps == potential.num_slices
-    np.testing.assert_array_equal(to_host_array(waves), to_host_array(reference))
+    # the two runs build their own FFT plans and aperture, so on a GPU they differ at
+    # the single-precision rounding level
+    np.testing.assert_allclose(
+        to_host_array(waves), to_host_array(reference), rtol=1e-5, atol=1e-5
+    )
 
 
 def si_setup(slice_thickness=2.0):

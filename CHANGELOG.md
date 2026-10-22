@@ -97,6 +97,19 @@ Features:
   `get_kinematical_diffraction_pattern()` returns patterns with an `EnergyAxis`, and the new
   `select_energy(energy)` returns the single-energy Bloch waves; `calculate_structure_matrix` and
   `calculate_scattering_matrix` still need a single energy and point to it ([PR #456](https://github.com/abTEM/abTEM/pull/456))
+- `KrylovMultislice`, a multislice algorithm for low energies (about 0.2–5 keV): it evaluates the exact
+  one-way root of the full operator, with the potential inside the root, by a Lanczos iteration in Fourier
+  space restricted to the propagating band. On a graphene monolayer the strong beams are within 1.2 % at
+  1 keV and 2.1 % at 200 eV of an exact two-way solution, where `FourierMultislice` is off by 9 % and 18 %
+  and the series of `RealSpaceMultislice(expansion_scope="full")` diverges. It is forward only (no
+  reflection, evanescent beams are dropped), refuses tilted waves and `TransmissionFunction` slices, and is
+  validated for thin specimens only. `multislice` hands any other algorithm to its own `make_step(waves)`
+  ([PR #622](https://github.com/abTEM/abTEM/pull/622))
+    - **Behaviour change:** the new `RealSpaceMultislice(backscatter_correction=...)` option defaults to
+      `False`. `expansion_scope="full"` used to always subtract the backscattered wave of each slice from the
+      forward wave (Eq. 10, Micron 190 (2025) 103778), which degrades the forward beams at low energies
+      (−23 % against −4 % on the {200} beams of graphene at 1 keV); pass `backscatter_correction=True` for the
+      previous result
 
 Performance:
 
