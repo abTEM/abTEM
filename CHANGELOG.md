@@ -110,6 +110,12 @@ Features:
       forward wave (Eq. 10, Micron 190 (2025) 103778), which degrades the forward beams at low energies
       (−23 % against −4 % on the {200} beams of graphene at 1 keV); pass `backscatter_correction=True` for the
       previous result
+- Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
+  plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
+  position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so
+  overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
+  ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
+  `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 Performance:
 
@@ -408,7 +414,6 @@ Planned for this release (not yet merged):
 - Support for skewed pixels (non-orthogonal x,y,z cell axes) ([PR #282](https://github.com/abTEM/abTEM/pull/282))
 - Radially variable detector sensitivity ([PR #283](https://github.com/abTEM/abTEM/pull/283))
 - Plasmons: fast `PhaseScramblePlasmons` for multislice and PRISM, and `MonteCarloPlasmons` for Bloch wave
-- CBED patterns for Bloch waves ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 ## 1.0.11
 

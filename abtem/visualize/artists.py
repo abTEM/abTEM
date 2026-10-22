@@ -206,8 +206,16 @@ class LinesArtist(Artist1D):
         x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
 
         if label is None and measurement.ensemble_shape:
+            # a measurement without base axes (a MeasurementsEnsemble) is drawn along
+            # its last axis, which is the x axis and not a set of lines
+            n_labelled = len(measurement.ensemble_shape) - (
+                0 if measurement.base_shape else 1
+            )
             labels = []
-            for n, axis in zip(measurement.shape, measurement.ensemble_axes_metadata):
+            for n, axis in zip(
+                measurement.shape[:n_labelled],
+                measurement.ensemble_axes_metadata[:n_labelled],
+            ):
                 axis = axis.to_ordinal_axis(n)
                 labels.append([l.format_title(".3g") for l in axis])
 
