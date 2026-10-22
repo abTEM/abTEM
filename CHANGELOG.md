@@ -127,6 +127,11 @@ Dependencies:
 
 Bugfixes:
 
+- `FresnelPropagator(order="exact")`, the default of `FourierMultislice`, propagates tilted beams exactly: it applied
+  tilt as the first-order translation `tan(theta) * dz`, so the wave was propagated paraxially about the beam
+  direction (a phase error of 0.015 rad per 1 Å slice at 100 mrad and 200 eV, 0.09 rad at 300 mrad). Results for
+  tilted beams change, growing with the tilt; untilted beams and `order=1` and `2` are unchanged
+  ([PR #626](https://github.com/abTEM/abTEM/pull/626))
 - `block_direct=True` in `Waves.diffraction_patterns` blocked a fixed 1 mrad radius. It now blocks the
   bright-field disk plus a margin for a probe with a semiangle cutoff, as `DiffractionPatterns.block_direct()`
   does. For a plane wave, or a cutoff below half a pixel, it blocks the zero-frequency pixel only, now also
