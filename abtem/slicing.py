@@ -211,7 +211,6 @@ def commensurate_gpts(
     target_sampling: float = 0.05,
     tolerance: float = 1e-3,
     round_to_fast_fft: bool = True,
-    device: str | None = None,
 ) -> tuple[int, int]:
     """
     Find grid points such that the sampling grid is commensurate with the atom
@@ -252,12 +251,6 @@ def commensurate_gpts(
         Target grid sampling [Å].
     tolerance : float
         Tolerance for identifying distinct atom planes [Å].
-    device : str, optional
-        The device the grid is used on, defaults to the configured one. On Metal,
-        where powers of two are much faster to transform than other lengths, a
-        grid that can be a power of two is preferred, and with
-        ``torch.emulate-float64`` factors of 7 are avoided (see
-        :func:`abtem.core.fft.next_preferred_fft_size`).
     round_to_fast_fft : bool
         If True (default), prefer grids that are also fast FFT sizes (all prime
         factors in {2, 3, 5, 7}). The realized sampling is then never coarser
@@ -272,12 +265,7 @@ def commensurate_gpts(
     tuple of int
         Number of grid points in x and y.
     """
-    from abtem.core.fft import (
-        is_fast_fft_size,
-        next_fast_fft_size,
-        next_preferred_fft_multiplier,
-        next_preferred_fft_size,
-    )
+    from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
         # The GCD search found no commensurate period. With fast-FFT rounding
@@ -292,7 +280,7 @@ def commensurate_gpts(
         if not round_to_fast_fft:
             return n_target
         if unique_x is None or L is None or len(unique_x) <= 1:
-            return next_preferred_fft_size(n_target, device)
+            return next_fast_fft_size(n_target)
 
         m = _translational_period_count(unique_x, L, tolerance)
         if not is_fast_fft_size(m):
@@ -404,7 +392,9 @@ def commensurate_gpts(
             # Rounding the multiplier up rather than to the nearer fast value
             # keeps the grid from ever coming out coarser than it would with
             # rounding off, so enabling this can only refine the sampling.
-            multiplier = next_preferred_fft_multiplier(nearest, n_periods, device)
+            multiplier = nearest if is_fast_fft_size(nearest) else (
+                next_fast_fft_size(nearest)
+            )
             n_multiple = multiplier * n_periods
         else:
             n_multiple = nearest * n_periods

@@ -327,13 +327,13 @@ class Grid(CopyMixin, EqualityMixin):
             )
 
             if self._fft_grid and _fast_fft_rounding_mode() == "always":
-                from abtem.core.fft import next_preferred_fft_size
+                from abtem.core.fft import next_fast_fft_size
 
                 # Round upward only, so the realized sampling is never coarser
                 # than requested. Endpoint grids are not periodic FFT grids and
                 # keep the exact ceil-derived size.
                 self._gpts = tuple(
-                    n if e else next_preferred_fft_size(n)
+                    n if e else next_fast_fft_size(n)
                     for n, e in zip(self._gpts, self._endpoint)
                 )
 
@@ -495,11 +495,8 @@ class Grid(CopyMixin, EqualityMixin):
         which FFT libraries (FFTW, pocketfft, MKL and cuFFT) ship optimized
         kernels; any other length falls back to a slower generic algorithm --
         on cuFFT the Bluestein algorithm, which additionally allocates a
-        workspace of several times the transform size. On Metal powers of two
-        are strongly preferred, being 2-4x faster per pixel than any other
-        length, and with ``torch.emulate-float64`` factors of 7 are avoided
-        (see :func:`abtem.core.fft.next_preferred_fft_size`). Rounding
-        is always upward, so the realized sampling is never coarser than before.
+        workspace of several times the transform size. Rounding is always
+        upward, so the realized sampling is never coarser than before.
 
         Every gpts is rounded, including on an endpoint grid -- unlike the
         automatic rounding, which leaves endpoint grids alone because they are
@@ -521,14 +518,14 @@ class Grid(CopyMixin, EqualityMixin):
         tuple of int
             The rounded gpts.
         """
-        from abtem.core.fft import next_preferred_fft_size
+        from abtem.core.fft import next_fast_fft_size
 
         assert self.gpts is not None
 
         if not self._fft_grid:
             return self.gpts
 
-        gpts = tuple(next_preferred_fft_size(n) for n in self.gpts)
+        gpts = tuple(next_fast_fft_size(n) for n in self.gpts)
 
         self.gpts = gpts
 

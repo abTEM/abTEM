@@ -24,6 +24,7 @@ import platform
 import subprocess
 import sys
 import time
+import warnings
 from importlib import metadata
 
 import ase.build
@@ -245,6 +246,10 @@ def main():
     config.set(
         {"diagnostics.progress_bar": False, "local_diagnostics.progress_bar": False}
     )
+    # Some sizes are measured on purpose although Metal is slow on them.
+    from abtem.core.fft import SlowFFTSizeWarning
+
+    warnings.simplefilter("ignore", SlowFFTSizeWarning)
     repeats = args.repeats or (1 if args.quick else REPEATS)
     grids = args.grids or ([128, 256] if args.quick else [128, 256, 512])
     fft_grids = args.fft_grids or (

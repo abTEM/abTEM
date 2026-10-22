@@ -148,6 +148,8 @@ ignore = ["E741", "E743"]
 addopts = "--dist=loadgroup"
 filterwarnings = [
     "error",
+    # Advice on faster grids for Metal; the tests choose their grids for coverage.
+    "ignore::abtem.core.fft.SlowFFTSizeWarning",
     "ignore:Overspecified grid, the provided sampling:UserWarning",
     "ignore:module 'sre_parse' is deprecated:DeprecationWarning",
     "ignore:module 'sre_constants' is deprecated:DeprecationWarning",

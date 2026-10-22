@@ -28,6 +28,8 @@ import functools
 
 import numpy as np
 
+from abtem.core.fft import warn_if_slow_emulated_fft
+
 # PyTorch and abtem.core._torch, loaded on first use by _load(): importing them
 # here would bypass the guards of abtem.core.backend._load_torch.
 torch = None
@@ -630,6 +632,7 @@ def fft2(
     _check_axis(n0)
     _check_axis(n1)
     _check_size(x)
+    warn_if_slow_emulated_fft((n0, n1))
     for factor in (pre, post):
         if factor is not None and factor.shape != (n0, n1):
             raise ValueError(

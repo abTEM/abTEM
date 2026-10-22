@@ -106,142 +106,6 @@ def next_fast_fft_size(n: int) -> int:
     return n
 
 
-_METAL_DEVICES = ("mps", "metal", "torch")
-
-# Relative cost per pixel of a float32 transform on Metal, against a power of
-# two, measured on Apple silicon: Metal's FFT runs powers of two 2-4x faster per
-# pixel than any other length (0.38 ns/pixel against 0.72-1.5). One number for
-# every other fast length, as what separates them is smaller than what separates
-# them from a power of two.
-_METAL_NON_POWER_OF_TWO_COST = 2.5
-
-
-def prefers_powers_of_two(device: Optional[str] = None) -> bool:
-    """
-    Whether FFTs are much faster on powers of two on the device: on Metal.
-
-    Parameters
-    ----------
-    device : str, optional
-        The device, defaults to the configured one.
-    """
-    if device is None:
-        device = config.get("device")
-    return str(device).lower() in _METAL_DEVICES
-
-
-def avoids_factors_of_seven(device: Optional[str] = None) -> bool:
-    """
-    Whether FFTs of lengths with a factor 7 are much slower on the device.
-
-    True for the emulated float64 of ``torch.emulate-float64`` on the host
-    device, whose transforms run on Metal in double-float
-    (:mod:`abtem.core._double_float`). Unlike Metal's float32 FFT, that one costs
-    about the same per pixel for powers of two and for lengths with factors 3
-    and 5 (1.7-2.8 ns/pixel, measured on Apple silicon), so rounding up to a
-    power of two would only add pixels; its radix-7 passes are 1.3-3.6x slower.
-
-    Parameters
-    ----------
-    device : str, optional
-        The device, defaults to the configured one.
-    """
-    if device is None:
-        device = config.get("device")
-    return str(device).lower() in ("cpu", "numpy") and bool(
-        config.get("torch.emulate-float64", False)
-    )
-
-
-def _is_power_of_two(n: int) -> bool:
-    return n > 0 and n & (n - 1) == 0
-
-
-def _is_five_smooth(n: int) -> bool:
-    return is_fast_fft_size(n) and n % 7 != 0
-
-
-def _next_five_smooth(n: int) -> int:
-    n = max(1, int(n))
-    while not _is_five_smooth(n):
-        n += 1
-    return n
-
-
-def _pixel_cost(n: int) -> float:
-    """The relative time of a float32 transform of an ``n`` by ``n`` grid on
-    Metal."""
-    return n * n * (1.0 if _is_power_of_two(n) else _METAL_NON_POWER_OF_TWO_COST)
-
-
-def next_preferred_fft_size(n: int, device: Optional[str] = None) -> int:
-    """
-    The length >= ``n`` that is cheapest to transform on the device.
-
-    Where all fast lengths cost alike (CPU and CUDA) this is
-    :func:`next_fast_fft_size`. On Metal a power of two is much faster per pixel
-    than any other length, so it is chosen unless the next fast length falls so
-    far short of it that the saved pixels outweigh the difference: for
-    ``n = 300`` that is 300 itself, for ``n = 330`` it is 512 rather than 336.
-    With ``torch.emulate-float64`` lengths with a factor 7 are avoided. The
-    result is never below ``n``.
-
-    Parameters
-    ----------
-    n : int
-        The minimum transform length.
-    device : str, optional
-        The device, defaults to the configured one.
-
-    Returns
-    -------
-    int
-        The preferred transform length.
-    """
-    fast = next_fast_fft_size(n)
-    if prefers_powers_of_two(device):
-        # Every other fast length costs the same per pixel, so the next one is
-        # the cheapest of them.
-        power = 1 << (max(1, int(n)) - 1).bit_length()
-        return power if _pixel_cost(power) <= _pixel_cost(fast) else fast
-    if avoids_factors_of_seven(device):
-        return _next_five_smooth(n)
-    return fast
-
-
-def next_preferred_fft_multiplier(
-    start: int, period: int, device: Optional[str] = None
-) -> int:
-    """
-    The multiplier ``q >= start`` for which ``q * period`` is cheapest to
-    transform on the device, among those that are fast lengths.
-
-    ``period`` must itself be a fast length, so that ``q * period`` is fast
-    exactly when ``q`` is. Where all fast lengths cost alike this is the next
-    fast ``q``. On Metal, a ``period`` that is a power of two lets ``q * period``
-    be one too, and the rule of :func:`next_preferred_fft_size` decides; with
-    ``torch.emulate-float64``, factors of 7 are avoided where the period allows.
-
-    Parameters
-    ----------
-    start : int
-        The minimum multiplier.
-    period : int
-        The length that ``q * period`` is a multiple of.
-    device : str, optional
-        The device, defaults to the configured one.
-    """
-    multiplier = next_fast_fft_size(start)
-    if prefers_powers_of_two(device) and _is_power_of_two(period):
-        power = 1 << (max(1, int(start)) * period - 1).bit_length()
-        if _pixel_cost(power) <= _pixel_cost(multiplier * period):
-            return power // period
-        return multiplier
-    if avoids_factors_of_seven(device) and _is_five_smooth(period):
-        return _next_five_smooth(start)
-    return multiplier
-
-
 _warned_slow_fft_shapes: set = set()
 # _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
 # on the shape set must be atomic or the same shape can warn more than once.
@@ -334,6 +198,147 @@ def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
         "slower and allocates a workspace of several times the array size. "
         f"Consider adjusting the transformed grid to {suggestion}{remedy}.",
         UserWarning,
+    )
+
+
+class SlowFFTSizeWarning(UserWarning):
+    """A transform runs on a length the device is markedly slower at, where a
+    nearby length would be faster.
+
+    abTEM chooses the same grids on every device; this tells the user when the
+    device at hand would prefer another one (see :func:`metal_fft_advice` and
+    :func:`emulated_fft_advice`).
+    """
+
+
+# Metal's FFT (float32, the 'mps' device) runs powers of two 2-4x faster per
+# pixel than any other fast length, 0.38 against 0.72-1.5 ns/pixel on Apple M2,
+# and lengths with a prime factor above 7 slower still (a 272^2 grid, 2^4 * 17,
+# ran no faster than the CPU). Relative costs per pixel, for the advice below.
+_METAL_COST_FAST = 2.5
+_METAL_COST_SLOW = 10.0
+
+# Smaller transforms are dominated by launch overheads; a different grid would
+# not help enough to be worth a warning.
+_METAL_WARN_MIN_ELEMENTS = 256 * 256
+
+# The emulated float64 FFT (abtem.core._double_float) takes two passes, and is
+# about twice as slow per pixel, on lines longer than one threadgroup holds.
+_EMULATED_MAX_LINE = 2048
+
+
+def _next_power_of_two(n: int) -> int:
+    return 1 << (max(1, int(n)) - 1).bit_length()
+
+
+def _metal_cost(lengths) -> float:
+    def per_pixel(n):
+        if n & (n - 1) == 0:
+            return 1.0
+        return _METAL_COST_FAST if is_fast_fft_size(n) else _METAL_COST_SLOW
+
+    return math.prod(lengths) * max(per_pixel(n) for n in lengths)
+
+
+def metal_fft_advice(lengths) -> Optional[tuple[int, ...]]:
+    """
+    A grid at least as fine that Metal's float32 FFT transforms faster, or None.
+
+    A power of two is much faster per pixel than any other length, so it can win
+    despite its extra pixels; for a 360 x 360 grid 512 x 512 does, for 300 x 300
+    it does not.
+
+    Parameters
+    ----------
+    lengths : tuple of int
+        The transformed lengths.
+    """
+    lengths = tuple(int(n) for n in lengths)
+    candidates = [
+        tuple(_next_power_of_two(n) for n in lengths),
+        tuple(next_fast_fft_size(n) for n in lengths),
+    ]
+    best = min(candidates, key=_metal_cost)
+    return best if _metal_cost(best) < _metal_cost(lengths) else None
+
+
+def _next_fast_without_seven(n: int) -> int:
+    n = next_fast_fft_size(n)
+    while n % 7 == 0:
+        n = next_fast_fft_size(n + 1)
+    return n
+
+
+def emulated_fft_advice(lengths) -> Optional[str]:
+    """
+    What makes the emulated float64 FFT (``torch.emulate-float64``) markedly
+    slower on these lengths, and the remedy, or None.
+
+    Its radix-7 passes cost 1.3-3.6x more per pixel than lengths with factors 2,
+    3 and 5 only, and lines longer than 2048 points take two passes. Powers of two
+    are no faster than other lengths here.
+
+    Parameters
+    ----------
+    lengths : tuple of int
+        The transformed lengths.
+    """
+    lengths = tuple(int(n) for n in lengths)
+    if any(n > _EMULATED_MAX_LINE for n in lengths):
+        return (
+            f"lines longer than {_EMULATED_MAX_LINE} points take two passes and "
+            "are about twice as slow per pixel; a grid of at most "
+            f"{_EMULATED_MAX_LINE} points per side, or the CPU, is faster"
+        )
+    if any(n % 7 == 0 for n in lengths):
+        suggestion = " x ".join(str(_next_fast_without_seven(n)) for n in lengths)
+        return (
+            "a factor 7 makes the transform 1.3-3.6x slower per pixel; "
+            f"{suggestion}, without one, is faster"
+        )
+    return None
+
+
+def _warn_once(key, message: str) -> None:
+    with _warned_slow_fft_shapes_lock:
+        if key in _warned_slow_fft_shapes:
+            return
+        _warned_slow_fft_shapes.add(key)
+    warnings.warn(message, SlowFFTSizeWarning)
+
+
+def _warn_slow_metal_fft_size(shape, func_name: str = "fft2", kwargs=None):
+    """Warn once per large Metal transform that another grid would speed up."""
+    lengths = _transform_lengths(shape, func_name, kwargs)
+    if not lengths or math.prod(lengths) < _METAL_WARN_MIN_ELEMENTS:
+        return
+    if all(n & (n - 1) == 0 for n in lengths):
+        return
+    advice = metal_fft_advice(lengths)
+    if advice is None:
+        return
+    shown = " x ".join(str(n) for n in lengths)
+    _warn_once(
+        ("metal", lengths),
+        f"FFT size {shown} is slow on Metal, whose FFT runs powers of two 2-4x "
+        f"faster per pixel: a {' x '.join(str(n) for n in advice)} grid would be "
+        "faster despite its extra pixels. Consider setting gpts explicitly.",
+    )
+
+
+def warn_if_slow_emulated_fft(lengths) -> None:
+    """Warn once per grid that the emulated float64 FFT is markedly slow on."""
+    lengths = tuple(int(n) for n in lengths)
+    if math.prod(lengths) < _METAL_WARN_MIN_ELEMENTS:
+        return
+    advice = emulated_fft_advice(lengths)
+    if advice is None:
+        return
+    shown = " x ".join(str(n) for n in lengths)
+    _warn_once(
+        ("emulated", lengths),
+        f"FFT size {shown} is slow in the emulated float64 on Metal "
+        f"(torch.emulate-float64): {advice}. Consider setting gpts explicitly.",
     )
 
 
@@ -811,6 +816,7 @@ def _fft_dispatch(
         )
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        _warn_slow_metal_fft_size(x.shape, func_name, kwargs)
         return getattr(backend.tp.fft, func_name)(x, **kwargs)
 
     check_cupy_is_installed()  # type: ignore

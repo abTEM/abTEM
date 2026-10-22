@@ -84,6 +84,7 @@ def test_fft2_is_accurate_for_every_supported_length(double_float, length):
     "shape",
     [(2, 4, 2560), (2, 2560, 4), (1, 8, 4096), (1, 4096, 8), (1, 2100, 64)],
 )
+@pytest.mark.filterwarnings("ignore::abtem.core.fft.SlowFFTSizeWarning")
 def test_axes_beyond_one_threadgroup_use_a_four_step_transform(double_float, shape):
     rng = np.random.default_rng(sum(shape))
     x = _random_complex(rng, shape)
@@ -311,3 +312,13 @@ def test_emulation_refuses_to_load_torch_after_pyfftw():
 
     assert result.returncode == 0, result.stderr
     assert "refused" in result.stdout
+
+
+def test_the_emulated_fft_warns_on_a_slow_grid(double_float):
+    from abtem.core.fft import SlowFFTSizeWarning, _warned_slow_fft_shapes
+
+    _warned_slow_fft_shapes.clear()
+    x = double_float.from_numpy(np.ones((1, 448, 448), dtype=np.complex128))
+
+    with pytest.warns(SlowFFTSizeWarning, match="448 x 448"):
+        double_float.fft2(x)
