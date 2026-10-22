@@ -124,6 +124,18 @@ Performance:
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
+- The Bloch-wave structure matrix is gathered on the device from the structure factors on a dense grid,
+  instead of being looked up through pandas on the host from the (beams², 3) array of Miller index
+  differences; on the GPU that lookup took two thirds of the time of a rotation series at 13,903 beams.
+  The eigendecomposition reuses the structure matrix's memory where the backend allows (CuPy, and NumPy
+  in double precision), and the beam amplitudes no longer form two more beams x beams arrays
+  ([issue #632](https://github.com/abTEM/abTEM/issues/632))
+    - A centrosymmetric crystal is solved as a real symmetric eigenproblem, that of the crystal moved
+      to its inversion center, which halves the memory of the structure matrix and its eigenvectors
+      and is several times faster to factorize; results agree with the complex solve to rounding.
+      `StructureFactor(inversion_center="auto")` detects the center from the atoms, and
+      `inversion_center=None` keeps the complex solve
+    - A rotation series computes the structure factors once, not once per orientation or dask block
 
 Dependencies:
 
@@ -395,6 +407,9 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
+- `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
+  more than that g_max apart set to zero as its warning says, where building the structure matrix raised
+  `ValueError: invalid entry in coordinates array` ([issue #632](https://github.com/abTEM/abTEM/issues/632))
 
 Documentation:
 
