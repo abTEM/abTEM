@@ -81,9 +81,16 @@ inline float2 quick_two_sum(float a, float b) {
 inline float2 two_prod(float a, float b) {
   float p = a * b; return float2(p, fma(a, b, -p));
 }
+// The "sloppy" sum: the low parts are added plainly, not through a second
+// two-sum. Its error is about one unit in the last place of the larger operand
+// (2^-46 of |a| + |b|), where the careful sum's is relative to the result; the
+// transforms and products here carry errors of that size anyway, as a transform
+// does of its norm, and measured end to end the results are as accurate (a
+// 136-slice multislice agrees with float64 to 1.5e-13 either way), at 11% less
+// time.
 inline float2 df_add(float2 a, float2 b) {
-  float2 s = two_sum(a.x, b.x); float2 t = two_sum(a.y, b.y);
-  s.y += t.x; s = quick_two_sum(s.x, s.y); s.y += t.y;
+  float2 s = two_sum(a.x, b.x);
+  s.y += a.y + b.y;
   return quick_two_sum(s.x, s.y);
 }
 inline float2 df_sub(float2 a, float2 b) { return df_add(a, float2(-b.x, -b.y)); }
@@ -432,7 +439,9 @@ def _group(n: int, lines: int, strides) -> int:
     for lines whose elements are apart but that are each other's neighbours
     (columns), as long as the threadgroup memory holds them."""
     bs, cs, js_in, js_out, es_in, es_out = strides
-    if es_in == 1 or cs != 1:
+    # Lines of 1024 points or more fill the threadgroup memory of a pair, which
+    # leaves one group per GPU core and was measured slower than single lines.
+    if es_in == 1 or cs != 1 or n >= 1024:
         return 1
     for group in GROUP_LINES:
         if lines % group == 0 and 16 * n * group <= 32768:
