@@ -34,11 +34,11 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 
 import numpy as np
 
+from abtem._lanczos import exponential_of_root, lanczos_function
 from abtem.core import config
-from abtem.core.backend import asnumpy, get_array_module
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
-from abtem.finite_difference import NotConvergedError
 from abtem.integrals import ScatteringFactorProjectionIntegrals
 from abtem.potentials.iam import TransmissionFunction
 from abtem.tilt import _get_tilt_axes
@@ -220,11 +220,10 @@ class _Band:
             return kinetic * a + projector * fft2(potential * ifft2(a))
 
         batch_shape = a0.shape[:-2]
-        a1 = _lanczos_exponential(
+        a1 = lanczos_function(
             a0.reshape((-1, mx, my)),
             apply,
-            self.k,
-            thickness,
+            exponential_of_root(self.k, thickness),
             tolerance,
             max_iterations,
             xp,
@@ -233,87 +232,3 @@ class _Band:
         out_k = xp.zeros_like(wave_k)
         out_k[..., self.rows, self.cols] = a1.reshape(batch_shape + (mx, my))
         return ifft2(out_k)
-
-
-def _inner(a, b, xp):
-    """Per-member inner product over the last two axes, shape (B,)."""
-    return xp.sum(xp.conj(a) * b, axis=(-2, -1))
-
-
-def _lanczos_exponential(a0, apply, k, dz, tolerance, max_iterations, xp):
-    """exp(i dz f(O)) a0 for every member of a0, with f(t) = k (sqrt(1 + 2 t / k) - 1).
-
-    One application of the Hermitian operator ``apply`` per iteration. The small
-    tridiagonal matrices are diagonalised on the host, in double precision.
-    """
-    dtype = a0.dtype
-    real_dtype = np.empty(0, dtype=dtype).real.dtype
-    norm0 = xp.sqrt(_inner(a0, a0, xp).real)
-    norm0_host = asnumpy(norm0).astype(np.float64)
-    safe = xp.asarray(np.where(norm0_host > 0, norm0_host, 1.0).astype(real_dtype))
-    q = a0 / safe[:, None, None]
-
-    basis = [q]
-    alphas, betas = [], []
-    coefficients_previous = None
-
-    for m in range(1, max_iterations + 1):
-        w = apply(basis[-1])
-        alpha = asnumpy(_inner(basis[-1], w, xp).real).astype(np.float64)
-        w = w - xp.asarray(alpha.astype(real_dtype))[:, None, None] * basis[-1]
-        if betas:
-            w = w - xp.asarray(betas[-1].astype(real_dtype))[:, None, None] * basis[-2]
-        for vector in basis:  # full reorthogonalisation: m is small
-            w = w - _inner(vector, w, xp)[:, None, None] * vector
-        alphas.append(alpha)
-
-        size = len(alphas)
-        tridiagonal = np.zeros((a0.shape[0], size, size))
-        index = np.arange(size)
-        tridiagonal[:, index, index] = np.stack(alphas, axis=1)
-        if betas:
-            off = np.stack(betas, axis=1)
-            tridiagonal[:, index[:-1], index[1:]] = off
-            tridiagonal[:, index[1:], index[:-1]] = off
-        values, vectors = np.linalg.eigh(tridiagonal)
-
-        argument = 1.0 + 2.0 * values / k
-        if argument.min() <= 0.0:
-            raise NotImplementedError(
-                "The operator has eigenvalues at or below the edge of the propagating "
-                "band (an exceptionally strong potential); lower propagating_cutoff or "
-                "use a "
-                "finer slicing."
-            )
-        phase = np.exp(1j * dz * k * (np.sqrt(argument) - 1.0))
-        coefficients = np.einsum(
-            "bij,bj,bj->bi", vectors, phase, vectors[:, 0, :].conj()
-        )
-
-        if coefficients_previous is not None:
-            padded = np.pad(coefficients_previous, ((0, 0), (0, 1)))
-            if np.linalg.norm(coefficients - padded, axis=1).max() < tolerance:
-                break
-
-        beta = asnumpy(xp.sqrt(_inner(w, w, xp).real)).astype(np.float64)
-        if (beta < 1e-14).all():
-            break
-        betas.append(beta)
-        basis.append(
-            w
-            / xp.asarray(np.where(beta > 1e-14, beta, 1.0).astype(real_dtype))[
-                :, None, None
-            ]
-        )
-        coefficients_previous = coefficients
-    else:
-        raise NotConvergedError(
-            f"the Lanczos iteration did not converge to {tolerance} in "
-            f"{max_iterations} iterations"
-        )
-
-    result = xp.zeros_like(a0)
-    for j, vector in enumerate(basis[: coefficients.shape[1]]):
-        weight = xp.asarray((coefficients[:, j] * norm0_host).astype(dtype))
-        result = result + weight[:, None, None] * vector
-    return result
