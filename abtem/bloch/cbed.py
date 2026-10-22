@@ -17,13 +17,11 @@ ensembles change the incident directions, and are solved separately.
 
 from __future__ import annotations
 
-import itertools
 import warnings
 from typing import TYPE_CHECKING, Optional, Sequence
 
 import dask.array as da
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from abtem.bloch.utils import reciprocal_cell
 from abtem.core import config
@@ -37,6 +35,7 @@ from abtem.distributions import BaseDistribution
 from abtem.measurements import DiffractionPatterns
 from abtem.prism.utils import _planewave_shift_coefficients
 from abtem.scan import BaseScan, validate_scan
+from abtem.tilt import BeamTilt2D
 from abtem.waves import Probe, _squeeze_flagged_axes
 
 if TYPE_CHECKING:
@@ -47,6 +46,25 @@ def _distribution_values(value) -> np.ndarray:
     if isinstance(value, BaseDistribution):
         return np.asarray(value.values, dtype=float).ravel()
     return np.atleast_1d(np.asarray(value, dtype=float))
+
+
+def _tilts(probe: Probe) -> np.ndarray:
+    """The probe's tilts [mrad], with the shape of its tilt ensemble + (2,)."""
+    tilt = probe.tilt
+    if isinstance(tilt, BeamTilt2D):
+        values = np.stack(
+            np.meshgrid(
+                _distribution_values(tilt.tilt_x),
+                _distribution_values(tilt.tilt_y),
+                indexing="ij",
+            ),
+            -1,
+        )
+    elif isinstance(tilt.tilt, BaseDistribution):
+        values = np.asarray(tilt.tilt.values, dtype=float)
+    else:
+        values = np.asarray(tilt.tilt, dtype=float)
+    return values.reshape(tilt.ensemble_shape + (2,))
 
 
 def _energies(probe: Probe, bloch_waves: BlochWaves) -> tuple[np.ndarray, bool]:
@@ -88,33 +106,35 @@ def _incident_plane_waves(probe: Probe) -> tuple[np.ndarray, np.ndarray, np.ndar
     aberrations = aberrations[..., ix, iy].reshape(
         aberrations_shape + (1,) * len(aperture_shape) + (-1,)
     )
-    coefficients = (aberrations * aperture).astype(np.complex128)
+    coefficients = (aberrations * aperture).astype(get_dtype(complex=True))
     coefficients /= np.sqrt(np.sum(np.abs(coefficients) ** 2, -1, keepdims=True))
 
     pixels = np.stack([(ix + nx // 2) % nx, (iy + ny // 2) % ny], -1)
     return pixels, np.stack([kx, ky], -1), coefficients
 
 
-def _orientations(bloch_waves: BlochWaves, directions: np.ndarray) -> np.ndarray:
-    """Euler angles ('xyz', radians) of the crystal orientations that bring each
+def _disc_box(pixels: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+    """The lower corner and the shape of the box around the illuminated pixels."""
+    lower = pixels.min(0)
+    return lower, tuple(pixels.max(0) - lower + 1)
+
+
+def _orientations(
+    bloch_waves: BlochWaves, directions: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The orientation matrix of `bloch_waves` relative to its structure factor's
+    cell, and the 'xy' Euler angles [rad] of the rotations that then bring each
     direction, given in the frame of `bloch_waves`, onto +z."""
-    # the orientation of `bloch_waves` relative to its structure factor's cell
     base = np.linalg.solve(
         np.array(bloch_waves.structure_factor.cell), np.array(bloch_waves.cell)
     ).T
 
     # R_y(b) R_x(a) maps d to +z for a = atan2(d_y, d_z), b = -asin(d_x)
-    tilts = Rotation.from_euler(
-        "xy",
-        np.stack(
-            [
-                np.arctan2(directions[:, 1], directions[:, 2]),
-                -np.arcsin(directions[:, 0]),
-            ],
-            -1,
-        ),
+    angles = np.stack(
+        [np.arctan2(directions[:, 1], directions[:, 2]), -np.arcsin(directions[:, 0])],
+        -1,
     )
-    return (tilts * Rotation.from_matrix(base)).as_euler("xyz")
+    return base, angles
 
 
 def _beam_offsets(
@@ -168,15 +188,13 @@ def _cbed_array(
     complex_dtype = get_dtype(complex=True)
     thicknesses = xp.asarray(thicknesses, dtype=get_dtype())
 
-    # beams sharing a transverse wave vector form one exit plane wave
-    exit_phases = complex_exponential(
-        2 * np.pi * xp.asarray(g_z, dtype=get_dtype())[None] * thicknesses[:, None]
-    )
-    one_hot = np.zeros((len(group_index), len(groups)))
-    one_hot[np.arange(len(group_index)), group_index] = 1.0
-    amplitudes = (amplitudes * exit_phases[None]) @ xp.asarray(
-        one_hot, dtype=complex_dtype
-    )
+    # beams sharing a transverse wave vector form one exit plane wave; sorted by
+    # group, the beams of each group are a slice
+    order = np.argsort(group_index, kind="stable")
+    bounds = np.searchsorted(group_index[order], np.arange(len(groups) + 1))
+    g_z = xp.asarray(g_z[order], dtype=get_dtype())
+    exit_phases = complex_exponential(2 * np.pi * g_z[None] * thicknesses[:, None])
+    amplitudes = amplitudes[..., xp.asarray(order)] * exit_phases[None]
 
     ensemble_shape = coefficients.shape[:-1]
     coefficients = xp.asarray(
@@ -208,8 +226,7 @@ def _cbed_array(
 
     # each group of beams is the illuminated disc, shifted by its offset; add
     # the discs through a padded canvas, dropping those that miss the detector
-    lower = pixels.min(0)
-    box = tuple(pixels.max(0) - lower + 1)
+    lower, box = _disc_box(pixels)
     nx, ny = gpts
     canvas = xp.zeros(canvas_shape + (nx + 2 * box[0], ny + 2 * box[1]), dtype=dtype)
     disc = xp.zeros(canvas_shape + box, dtype=dtype)
@@ -219,10 +236,11 @@ def _cbed_array(
         x0, y0 = lower[0] + ox + box[0], lower[1] + oy + box[1]
         if not (0 <= x0 < nx + box[0] and 0 <= y0 < ny + box[1]):
             continue
+        exit_waves = amplitudes[..., bounds[i] : bounds[i + 1]].sum(-1).T
         if positions is None:
-            disc[..., rows, cols] = weights * abs2(amplitudes[:, :, i]).T
+            disc[..., rows, cols] = weights * abs2(exit_waves)
         else:
-            disc[..., rows, cols] = weights * amplitudes[:, :, i].T
+            disc[..., rows, cols] = weights * exit_waves
         canvas[..., x0 : x0 + box[0], y0 : y0 + box[1]] += disc
 
     array = canvas[..., box[0] : box[0] + nx, box[1] : box[1] + ny]
@@ -248,14 +266,14 @@ def _cbed_member(
 
     # a tilted probe is a tilted beam: the plane waves keep their pixels, but
     # meet the crystal along directions offset by the tilt, as in multislice
-    tilt = np.array([probe.tilt.tilt_x, probe.tilt.tilt_y], dtype=float) * 1e-3
-    transverse = wave_vectors * wavelength + tilt
+    transverse = wave_vectors * wavelength + _tilts(probe).reshape(2) * 1e-3
     directions = np.concatenate(
         [transverse, np.sqrt(1 - np.sum(transverse**2, 1))[:, None]], axis=1
     )
+    base, angles = _orientations(bloch_waves, directions)
     ensemble = BlochwaveEnsemble(
-        "xyz",
-        _orientations(bloch_waves, directions),
+        "xy",
+        angles,
         structure_factor=bloch_waves.structure_factor,
         energy=bloch_waves.energy,
         sg_max=bloch_waves.sg_max,
@@ -263,9 +281,11 @@ def _cbed_member(
         centering=bloch_waves._centering,
         device=bloch_waves._device,
         use_wave_eq=bloch_waves.use_wave_eq,
+        orientation_matrix=base,
     )
+    # a lazy calculation runs one task per plane wave; its progress is dask's
     amplitudes = ensemble.calculate_diffraction_patterns(
-        thicknesses, return_complex=True, lazy=lazy, pbar=pbar
+        thicknesses, return_complex=True, lazy=lazy, pbar=pbar and not lazy
     )
 
     offsets, g_z = _beam_offsets(bloch_waves, amplitudes.miller_indices, probe.extent)
@@ -282,14 +302,41 @@ def _cbed_member(
         wavelength=wavelength,
         gpts=probe.gpts,
     )
-    if not lazy:
-        return _cbed_array(amplitudes.array, positions, **kwargs)
-
-    # every block of scan positions takes all plane waves and beams, and makes
-    # the patterns of every member of the aberration and aperture ensembles
     ensemble_shape = coefficients.shape[:-1]
     scan_shape = () if positions is None else positions.shape[:-1]
     m, n = len(ensemble_shape), len(scan_shape)
+
+    # per position and thickness, a block holds the pattern, the padded canvas,
+    # and a disc with its weighted amplitudes
+    nx, ny = probe.gpts
+    _, box = _disc_box(pixels)
+    per_position = int(
+        nx * ny + (nx + 2 * box[0]) * (ny + 2 * box[1]) + 2 * box[0] * box[1]
+    )
+
+    def scan_chunks(shape):
+        chunks = validate_chunks(
+            ensemble_shape + shape + (len(thicknesses), per_position),
+            (-1,) * m + ("auto",) * len(shape) + (-1, -1),
+            dtype=get_dtype(complex=True),
+            device=bloch_waves._device,
+        )
+        return chunks[m : m + len(shape)]
+
+    if not lazy:
+        if positions is None:
+            return _cbed_array(amplitudes.array, None, **kwargs)
+        flat = positions.reshape(-1, 2)
+        (sizes,) = scan_chunks((len(flat),))
+        arrays = [
+            _cbed_array(amplitudes.array, batch, **kwargs)
+            for batch in np.split(flat, np.cumsum(sizes)[:-1])
+        ]
+        array = get_array_module(arrays[0]).concatenate(arrays, axis=m)
+        return array.reshape(ensemble_shape + scan_shape + array.shape[m + 1 :])
+
+    # every block of scan positions takes all plane waves and beams, and makes
+    # the patterns of every member of the aberration and aperture ensembles
     ensemble_axes, scan_axes = tuple(range(m)), tuple(range(m, m + n))
     plane_waves, beams, xy, thickness, kx, ky = range(m + n, m + n + 6)
 
@@ -297,13 +344,8 @@ def _cbed_member(
     if positions is None:
         args += [None, None]
     else:
-        chunks = validate_chunks(
-            ensemble_shape + scan_shape + (len(thicknesses),) + probe.gpts,
-            (-1,) * m + ("auto",) * n + (-1, -1, -1),
-            dtype=get_dtype(complex=True),
-        )
         args += [
-            da.from_array(positions, chunks=chunks[m : m + n] + (-1,)),
+            da.from_array(positions, chunks=scan_chunks(scan_shape) + (-1,)),
             scan_axes + (xy,),
         ]
 
@@ -334,24 +376,29 @@ def calculate_cbed_patterns(
         pbar = config.get("diagnostics.task_progress", False)
 
     energies, energy_ensemble = _energies(probe, bloch_waves)
-    tilts = [
-        _distribution_values(probe.tilt.tilt_x),
-        _distribution_values(probe.tilt.tilt_y),
-    ]
+    tilts = _tilts(probe)
 
     squeeze_thickness = np.ndim(thicknesses) == 0
     thicknesses = np.atleast_1d(np.asarray(thicknesses, dtype=float))
 
     def member(tilt, energy):
         member = probe.copy()
-        member.tilt = tilt
+        member.tilt = tuple(tilt)
         member.energy = float(energy)
         return member
+
+    if probe.scan_positions.ensemble_shape:
+        if scan is not None:
+            raise ValueError(
+                "the probe has scan positions of its own; give the positions "
+                "either to the probe or as scan, not both"
+            )
+        scan = probe.scan_positions
 
     scan_axes_metadata: list[AxisMetadata] = []
     positions = None
     if scan is not None:
-        scan = validate_scan(scan, member((tilts[0][0], tilts[1][0]), energies[0]))
+        scan = validate_scan(scan, member(tilts.reshape(-1, 2)[0], energies[0]))
         positions = scan.get_positions()
         scan_axes_metadata = scan.ensemble_axes_metadata
 
@@ -366,7 +413,7 @@ def calculate_cbed_patterns(
     )
     energy_axis += 0 if positions is None else positions.ndim - 1
     arrays = []
-    for tilt in itertools.product(*tilts):
+    for tilt in tilts.reshape(-1, 2):
         per_energy = [
             _cbed_member(
                 bloch_waves.select_energy(energy),
@@ -381,16 +428,21 @@ def calculate_cbed_patterns(
         arrays.append(
             stack(per_energy, energy_axis) if energy_ensemble else per_energy[0]
         )
-    tilt_shape = probe.tilt.ensemble_shape
+    tilt_shape = tilts.shape[:-1]
     if tilt_shape:
         array = stack(arrays, 0)
         array = array.reshape(tilt_shape + array.shape[1:])
     else:
         array = arrays[0]
 
-    probe_axes = probe.ensemble_axes_metadata
+    # the probe's own scan positions, if any, came in as the scan
+    probe_axes = [
+        *probe.tilt.ensemble_axes_metadata,
+        *probe.aberrations.ensemble_axes_metadata,
+        *probe.aperture.ensemble_axes_metadata,
+    ]
     if isinstance(probe.energy, BaseDistribution):
-        probe_axes, energy_axes = probe_axes[:-1], probe_axes[-1:]
+        energy_axes = probe.ensemble_axes_metadata[-1:]
     elif energy_ensemble:
         energy_axes = [EnergyAxis(values=tuple(float(e) for e in energies))]
     else:

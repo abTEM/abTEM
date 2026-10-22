@@ -22,6 +22,7 @@ from abtem.bloch.utils import (
 from abtem.core.backend import asnumpy
 from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
+from abtem.tilt import precession_tilts
 
 
 @st.composite
@@ -1751,6 +1752,16 @@ def test_cbed_of_a_tilted_beam_matches_multislice():
     assert _r_factor(rotated, references[-10.0]) < 0.03
     assert _r_factor(rotated, references[10.0]) > 0.1
 
+    # Looking along x, Si shows the same projected lattice. The orientations
+    # are passed as matrices, so a 90 degree rotation meets no gimbal lock.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="Gimbal lock")
+        along_x = bloch_waves.rotate("y", np.pi / 2).calculate_cbed_patterns(
+            probe, potential.thickness
+        )
+    along_z = bloch_waves.calculate_cbed_patterns(probe, potential.thickness)
+    assert _r_factor(along_x.compute().array, along_z.compute().array) < 0.01
+
 
 def test_cbed_axes_and_laziness():
     bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
@@ -1768,8 +1779,15 @@ def test_cbed_axes_and_laziness():
         assert lazy.sampling == pytest.approx(probe.reciprocal_space_sampling)
         assert lazy.metadata["energy"] == 200e3
 
-    eager = bloch_waves.calculate_cbed_patterns(probe, lazy=False, **kwargs)
-    np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+        eager = bloch_waves.calculate_cbed_patterns(probe, lazy=False, **kwargs)
+        np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+
+    # a probe's own scan positions are the scan
+    own_positions = probe.copy()
+    own_positions.scan_positions = scan
+    result = bloch_waves.calculate_cbed_patterns(own_positions, [10.0, 20.0])
+    assert result.ensemble_axes_metadata == lazy.ensemble_axes_metadata
+    np.testing.assert_allclose(result.compute().array, eager.array, atol=1e-6)
 
     for precision in ("float32", "float64"):
         with abtem.config.set({"precision": precision}):
@@ -1829,6 +1847,21 @@ def test_cbed_probe_ensembles_match_their_members():
             atol=1e-6,
         )
 
+    # paired tilts, as in precession, are members as well
+    tilts = precession_tilts(2.0, 3)
+    precession = probe.copy()
+    precession.tilt = tilts
+    patterns = bloch_waves.calculate_cbed_patterns(precession, 20.0)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "TiltAxis"
+    ]
+    patterns = patterns.compute().array
+    for i, tilt in enumerate(tilts):
+        member = probe.copy()
+        member.tilt = tuple(tilt)
+        expected = bloch_waves.calculate_cbed_patterns(member, 20.0)
+        np.testing.assert_allclose(patterns[i], expected.compute().array, atol=1e-6)
+
 
 def test_cbed_rejects_invalid_inputs():
     bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
@@ -1841,6 +1874,11 @@ def test_cbed_rejects_invalid_inputs():
     off_grid = abtem.Probe(semiangle_cutoff=3.0, energy=200e3, extent=15.0, gpts=48)
     with pytest.warns(UserWarning, match="projected lattice"):
         bloch_waves.calculate_cbed_patterns(off_grid, 20.0)
+
+    own_positions = probe.copy()
+    own_positions.scan_positions = [(1.0, 2.0)]
+    with pytest.raises(ValueError, match="not both"):
+        bloch_waves.calculate_cbed_patterns(own_positions, 20.0, scan=[(1.0, 2.0)])
 
 
 @pytest.mark.parametrize("device", [gpu])

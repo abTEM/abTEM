@@ -2326,18 +2326,21 @@ class BlochWaves:
             The probe. Its grid (extent and gpts or sampling) sets the detector:
             the patterns have its gpts and a sampling of 1 / extent [1/Å]. Its
             energies, if given, must be among those of the Bloch waves; if not
-            given, the Bloch waves' energies are used.
+            given, the Bloch waves' energies are used. Its scan positions, if it
+            has any, are the scan.
         thicknesses : float or sequence of floats
             The thicknesses of the sample [Å].
         scan : array of xy-positions or BaseScan, optional
-            Probe positions [Å]. If not given, the position-averaged pattern is
-            calculated.
+            Probe positions [Å]. If neither this nor the probe gives positions,
+            the position-averaged pattern is calculated.
         lazy : bool
             If True (default), the calculation is done lazily using dask. If False,
             the calculation is done eagerly.
         pbar : bool, optional
-            If True, a progress bar is shown. Default is None, which means the value
-            is taken from the configuration.
+            If True, a progress bar over the plane waves is shown when the
+            calculation is eager; a lazy result shows its progress when it is
+            computed. Default is None, which means the value is taken from the
+            configuration.
 
         Returns
         -------
@@ -2353,7 +2356,6 @@ class BlochWaves:
         return calculate_cbed_patterns(
             self, probe, thicknesses, scan=scan, lazy=lazy, pbar=pbar
         )
-
 
 
 def is_base_distribution_tuple(
@@ -2374,6 +2376,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         device: Optional[str] = None,
         use_wave_eq: bool | Literal["exact"] = "exact",
         use_degrees: bool = False,
+        orientation_matrix: Optional[np.ndarray] = None,
     ):
         axes = args[::2]
         if not is_valid_rotation_axes(axes):
@@ -2414,6 +2417,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._g_max = g_max
         self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
+        self._orientation_matrix = orientation_matrix
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The base implementation reads each __init__ kwarg back off `self`
@@ -2492,11 +2496,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
             orientation_matrices = orientation_matrices @ R
 
+        # a fixed orientation, applied before the rotations
+        if self._orientation_matrix is not None:
+            orientation_matrices = orientation_matrices @ self._orientation_matrix
+
         return orientation_matrices
 
     @property
     def structure_factor(self) -> BaseStructureFactor:
         return self._structure_factor
+
+    @property
+    def orientation_matrix(self) -> Optional[np.ndarray]:
+        return self._orientation_matrix
 
     @property
     def axes(self) -> Sequence[str]:
