@@ -7,29 +7,39 @@ formula `plane_wave_expansion` replaced ("old") and with it ("new"). A stage tha
 out of memory is recorded as failed instead of ending the run, so a payload that does
 not fit still reports the stages before it.
 
+The settings can come from a py3DED simulation config (a JSON file, whose `cif_file`
+is read relative to it): `energy`, `thermal_sigmas`, `centering`, `sg_max`, `g_max`,
+`use_wave_eq`, `precision`, `rotation_axis_orientation` (the azimuth of the tilt axis),
+`rotation_min`, `rotation_max`, `thickness` and `exit_planes`. Every option below
+overrides the config; without a config the defaults are those of the options.
+
 Usage
 -----
-    python benchmarks/bench_bloch_3ded_payload.py STRUCTURE [device] [g_max] [gpts] [n_tilts] [old] [sg_max] [precision]
+    python benchmarks/bench_bloch_3ded_payload.py STRUCTURE [options]
 
-    STRUCTURE  "baddeleyite" (ZrO2, P21/c) or the path of a file ASE reads (a CIF)
-    device     cpu (default), gpu or mps
-    g_max      reciprocal-space cutoff of the structure factor [1/A] (default 3.0)
-    gpts       grid points of the exit waves per side (default 256)
-    n_tilts    tilts about x, 1 degree apart, as a zxz rotation series (default 5)
-    old        1 (default) also times the old synthesis; 0 skips it, which it must
-               when its (beams x gpts**2 x thicknesses x 16 bytes) basis does not fit
-    sg_max     maximum excitation error of the selected beams [1/A] (default 0.2); more
-               beams are selected the larger it is
-    precision  float32 (default) or float64
+    STRUCTURE  "baddeleyite" (ZrO2, P21/c), the path of a file ASE reads (a CIF), or
+               the path of a py3DED config (.json)
+
+    --device cpu|gpu|mps     (default cpu; a config's "device" is not used)
+    --tilts N                number of tilts, evenly spread over the tilt range, as a
+                             zxz rotation series (axis, tilt, -axis) (default 5; a
+                             config has hundreds)
+    --tilt-range MIN MAX     [deg] (default 0 4, or the config's)
+    --axis DEG               azimuth of the tilt axis [deg] (default 0, or the config's)
+    --gpts N                 grid points per side of the exit waves (default 256)
+    --old                    also time the old synthesis, whose (beams x gpts**2 x
+                             thicknesses x 16 bytes) basis must fit
+    --g-max, --sg-max, --energy, --thermal-sigma, --centering, --precision,
+    --thickness, --planes    as the config keys (defaults: 3.0 1/A, 0.2 1/A, 200e3 eV,
+                             0.078 A, F, float32, 500 A, 5)
 
 Production-size runs on a GPU (the results are also written to
 benchmarks/results/, which is git-ignored):
-    python benchmarks/bench_bloch_3ded_payload.py baddeleyite gpu 8.0 256 5 0
-    python benchmarks/bench_bloch_3ded_payload.py kyanite.cif gpu 8.0 256 5 0
+    python benchmarks/bench_bloch_3ded_payload.py ../py3DED/examples/realistic_cases/Al2SiO5_Kyanite.json --device gpu --tilts 3
 """
 
+import argparse
 import json
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -41,16 +51,57 @@ from abtem.bloch import BlochWaves, StructureFactor, dynamical
 from abtem.core.backend import asnumpy
 from abtem.core.complex import complex_exponential
 
-structure = sys.argv[1] if len(sys.argv) > 1 else "baddeleyite"
-device = sys.argv[2] if len(sys.argv) > 2 else "cpu"
-g_max = float(sys.argv[3]) if len(sys.argv) > 3 else 3.0
-n = int(sys.argv[4]) if len(sys.argv) > 4 else 256
-n_tilts = int(sys.argv[5]) if len(sys.argv) > 5 else 5
-with_old = bool(int(sys.argv[6])) if len(sys.argv) > 6 else True
-sg_max = float(sys.argv[7]) if len(sys.argv) > 7 else 0.2
-precision = sys.argv[8] if len(sys.argv) > 8 else None
-energy = 200e3
-thicknesses = np.linspace(100, 500, 5)
+parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+parser.add_argument("structure")
+parser.add_argument("--device", default="cpu", choices=["cpu", "gpu", "mps"])
+parser.add_argument("--tilts", type=int, default=5)
+parser.add_argument("--tilt-range", type=float, nargs=2)
+parser.add_argument("--axis", type=float)
+parser.add_argument("--gpts", type=int, default=256)
+parser.add_argument("--old", action="store_true")
+parser.add_argument("--g-max", type=float)
+parser.add_argument("--sg-max", type=float)
+parser.add_argument("--energy", type=float)
+parser.add_argument("--thermal-sigma", type=float)
+parser.add_argument("--centering")
+parser.add_argument("--precision", choices=["float32", "float64"])
+parser.add_argument("--thickness", type=float)
+parser.add_argument("--planes", type=int)
+args = parser.parse_args()
+
+config = {}
+structure = args.structure
+if structure.endswith(".json"):
+    config = json.loads(Path(structure).read_text())
+    structure = str(Path(structure).parent / config["cif_file"])
+
+
+def setting(option, key, default):
+    """The option if given, else the config's value of `key`, else the default."""
+    value = getattr(args, option)
+    return value if value is not None else config.get(key, default)
+
+
+device = args.device
+n = args.gpts
+n_tilts = args.tilts
+with_old = args.old
+g_max = setting("g_max", "g_max", 3.0)
+sg_max = setting("sg_max", "sg_max", 0.2)
+energy = setting("energy", "energy", 200e3)
+thermal_sigma = setting("thermal_sigma", "thermal_sigmas", 0.078)
+centering = setting("centering", "centering", "F")
+precision = setting("precision", "precision", "float32")
+axis = setting("axis", "rotation_axis_orientation", 0.0)
+tilt_range = args.tilt_range or (
+    config.get("rotation_min", 0.0),
+    config.get("rotation_max", 4.0),
+)
+thickness = setting("thickness", "thickness", 500.0)
+planes = setting("planes", "exit_planes", 5)
+use_wave_eq = config.get("use_wave_eq", True)
+thicknesses = np.linspace(thickness / planes, thickness, planes)
+tilts = np.linspace(tilt_range[0], tilt_range[1], n_tilts)
 
 
 def load_atoms():
@@ -148,13 +199,13 @@ def stage(name, function, results, warm_up=False):
     return value
 
 
-if precision is not None:
-    abtem.config.set({"precision": precision})
+abtem.config.set({"precision": precision})
 atoms = load_atoms()
 print(
     f"{structure} ({atoms.get_chemical_formula()}) device={device} g_max={g_max} "
-    f"sg_max={sg_max} gpts={n}x{n} tilts={n_tilts} "
-    f"precision={abtem.config.get('precision')}",
+    f"sg_max={sg_max} gpts={n}x{n} tilts={n_tilts} in {tuple(tilt_range)} deg about "
+    f"{axis} deg, {planes} thicknesses to {thickness} A, centering {centering}, "
+    f"energy {energy} eV, precision {precision}",
     flush=True,
 )
 abtem.config.set({"diagnostics.progress_bar": False, "diagnostics.task_progress": False})
@@ -165,7 +216,14 @@ results = {
     "sg_max": sg_max,
     "gpts": n,
     "n_tilts": n_tilts,
-    "precision": abtem.config.get("precision"),
+    "precision": precision,
+    "energy": energy,
+    "centering": centering,
+    "thermal_sigma": thermal_sigma,
+    "axis": axis,
+    "tilt_range": list(tilt_range),
+    "thickness": thickness,
+    "planes": planes,
 }
 stages = results["stages"] = {}
 
@@ -173,12 +231,16 @@ bloch_waves = stage(
     "structure factor + beams",
     lambda: BlochWaves(
         structure_factor=StructureFactor(
-            atoms, g_max=g_max, parametrization="lobato", thermal_sigma=0.078,
+            atoms,
+            g_max=g_max,
+            parametrization="lobato",
+            thermal_sigma=thermal_sigma,
+            centering=centering,
             device=device,
         ),
         energy=energy,
         sg_max=sg_max,
-        use_wave_eq=True,
+        use_wave_eq=use_wave_eq,
         device=device,
     ),
     stages,
@@ -186,7 +248,7 @@ bloch_waves = stage(
 if bloch_waves is not None:
     results["n_beams"] = len(bloch_waves.hkl)
     print(f"  {results['n_beams']} beams selected", flush=True)
-    angles = np.array([[0.0, tilt, 0.0] for tilt in range(n_tilts)])
+    angles = np.array([[axis, tilt, -axis] for tilt in tilts])
     rotated = bloch_waves.rotate("zxz", angles, degrees=True)
 
     stage(
@@ -216,6 +278,6 @@ if bloch_waves is not None:
 
 output = Path(__file__).parent / "results"
 output.mkdir(exist_ok=True)
-path = output / f"3ded_{Path(structure).stem}_{device}_g{g_max}_sg{sg_max}_{n}_{n_tilts}_{results['precision']}.json"
+path = output / f"3ded_{Path(structure).stem}_{device}_g{g_max}_sg{sg_max}_{n}_{n_tilts}_{precision}.json"
 path.write_text(json.dumps(results, indent=2))
 print(f"written to {path}")
