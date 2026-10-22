@@ -1,4 +1,7 @@
+import functools
+
 import ase
+import ase.build
 import numpy as np
 import pytest
 from utils import to_host_array
@@ -82,3 +85,66 @@ def test_forward_wave_is_independent_of_requesting_backscatter_when_correction_i
     np.testing.assert_array_equal(
         to_host_array(transmitted), to_host_array(forward_only)
     )
+
+
+# Strong beams of a graphene monolayer, as the flux that the exact two-way solution
+# (Numerov, evanescent beams left out) puts in the three families of the hexagonal
+# lattice, at 0.469, 0.813 and 0.939 1/Å, at 1 keV.
+EXACT_FAMILY_FLUX_1_KEV = np.array([0.044630, 0.039530, 0.006040])
+
+
+@functools.lru_cache(maxsize=None)
+def _graphene_exit_wave(correction):
+    atoms = abtem.orthogonalize_cell(ase.build.graphene(a=2.46, vacuum=1.0))
+    atoms.center(vacuum=6.0, axis=2)
+    potential = abtem.Potential(
+        atoms,
+        gpts=(48, 84),
+        slice_thickness=0.05,
+        projection="finite",
+        periodic=True,
+    )
+    algorithm = RealSpaceMultislice(
+        order=1, expansion_scope="full", backscatter_correction=correction
+    )
+    waves = abtem.PlaneWave(energy=1000.0).multislice(
+        potential, algorithm=algorithm, lazy=False
+    )
+    return to_host_array(waves)
+
+
+def _family_intensities(array):
+    nx, ny = array.shape
+    intensity = np.abs(np.fft.fft2(array) / (nx * ny)) ** 2
+    fx = np.fft.fftfreq(nx, 2.46 / nx)[:, None]
+    fy = np.fft.fftfreq(ny, 4.2608 / ny)[None]
+    radius = np.hypot(fx, fy)
+    return np.array(
+        [intensity[np.abs(radius - f) < 0.01].sum() for f in (0.469, 0.813, 0.939)]
+    )
+
+
+def test_the_published_correction_is_less_accurate_than_none_at_1_kev():
+    # Oracle: the exact two-way solution (stored above). The correction of Eq. 10 was
+    # validated at 30 and 200 keV; at 1 keV the strong beams are 16 % off with it
+    # and 7 % without it.
+    errors = {}
+    for correction in (False, True):
+        flux = _family_intensities(_graphene_exit_wave(correction))
+        errors[correction] = np.abs(flux / EXACT_FAMILY_FLUX_1_KEV - 1).max()
+
+    assert errors[False] < 0.10
+    assert errors[True] > 0.12
+    assert errors[True] > 1.5 * errors[False]
+
+
+def test_the_corrected_forward_wave_has_more_intensity_than_the_incident_wave():
+    # Oracle: the transmitted flux of the exact solution is 0.99988 (1.2e-4 is
+    # reflected), and the paper's own normalisation criterion is a total of at most 1.
+    # The unitary series keeps it, the correction adds 1.4 %.
+    total = {
+        correction: float((np.abs(_graphene_exit_wave(correction)) ** 2).mean())
+        for correction in (False, True)
+    }
+    assert total[False] == pytest.approx(0.9998, abs=5e-4)
+    assert total[True] > 1.005
