@@ -1,4 +1,5 @@
 import functools
+import warnings
 
 import ase
 import ase.build
@@ -189,3 +190,23 @@ def test_the_correction_raises_the_high_angle_intensity_above_the_exact_one_at_3
     assert abs(without) < 0.012
     assert with_correction > 0.015
     assert with_correction - without > 0.01
+
+
+def test_the_full_scope_warns_about_the_infinite_projection():
+    # Oracle: the infinite projection (the default of Potential) puts the whole
+    # projected potential of an atom in one slice, so the potential per unit
+    # thickness that the full scope needs is not defined; the propagator scope uses
+    # the potential to first order only and does not mind.
+    atoms = ase.Atoms("Si", cell=[3.0, 3.0, 3.0], pbc=True)
+    potential = abtem.Potential(atoms, gpts=(16, 16), slice_thickness=1.0)
+    plane_wave = abtem.PlaneWave(energy=30e3)
+
+    with pytest.warns(UserWarning, match="projection='finite'"):
+        plane_wave.multislice(
+            potential,
+            algorithm=RealSpaceMultislice(expansion_scope="full"),
+            lazy=False,
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        plane_wave.multislice(potential, algorithm=RealSpaceMultislice(), lazy=False)

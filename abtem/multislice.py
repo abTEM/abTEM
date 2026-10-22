@@ -779,6 +779,22 @@ class RealSpaceMultislice:
     max_terms: int = 80
     backscatter_correction: bool = False
 
+    def check_potential(self, potential) -> None:
+        """Warn about an infinite projection with ``expansion_scope="full"``."""
+        from abtem.integrals import ScatteringFactorProjectionIntegrals
+
+        if self.expansion_scope == "full" and isinstance(
+            getattr(potential, "integrator", None), ScatteringFactorProjectionIntegrals
+        ):
+            warnings.warn(
+                'expansion_scope="full" needs the potential per unit thickness, but '
+                "the infinite projection (the default) puts the whole projected "
+                "potential of an atom in the slice that holds it, which grows as "
+                "1 / thickness when the slices get thinner, so the result does not "
+                "converge. Build the potential with projection='finite'.",
+                UserWarning,
+            )
+
 
 def multislice_and_detect(
     waves: Waves,
@@ -873,6 +889,7 @@ def multislice_and_detect(
             )
 
     else:
+        algorithm.check_potential(potential)
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
         # The next slice is only needed to calculate the backscattered component.
         look_ahead = algorithm.backscatter_correction or return_backscattered

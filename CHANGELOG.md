@@ -137,6 +137,9 @@ Bugfixes:
       30 keV it leaves the strong beams unchanged but puts the beams at 120–377 mrad 1.5 % above the exact solution.
       `return_backscattered=True` still returns the backscattered wave
       ([PR #629](https://github.com/abTEM/abTEM/pull/629))
+    - `expansion_scope="full"` now warns about a potential with the default infinite projection, which puts the whole
+      projected potential of an atom in one slice, so that the potential per unit thickness it needs grows as 1 / thickness
+      and the result does not converge: use `projection="finite"`
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
