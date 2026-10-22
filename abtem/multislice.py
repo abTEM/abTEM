@@ -895,7 +895,9 @@ def multislice_and_detect(
             return result
 
     else:
-        # any other algorithm provides its own step
+        # any other algorithm provides its own step, and may check the potential
+        if hasattr(algorithm, "check_potential"):
+            algorithm.check_potential(potential)
         multislice_step = algorithm.make_step(
             waves, return_backscattered=return_backscattered
         )
@@ -1189,6 +1191,8 @@ def transition_potential_multislice_and_detect(
             return _translate_tilted_waves(waves, potential_slice.thickness)
 
     else:
+        if hasattr(algorithm, "check_potential"):
+            algorithm.check_potential(potential)
         multislice_step = algorithm.make_step(waves)
 
     if detectors is None:

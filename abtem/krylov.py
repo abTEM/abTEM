@@ -28,6 +28,7 @@ band, which is the case at low energies.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, ClassVar
 
@@ -38,6 +39,7 @@ from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
 from abtem.finite_difference import NotConvergedError
+from abtem.integrals import ScatteringFactorProjectionIntegrals
 from abtem.potentials.iam import TransmissionFunction
 from abtem.tilt import _get_tilt_axes
 
@@ -62,8 +64,11 @@ class KrylovMultislice:
     hundred eV.
 
     The potential must be given as projected potential slices, not as precomputed
-    transmission functions, and should use finite projection with slices of about 0.05 Å
-    or thinner. Tilted wave functions are not supported.
+    transmission functions, and must use finite projection (``projection="finite"``)
+    with slices of about 0.05 Å or thinner: the infinite projection puts the whole
+    projected potential of an atom in one slice, so the potential per unit thickness
+    grows as 1 / thickness and the result does not converge (a warning is given).
+    Tilted wave functions are not supported.
 
     Parameters
     ----------
@@ -96,6 +101,20 @@ class KrylovMultislice:
             raise ValueError("tolerance must be positive")
         if self.max_iterations < 2:
             raise ValueError("max_iterations must be at least 2")
+
+    def check_potential(self, potential) -> None:
+        """Warn about an infinite projection, which this algorithm cannot use."""
+        if isinstance(
+            getattr(potential, "integrator", None), ScatteringFactorProjectionIntegrals
+        ):
+            warnings.warn(
+                "KrylovMultislice needs the potential per unit thickness, but the "
+                "infinite projection (the default) puts the whole projected potential "
+                "of an atom in the slice that holds it, which grows as 1 / thickness "
+                "when the slices get thinner, so the result does not converge. Build "
+                "the potential with projection='finite'.",
+                UserWarning,
+            )
 
     def make_step(self, waves: Waves, return_backscattered: bool = False) -> Callable:
         """The per-slice step: ``exp(i dz F(O))`` applied by a Lanczos iteration."""
@@ -157,10 +176,13 @@ class _Band:
         kc = min(kc, config.get("antialias.cutoff") * nyquist)
         kv = min(2 * kc, 2 * nyquist - 2 * kc)
 
-        # The band |k| < kc and the potential components that couple it, |q| < kv, fit
-        # a grid whose Nyquist frequency is kv. It is never larger than the grid given.
-        mx = min(nx, 2 * int(np.ceil(kv * lx)))
-        my = min(ny, 2 * int(np.ceil(kv * ly)))
+        # A product of the wave (|k| < kc) and the potential (|q| < kv) reaches kc + kv,
+        # and stays out of the band, rather than wrapping into it, on a grid whose
+        # Nyquist frequency is at least kc + kv / 2 (2 kc when kv = 2 kc). The grid is
+        # never larger than the one given.
+        coarse_nyquist = kc + kv / 2
+        mx = min(nx, 2 * int(np.ceil(coarse_nyquist * lx)))
+        my = min(ny, 2 * int(np.ceil(coarse_nyquist * ly)))
         self.fine_gpts, self.coarse_gpts = (nx, ny), (mx, my)
         ix = np.fft.fftfreq(mx, 1 / mx).round().astype(int)
         iy = np.fft.fftfreq(my, 1 / my).round().astype(int)

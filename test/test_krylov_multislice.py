@@ -277,3 +277,21 @@ def test_krylov_runs_in_the_core_loss_multislice():
         result = signal(KrylovMultislice(), lazy)
         assert result.shape == reference.shape
         assert np.abs(result - reference).max() < 6e-2 * np.abs(reference).max()
+
+
+def test_krylov_warns_about_the_infinite_projection():
+    # Oracle: the infinite projection (the default of Potential) puts the whole
+    # projected potential of an atom in one slice, so the potential per unit thickness
+    # is not defined and the result depends on the slice thickness (SrTiO3 at 30 keV:
+    # the high-angle intensity changes by tens of percent between 0.1 and 0.02 Å).
+    atoms, _ = si_setup()
+    infinite = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+    finite = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=2.0, projection="finite"
+    )
+    plane_wave = abtem.PlaneWave(energy=100e3)
+
+    with pytest.warns(UserWarning, match="projection='finite'"):
+        plane_wave.multislice(infinite, algorithm=KrylovMultislice(), lazy=False)
+    # no warning for the finite projection
+    plane_wave.multislice(finite, algorithm=KrylovMultislice(), lazy=False)
