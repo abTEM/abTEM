@@ -68,7 +68,8 @@ class KrylovMultislice:
     with slices of about 0.05 Å or thinner: the infinite projection puts the whole
     projected potential of an atom in one slice, so the potential per unit thickness
     grows as 1 / thickness and the result does not converge (a warning is given).
-    Tilted wave functions are not supported.
+    A tilted wave function is propagated in the frame of its direction, as in
+    ``FourierMultislice``; tilt ensembles are not supported.
 
     Parameters
     ----------
@@ -118,9 +119,10 @@ class KrylovMultislice:
 
     def make_step(self, waves: Waves, return_backscattered: bool = False) -> Callable:
         """The per-slice step: ``exp(i dz F(O))`` applied by a Lanczos iteration."""
-        if waves.base_tilt != (0.0, 0.0) or _get_tilt_axes(waves):
+        if _get_tilt_axes(waves):
             raise NotImplementedError(
-                "KrylovMultislice does not support tilted wave functions yet."
+                "KrylovMultislice does not support tilt ensembles: propagate one tilt "
+                "at a time."
             )
 
         xp = get_array_module(waves.device)
@@ -130,6 +132,7 @@ class KrylovMultislice:
             waves._valid_energy,
             self.propagating_cutoff,
             xp,
+            tilt=waves.base_tilt,
         )
 
         def step(waves, potential_slice, next_slice=None):
@@ -160,7 +163,7 @@ class KrylovMultislice:
 class _Band:
     """The propagating band of one grid and energy, and the grid that holds it."""
 
-    def __init__(self, gpts, sampling, energy, cutoff, xp):
+    def __init__(self, gpts, sampling, energy, cutoff, xp, tilt=(0.0, 0.0)):
         self.xp = xp
         wavelength = energy2wavelength(energy)
         self.k = 2 * np.pi / wavelength
@@ -168,12 +171,22 @@ class _Band:
         lx, ly = nx * sampling[0], ny * sampling[1]
         kc = cutoff / wavelength
 
+        # A tilted wave travels along (tan x, tan y, 1) and, as in multislice, is
+        # stored without the carrier exp(2 pi i (k_t . r + k_zt z)): the stored
+        # component q is the plane wave q + k_t, and the band is the disc around -k_t.
+        tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+        norm = np.sqrt(1.0 + np.sum(tangent**2))
+        shift = tangent / (wavelength * norm)
+        self.reference = self.k / norm
+
         # On a grid too coarse for the propagating band (high energies) the band is
         # limited as in the other algorithms, by the antialiasing aperture. A product
         # of the wave and the potential then lands outside the band when the potential
         # is limited to 2 nyquist - 2 kc, which is kc itself at the aperture.
         nyquist = 1 / (2 * max(sampling))
-        kc = min(kc, config.get("antialias.cutoff") * nyquist)
+        antialias = config.get("antialias.cutoff") * nyquist
+        band = kc  # the radius of the propagating band around -k_t
+        kc = min(kc + np.hypot(*shift), antialias)  # the stored components reach this
         kv = min(2 * kc, 2 * nyquist - 2 * kc)
 
         # A product of the wave (|k| < kc) and the potential (|q| < kv) reaches kc + kv,
@@ -189,11 +202,14 @@ class _Band:
         self.rows = xp.asarray((ix % nx)[:, None])
         self.cols = xp.asarray((iy % ny)[None, :])
 
-        k2 = (ix[:, None] / lx) ** 2 + (iy[None, :] / ly) ** 2
-        self.projector = xp.asarray(k2 < kc**2)
+        qx, qy = ix[:, None] / lx, iy[None, :] / ly
+        k2 = qx**2 + qy**2
+        tilted_k2 = (qx + shift[0]) ** 2 + (qy + shift[1]) ** 2
+        in_band = (tilted_k2 < band**2) & (k2 < antialias**2)
+        self.projector = xp.asarray(in_band)
         self.potential_window = xp.asarray(k2 < kv**2)
-        # laplacian / (4 pi K) = -pi k^2 / K in Fourier space, in the band
-        self.kinetic = xp.asarray(-np.pi * k2 * wavelength * (k2 < kc**2))
+        # laplacian / (4 pi K) = -pi |q + k_t|^2 / K in Fourier space, in the band
+        self.kinetic = xp.asarray(-np.pi * tilted_k2 * wavelength * in_band)
 
     def advance(self, array, sigma_v, thickness, tolerance, max_iterations):
         """exp(i dz F(O)) applied to wave functions given as real-space arrays."""
@@ -223,7 +239,7 @@ class _Band:
         a1 = lanczos_function(
             a0.reshape((-1, mx, my)),
             apply,
-            exponential_of_root(self.k, thickness),
+            exponential_of_root(self.k, thickness, self.reference),
             tolerance,
             max_iterations,
             xp,

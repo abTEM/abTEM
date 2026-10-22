@@ -109,7 +109,7 @@ Features:
   space restricted to the propagating band. On a graphene monolayer the strong beams are within 1.2 % at
   1 keV and 2.1 % at 200 eV of an exact two-way solution, where `FourierMultislice` is off by 9 % and 18 %
   and the series of `RealSpaceMultislice(expansion_scope="full")` diverges. It is forward only (no
-  reflection, evanescent beams are dropped), refuses tilted waves and `TransmissionFunction` slices, and is
+  reflection, evanescent beams are dropped), refuses tilt ensembles and `TransmissionFunction` slices, and is
   validated for thin specimens only. `multislice` hands any other algorithm to its own `make_step(waves)`
   ([PR #622](https://github.com/abTEM/abTEM/pull/622))
 - Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each

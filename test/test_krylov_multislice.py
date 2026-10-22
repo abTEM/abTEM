@@ -119,10 +119,77 @@ def test_krylov_is_closer_to_the_exact_solution_than_split_step(
     assert split.max() > split_step_error
 
 
+# The strong beams of a graphene monolayer for a wave tilted by (80, 30) mrad, at 1 keV:
+# the flux that the exact two-way solution (Numerov, 0.01 Å steps, propagating beams
+# only; the beam g of a wave stored without the carrier of its direction is the plane
+# wave g + k_t) puts in the beam at the grid index (i, j) of the 48 x 84 grid.
+TILTED_EXACT_FLUX = {
+    (0, 0): 0.8911565,
+    (0, 82): 0.0075034,
+    (47, 1): 0.0074885,
+    (0, 2): 0.0074791,
+    (1, 83): 0.0074624,
+    (1, 1): 0.0074409,
+    (47, 83): 0.0074407,
+    (47, 81): 0.0066886,
+}
+
+
+@pytest.mark.float64
+def test_krylov_follows_the_exact_solution_for_a_tilted_wave():
+    # Oracle: the exact two-way solution (stored above). The tilted split step, with
+    # the exact tilted propagator, is 2.5-9 % off on these beams; the tilted Krylov
+    # step is within 1.5 %.
+    potential = abtem.Potential(
+        graphene_monolayer(),
+        gpts=(48, 84),
+        slice_thickness=0.05,
+        projection="finite",
+        periodic=True,
+    )
+    wave = abtem.PlaneWave(energy=1000.0, tilt=(80.0, 30.0))
+
+    def errors(algorithm):
+        array = to_host_array(
+            wave.multislice(potential, algorithm=algorithm, lazy=False)
+        )
+        intensity = np.abs(np.fft.fft2(array) / array.size) ** 2
+        return np.array(
+            [intensity[index] / flux - 1 for index, flux in TILTED_EXACT_FLUX.items()]
+        )
+
+    assert np.abs(errors(KrylovMultislice())).max() < 0.015
+    assert np.abs(errors(FourierMultislice())).max() > 0.05
+
+
+@devices
+def test_krylov_conserves_intensity_for_a_tilted_wave(device):
+    waves = abtem.PlaneWave(energy=1000.0, tilt=(80.0, 30.0), device=device).multislice(
+        graphene_potential(0.05, device), algorithm=KrylovMultislice(), lazy=False
+    )
+    array = to_host_array(waves)
+    assert abs((np.abs(array) ** 2).mean() - 1.0) < 1e-4
+
+
+def test_krylov_for_a_vanishing_tilt_is_the_untilted_step():
+    potential = graphene_potential(0.1)
+    result = to_host_array(
+        abtem.PlaneWave(energy=1000.0, tilt=(0.0, 0.0)).multislice(
+            potential, algorithm=KrylovMultislice(), lazy=False
+        )
+    )
+    reference = to_host_array(
+        abtem.PlaneWave(energy=1000.0).multislice(
+            potential, algorithm=KrylovMultislice(), lazy=False
+        )
+    )
+    np.testing.assert_array_equal(result, reference)
+
+
 def test_krylov_refuses_unsupported_input():
     potential = graphene_potential(0.05)
-    with pytest.raises(NotImplementedError, match="tilted"):
-        abtem.PlaneWave(energy=1000.0, tilt=(5.0, 0.0)).multislice(
+    with pytest.raises(NotImplementedError, match="tilt ensembles"):
+        abtem.PlaneWave(energy=1000.0, tilt=([5.0, 10.0], 0.0)).multislice(
             potential, algorithm=KrylovMultislice(), lazy=False
         )
 
