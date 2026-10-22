@@ -1039,7 +1039,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         Parameters
         ----------
         max_angle : float
-            Maximum angle (in degrees) for the local potential calculation.
+            Maximum angle (in mrad) for the local potential calculation.
         space : str, optional
             Specifies the coordinate space in which the potential is calculated.
             Default is "reciprocal". Possible values are "reciprocal" and "real".

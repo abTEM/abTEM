@@ -188,7 +188,8 @@ def get_conversion_factor(
         units = validate_units(units, "mrad")
         assert units is not None
 
-        # small-angle relation: alpha [mrad] = 1e3 * wavelength [Å] * k [1/Å]
+        # coordinate of the angular grid: alpha [mrad] = 1e3 * wavelength [Å] * k [1/Å],
+        # the scattering angle only in the small-angle limit
         conversion = wavelength * 1e3 * _conversion_factors[units] / old_factor
         return conversion
 

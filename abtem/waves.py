@@ -33,7 +33,13 @@ from abtem.core.backend import (
 )
 from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
-from abtem.core.energy import Accelerator, HasAcceleratorMixin
+from abtem.core.energy import (
+    Accelerator,
+    HasAcceleratorMixin,
+    angle_convention,
+    to_grid_angle,
+    to_scattering_angle_limit,
+)
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import (
     fft2,
@@ -219,14 +225,17 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         """List of AxisMetadata for base axes in reciprocal space."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+        # The axis is uniform in 1e3 * wavelength * k, which is a scattering angle only
+        # with the paraxial convention.
+        label = "scattering angle" if angle_convention() == "paraxial" else "λk"
         return [
             ReciprocalSpaceAxis(
-                label="scattering angle x",
+                label=f"{label} x",
                 sampling=self.angular_sampling[0],
                 units="mrad",
             ),
             ReciprocalSpaceAxis(
-                label="scattering angle y",
+                label=f"{label} y",
                 sampling=self.angular_sampling[1],
                 units="mrad",
             ),
@@ -273,9 +282,10 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
             return self._valid_gpts
 
         elif isinstance(angle, (Number, float)):
+            grid_angle = to_grid_angle(angle)
             gpts = (
-                int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
-                int(2 * np.ceil(angle / self.angular_sampling[1])) + 1,
+                int(2 * np.ceil(grid_angle / self.angular_sampling[0])) + 1,
+                int(2 * np.ceil(grid_angle / self.angular_sampling[1])) + 1,
             )
 
         elif angle == "cutoff":
@@ -293,10 +303,15 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def cutoff_angles(self) -> tuple[float, float]:
-        """Scattering angles at the antialias cutoff [mrad]."""
+        """Scattering angles at the antialias cutoff [mrad], in the convention of the
+        ``angles`` configuration."""
         return (
-            self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0],
-            self.antialias_cutoff_gpts[1] // 2 * self.angular_sampling[1],
+            to_scattering_angle_limit(
+                self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0]
+            ),
+            to_scattering_angle_limit(
+                self.antialias_cutoff_gpts[1] // 2 * self.angular_sampling[1]
+            ),
         )
 
     @property
@@ -304,16 +319,24 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         """Scattering angles corresponding to the sides of the largest rectangle within
         the antialias cutoff [mrad]."""
         return (
-            self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0],
-            self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1],
+            to_scattering_angle_limit(
+                self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0]
+            ),
+            to_scattering_angle_limit(
+                self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1]
+            ),
         )
 
     @property
     def full_cutoff_angles(self) -> tuple[float, float]:
         """Scattering angles corresponding to the full wave function size [mrad]."""
         return (
-            self._valid_gpts[0] // 2 * self.angular_sampling[0],
-            self._valid_gpts[1] // 2 * self.angular_sampling[1],
+            to_scattering_angle_limit(
+                self._valid_gpts[0] // 2 * self.angular_sampling[0]
+            ),
+            to_scattering_angle_limit(
+                self._valid_gpts[1] // 2 * self.angular_sampling[1]
+            ),
         )
 
     @property

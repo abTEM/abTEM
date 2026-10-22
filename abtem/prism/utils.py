@@ -4,7 +4,7 @@ import numpy as np
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import energy2wavelength, to_grid_angle
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 
 
@@ -138,6 +138,7 @@ def prism_wave_vectors(
     xp=np,
 ) -> np.ndarray:
     wavelength = energy2wavelength(energy)
+    cutoff = to_grid_angle(cutoff)
 
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
