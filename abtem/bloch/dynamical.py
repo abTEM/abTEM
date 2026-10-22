@@ -64,7 +64,7 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
-from abtem.measurements import IndexedDiffractionPatterns
+from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.slicing import _integrate_planes
@@ -72,10 +72,10 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Waves
+from abtem.waves import Probe, Waves
 
 if TYPE_CHECKING:
-    pass
+    from abtem.scan import BaseScan
 
 
 class BlochWavePrecisionWarning(UserWarning):
@@ -2287,6 +2287,76 @@ class BlochWaves:
 
         return bloch_waves
 
+    def calculate_cbed_patterns(
+        self,
+        probe: Probe,
+        thicknesses: float | Sequence[float] | np.ndarray,
+        scan: Optional[Sequence | np.ndarray | BaseScan] = None,
+        lazy: bool = True,
+        pbar: Optional[bool] = None,
+    ) -> DiffractionPatterns:
+        """Calculate convergent-beam electron diffraction (CBED) patterns.
+
+        Each plane wave of the probe, one per pixel of its reciprocal-space grid
+        inside the aperture, is a Bloch-wave calculation of the crystal rotated to
+        bring the plane wave's direction onto the optic axis. Its beams are placed
+        on the probe's grid, at the plane wave's wave vector plus the beam's
+        transverse reciprocal lattice vector.
+
+        Without a scan, the result is the position-averaged (PACBED) pattern: the
+        incoherent sum over the plane waves, weighted by the aperture. It is also
+        the CBED pattern at any position when the discs do not overlap. With a
+        scan, the plane waves add coherently at each probe position, with the
+        probe's aberrations, which gives the interference where discs overlap.
+
+        The probe may have ensemble axes. Members of an aberration or aperture
+        series, such as a defocus series, share the Bloch-wave solutions; members
+        of a tilt series or an energy ensemble are solved separately. A tilted
+        probe meets the crystal at its tilt, with the pattern centred on the beam,
+        as in multislice. Bloch waves of several energies give an energy axis.
+
+        The probe's extent should be a whole number of unit cells, so that the
+        reciprocal lattice falls on its grid; the crystal must then have an
+        orthogonal cell. A beam that misses the grid is placed at the nearest
+        pixel, with a warning.
+
+        Parameters
+        ----------
+        probe : Probe
+            The probe. Its grid (extent and gpts or sampling) sets the detector:
+            the patterns have its gpts and a sampling of 1 / extent [1/Å]. Its
+            energies, if given, must be among those of the Bloch waves; if not
+            given, the Bloch waves' energies are used. Its scan positions, if it
+            has any, are the scan.
+        thicknesses : float or sequence of floats
+            The thicknesses of the sample [Å].
+        scan : array of xy-positions or BaseScan, optional
+            Probe positions [Å]. If neither this nor the probe gives positions,
+            the position-averaged pattern is calculated.
+        lazy : bool
+            If True (default), the calculation is done lazily using dask. If False,
+            the calculation is done eagerly.
+        pbar : bool, optional
+            If True, a progress bar over the plane waves is shown when the
+            calculation is eager; a lazy result shows its progress when it is
+            computed. Default is None, which means the value is taken from the
+            configuration.
+
+        Returns
+        -------
+        DiffractionPatterns
+            The CBED patterns. Their ensemble axes are those of the probe (tilt,
+            aberrations, aperture), the scan's, an energy axis if there are several
+            energies, and a thickness axis if several thicknesses are given. For
+            a single position, the intensities sum to the fraction of the probe
+            that the beams carry onto the grid.
+        """
+        from abtem.bloch.cbed import calculate_cbed_patterns
+
+        return calculate_cbed_patterns(
+            self, probe, thicknesses, scan=scan, lazy=lazy, pbar=pbar
+        )
+
 
 def is_base_distribution_tuple(
     rotations: tuple[BaseDistribution | np.ndarray | float, ...],
@@ -2306,6 +2376,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         device: Optional[str] = None,
         use_wave_eq: bool | Literal["exact"] = "exact",
         use_degrees: bool = False,
+        orientation_matrix: Optional[np.ndarray] = None,
     ):
         axes = args[::2]
         if not is_valid_rotation_axes(axes):
@@ -2346,6 +2417,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._g_max = g_max
         self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
+        self._orientation_matrix = orientation_matrix
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The base implementation reads each __init__ kwarg back off `self`
@@ -2424,11 +2496,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
             orientation_matrices = orientation_matrices @ R
 
+        # a fixed orientation, applied before the rotations
+        if self._orientation_matrix is not None:
+            orientation_matrices = orientation_matrices @ self._orientation_matrix
+
         return orientation_matrices
 
     @property
     def structure_factor(self) -> BaseStructureFactor:
         return self._structure_factor
+
+    @property
+    def orientation_matrix(self) -> Optional[np.ndarray]:
+        return self._orientation_matrix
 
     @property
     def axes(self) -> Sequence[str]:

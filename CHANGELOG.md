@@ -111,6 +111,12 @@ Features:
   ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
     - A detector, aperture, or `crop` with an explicit angle above 250 mrad now warns while `angles` is
       `"paraxial"`
+- Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
+  plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
+  position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so
+  overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
+  ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
+  `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 Performance:
 
@@ -409,7 +415,6 @@ Planned for this release (not yet merged):
 - Support for skewed pixels (non-orthogonal x,y,z cell axes) ([PR #282](https://github.com/abTEM/abTEM/pull/282))
 - Radially variable detector sensitivity ([PR #283](https://github.com/abTEM/abTEM/pull/283))
 - Plasmons: fast `PhaseScramblePlasmons` for multislice and PRISM, and `MonteCarloPlasmons` for Bloch wave
-- CBED patterns for Bloch waves ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 ## 1.0.11
 
