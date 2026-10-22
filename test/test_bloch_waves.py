@@ -23,7 +23,7 @@ from abtem.bloch.utils import (
     relative_positions_for_centering,
     wrapped_is_close,
 )
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
 from abtem.tilt import precession_tilts
@@ -1250,7 +1250,7 @@ def test_projected_potential_sampling_and_integer_gpts(lazy):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
     # NumPy excitation errors / reciprocal vectors used to meet CuPy data
-    from abtem.core.backend import asnumpy
+    from abtem.core.backend import asnumpy, get_array_module
 
     sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
     reference_sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device="cpu")
@@ -1911,7 +1911,11 @@ def _direct_plane_wave_sum(amplitudes, g, x, y, z):
 
 @pytest.mark.parametrize("precision, tol", [("float64", 1e-12), ("float32", 1e-5)])
 @pytest.mark.parametrize("shape", [(), (3,), (2, 3)], ids=["scalar", "z", "batch-z"])
-def test_plane_wave_expansion_matches_direct_summation(precision, tol, shape):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plane_wave_expansion_matches_direct_summation(precision, tol, shape, device):
+    if device == "mps" and precision == "float64":
+        pytest.skip("Metal has no double precision")
+    xp = get_array_module(device)
     rng = np.random.default_rng(0)
     n_beams, gpts = 40, (24, 20)
     g = rng.uniform(-1, 1, (n_beams, 3))
@@ -1927,14 +1931,17 @@ def test_plane_wave_expansion_matches_direct_summation(precision, tol, shape):
     cdtype = np.result_type(dtype, np.complex64)
     amplitudes = amplitudes.astype(cdtype)
     with abtem.config.set({"precision": precision}):
+        # the arrays are on the device, as they are in a calculation on it
         result = plane_wave_expansion(
-            amplitudes,
-            g.astype(dtype),
-            x.astype(dtype),
-            y.astype(dtype),
-            z.astype(dtype),
+            xp.asarray(amplitudes),
+            xp.asarray(g.astype(dtype)),
+            xp.asarray(x.astype(dtype)),
+            xp.asarray(y.astype(dtype)),
+            xp.asarray(z.astype(dtype)),
         )
+    assert get_array_module(result) is xp
     assert result.dtype == cdtype
+    result = asnumpy(result)
 
     # the reference sees the inputs rounded to the working precision
     cast = lambda a: a.astype(dtype).astype(np.float64)
