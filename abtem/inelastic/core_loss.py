@@ -1039,7 +1039,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         Parameters
         ----------
         max_angle : float
-            Maximum angle (in degrees) for the local potential calculation.
+            Maximum scattering angle [mrad] for the local potential calculation.
         space : str, optional
             Specifies the coordinate space in which the potential is calculated.
             Default is "reciprocal". Possible values are "reciprocal" and "real".
@@ -1313,16 +1313,37 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return state
 
     def filter_sites(self, waves, sites, threshold):
+        """The sites at which the transition potential overlaps the waves.
+
+        Parameters
+        ----------
+        waves : Waves or Probe
+            The waves that are scattered.
+        sites : Atoms, Atom or numpy.ndarray
+            The candidate sites, as atoms or as an (n, 2) array of positions.
+        threshold : float, optional
+            The absolute overlap threshold; sites with an overlap above it are kept.
+            Without a threshold all sites are kept.
+
+        Returns
+        -------
+        Atoms or numpy.ndarray
+            The sites that are kept, in the form they were given: the atoms of the
+            transition potential's element for `Atoms`, positions otherwise. Without
+            a threshold nothing is filtered and an `Atoms` or `Atom` is returned as
+            it is; with a threshold a single `Atom` gives an array of positions.
+        """
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
         # As in absolute_threshold: the mask below needs the intensity in memory
         waves = waves.ensure_computed(progress_bar=False).ensure_real_space()
 
-        # The mask below is computed over the validated array, which subsets
-        # an Atoms input to this element -- index that same array at the end,
-        # not the caller's object, or the two lengths disagree.
-        sites = self.validate_sites(sites)
-        validated_sites = sites
+        # The mask below is computed over the validated array, which subsets an
+        # Atoms input to this element: apply it to that subset, not to the whole
+        # of the caller's atoms, or the two lengths disagree.
+        original_sites = sites
+        validated_sites = self.validate_sites(sites)
+        kept = validated_sites
 
         if threshold is not None and threshold > 0.0:
             xp = get_array_module(waves.array)
@@ -1405,9 +1426,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
             # print(type(mask), type(sites))
 
-            sites = sites[mask]
+            kept = kept[mask]  # on the host: validated_sites was moved to the device
+            if isinstance(original_sites, Atoms):
+                return original_sites[original_sites.numbers == self.Z][mask]
 
-        return sites
+            return kept
+
+        # without a threshold nothing is filtered: the sites are returned as given
+        if isinstance(original_sites, (Atoms, Atom)):
+            return original_sites
+
+        return kept
 
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
