@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import is_cell_orthogonal, _wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -305,14 +305,43 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         supercell. The slice thickness may be given as a sequence of values for each
         slice, in which case an error will be thrown if the sum of slice thicknesses is
         not equal to the height of the atoms.
+    wrap : bool, optional
+        If True (default), atoms outside the cell are wrapped into it before they
+        are assigned to slices. The given atoms are not modified.
     """
 
     def __init__(
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Callers that know the potential's
+        # convention pass it through; the default wraps, since that is right
+        # for everything else that reaches here.
+        #
+        # Validate first: wrapping reads np.diag(atoms.cell) and would
+        # silently ignore the shear terms of a non-orthogonal cell before
+        # BaseSlicedAtoms raises for it.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = _wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
@@ -325,6 +354,21 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         bin_edges -= 1e-12
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
+
+        # label_to_index silently discards labels outside [0, num_slices - 1].
+        # np.digitize against increasing bins returns [0, len(bins)], never
+        # negative, so only the upper end can escape: an atom below the entrance
+        # face already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised after
+        # padding. It belongs to the face it left, so clamp it into the last
+        # slice, mirroring what digitize already does at the entrance face. Its
+        # true position is kept: the infinite projection does not depend on z
+        # within a slice, so the projected potential is conserved exactly, where
+        # dropping the atom lost its whole contribution.
+        if not wrap:
+            labels = np.minimum(labels, len(self) - 1)
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
@@ -410,3 +454,52 @@ class SlicedAtoms(BaseSlicedAtoms):
         atoms = self.atoms[in_slice]
         atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
+
+
+def _sum_planes(array, start: int, stop: int):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[-1]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
+
+
+def _integrate_planes(array, start: float, stop: float):
+    """
+    The integral of the planes of `array`, repeated periodically along its last
+    axis, from `start` to `stop` (`start` < `stop`), in units of the plane spacing:
+    multiply by the spacing for an integral over heights.
+
+    Plane k is the sample at the height k and stands for the heights from k - 1/2
+    to k + 1/2, so each plane is weighted by the length of its heights that lie
+    between the limits. Consecutive slices share their limit, so the weights of
+    every plane add up to one. A limit on a plane splits it between the slices on
+    either side (the trapezoidal rule), so the integral of a slice is centred on
+    the slice; summing the planes from the lower limit up to the upper one whole (a
+    left Riemann sum) would put it half a plane below the slice.
+    """
+    n = array.shape[-1]
+    # The limits half a plane up, so that plane k stands for the interval from k
+    # to k + 1. Python floats, so that the weights keep the dtype of `array`: a
+    # NumPy float64 scalar would promote float32 planes to float64.
+    u, v = float(start) + 0.5, float(stop) + 0.5
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        return (v - u) * array[..., first % n]
+
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[..., last % n]
+    if last > first + 1:
+        summed = summed + _sum_planes(array, first + 1, last)
+    return summed

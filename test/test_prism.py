@@ -187,6 +187,11 @@ def test_prism_scan(
     )
     scan.match_probe(probe)
     measurement_shape = detector._out_shape(probe)[0]
+    # Sizing the detector for these probes leaves the angle on it. Make it explicit,
+    # so the scan uses the angle the expected shape was computed with (a detector
+    # without a given outer angle takes the one of the waves it is applied to).
+    if hasattr(detector, "_outer_is_explicit"):
+        detector.outer = detector.outer
 
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=lazy)
 
@@ -215,6 +220,34 @@ def test_s_matrix_store_on_host(data, lazy):
     s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
     s_matrix = s_matrix.build().compute()
     assert_array_matches_device(s_matrix.array, "cpu")
+
+
+@pytest.mark.parametrize("store_on_host", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_s_matrix_build_dtype_follows_the_precision(precision, lazy, store_on_host):
+    from ase.build import bulk
+
+    import abtem
+    from abtem.core.utils import get_dtype
+
+    with abtem.config.set({"precision": precision, "device": "cpu"}):
+        potential = abtem.Potential(
+            bulk("Si", cubic=True), gpts=32, slice_thickness=2.7
+        )
+        s_matrix = abtem.SMatrix(
+            energy=100e3,
+            semiangle_cutoff=20,
+            potential=potential,
+            interpolation=1,
+            store_on_host=store_on_host,
+        )
+        expected = get_dtype(complex=True)
+        built = s_matrix.build(lazy=lazy)
+
+        assert expected == (np.complex128 if precision == "float64" else np.complex64)
+        assert built.array.dtype == expected
+        assert built.compute().array.dtype == expected
 
 
 @given(data=st.data())
@@ -322,3 +355,200 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
 #     measurements.compute()
 #
 #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan)
+
+
+def test_prism_aberrated_ctf_matches_probe():
+    # regression test for two bugs in the reduction coefficients: the
+    # normalization used the complex square instead of the absolute square, and
+    # the azimuthal angle convention must match polar_spatial_frequencies,
+    # ie. arctan2(ky, kx). the real-space intensity of an aberrated probe is
+    # sensitive to both; the vacuum diffraction intensity is sensitive to
+    # neither.
+    from abtem import CTF, Probe, SMatrix
+
+    ctf = CTF(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=50,
+        astigmatism=40,
+        astigmatism_angle=0.5236,
+        coma=3e3,
+        coma_angle=1.0,
+    )
+
+    probe = Probe._from_ctf(extent=20, gpts=128, ctf=ctf, energy=100e3)
+    probe_intensity = probe.build(lazy=False).intensity().array
+
+    s_matrix = SMatrix(
+        extent=20,
+        gpts=128,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample=False,
+    )
+    prism_intensity = s_matrix.reduce(ctf=ctf, lazy=False).intensity().array
+
+    assert np.allclose(
+        np.squeeze(prism_intensity),
+        np.squeeze(probe_intensity),
+        atol=1e-5 * probe_intensity.max(),
+    )
+
+
+class TestWrappedCrop2D:
+    """``wrapped_slices`` assumed ``-n <= start < n`` and ``0 < stop <= 2n``.
+
+    Outside that range it returned a wrongly shaped array instead of failing:
+    for a window entirely in negative indices, ``slice(0, stop)`` is Python's
+    negative indexing and selects ``n + stop`` rows rather than none. The crop
+    then reached the caller intact and surfaced as a broadcast error frames
+    away, in ``prism_transition_potential_scan``. Reachable from any model with
+    atoms far enough outside the cell.
+    """
+
+    @staticmethod
+    def _reference(array, corner, size):
+        """The crop by modulo index -- the definition of a periodic crop."""
+        i = (corner[0] + np.arange(size[0])) % array.shape[-2]
+        j = (corner[1] + np.arange(size[1])) % array.shape[-1]
+        return array[..., i[:, None], j[None, :]]
+
+    @pytest.mark.parametrize("n, size", [(192, 64), (17, 5), (8, 8)])
+    def test_every_corner_gives_the_right_shape_and_values(self, n, size):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(0)
+        array = rng.standard_normal((2, n, n))
+        # Several periods either side: the old code was correct only in a
+        # narrow band around zero, and wrong by n + size rows outside it.
+        for corner in range(-3 * n, 3 * n):
+            got = wrapped_crop_2d(array, (corner, 0), (size, size))
+            assert got.shape == (2, size, size)
+            assert np.array_equal(
+                got, self._reference(array, (corner, 0), (size, size))
+            )
+
+    def test_both_axes_wrap_independently(self):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(1)
+        array = rng.standard_normal((3, 24, 20))
+        for corner in [(-30, -25), (-5, 18), (23, -1), (47, 39), (-48, -40)]:
+            got = wrapped_crop_2d(array, corner, (7, 9))
+            assert got.shape == (3, 7, 9)
+            assert np.array_equal(got, self._reference(array, corner, (7, 9)))
+
+    @pytest.mark.parametrize("size", [16, 24, 32, 48])
+    def test_windows_wider_than_one_period(self, size):
+        """Two slices cannot express these; the general path must.
+
+        The old code was correct here only for corners in a narrow band around
+        zero -- e.g. n=16, corner=-23, size=24 came back as 8x8 -- so sweep the
+        corner rather than picking one.
+        """
+        from abtem.prism.utils import wrapped_crop_2d
+
+        n = 16
+        rng = np.random.default_rng(2)
+        array = rng.standard_normal((1, n, n))
+        for corner in range(-2 * n, 2 * n, 3):
+            got = wrapped_crop_2d(array, (corner, corner), (size, size))
+            assert got.shape == (1, size, size)
+            assert np.array_equal(
+                got, self._reference(array, (corner, corner), (size, size))
+            )
+
+    def test_wrapped_slices_refuses_more_than_one_period(self):
+        from abtem.prism.utils import wrapped_slices
+
+        with pytest.raises(RuntimeError, match="exceeds the period"):
+            wrapped_slices(0, 25, 24)
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_matches_on_device(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(3)
+        array = rng.standard_normal((2, 32, 32))
+        for corner in [(-40, 7), (-9, -9), (70, -70)]:
+            got = wrapped_crop_2d(copy_to_device(array, device), corner, (11, 11))
+            assert_array_matches_device(got, device)
+            assert np.allclose(
+                np.asarray(copy_to_device(got, "cpu")),
+                self._reference(array, corner, (11, 11)),
+            )
+
+
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_reduce_of_a_built_s_matrix_follows_the_ensemble_mean_of_the_frozen_phonons(
+    ensemble_mean,
+):
+    # An eager SMatrixArray.reduce returned the frozen-phonon axis unreduced, while
+    # a lazy one averaged it, as SMatrix.scan and multislice do, eager and lazy.
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    frozen_phonons = abtem.FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.1, seed=1, ensemble_mean=ensemble_mean
+    )
+    potential = abtem.Potential(frozen_phonons, sampling=0.15, slice_thickness=2)
+    detector = abtem.AnnularDetector(30, 60)
+    scan = GridScan((0, 0), (1, 1), gpts=(3, 5), fractional=True, potential=potential)
+    s_matrix = abtem.SMatrix(potential=potential, energy=70e3, semiangle_cutoff=20)
+
+    def axis_names(measurement):
+        return [type(a).__name__ for a in measurement.axes_metadata]
+
+    eager = s_matrix.build(lazy=False).reduce(scan, detectors=detector)
+    lazy = s_matrix.build(lazy=True).reduce(scan, detectors=detector).compute()
+    scanned = s_matrix.scan(scan, detector, lazy=False)
+
+    expected = ["RealSpaceAxis", "RealSpaceAxis"]
+    if not ensemble_mean:
+        expected = ["FrozenPhononsAxis"] + expected
+    for measurement in (eager, lazy, scanned):
+        assert axis_names(measurement) == expected
+
+    scale = np.abs(scanned.array).max()
+    np.testing.assert_allclose(eager.array, scanned.array, rtol=0, atol=1e-5 * scale)
+    np.testing.assert_allclose(lazy.array, scanned.array, rtol=0, atol=1e-5 * scale)
+
+
+def test_prism_reduce_averages_a_ctf_ensemble_eagerly_as_lazily():
+    # With a frozen-phonon ensemble in the potential, a CTF ensemble flagged
+    # ensemble_mean is averaged by the lazy branch of SMatrix.reduce, but the
+    # eager branch returned its axis unreduced, so a 4-member defocus
+    # distribution gave a (4, 3, 3) result instead of (3, 3).
+    import ase
+
+    import abtem
+    from abtem import distributions
+    from abtem.transfer import CTF
+
+    atoms = ase.Atoms(
+        "CO", positions=[(2.0, 2.0, 1.0), (5.5, 4.0, 2.5)], cell=(8.0, 8.0, 4.0)
+    )
+    frozen_phonons = abtem.FrozenPhonons(
+        atoms, num_configs=3, sigmas=0.05, seed=1, ensemble_mean=True
+    )
+    potential = abtem.Potential(
+        frozen_phonons, gpts=48, slice_thickness=2.0, projection="finite"
+    )
+    s_matrix = abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
+    scan = abtem.GridScan((0, 0), (4, 4), gpts=(3, 3))
+    detector = abtem.AnnularDetector(10, 60)
+    defocus = distributions.from_values(
+        np.array([-40.0, 0.0, 25.0, 60.0]), ensemble_mean=True
+    )
+    ctf = CTF(semiangle_cutoff=20, defocus=defocus)
+
+    eager = s_matrix.reduce(scan, detectors=detector, ctf=ctf, lazy=False)
+    lazy = s_matrix.reduce(scan, detectors=detector, ctf=ctf, lazy=True).compute()
+
+    assert eager.shape == lazy.shape == (3, 3)
+    scale = np.abs(lazy.array).max()
+    np.testing.assert_allclose(eager.array, lazy.array, rtol=0, atol=1e-5 * scale)

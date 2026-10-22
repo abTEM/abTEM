@@ -59,6 +59,7 @@ from abtem.atoms import (
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
+from abtem.slicing import _integrate_planes
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -225,7 +226,7 @@ def calculate_structure_factors(
 
     struct_factors = (
         xp.sum(
-            f_e * xp.exp(-2.0j * np.pi * positions @ hkl),
+            f_e * xp.exp(2.0j * np.pi * positions @ hkl),
             axis=0,
         )
         / atoms.cell.volume
@@ -282,8 +283,14 @@ def structure_factor_to_potential(
     """
     xp = get_array_module(structure_factor)
     structure_factor = structure_factor_1d_to_3d(structure_factor, hkl, gpts)
-    potential = xp.fft.ifftn(structure_factor)
-    potential = potential * np.prod(potential.shape) / kappa
+    # calculate_structure_factors uses the standard crystallographic convention
+    # F(g) = sum_j f_j exp(+2pi i g.r_j), i.e. V(r) = sum_g F(g) exp(-2pi i g.r)
+    # is the correct Fourier synthesis -- exactly numpy's forward transform
+    # (fftn), not the inverse. Unlike ifftn, fftn carries no built-in 1/N
+    # normalization, so (unlike the previous ifftn-based version) the result
+    # must not be rescaled by the number of grid points.
+    potential = xp.fft.fftn(structure_factor)
+    potential = potential / kappa
     potential -= potential.min()
     return potential.real
 
@@ -296,6 +303,35 @@ def equal_slice_thicknesses(
     n_per_slice = equal_sized_chunks(num_items=num_gpts_z, num_chunks=n_slices)
     slice_thicknesses = tuple(n * dz for n in n_per_slice)
     return slice_thicknesses, n_per_slice
+
+
+def _snap_slice_thicknesses(
+    slice_thicknesses: Sequence[float], num_gpts_z: int, depth: float
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """Slice thicknesses given as a sequence, snapped to the z grid.
+
+    Each slice boundary (the cumulative thickness) is moved to the nearest z
+    grid plane, so the slices tile the cell exactly whenever the thicknesses
+    add up to its depth (to within half a z sample). Returns the thicknesses
+    actually used and the number of z grid points in each slice.
+    """
+    sampling_z = depth / num_gpts_z
+    thicknesses = np.asarray([float(dz) for dz in slice_thicknesses])
+    if abs(thicknesses.sum() - depth) > sampling_z / 2:
+        raise ValueError(
+            f"the slice thicknesses must add up to the cell depth, {depth:g} Å "
+            f"(to within half the z sampling, {sampling_z / 2:.3g} Å); they add up "
+            f"to {thicknesses.sum():g} Å"
+        )
+    boundaries = np.round(np.cumsum(thicknesses) / sampling_z).astype(int)
+    boundaries[-1] = num_gpts_z
+    chunks = np.diff(np.concatenate(([0], boundaries)))
+    if chunks.min() < 1:
+        raise ValueError(
+            f"every slice must span at least one z grid point ({sampling_z:.3g} Å "
+            "here); increase the thinnest slice thicknesses or `g_max`"
+        )
+    return tuple(float(n * sampling_z) for n in chunks), tuple(int(n) for n in chunks)
 
 
 def slice_potential(
@@ -316,12 +352,15 @@ def slice_potential(
         thickness / n for n, thickness in zip(slice_chunks, slice_thicknesses)
     )
 
-    start = np.cumsum((0,) + slice_chunks)
+    bounds = np.cumsum((0,) + slice_chunks)
 
+    # The slice boundaries lie on planes, so each boundary plane is split between
+    # the slices on either side and the last slice takes half of plane 0, as the
+    # potential is periodic along z (see `_integrate_planes`).
     potential_sliced = np.stack(
         [
-            np.sum(potential_3d[..., start:stop], axis=-1) * dz
-            for start, stop, dz in zip(start[:-1], start[1:], z_samplings)
+            _integrate_planes(potential_3d, start, stop) * dz
+            for start, stop, dz in zip(bounds[:-1], bounds[1:], z_samplings)
         ],
         axis=-1,
     )
@@ -720,7 +759,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         slice_thickness: Optional[float | Sequence[float]] = 0.5,
         sampling: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
-        lazy: bool = True,
+        lazy: Optional[bool] = None,
     ) -> PotentialArray:
         """Calculate the projected potential from the structure factors.
 
@@ -732,15 +771,29 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             The sampling of the projected potential [Å].
         gpts : int or tuple of ints
             The grid points of the projected potential.
-        lazy : bool
+        lazy : bool, optional
             If True, the calculation is done lazily using dask. If False, the
-             calculation is done eagerly.
+            calculation is done eagerly. If None (default), the calculation is lazy
+            if the structure factors are lazy.
 
         Returns
         -------
         PotentialArray
             The projected potential.
         """
+        if lazy is not None and lazy != self.is_lazy:
+            if lazy:
+                structure_factor = self.ensure_lazy()
+            else:
+                # `compute` works in place, so compute a new object to leave this one
+                # lazy.
+                kwargs = self._copy_kwargs(exclude=("array",))
+                kwargs["array"] = self.array
+                structure_factor = self.__class__(**kwargs).compute()
+            return structure_factor.get_projected_potential(
+                slice_thickness, sampling, gpts
+            )
+
         if not is_cell_orthogonal(self.cell):
             raise NotImplementedError(
                 "Converting structure factor to projected potential is not supported ",
@@ -749,37 +802,38 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         extent = tuple(np.diag(self.cell)[:2])
 
-        if sampling is not None:
-            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-            validated_gpts = grid._valid_gpts
-
         potential_3d = self.get_potential_3d()
         depth = np.array(self.cell)[2, 2]
-        sampling_z = depth / potential_3d.shape[-1]
+        num_gpts_z = potential_3d.shape[-1]
+        sampling_z = depth / num_gpts_z
+
+        # the lateral grid, resolved once from gpts (int or pair) or sampling
+        if gpts is None and sampling is None:
+            validated_gpts = tuple(potential_3d.shape[:2])
+        else:
+            if isinstance(gpts, int):
+                gpts = (gpts, gpts)
+            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+            validated_gpts = tuple(int(n) for n in grid._valid_gpts)
 
         if slice_thickness is None:
             slice_thickness = min(1.0, depth)
 
         if isinstance(slice_thickness, (float, int)):
             validated_slice_thickness, slice_chunks = equal_slice_thicknesses(
-                num_gpts_z=potential_3d.shape[-1],
+                num_gpts_z=num_gpts_z,
                 slice_thickness=slice_thickness,
                 depth=depth,
             )
         elif isinstance(slice_thickness, Sequence):
-            validated_slice_thickness = tuple(float(dz) for dz in slice_thickness)
+            validated_slice_thickness, slice_chunks = _snap_slice_thicknesses(
+                slice_thickness, num_gpts_z=num_gpts_z, depth=depth
+            )
         else:
             raise ValueError(
                 "Invalid `slice_thickness` argument type, must be float or sequence ",
                 "of floats",
             )
-
-        if gpts is None:
-            validated_gpts = potential_3d.shape[:2]
-        else:
-            assert isinstance(gpts, tuple)
-            assert len(gpts) == 2
-            validated_gpts = gpts
 
         if min(validated_slice_thickness) < sampling_z:
             raise RuntimeError(
@@ -794,7 +848,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
                 chunks=(len(slice_chunks),) + validated_gpts,
                 meta=xp.array((), dtype=potential_3d.dtype),
             )
@@ -803,7 +857,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
             )
 
         sampling = (
@@ -845,6 +899,29 @@ def calculate_M_matrix(
     return Mii
 
 
+def _metric(
+    hkl: np.ndarray,
+    cell: np.ndarray | Cell,
+    energy: float,
+    use_wave_eq: bool,
+) -> np.ndarray:
+    """Diagonal of M, the symmetrizing metric of the Bloch-wave eigenproblem.
+
+    The standard Bloch-wave equation (use_wave_eq=False; the Helmholtz equation with
+    only gamma**2 dropped) is the generalized eigenproblem
+
+        A C = 2 K gamma B C,   B = diag(1 + g_z / K),
+
+    solved as the Hermitian problem (M A M) C' = 2 K gamma C' with
+    M = B**(-1/2) (calculate_M_matrix) and C = M C'. The wave-equation form
+    (use_wave_eq=True), the equation multislice solves, has gamma with the
+    constant coefficient 2 K instead: an ordinary Hermitian eigenproblem, M = 1.
+    """
+    if use_wave_eq:
+        return np.ones(len(hkl))
+    return calculate_M_matrix(hkl, cell, energy)
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
@@ -884,7 +961,7 @@ def calculate_structure_matrix(
     xp = get_array_module(structure_factor)
 
     g = xp.asarray(calculate_g_vec(hkl_selected, cell))
-    Mii = calculate_M_matrix(hkl_selected, cell, energy)
+    Mii = _metric(hkl_selected, cell, energy, use_wave_eq)
 
     hkl_selected = np.asarray(hkl_selected)
 
@@ -904,11 +981,13 @@ def calculate_structure_matrix(
 
     Mii = xp.asarray(Mii)
 
-    A *= prefactor * Mii[None] * Mii[:, None]
+    A = A * (prefactor * Mii[None] * Mii[:, None])
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+    # M (2 K diag(s_g) + U) M: the diagonal carries M**2, like the off-diagonal
+    # M_i M_j
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
+    diag *= Mii**2
 
     xp.fill_diagonal(A, diag)
     return A
@@ -926,6 +1005,7 @@ def calculate_dynamical_scattering(
     cell: np.ndarray | Cell,
     energy: float,
     thicknesses: float | Iterable[float],
+    use_wave_eq: bool = False,
 ) -> np.ndarray:
     """Calculate the dynamical scattering given a structure matrix.
 
@@ -941,6 +1021,10 @@ def calculate_dynamical_scattering(
         The energy of the electrons [eV].
     thicknesses : sequence of floats
         The thicknesses of the sample [Å].
+    use_wave_eq : bool, optional
+        The form of the Bloch-wave equation the structure matrix was built for (see
+        :func:`calculate_structure_matrix`); decides the metric used to map its
+        eigenvectors back to beam amplitudes.
 
     Returns
     -------
@@ -953,20 +1037,20 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(_metric(hkl, cell, energy, use_wave_eq))
 
+    # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
     v, C = xp.linalg.eigh(structure_matrix)
-    # v, C = scipy.linalg.eigh(structure_matrix)
 
     gamma = v * energy2wavelength(energy) / 2.0
 
-    np.fill_diagonal(C, np.diag(C) / Mii)
-
-    C_inv = xp.conjugate(C.T)
-
+    # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the physical
+    # Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as M_00 = 1 (g_z = 0
+    # for the direct beam).
     initial = plane_wave_coefficients(hkl, xp)
+    alpha = xp.conjugate(C.T) @ initial
 
-    alpha = C_inv @ initial
+    C = Mii[:, None] * C
     if not thicknesses.shape:
         array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
     else:
@@ -1007,6 +1091,7 @@ def calculate_scattering_matrix(
     z: float,
     energy: float,
     method: str = "expm",
+    use_wave_eq: bool = False,
 ) -> np.ndarray:
     """Calculate the scattering matrix for a given set of reciprocal space vectors.
 
@@ -1028,6 +1113,10 @@ def calculate_scattering_matrix(
                 Use a matrix exponential.
             ``decomposition`` :
                 Use a Hermitian matrix eigendecomposition.
+    use_wave_eq : bool, optional
+        The form of the Bloch-wave equation the structure matrix was built for (see
+        :func:`calculate_structure_matrix`); decides the metric used to map the
+        result back to beam amplitudes.
 
     Returns
     -------
@@ -1041,7 +1130,8 @@ def calculate_scattering_matrix(
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
+    # S = C exp(2 pi i gamma z) C^-1 with C = M C': M expm(...) M^-1
+    Mii = _metric(hkl, cell, energy, use_wave_eq)
     M = xp.asarray(np.diag(Mii))
     M_inv = xp.asarray(np.diag(1 / Mii))
 
@@ -1116,6 +1206,7 @@ def plane_wave_basis(
     np.ndarray
         The plane wave basis at the given positions.
     """
+    g = get_array_module(x).asarray(g)  # on the device of the positions
     plane_waves_x = complex_exponential(
         2 * np.pi * g[None, :, 0, None, None] * x[None, None, :, None]
     )
@@ -1193,7 +1284,9 @@ def validate_rotations(
 
 
 def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
-    if isinstance(rotations, Iterable):
+    if isinstance(rotations, BaseDistribution):
+        ensemble = True
+    elif isinstance(rotations, Iterable):
         rotations = np.array(rotations)
         if rotations.ndim == 1 and len(axes) > 1:
             assert len(axes) == len(rotations)
@@ -1390,7 +1483,9 @@ class BlochWaves:
         if excitation_error_sigma is None:
             excitation_error_sigma = self._sg_max / 3.0
 
-        intensity = S_array * np.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
+        xp = get_array_module(S_array)
+        sg = xp.asarray(sg)
+        intensity = S_array * xp.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
 
         metadata = {"energy": self.energy, "sg_max": self._sg_max, "g_max": self.g_max}
 
@@ -1456,7 +1551,9 @@ class BlochWaves:
         np.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        # Eager: the result feeds xp.asarray, and CuPy refuses to convert a
+        # dask array implicitly (NumPy happens to accept one).
+        A = self.calculate_structure_matrix(lazy=False)
         hkl = self.hkl
         cell = self.cell
 
@@ -1464,7 +1561,12 @@ class BlochWaves:
         A = xp.asarray(A)
 
         S = calculate_scattering_matrix(
-            A=A, hkl=hkl, cell=cell, z=z, energy=self.energy
+            A=A,
+            hkl=hkl,
+            cell=cell,
+            z=z,
+            energy=self.energy,
+            use_wave_eq=self.use_wave_eq,
         )
         return S
 
@@ -1492,6 +1594,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
                 drop_axis=1,
                 chunks=chunks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
@@ -1503,6 +1606,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
             )
 
         return array
@@ -1674,6 +1778,12 @@ class BlochWaves:
             )
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
+
+            if thicknesses.ndim == 0:
+                # a scalar thickness has no ensemble (thickness) axis; drop the spurious
+                # leading size-1 axis so the array matches the empty axis metadata (the
+                # lazy path already returns a 2D array in this case).
+                array = array[0]
 
         ensemble_axes_metadata: list[AxisMetadata] = []
 
@@ -1890,8 +2000,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
             if hasattr(rotation, "values"):
+                # SciPy >= 1.18 requires an explicit (N, len(axes)) shape, even for
+                # a single-axis sequence.
+                values = np.asarray(rotation.values, dtype=float).reshape(-1, len(axes))
                 R = Rotation.from_euler(
-                    axes, rotation.values, degrees=self._use_degrees
+                    axes, values, degrees=self._use_degrees
                 ).as_matrix()
                 R = R[(slice(None),) + (None,) * (orientation_matrices.ndim - 2)]
             else:
@@ -2103,7 +2216,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 lazy=False,
             )
 
-            array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
+            array[i][..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
             pbar_obj.update_if_exists(1)
 

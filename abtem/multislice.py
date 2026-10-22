@@ -444,9 +444,20 @@ def _update_measurements(
 
 def _validate_potential_ensemble_indices(
     potential_index: int | tuple[int, ...],
-    exit_plane_index: int | tuple[int, ...],
+    exit_plane_index: int | slice | tuple[int | slice, ...],
     potential: BasePotential,
-) -> tuple[int, ...]:
+) -> tuple[int | slice, ...]:
+    """Index into a measurement's leading potential-ensemble and exit-plane axes.
+
+    The measurement is allocated with the potential's ensemble axes *before*
+    the exit-plane axis (see ``_potential_ensemble_shape_and_metadata``), so
+    both have to be indexed together; indexing the plane axis alone silently
+    addresses the ensemble axis instead whenever the potential has one.
+
+    ``exit_plane_index`` may be a ``slice`` for accumulations that contribute
+    to every plane at or beyond a depth, as the single-channel core-loss
+    driver does.
+    """
     if not potential.ensemble_shape:
         potential_index = ()
     elif not isinstance(potential_index, tuple):
@@ -463,13 +474,14 @@ def _validate_potential_ensemble_indices(
 
 
 def _generate_potential_configurations(potential):
+    # generate_blocks() is called with its default chunks=1, which validates to
+    # a size-1 chunk along every ensemble axis (see Ensemble.generate_blocks),
+    # so potential_index from np.ndindex(shape) is already the full per-axis
+    # index tuple. Re-unraveling it here previously scrambled the index for any
+    # potential ensemble with more than one non-trivial axis (each element of
+    # the tuple got treated as an independent flat index into the full shape).
     for potential_index, _, potential_configuration in potential.generate_blocks():
         potential_configuration = potential_configuration.item()
-
-        if len(potential.ensemble_shape):
-            potential_index = np.unravel_index(
-                potential_index, potential.ensemble_shape
-            )
 
         yield potential_index, potential_configuration
 
@@ -565,7 +577,8 @@ def multislice_and_detect(
         Algorithm used for multislice operator (default is FourierMultislice())
     return_backscattered: bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
-        backscattered components are also returned. Requires potential exit_planes
+        backscattered components are also returned. Requires an exit plane after
+        every slice (potential exit_planes=1).
 
     """
     waves = waves.ensure_real_space()
@@ -577,9 +590,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        if potential.num_exit_planes == 1:
+        # A slice's backscattered wave is kept only at an exit plane, and the
+        # back-propagation sums the kept waves into the entrance plane.
+        if tuple(potential.exit_planes) != tuple(range(-1, potential.num_slices)):
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes."
+                "Backscattering contributions require potential.exit_planes after "
+                "every slice, starting with the entrance plane -1 (exit_planes=1)."
             )
 
         # moved to MultisliceTransform
@@ -656,6 +672,7 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
+        forward_slices = []
 
         for potential_slice, next_slice in lookahead(
             potential_configuration.generate_slices()
@@ -667,6 +684,9 @@ def multislice_and_detect(
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
             tqdm_pbar.update_if_exists(int(n_waves))
+
+            if return_backscattered:
+                forward_slices.append(potential_slice)
 
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -694,6 +714,17 @@ def multislice_and_detect(
                         )
                 exit_plane_index += 1
 
+        if return_backscattered:
+            # The back-propagation of this configuration's backscattered waves
+            # uses the slices its forward pass used.
+            _back_propagate_backscattered_waves(
+                measurements[-1][  # type: ignore
+                    _validate_potential_ensemble_indices(potential_index, (), potential)
+                ],
+                forward_slices,
+                multislice_step,
+            )
+
     # Handle final output if not using intermediate measurements
     if measurements is None:
         measurements = [
@@ -701,95 +732,56 @@ def multislice_and_detect(
             for detector in detectors
         ]
 
-    elif return_backscattered:
-        _back_propagate_backscattered_waves(
-            measurements[-1],  # type: ignore
-            potential,
-            multislice_step,
-        )
-
     tqdm_pbar.close_if_exists()
 
     return measurements
 
 
-def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
-    """
-    Group potential slices between exit_planes, summing their thicknesses.
-
-    Parameters
-    ----------
-    potential_slices : list of PotentialSlice
-        Original slices along the beam direction.
-    exit_planes : list of int
-        Indices of exit planes (first can be -1 for entrance plane).
-
-    Returns
-    -------
-    effective_slices : list of PotentialSlice
-        Aggregated slices with summed potential arrays and summed thicknesses.
-    """
-
-    effective_slices = []
-
-    for i in range(0, len(exit_planes) - 1):
-        idx_start = exit_planes[i] + 1  # slice after previous exit plane
-        idx_end = exit_planes[i + 1] + 1  # include this exit plane
-
-        # Aggregate slices in this block
-        combined_slice = potential_slices[idx_start].copy()
-        thickness = combined_slice.slice_thickness[0]
-        # Add remaining slices in the block
-        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
-            combined_slice += in_bw_slice
-            thickness += in_bw_slice.slice_thickness[0]
-            combined_slice._slice_thickness = (thickness,)
-            combined_slice._slice_limits = [(0, thickness)]
-
-        effective_slices.append(combined_slice)
-
-    return effective_slices
-
-
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    potential: BasePotential,
+    forward_slices: list[BasePotential],
     multislice_step: Callable,
 ) -> Waves:
     """
     For each slice in the multislice step, a small part of the wave get backscattered.
     This function runs the multislice in reverse for each backscattered wave summing
     them for a final backscattered wave result.
+
+    `backscattered_waves` are those of one configuration, with one exit plane after
+    every slice and the entrance plane first, and `forward_slices` are the slices its
+    forward pass used. The wave at plane `i + 1`, after slice `i`, crosses slice `i`
+    to reach plane `i`.
     """
 
     xp = get_array_module(backscattered_waves.device)
-    potential_slices = [
-        slice
-        for _, config in _generate_potential_configurations(potential)
-        for slice in config.generate_slices()
-    ]
-
-    effective_slices = _aggregate_slices_by_exit_planes(
-        potential_slices, potential.exit_planes
-    )
-
-    num_slices = len(effective_slices)
-    if len(backscattered_waves) != num_slices + 1:
-        raise ValueError("Wrong shapes")
 
     # zero intensity in incoming wave
     backscattered_waves[0]._array[:] = 0
 
     # Go through potential in reverse
-    for i in range(num_slices - 2, -1, -1):
+    for i in range(len(forward_slices) - 1, -1, -1):
         contribution_at_slice = backscattered_waves[i + 1].copy()
         contribution_at_slice.array = xp.conj(contribution_at_slice.array)
         contribution_at_slice, _ = multislice_step(
-            contribution_at_slice, effective_slices[i + 1], next_slice=None
+            contribution_at_slice, forward_slices[i], next_slice=None
         )
         backscattered_waves[i].array += xp.conj(contribution_at_slice.array)
 
     return backscattered_waves
+
+
+_FULL_EXPANSION_SCOPE_MESSAGE = (
+    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
+    "core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice(expansion_scope='propagator')."
+)
+
+
+def _is_full_expansion_scope(algorithm) -> bool:
+    return (
+        isinstance(algorithm, RealSpaceMultislice)
+        and algorithm.expansion_scope == "full"
+    )
 
 
 def transition_potential_multislice_and_detect(
@@ -820,13 +812,19 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
+        Algorithm used for multislice operator (default is FourierMultislice()). A
+        RealSpaceMultislice must have ``expansion_scope="propagator"``.
 
     Returns
     -------
     measurements : Waves or tuple of :class:`.BaseMeasurement`
         Exit waves or detected measurements or lists of measurements.
     """
+    # The real-space step is called without a next slice, so the full expansion scope
+    # would return a (waves, backscattered) pair in place of the waves, and could not
+    # apply its correction in any case. The driver is also a public entry point.
+    if _is_full_expansion_scope(algorithm):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
@@ -871,7 +869,7 @@ def transition_potential_multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=algorithm.expansion_scope == "full",
+                fully_corrected=False,
             )
 
     if detectors is None:
@@ -888,6 +886,19 @@ def transition_potential_multislice_and_detect(
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
     )
+
+    # A built TransitionPotentialArray cannot be matched: build() bakes
+    # self.energy into the array's form factors (k0, kn, the relativistic
+    # mass correction, the interaction parameter), and its array shape is
+    # fixed, so the match below can only change the grid or accelerator,
+    # never recompute the array to agree with them. Checking first, while
+    # grid/accelerator still report what the array actually is, catches both
+    # -- the grid case otherwise fails with an opaque broadcast ValueError
+    # inside scatter, and the energy case would silently run with form
+    # factors computed for another energy.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(waves)
+        transition_potential.accelerator.check_match(waves)
 
     transition_potential.grid.match(waves)
     transition_potential.accelerator.match(waves)
@@ -906,7 +917,13 @@ def transition_potential_multislice_and_detect(
         sites = potential.atoms
 
     if isinstance(sites, Atoms):
-        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+        # Follow the potential's own convention, so explicitly passed sites
+        # are sliced exactly as sites=None would be.
+        sites = SliceIndexedAtoms(
+            sites,
+            slice_thickness=potential.slice_thickness,
+            wrap=getattr(potential, "periodic", True),
+        )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(
             "Could not derive scattering sites from the potential "
@@ -922,10 +939,6 @@ def transition_potential_multislice_and_detect(
             f"{transition_potential.Z}"
         )
 
-    absolute_threshold = transition_potential.absolute_threshold(
-        waves, threshold=threshold
-    )
-
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
 
@@ -940,11 +953,13 @@ def transition_potential_multislice_and_detect(
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
-        if potential.exit_planes[0] == -1:
-            measurement_index = _validate_potential_ensemble_indices(
-                potential_index, 0, potential
-            )
-            _update_measurements(waves, detectors, measurements, measurement_index)
+
+        # The entrance exit plane at t = 0 stays zero: no material has been
+        # traversed, so no ionisation has happened. Detecting the incident
+        # *elastic* wave here, as the elastic driver correctly does, wrote the
+        # full unscattered intensity into the t = 0 bin of a core-loss
+        # measurement. Measurements are allocated zeroed, so there is nothing
+        # to do.
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
@@ -1010,6 +1025,16 @@ def transition_potential_multislice_and_detect(
             if len(sites_slice) == 0:
                 continue
 
+            # The overlap cut is ranked on the very waves the sites of this
+            # slice scatter. A cut ranked once on the entrance wave and
+            # applied at every depth drifted as the probe propagated: a
+            # symmetry-tied group of sites at the cut fell below it together
+            # (in one 1 A vacuum slice, threshold=0.1 kept 4.8% of the signal),
+            # and as the probe spreads with depth it dropped ever more sites.
+            absolute_threshold = transition_potential.absolute_threshold(
+                waves, threshold=threshold
+            )
+
             for (
                 included_sites,
                 scattered_waves,
@@ -1058,19 +1083,34 @@ def transition_potential_multislice_and_detect(
                 else:
                     exit_plane_index = bisect_left(potential.exit_planes, scatter_index)
 
-                    measurement_plane_indices: tuple[slice] | tuple = ()
-                    if len(potential.exit_planes) > 1:
-                        exit_planes = slice(
-                            exit_plane_index, len(potential.exit_planes)
-                        )
-                        measurement_plane_indices = (exit_planes,)
+                    # Single-channel ionisation at this depth contributes to
+                    # every exit plane at or beyond it, hence a slice over the
+                    # plane axis. The potential's ensemble axes come first in
+                    # the measurement, so they must be indexed as well -- the
+                    # double-channel branch above gets this right by going
+                    # through _update_loss_measurements. Indexing the plane
+                    # axis alone meant that with a single exit plane the index
+                    # was empty and every configuration's contribution was
+                    # broadcast across all configurations (giving num_configs
+                    # times the correct result), while with several exit planes
+                    # the plane slice landed on the configuration axis and
+                    # either dropped the contribution (a length-1 axis) or
+                    # wrote it into the wrong configuration slots.
+                    n_plane_axes = 1 if len(potential.exit_planes) > 1 else 0
+
+                    measurement_indices = _validate_potential_ensemble_indices(
+                        potential_index,
+                        slice(exit_plane_index, len(potential.exit_planes)),
+                        potential,
+                    )
 
                     for i, detector in enumerate(detectors):
                         new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_plane_indices] += (
-                            new_measurement.array[
-                                (None,) * len(measurement_plane_indices)
-                            ]
+                        # Only the plane axis is a slice and so survives the
+                        # indexing; the ensemble axes are integers and are
+                        # dropped, so broadcast over the plane axis alone.
+                        measurements[i].array[measurement_indices] += (
+                            new_measurement.array[(None,) * n_plane_axes]
                         )
 
     tqdm_pbar.close_if_exists()
@@ -1246,7 +1286,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         chunks: tuple[int, ...] = ()
 
         if len(self.potential.ensemble_shape) > 0:
-            chunks = chunks + (1,)
+            chunks = chunks + (1,) * len(self.potential.ensemble_shape)
 
         if len(self.potential.exit_planes) > 1:
             chunks = chunks + (len(self.potential.exit_planes),)

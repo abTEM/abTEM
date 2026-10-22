@@ -22,7 +22,13 @@ from abtem.core.axes import (
     UnknownAxis,
     WaveVectorAxis,
 )
-from abtem.core.backend import copy_to_device, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    copy_to_device,
+    cp,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -1061,7 +1067,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
         phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
         array = ctf._evaluate_from_angular_grid(alpha, phi)
-        array = array / xp.sqrt((array**2).sum(axis=-1, keepdims=True))
+        # the coefficients may be complex when the ctf includes aberrations, hence
+        # the normalization must use the absolute square
+        array = array / xp.sqrt((xp.abs(array) ** 2).sum(axis=-1, keepdims=True))
         return array
 
     def _batch_reduce_to_measurements(
@@ -1319,6 +1327,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             measurements = self._batch_reduce_to_measurements(
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
+            # Ensemble axes flagged ensemble_mean (frozen phonons by default, or
+            # a CTF ensemble) were returned unreduced, unlike the lazy branch,
+            # which averages them in _finalize_lazy_measurements.
+            measurements = [
+                (
+                    measurement.reduce_ensemble()
+                    if hasattr(measurement, "reduce_ensemble")
+                    else measurement
+                )
+                for measurement in measurements
+            ]
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         out = _wrap_measurements(measurements)
@@ -1343,7 +1362,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector`.
             See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
@@ -1363,11 +1384,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
         if scan is None:
             scan = GridScan()
@@ -1840,12 +1859,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.store_on_host:
                 array = np.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
             else:
                 array = xp.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
 
             for i, _, s_matrix in self.generate_blocks(1):
@@ -1858,7 +1877,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     new_array = self._build_s_matrix(s_matrix, slice(start, stop))
 
                     if self.store_on_host:
-                        new_array = xp.asnumpy(new_array)
+                        new_array = asnumpy(new_array)
 
                     array[items] = new_array
 
@@ -1909,7 +1928,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector`.
             See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
@@ -1941,11 +1962,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s)
-            given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:
@@ -2127,6 +2146,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
+            # The S-matrix (potential) ensemble is averaged block by block
+            # above, but CTF ensemble axes flagged ensemble_mean were returned
+            # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
+            measurements = [
+                measurement.reduce_ensemble()
+                if hasattr(measurement, "reduce_ensemble")
+                else measurement
+                for measurement in ensure_list(measurements)
+            ]
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:

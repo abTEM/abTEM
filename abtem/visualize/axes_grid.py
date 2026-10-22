@@ -14,20 +14,29 @@ from abtem.core.utils import flatten_list_of_lists, interleave
 
 
 class _SyncedCbarLocator:
-    """Locator that keeps a colorbar aligned with a reference axes."""
+    """Locator that keeps a colorbar aligned with the union of a set of
+    reference axes, so a colorbar spans the full height (``sync_axis="y"``)
+    or width (``sync_axis="x"``) of every panel it is meant to cover -- e.g.
+    a single shared colorbar spanning every row of a multi-row exploded
+    grid, or a per-panel colorbar matching just its own panel.
+    """
 
-    def __init__(self, original_locator, ref_ax, sync_axis="y"):
+    def __init__(self, original_locator, ref_axes, sync_axis="y"):
         self._original = original_locator
-        self._ref_ax = ref_ax
+        self._ref_axes = ref_axes
         self._sync_axis = sync_axis
 
     def __call__(self, axes, renderer):
         pos = self._original(axes, renderer)
-        ref = self._ref_ax.get_position(original=False)
+        positions = [ax.get_position(original=False) for ax in self._ref_axes]
         if self._sync_axis == "y":
-            return Bbox.from_bounds(pos.x0, ref.y0, pos.width, ref.height)
+            y0 = min(p.y0 for p in positions)
+            y1 = max(p.y1 for p in positions)
+            return Bbox.from_bounds(pos.x0, y0, pos.width, y1 - y0)
         else:
-            return Bbox.from_bounds(ref.x0, pos.y0, ref.width, pos.height)
+            x0 = min(p.x0 for p in positions)
+            x1 = max(p.x1 for p in positions)
+            return Bbox.from_bounds(x0, pos.y0, x1 - x0, pos.height)
 
 
 def _cbar_orientation(cbar_loc):
@@ -107,7 +116,10 @@ class AxesGrid:
 
         self._sizes = {
             "cbar_spacing": Size.Fixed(1.1),
-            "padding": Size.Fixed(0.1),
+            # Wide enough to fit a ~3-4 character tick label (e.g. the
+            # "-100"/"100" pair at a shared panel boundary) without the
+            # two neighbouring panels' edge labels visually colliding.
+            "padding": Size.Fixed(0.25),
             "cbar_shift": Size.Fixed(0.0),
             "cbar_width": Size.Fixed(0.15),
             "left": Size.Fixed(0.0),
@@ -318,16 +330,29 @@ class AxesGrid:
         return line_types
 
     def _connect_cbar_sync(self):
-        ref_ax = self._axes.ravel()[0]
         sync_axis = "y" if self._cbar_loc == "right" else "x"
-        for cax in self._caxes.ravel():
+
+        def sync(cax, ref_axes):
             if cax is None or cax == 0:
-                continue
+                return
             original_locator = cax.get_axes_locator()
             if original_locator is not None:
                 cax.set_axes_locator(
-                    _SyncedCbarLocator(original_locator, ref_ax, sync_axis)
+                    _SyncedCbarLocator(original_locator, ref_axes, sync_axis)
                 )
+
+        if self._cbar_mode == "each":
+            # Each panel has its own colorbar(s): match only that panel.
+            for col in range(self._ncols):
+                for row in range(self._nrows):
+                    ref_axes = [self._axes[col, row]]
+                    for cax in self._caxes[col, row].ravel():
+                        sync(cax, ref_axes)
+        else:
+            # One shared colorbar: span every panel it is shared across.
+            ref_axes = list(self._axes.ravel())
+            for cax in self._caxes.ravel():
+                sync(cax, ref_axes)
 
     def set_sizes(self, **kwargs):
         for key, value in kwargs.items():

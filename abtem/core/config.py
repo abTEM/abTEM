@@ -8,6 +8,7 @@ from typing import Any, Literal, Union
 
 import yaml  # type: ignore
 from dask.config import canonical_name, collect, update
+from dask.config import paths as dask_paths
 
 no_default = "__no_default__"
 
@@ -155,6 +156,10 @@ def refresh(
 
     for d in defaults:
         update(config, d, priority="old")
+
+    # abTEM's own location (PATH) is read after dask's, so that it takes
+    # precedence over the yaml files there.
+    kwargs.setdefault("paths", [*dask_paths, PATH])
 
     update(config, collect(**kwargs))
 

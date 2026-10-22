@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, SupportsFloat
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, ParameterAxis
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
     Accelerator,
@@ -89,17 +89,20 @@ class BaseTransferFunction(
         """
 
         if waves is None:
-            device = "cpu"
+            transfer_function, device = self, "cpu"
         else:
-            self.accelerator.match(waves)
-            self.grid.match(waves)
+            # Match a copy, so that evaluating against `waves` does not leave this
+            # transfer function with their energy or grid.
+            transfer_function = self.copy()
+            transfer_function.accelerator.match(waves)
+            transfer_function.grid.match(waves)
             device = waves.device
 
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
+        transfer_function.grid.check_is_defined()
+        transfer_function.accelerator.check_is_defined()
 
-        alpha, phi = self._angular_grid(device)
-        return self._evaluate_from_angular_grid(alpha, phi)
+        alpha, phi = transfer_function._angular_grid(device)
+        return transfer_function._evaluate_from_angular_grid(alpha, phi)
 
     def to_diffraction_patterns(
         self,
@@ -153,7 +156,7 @@ class BaseTransferFunction(
             xp.fft.fftshift(array, axes=(-2, -1)),
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
-            fftshift=False,
+            fftshift=True,
             metadata={"energy": self.energy},
         )
         return diffraction_patterns
@@ -370,12 +373,11 @@ class Aperture(BaseAperture):
         ensemble_axes_metadata: list[AxisMetadata] = []
         if isinstance(self.semiangle_cutoff, BaseDistribution):
             ensemble_axes_metadata = [
-                ParameterAxis(
+                ParameterAxis.from_distribution(
+                    self.semiangle_cutoff,
                     label="semiangle_cutoff",
-                    values=tuple(self.semiangle_cutoff),
                     units="mrad",
                     tex_label="$\\alpha_{cut}$",
-                    _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
         return ensemble_axes_metadata
@@ -584,7 +586,7 @@ class Bullseye(BaseAperture):
         edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
         k_corner = float(self._corner_radius) / 1e3
 
-        aperture = xp.zeros(self.gpts, dtype=float)
+        aperture = xp.zeros(self.gpts, dtype=get_dtype(complex=False))
 
         for a0 in range(self.num_rings):
             k_inner = a0 * (ds + d0)
@@ -602,8 +604,8 @@ class Bullseye(BaseAperture):
                             t_deg += 360.0 / self._spoke_num / 2.0
 
                         t = np.deg2rad(t_deg)
-                        ct = np.cos(t)
-                        st = np.sin(t)
+                        ct = float(np.cos(t))
+                        st = float(np.sin(t))
 
                         u = kx * ct + ky * st
                         v = ky * ct - kx * st
@@ -627,8 +629,8 @@ class Bullseye(BaseAperture):
                         t_deg += 360.0 / self._spoke_num / 2.0
 
                     t = np.deg2rad(t_deg)
-                    ct = np.cos(t)
-                    st = np.sin(t)
+                    ct = float(np.cos(t))
+                    st = float(np.sin(t))
 
                     u = kx * ct + ky * st
                     v = ky * ct - kx * st
@@ -641,7 +643,7 @@ class Bullseye(BaseAperture):
             aper = _ramp01((-d_keep) / edge_w)
             aperture += aper
         aperture = xp.clip(aperture, 0, 1)
-        return aperture
+        return aperture.astype(get_dtype(complex=False))
 
 
 class Vortex(BaseAperture):
@@ -933,10 +935,17 @@ class RadialPhasePlate(BaseAperture):
         else:
             alpha_normed = (alpha_normed - alpha_normed.min()) / ptp
 
-        phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
-        phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
+        # The sign of sin(pi * k) at the integer k reached outside the cutoff is set
+        # by rounding, so this is deliberately evaluated in float64 whatever the
+        # configured precision: in float32 it flips the phase of most of the grid.
+        flipped = (
+            xp.sin(alpha_normed.astype(xp.float64) * np.pi * (self.num_flips + 1)) < 0.0
+        )
+        # The exponent is 0 or phase_shift: built in the dtype of the grid, so that
+        # the complex result is in the configured precision without a cast.
+        flipped = flipped.astype(alpha.dtype) * self.phase_shift
 
-        return phase_shift
+        return xp.exp(1.0j * flipped)
 
 
 class TemporalEnvelope(BaseTransferFunction):
@@ -1001,8 +1010,9 @@ class TemporalEnvelope(BaseTransferFunction):
     ) -> np.ndarray:
         xp = get_array_module(alpha)
 
-        unpacked, _ = _unpack_distributions(self.focal_spread, shape=alpha.shape, xp=xp)
-        (focal_spread,) = unpacked
+        (focal_spread,) = _unpack_distributions(
+            self.focal_spread, shape=alpha.shape, xp=xp
+        )
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
@@ -1152,11 +1162,10 @@ class _HasAberrations(HasAcceleratorMixin):
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
                 axes_metadata += [
-                    ParameterAxis(
+                    ParameterAxis.from_distribution(
+                        value,
                         label=parameter_name,
-                        values=tuple(value.values),
                         units="Å",
-                        _ensemble_mean=value.ensemble_mean,
                         tex_label=symbol_to_tex_symbol(parameter_name),
                     )
                 ]
@@ -1187,16 +1196,32 @@ class _HasAberrations(HasAcceleratorMixin):
         aberration_coefficients : dict
             Mapping from aberration symbols to their corresponding values.
         """
-        for symbol, value in aberration_coefficients.items():
-            if symbol in ("defocus", "C10"):
-                if isinstance(value, str) and value.lower() == "scherzer":
-                    if self.energy is None:
-                        raise RuntimeError(
-                            "energy undefined, Scherzer defocus cannot be evaluated"
-                        )
-                    C30 = self._aberration_coefficients["C30"]
-                    assert isinstance(C30, SupportsFloat)
-                    value = scherzer_defocus(float(C30), self._valid_energy)
+
+        def is_scherzer(symbol, value):
+            return (
+                symbol in ("defocus", "C10")
+                and isinstance(value, str)
+                and value.lower() == "scherzer"
+            )
+
+        # The Scherzer defocus depends on C30, so resolve it only after every
+        # other coefficient has been set, whatever the order they were given in.
+        items = sorted(
+            aberration_coefficients.items(), key=lambda item: is_scherzer(*item)
+        )
+
+        for symbol, value in items:
+            if is_scherzer(symbol, value):
+                if self.energy is None:
+                    raise RuntimeError(
+                        "energy undefined, Scherzer defocus cannot be evaluated"
+                    )
+                C30 = self._aberration_coefficients["C30"]
+                assert isinstance(C30, SupportsFloat)
+                value = scherzer_defocus(float(C30), self._valid_energy)
+                if symbol == "C10":
+                    # scherzer_defocus returns a defocus; C10 = -defocus.
+                    value = -value
 
             if isinstance(value, str):
                 raise ValueError("string values only allowed for defocus")
@@ -1324,8 +1349,10 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
 
-        unpacked, _ = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
-        angular_spread = unpacked[-1] / 1e3
+        unpacked = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
+        # An array, so that its sign (a float64 NumPy scalar for a plain float)
+        # does not widen the single-precision envelope.
+        angular_spread = xp.asarray(unpacked[-1] / 1e3, dtype=get_dtype(complex=False))
         parameters = dict(zip(polar_symbols, unpacked[:-1]))
 
         alpha = xp.array(alpha)
@@ -1504,7 +1531,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
             )
 
-        parameter_values, weights = _unpack_distributions(
+        parameter_values = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
 
@@ -1582,12 +1609,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         array *= xp.array(2 * xp.pi / self.wavelength, dtype=dtype)
         array = complex_exponential(-array)
 
-        if cp is not None:
-            weights = cp.asnumpy(weights)
-
-        if weights is not None:
-            array = xp.asarray(weights, dtype=dtype) * array
-
+        # The distribution weights are NOT applied here: each ensemble member is
+        # the unweighted transfer function for its parameter values, and the
+        # weights (carried by the ensemble axis metadata) are applied as
+        # probabilities when the ensemble of measurements is reduced.
         return array
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
@@ -18,6 +19,7 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
@@ -25,6 +27,7 @@ from abtem.atoms import (
     pad_atoms,
     plane_to_axes,
     rotate_atoms_to_plane,
+    _wrap_and_snap_atoms,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -427,7 +430,7 @@ def validate_potential(
     #    raise ValueError()
 
     if waves is not None and potential is not None:
-        potential.grid.match(waves)
+        potential.match_grid(waves)
 
     return potential
 
@@ -596,7 +599,7 @@ class _FieldBuilder(BaseField):
 
             xp = get_array_module(self.device)
             chunks = validate_chunks(self.ensemble_shape, self._default_ensemble_chunks)
-            chunks = chunks + self.base_shape
+            chunks = chunks + (last_slice - first_slice,) + self.base_shape[1:]
 
             if self.ensemble_shape:
                 new_axis = tuple(
@@ -641,11 +644,23 @@ class _FieldBuilder(BaseField):
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
 
+        # The exit planes index the slices of the whole potential; the range keeps
+        # those inside it, counted from its first slice. With none left, the exit
+        # plane is the last slice of the range. A range starting at the first slice
+        # also keeps the entrance plane (-1, the incident wave) of the potential.
+        exit_planes = tuple(
+            plane - first_slice
+            for plane in self.exit_planes
+            if first_slice <= plane < last_slice
+        ) or (last_slice - first_slice - 1,)
+        if first_slice == 0 and -1 in self.exit_planes:
+            exit_planes = (-1,) + exit_planes
+
         output_potential = self._array_object(
             array,
             sampling=self._valid_sampling,
             slice_thickness=self.slice_thickness[first_slice:last_slice],
-            exit_planes=self.exit_planes,
+            exit_planes=exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
         return output_potential
@@ -722,11 +737,43 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         transformed_atoms : Atoms
             Transformed atoms.
         """
+        return self._transform_atoms()[0]
+
+    def _margins(self) -> tuple[float, float, float]:
+        """The margin the integrator needs along each axis beyond the cell.
+
+        A real-space finite integrator needs every atom within its cutoff of
+        the cell in all three directions. One built by FFT in-plane already
+        sees the in-plane neighbours through the periodic build, so it needs
+        them along z only, and an infinite projection needs none at all.
+        """
+        if not self.integrator.finite:
+            return (0.0, 0.0, 0.0)
+
+        cutoffs = self._cutoffs()
+        margin = max(cutoffs) if len(cutoffs) else 0.0
+
+        if self.integrator.periodic:
+            return (0.0, 0.0, margin)
+
+        return (margin, margin, margin)
+
+    def _transform_atoms(self) -> tuple[Atoms, bool]:
+        """The transformed atoms, and whether they were cut out of a larger
+        repeated structure, in which case they already carry the integrator's
+        margin and must not be padded again."""
         atoms = self.frozen_phonons.atoms
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
-        elif tuple(np.diag(atoms.cell)) != self.box:
+        # `diag(atoms.cell) == self.box` is not by itself proof the cell is
+        # orthogonal: for a near-orthorhombic cell with off-diagonal noise
+        # below ~2e-8 relative, the box norms round to the exact diagonal
+        # entries in float64. Also require is_cell_orthogonal so such noisy
+        # cells still reach orthogonalize_cell instead of being used as-is.
+        elif tuple(np.diag(atoms.cell)) != self.box or not is_cell_orthogonal(
+            atoms.cell
+        ):
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,
@@ -736,21 +783,29 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     return_transform=False,
                     allow_transform=True,
                 )
-                return atoms
+                return atoms, False
             else:
-                cutoffs = self._cutoffs()
+                # The margin comes from the larger repeated structure, so it
+                # is the true neighbourhood of a cell that need not be
+                # commensurate with it. Periodic padding on top of it added
+                # images of the margin atoms -- in-plane, where an FFT build
+                # also wraps them, and in depth -- and inflated the potential
+                # of a transformed non-periodic cell many times over. An
+                # infinite projection's cutoff is infinite, which cut every
+                # atom; it needs no margin.
                 atoms = cut_cell(
                     atoms,
                     cell=self.box,
                     plane=self.plane,
                     origin=self.origin,
-                    margin=max(cutoffs) if cutoffs else 0.0,
+                    margin=self._margins(),
                 )
+                return atoms, True
 
-        return atoms
+        return atoms, False
 
     def _prepare_atoms(self):
-        atoms = self.get_transformed_atoms()
+        atoms, is_cut = self._transform_atoms()
 
         if self.integrator.finite:
             cutoffs = self._cutoffs()
@@ -760,16 +815,30 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap(eps=0.0)
-            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
-            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
-            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
-            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
-            # outside all bins and is silently dropped.  Snap those back to 0.
-            cell_z = atoms.cell[2, 2]
-            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+            # Shared with SliceIndexedAtoms, which applies the same wrap to the
+            # atoms it is handed directly -- e.g. explicit core-loss ``sites``
+            # and CrystalPotential's tiled atoms, which do not come through
+            # here.
+            #
+            # Copy, because these atoms are *not* this method's own. For
+            # DummyFrozenPhonons -- the wrapper every plain Potential(atoms)
+            # gets -- get_transformed_atoms() and randomize() are both the
+            # identity, so writing in place here mutates the object the
+            # potential stores and ships into the task graph as ONE shared
+            # node, and for a list of atoms or a pre-built frozen-phonons
+            # object it is the CALLER's own object. _wrap_and_snap_atoms copies
+            # only when it has to change something.
+            atoms = _wrap_and_snap_atoms(atoms)
 
-        if not self.integrator.periodic and self.integrator.finite:
+        if is_cut:
+            # cut_cell already supplied exactly the margin padding would add.
+            pass
+        elif not self.integrator.periodic and self.integrator.finite:
+            # A real-space integrator takes its in-plane images from pad_atoms,
+            # which does not reach an atom given far outside the cell, and the
+            # build is periodic in-plane.
+            atoms = atoms.copy()
+            _wrap_far_atoms(atoms, (margins,) * 3, "xy")
             atoms = pad_atoms(atoms, margins=margins)
         elif self.integrator.periodic:
             atoms = pad_atoms(atoms, margins=margins, directions="z")
@@ -783,7 +852,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                # Non-periodic potentials are randomised after padding and are
+                # deliberately never wrapped.
+                wrap=self.periodic,
             )
 
         return sliced_atoms
@@ -1205,6 +1278,18 @@ class FieldArray(BaseField, ArrayObject):
         kwargs["array"] = array
         kwargs["slice_thickness"] = slice_thickness
         kwargs["sampling"] = None
+
+        # the exit planes index the slices, hence they have to be mapped into the
+        # sliced potential; those falling outside it are dropped, and if none
+        # remain the exit plane defaults to the last slice of the new potential
+        selected = np.atleast_1d(np.arange(potential_array.num_slices)[slic_items[0]])
+        exit_planes = tuple(
+            int(np.flatnonzero(selected == plane)[0])
+            for plane in potential_array.exit_planes
+            if plane in selected
+        )
+        kwargs["exit_planes"] = exit_planes if exit_planes else None
+
         return potential_array.__class__(**kwargs)
 
     def tile(self, repetitions: tuple[int, int] | tuple[int, int, int]):
@@ -1228,9 +1313,12 @@ class FieldArray(BaseField, ArrayObject):
 
         assert len(repetitions) == 3
 
-        new_array = np.tile(
-            self.array, (repetitions[2], repetitions[0], repetitions[1])
-        )
+        tile_reps = [1] * len(self.array.shape)
+        tile_reps[-self._base_dims] = repetitions[2]
+        tile_reps[-2] = repetitions[0]
+        tile_reps[-1] = repetitions[1]
+
+        new_array = np.tile(self.array, tuple(tile_reps))
 
         if self.extent is not None:
             new_extent = (
@@ -1563,12 +1651,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
+        transmission = self.array[0]
         if conjugate:
-            waves._array *= xp.conjugate(self.array[0])
-        else:
-            waves._array *= self.array[0]
+            # the method, not xp.conjugate: a CuPy function rejects a dask array
+            transmission = transmission.conj()
+
+        lazy_waves = isinstance(waves._array, da.Array)
+        if isinstance(transmission, da.Array) and not lazy_waves:
+            # The waves are transmitted in place, and an in-place NumPy or CuPy
+            # product cannot take a dask operand. Keep eager waves eager: compute
+            # the (single-slice) transmission function, synchronously so CuPy
+            # tasks never run concurrently.
+            transmission = transmission.compute(scheduler="synchronous")
+
+        waves._array *= transmission
 
         return waves
 
@@ -1712,20 +1808,55 @@ class CrystalPotential(_PotentialBuilder):
         return super().gpts
 
     @gpts.setter
-    def gpts(self, gpts: tuple[int, int]):
+    def gpts(self, gpts: int | tuple[int, int]):
+        gpts = self.grid._validate(gpts, dtype=int)
         if not (
             (gpts[0] % self.repetitions[0] == 0)
-            and (gpts[1] % self.repetitions[0] == 0)
+            and (gpts[1] % self.repetitions[1] == 0)
         ):
             raise ValueError(
                 "Number of grid points must be divisible by the number of potential"
-                "repetitions."
+                " repetitions."
             )
-        self.grid.gpts = gpts
-        self._potential_unit.gpts = (
+        unit_gpts = (
             gpts[0] // self._repetitions[0],
             gpts[1] // self._repetitions[1],
         )
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(unit_gpts, self._potential_unit.gpts)
+            return
+        # The unit first: a unit that rejects its gpts leaves the crystal unchanged.
+        self._potential_unit.gpts = unit_gpts
+        self.grid.gpts = gpts
+
+    def match_grid(self, other, check_match: bool = False):
+        """Match the grid to another object with a Grid, keeping the unit in step."""
+        # The gpts go through the setter, which keeps the unit in step or raises
+        # before anything changes; the extent is checked first so that a mismatch
+        # leaves the gpts alone as well.
+        if check_match:
+            self.grid.check_match(other)
+        self.grid.check_match(Grid(extent=other.extent))
+        if other.extent is None:
+            # An object given a sampling works out its gpts from the extent.
+            other.extent = self.extent
+        if other.gpts is not None and tuple(other.gpts) != self.gpts:
+            self.gpts = other.gpts
+        self.grid.match(other, check_match=check_match)
+        return self
+
+    @staticmethod
+    def _require_the_grid_of_a_built_unit(requested, current):
+        """
+        A built `PotentialArray` has the grid of its data. Setting the grid it has
+        changes nothing; any other grid raises, with the unit left untouched.
+        """
+        if not np.allclose(requested, current):
+            raise RuntimeError(
+                "The grid of a built PotentialArray unit is that of its data and "
+                "cannot be changed; set the gpts or sampling of the unit before "
+                "building it."
+            )
 
     @property
     def sampling(self) -> tuple[float, float] | None:
@@ -1733,8 +1864,26 @@ class CrystalPotential(_PotentialBuilder):
 
     @sampling.setter
     def sampling(self, sampling: tuple[float, float]):
-        self.sampling = sampling
+        validated = self.grid._validate(sampling, dtype=float)
+        if validated is None or not np.all(
+            np.isfinite(validated) & (np.asarray(validated) > 0)
+        ):
+            raise ValueError(
+                f"The sampling must be positive and finite, got {sampling}."
+            )
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(
+                validated, self._potential_unit.sampling
+            )
+            return
+        # The unit rounds its own gpts up for the requested sampling, and the
+        # crystal takes whole units, so its gpts follow the unit's.
         self._potential_unit.sampling = sampling
+        unit_gpts = self._potential_unit._valid_gpts
+        self.grid.gpts = (
+            unit_gpts[0] * self._repetitions[0],
+            unit_gpts[1] * self._repetitions[1],
+        )
 
     @property
     def repetitions(self) -> tuple[int, int, int]:
@@ -1939,6 +2088,14 @@ class CrystalPotential(_PotentialBuilder):
             ensemble_mean=fp.ensemble_mean,
             seed=int(member_seed) if reseed else int(fp.seed[0]),
         )
+        if "frozen_phonons" in unit._arg_keys(type(unit)):
+            # ``GPAWPotential`` takes its frozen phonons next to its calculators,
+            # which may be unread ``.gpw`` paths that its constructor cannot take
+            # back. Only the frozen phonons differ, so the calculators are shared.
+            pool_unit = copy.copy(unit)
+            pool_unit._frozen_phonons = new_fp
+            return pool_unit
+
         kwargs = unit._copy_kwargs(exclude=("atoms",))
         return type(unit)(new_fp, **kwargs)
 
@@ -1979,12 +2136,27 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy.
+        if potentials.is_lazy:
+            potentials = potentials.__class__(
+                potentials.array.compute(scheduler="synchronous"),
+                **potentials._copy_kwargs(exclude=("array",)),
+            )
+
         rng = np.random.default_rng(member_seed)
+
+        if last_slice is None:
+            last_slice = len(self)
 
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
         # Without it each (z-rep, unit-slice) pair re-tiles the same array via
@@ -2002,14 +2174,9 @@ class CrystalPotential(_PotentialBuilder):
         n_configs = potentials.shape[0]
 
         # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
-        # per-tile access into the pool, so materialise the (small unit-cell)
-        # pool array once. A lazily-built PotentialArray unit carries a dask
-        # array here; compute it so per-tile fancy indexing works and stays on
-        # the target device.
+        # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
-        if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
@@ -2095,34 +2262,54 @@ class CrystalPotential(_PotentialBuilder):
             # Draw an independent displaced realisation per unit cell in the x,
             # y and z supercell directions. For a single-config pool this
             # collapses to the cheap cached ``.tile()`` path below.
+            # Always draw (even for z-repetitions skipped below) so the
+            # frozen-phonon sequence and the pool budget accounting stay
+            # consistent regardless of first_slice -- different chunks of the
+            # same crystal must see the same per-layer configuration draws.
             if n_configs > 1:
                 config_tiles = _draw_config_tiles()
             else:
                 config_tiles = None
 
-            for j in range(len(self.potential_unit)):
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # advance the counter and skip.
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
+            for j in range(unit_slices):
+                # Iterate j from 0 even for slices before first_slice in a
+                # partially-overlapping rep, so the unit generator advances in
+                # order (j=0, j=1, ...). The tiling cache ensures each
+                # (config, j) pair is tiled at most once.
                 if config_tiles is None:
                     slic = _tiled_slice(0, j)
                 else:
                     slic = _mosaic_slice(config_tiles, j)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    # Mutating the cached slice is safe in the standard
+                    # sequential consumption pattern (the consumer reads
+                    # ``slic.exit_planes`` immediately upon receiving the yield
+                    # and never holds a back-reference across iterations — see
+                    # multislice.py:672). Reset the value on every yield so
+                    # re-entering the same cached slice on a different z-rep
+                    # still carries the right metadata.
+                    slic._exit_planes = exit_planes
 
-                # Mutating the cached slice is safe in the standard sequential
-                # consumption pattern (the consumer reads ``slic.exit_planes``
-                # immediately upon receiving the yield and never holds a back-
-                # reference across iterations — see multislice.py:672). Reset
-                # the value on every yield so re-entering the same cached
-                # slice on a different z-rep still carries the right metadata.
-                slic._exit_planes = exit_planes
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                start += 1
-                stop += 1
+                global_idx += 1
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
-
-                if j == last_slice:
-                    break
+                if global_idx >= last_slice:
+                    return

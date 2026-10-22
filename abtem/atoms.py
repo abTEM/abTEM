@@ -792,6 +792,30 @@ def best_orthogonal_cell(
     return np.linalg.norm(cell, axis=0)
 
 
+def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> None:
+    """
+    Snap scaled positions that are within `tolerance` (in Angstrom, along the
+    relevant lattice vector) of a cell boundary to exactly 0.
+
+    Relaxed structures from DFT or machine-learned potentials often leave atoms
+    that are physically on a cell boundary or corner with a tiny numerical
+    residual, e.g. a scaled coordinate of -1e-9 instead of exactly 0. Since
+    `ase.build.tools.cut` (used to build the orthogonal supercell) computes
+    scaled positions with a plain `% 1.0`, such a residual wraps to just below
+    1.0 rather than staying just above 0.0 depending on its sign, and is then
+    silently excluded by `cut`'s boundary mask. This makes `orthogonalize_cell`
+    non-deterministic under sub-tolerance numerical noise, dropping atoms for
+    some inputs but not others even though they represent the same structure.
+    """
+    scaled = atoms.get_scaled_positions(wrap=False)
+    lengths = atoms.cell.lengths()
+    lengths[lengths == 0] = 1.0
+    eps = tolerance / lengths
+    near_boundary = np.abs(scaled - np.round(scaled)) < eps
+    scaled[near_boundary] = np.round(scaled[near_boundary])
+    atoms.set_scaled_positions(scaled % 1.0)
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -862,6 +886,15 @@ def orthogonalize_cell(
         The applied transform given as Euler angles (by default not returned).
     """
 
+    # Copy once, up front, rather than at each mutating call below. Three
+    # separate ASE calls on `atoms` in this function mutate in place --
+    # `set_cell`/`wrap` immediately below, `translate`/`wrap` when `origin`
+    # is non-default, and `_snap_scaled_positions_to_cell_boundary` right
+    # before `cut()` in the repeat-and-cut branch further down -- so copying
+    # at only one of those call sites still leaves the others writing into
+    # the caller's object.
+    atoms = atoms.copy()
+
     cell = atoms.cell
     cell[np.abs(cell) < 1e-6] = 0.0
     atoms.set_cell(cell)
@@ -883,23 +916,66 @@ def orthogonalize_cell(
         if is_cell_orthogonal(atoms.cell):
             if return_transform:
                 return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            elif return_transform_matrix:
+                return atoms, np.eye(3)
             else:
                 return atoms
-        # Early-exit bug: diag==box with non-orthogonal cell -> GS fallback
-        if not return_transform and not return_transform_matrix:
-            from numpy import dot
-            _cell = np.array(atoms.cell, dtype=float)
-            v1, v2, v3 = _cell[0], _cell[1], _cell[2]
-            v2_new = v2 - dot(v2, v1) / dot(v1, v1) * v1
-            from ase import Atoms as _Atoms
-            atoms = _Atoms(symbols=atoms.get_chemical_symbols(),
-                           positions=atoms.get_positions().copy(),
-                           cell=np.array([v1, v2_new, v3]), pbc=atoms.pbc)
-            atoms.wrap()
+
+        # `best_orthogonal_cell` computes box lengths as norms of (possibly
+        # repeated) lattice vectors. For a near-orthorhombic cell whose
+        # off-diagonal components are smaller than about 2e-8 relative to the
+        # corresponding diagonal entry, those norms round to the exact
+        # diagonal entries in float64, so `diag(cell) == box` can be True
+        # even though `is_cell_orthogonal` (tol=1e-12) still correctly
+        # reports the cell as non-orthogonal. This is a relative, not
+        # absolute, effect: a 5000 A cell can carry noise up to ~1e-4 A and
+        # still trip it, while a 5 A cell only does so below ~1e-7 A. No
+        # repetition is needed in this case, just removal of the numerical
+        # residual, so remove it by zeroing the off-diagonal components
+        # directly, rather than falling through to the general repeat-and-cut
+        # path below (which assumes real repetition is needed to reach
+        # `box`).
+        #
+        # A Gram-Schmidt process on the three vectors would only guarantee
+        # they end up mutually orthogonal, not axis-aligned: if the noise
+        # sits in the first vector (whose direction seeds the process), the
+        # result is a valid orthogonal box rotated slightly off the
+        # coordinate axes, which is not what the rest of this function
+        # assumes. Since reaching this branch already means every
+        # off-diagonal component is at or below float64's ~2e-8 relative
+        # rounding floor (see above), zeroing them directly is both simpler
+        # and correct; anything larger is guarded against below rather than
+        # silently discarded.
+        cell = np.array(atoms.cell, dtype=float)
+        off_diagonal = cell[~np.eye(3, dtype=bool)]
+        max_off_diagonal = np.max(np.abs(off_diagonal))
+        relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
+        if relative_off_diagonal > 1e-6:
+            raise RuntimeError(
+                "Cell is not orthogonal and the off-diagonal components "
+                f"({max_off_diagonal:.3e} A, {relative_off_diagonal:.3e} "
+                "relative to the cell size) are too large to be numerical "
+                "noise; refusing to silently drop them. This should not "
+                "normally happen; please report this cell."
+            )
+
+        orthogonal_cell = np.diag(np.diag(cell))
+
+        atoms = atoms.copy()
+        atoms.set_cell(orthogonal_cell)
+        atoms.wrap()
+
+        if return_transform:
+            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+        elif return_transform_matrix:
+            return atoms, np.eye(3)
+        else:
             return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
+
+    _snap_scaled_positions_to_cell_boundary(atoms, tolerance)
 
     inv = np.linalg.inv(atoms.cell)
     vectors = np.dot(np.diag(box), inv)
@@ -951,8 +1027,13 @@ def atoms_in_cell(
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
+    # The interval is half-open, [-m, 1 + m), and the tolerance shifts *both*
+    # ends down so that it stays a period long. With it on the lower end only,
+    # float noise from a rotation or orthogonalisation -- an atom at -3e-17
+    # and its periodic image at 1 - 1e-16 -- kept both copies, and a
+    # non-periodic cut of hcp Mg held 8 atoms where its cell has 4.
     mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
-        scaled_positions < (1 + scaled_margins)[None], axis=1
+        scaled_positions < (1 + scaled_margins - 1e-12)[None], axis=1
     )
 
     atoms = atoms[mask]
@@ -969,7 +1050,7 @@ def cut_cell(
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell,
     ignoring periodicity. If the given atoms do not originally fill the cell, they are
-    first repeated until they do.
+    first repeated until they do, also when some of them lie outside the cell.
 
     Parameters
     ----------
@@ -1026,9 +1107,11 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
+    floor_min = np.floor(scaled_corners.min(axis=0))
+
     new_atoms = atoms * repetitions
 
-    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    center_translate = np.dot(floor_min, atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
@@ -1036,8 +1119,126 @@ def cut_cell(
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
 
+    # The repetitions are the lattice shifts [first, first + repetitions). They reach
+    # every image in the region kept of an atom given in the cell, except in a
+    # non-orthogonal cell with a margin, and at a face within rounding. They miss
+    # those of an atom given outside the cell. Those images are placed directly, at
+    # the lattice shifts the region kept needs, and follow the atoms of the
+    # repetitions, which are as they would be without them. Their number is set by
+    # the box, not by how far outside the cell the atom is.
+    first = floor_min - scaled_margin.sum(0)
+    # The region kept is the one `atoms_in_cell` keeps, which allows 1e-12 of the box
+    # length at both faces of the box.
+    kept = scaled_corners - np.linalg.solve(
+        atoms.cell.T, np.array(margin) + 1e-12 * np.array(cell)
+    )
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    unreached = np.flatnonzero(
+        np.any(
+            (scaled_positions < kept.max(axis=0) - first - repetitions)
+            | (scaled_positions >= kept.min(axis=0) - first + 1),
+            axis=1,
+        )
+    )
+    # The region kept spans fewer than `repetitions` shifts along each axis.
+    steps = np.indices(repetitions).reshape(3, -1).T
+    shifts = np.ceil(kept.min(axis=0) - scaled_positions[unreached])[:, None] + steps
+    shifts = shifts.reshape(-1, 3)
+    reached = np.all((shifts >= first) & (shifts < first + repetitions), axis=1)
+    missed = atoms[np.repeat(unreached, len(steps))[~reached]]
+    missed.positions[:] += np.dot(shifts[~reached], atoms.cell)
+    missed.cell = cell
+    new_atoms.extend(atoms_in_cell(missed, margin=margin))
+
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
+
+
+def _wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
+    """Wrap atoms into their cell by modulo, snapping the boundary cases to zero.
+
+    Wrapping is by ``np.mod`` rather than ``Atoms.wrap``, because ``wrap`` is a
+    **no-op along any axis where ``pbc`` is False** -- which is ASE's default
+    for a hand-built ``Atoms`` and what every ``ase.build.*(vacuum=...)`` slab
+    carries. The slicing this feeds models an infinite-projection potential
+    that is periodic in all three directions whatever the ``Atoms`` object
+    declares, so the bin index must be taken modulo the cell regardless.
+
+    The snap is still needed: positions land in ``[0, L)``, and the
+    ``SliceIndexedAtoms`` bin edges are nudged down by 1e-12, so anything in
+    ``(L - 1e-12, L)`` would fall outside every bin and be dropped. The same
+    applies in x and y, where a value a hair below ``L`` puts the atom's FFT
+    peak at the wrong position.
+
+    Idempotent, and the caller's ``Atoms`` is not modified unless ``copy`` is
+    False.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        Atoms to wrap. Not modified unless ``copy`` is False.
+    copy : bool, optional
+        If False, wrap in place. Only for callers that own ``atoms``.
+    """
+    cell = np.diag(np.array(atoms.cell))
+
+    positions = atoms.positions
+    if positions.size == 0 or not np.all(cell > 0.0):
+        # A degenerate cell is reported better by the caller's own validation
+        # than by a modulo-by-zero here.
+        return atoms
+
+    if np.all((positions >= 0.0) & (positions < cell - 1e-10)):
+        return atoms
+
+    if copy:
+        atoms = atoms.copy()
+
+    np.mod(atoms.positions, cell, out=atoms.positions)
+
+    for ax in range(3):
+        length = cell[ax]
+        atoms.positions[atoms.positions[:, ax] > length - 1e-10, ax] = 0.0
+        atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+
+    return atoms
+
+
+def _pad_images(margin: float, length: float) -> int:
+    """The number of cell lengths `pad_atoms` repeats a cell to each side."""
+    return int(np.ceil(margin / length))
+
+
+def _wrap_far_atoms(
+    atoms: Atoms, margins: tuple[float, float, float], directions: str = "xy"
+) -> None:
+    """
+    Wrap into the cell, in place, the atoms that `pad_atoms` would not keep with all
+    their images, along the given directions.
+
+    `pad_atoms` repeats the cell `_pad_images` times to each side and crops to the
+    margin. The images of an atom given outside the cell are all in the repetitions
+    only up to the distance they reach less the margin, and the atom itself is kept
+    only up to the margin. Wrapping the atoms further out, by whole cell lengths,
+    leaves the periodic structure unchanged. An atom closer to the cell is not moved.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to wrap, with an orthogonal cell.
+    margins : tuple of three floats
+        The padding margin along `x`, `y` and `z`.
+    directions : str
+        The directions to wrap along, as for `pad_atoms`.
+    """
+    for direction in directions:
+        axis = "xyz".index(direction)
+        length = atoms.cell[axis, axis]
+        reach = _pad_images(margins[axis], length) * length
+        slack = min(reach - margins[axis], margins[axis])
+        positions = atoms.positions[:, axis]
+        far = (positions < -slack) | (positions >= length + slack)
+        positions[far] = np.mod(positions[far], length)
 
 
 def pad_atoms(
@@ -1046,8 +1247,12 @@ def pad_atoms(
     directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms
+    Repeat the atoms in the given directions, retaining only the repeated atoms
     within the margin distance from the cell boundary.
+
+    Atoms are cropped only along the directions that were repeated. Along any other
+    direction, including a padded direction with a zero margin, every atom is kept,
+    even one outside the cell.
 
     Parameters
     ----------
@@ -1055,7 +1260,7 @@ def pad_atoms(
         The atoms that should be padded.
     margins: one or tuple of three floats
         The padding margin. Can be specified either as a single value for all
-        directions, or three separate values.
+        directions, or three separate values for `x`, `y` and `z`.
     directions : str
         The directions to pad the atoms as a concatenation of one or more of `x`, `y`
         and `z` for each of the principal directions.
@@ -1080,16 +1285,27 @@ def pad_atoms(
     axes = [{"x": 0, "y": 1, "z": 2}[direction] for direction in directions]
 
     reps = [1, 1, 1]
-    for axis, margin in zip(axes, margins):
-        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+    for axis in axes:
+        reps[axis] = 1 + 2 * _pad_images(margins[axis], atoms.cell[axis, axis])
 
-    if any([rep > 1 for rep in reps]):
-        atoms = atoms * reps
-        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
-        atoms.cell = old_cell
+    if not any([rep > 1 for rep in reps]):
+        return atoms
 
-    atoms = atoms_in_cell(atoms, margins)
-    return atoms
+    atoms = atoms * reps
+    atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
+    atoms.cell = old_cell
+
+    # Crop only along the repeated axes: the crop is there to trim the images
+    # just added. Along any other axis it can only remove original atoms, and a
+    # non-periodic potential holds those unwrapped -- an atom displaced out of
+    # the cell before it reached the potential (frozen phonons iterated by
+    # hand, an MD snapshot) was dropped here and lost its whole contribution,
+    # where the same displacement applied by the potential after padding was
+    # kept. An infinite margin disables atoms_in_cell along that axis.
+    crop_margins = tuple(
+        float(margins[axis]) if reps[axis] > 1 else np.inf for axis in range(3)
+    )
+    return atoms_in_cell(atoms, crop_margins)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from abc import ABCMeta, abstractmethod
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -66,30 +67,28 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def integrate_on_grid(
         self,
-        positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
+        atoms: Atoms,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
     ) -> np.ndarray:
         """
-        Integrate radial potential between two limits at the given 2D positions on a
-        grid. The integration limits are only used when the integration method is
+        Integrate radial potential between two limits at the given atomic positions on
+        a grid. The integration limits are only used when the integration method is
         finite.
 
         Parameters
         ----------
-        positions : np.ndarray
-            2D array of xy-positions of the centers of each radial function [Å].
-        a : np.ndarray
-            Lower integration limit of the pr
-            ojection integrals along z for each position [Å]. The limit is given
-            relative to the center of the radial function.
-        b : np.ndarray
-            Upper integration limit of the projection integrals along z for each
-            position [Å]. The limit is given relative to the center of the radial
-            function.
+        atoms : ase.Atoms
+            The atoms whose radial functions are integrated onto the grid.
+        a : float
+            Lower integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
+        b : float
+            Upper integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
         gpts : two int
             Number of grid points in `x` and `y` describing each slice of the potential.
         sampling : two float
@@ -273,8 +272,8 @@ class GaussianProjectionIntegrals(FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -395,6 +394,21 @@ def superpose_deltas(
     return array
 
 
+_MAX_SCATTERING_FACTOR_ENTRIES = 32
+
+
+def _device_cache_key(device) -> str | tuple[str, int]:
+    """Name the concrete device a cached array belongs to.
+
+    ``device`` may be the string "cpu"/"gpu", an array module or an array, which
+    is not always hashable and does not distinguish one GPU from another.
+    """
+    xp = get_array_module(device)
+    if xp is np:
+        return "cpu"
+    return ("gpu", int(xp.cuda.Device().id))
+
+
 class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     """
     A FieldIntegrator calculating infinite projections of radial potential
@@ -415,7 +429,10 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
-        self._scattering_factors = {}
+        # Bounded and least-recently-used. A plain OrderedDict rather than a
+        # functools.lru_cache around a bound method, which could not be pickled
+        # (breaking dask's processes scheduler) or compared and copied.
+        self._scattering_factors: OrderedDict = OrderedDict()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -449,26 +466,50 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         return f
 
     def get_scattering_factor(self, symbol, gpts, sampling, device):
-        try:
-            scattering_factor = self.scattering_factors[symbol]
-        except KeyError:
-            scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device
-            )
-            self._scattering_factors[symbol] = scattering_factor
+        # The cached array depends on the grid and on the device it was
+        # allocated on, not on the element alone: keying on ``symbol`` served
+        # the first grid's array to every later grid (a broadcast error in
+        # integrate_on_grid) and the first device's array to every later device.
+        key = (symbol, tuple(gpts), tuple(sampling), _device_cache_key(device))
 
+        cache = self._scattering_factors
+        try:
+            scattering_factor = cache[key]
+        except KeyError:
+            pass
+        else:
+            try:
+                cache.move_to_end(key)
+            except KeyError:  # evicted by another thread; the value is still ours
+                pass
+            return scattering_factor
+
+        scattering_factor = self._calculate_scattering_factor(
+            symbol, gpts, sampling, device
+        )
+
+        # The full key admits one entry per (element, grid, device) rather than
+        # per element, so an integrator shared across grids needs a bound. The
+        # eviction tolerates another thread emptying the cache underneath it.
+        while len(cache) >= _MAX_SCATTERING_FACTOR_ENTRIES:
+            try:
+                cache.popitem(last=False)
+            except KeyError:
+                break
+        cache[key] = scattering_factor
         return scattering_factor
 
     @property
-    def scattering_factors(self) -> dict[str, np.ndarray]:
-        """Projected scattering factor array on a 2D grid."""
+    def scattering_factors(self) -> dict[tuple, np.ndarray]:
+        """Cached projected scattering factors, keyed by element, grid and
+        device."""
         return self._scattering_factors
 
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -986,7 +1027,12 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_xp)[None]
             )
 
-            if len(self._parametrization.sigmas):
+            # An element with a smoothing width is accumulated into its own
+            # buffer, smoothed, and then added; every other element goes
+            # straight into the slice.
+            symbol = chemical_symbols[number]
+            smoothed = symbol in self._parametrization.sigmas
+            if smoothed:
                 temp = xp.zeros(gpts, dtype=get_dtype(complex=False))
             else:
                 temp = array
@@ -1015,9 +1061,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            symbol = chemical_symbols[number]
-
-            if symbol in self._parametrization.sigmas:
+            if smoothed:
                 sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"

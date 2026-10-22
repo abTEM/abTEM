@@ -18,7 +18,7 @@ from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.utils import itemset
+from abtem.core.utils import get_dtype, itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -231,16 +231,13 @@ def _interpolate_between_cells(
     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
     coordinates = np.dot(coordinates, new_cell) + offset
 
-    padding = 3
-    padded_array = np.pad(array, ((padding,) * 2,) * 3, mode="wrap")
-
     inverse_old_cell = np.linalg.inv(np.array(old_cell))
     mapped_coordinates = np.dot(coordinates, inverse_old_cell) % 1.0
     mapped_coordinates *= array.shape
-    mapped_coordinates += padding
 
+    # "grid-wrap" makes the spline periodic with the array's own length.
     interpolated = map_coordinates(
-        padded_array, mapped_coordinates.T, mode="wrap", order=order
+        array, mapped_coordinates.T, mode="grid-wrap", order=order
     )
     interpolated = interpolated.reshape(new_shape)
     return interpolated
@@ -253,11 +250,16 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
 
-    slice_array = _interpolate_between_cells(
-        array, slice_shape, cell, slice_box, (0, 0, a)
-    )
-
     dz = (b - a) / slice_shape[-1]
+
+    # Midpoint rule: sample at a + (i + 1/2) dz. The samples used to start at
+    # z = a (a left Riemann sum), which centres the slice integral dz/2 below the
+    # slice centre. Summed over a full period the bias cancels, but per slice it
+    # shifts the long-range part of ChargeDensityPotential against the
+    # short-range quadrature part, which is placed correctly.
+    slice_array = _interpolate_between_cells(
+        array, slice_shape, cell, slice_box, (0, 0, a + dz / 2)
+    )
 
     return np.sum(slice_array, axis=-1) * dz
 
@@ -396,7 +398,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         else:
             raise RuntimeError()
 
-        self._charge_density = charge_density.astype(np.float32)
+        self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
 
         cell = self._frozen_phonons.atoms.cell * repetitions

@@ -7,6 +7,7 @@ from ase import Atoms
 from ase.cell import Cell
 
 from abtem.bloch.utils import excitation_errors, reciprocal_cell
+from abtem.core.backend import get_array_module
 from abtem.core.grid import polar_spatial_frequencies
 
 
@@ -191,7 +192,8 @@ def integrate_ellipse_around_pixels(
     np.ndarray
         The integrated intensities around the pixels.
     """
-    weights = antialiased_disk(r, sampling)
+    # on the array's device: the weights multiply slices of it
+    weights = get_array_module(array).asarray(antialiased_disk(r, sampling))
     a, b = weights.shape[0] // 2, weights.shape[1] // 2
     intensities = np.zeros_like(array, shape=array.shape[:-2] + (nm.shape[-2],))
 
@@ -293,30 +295,30 @@ def index_diffraction_spots(
 
     mask = overlapping_spots_mask(nm, sg)
 
-    intensities = intensities * mask
+    intensities = intensities * get_array_module(intensities).asarray(mask)
 
     return intensities
 
 
 def miller_to_miller_bravais(hkl: tuple[int, int, int]) -> tuple[int, int, int, int]:
     """
-    Convert Miller indices to Miller-Bravais indices.
+    Convert the Miller indices of a plane to Miller-Bravais indices.
+
+    For a plane (h k l) of a hexagonal lattice the four-index form is
+    (h k i l) with the redundant index i = -(h + k), since the third basal
+    axis is a3 = -(a1 + a2). (Directions [UVW] convert differently, to
+    [(2U - V)/3, (2V - U)/3, -(U + V)/3, W]; this function is for planes.)
 
     Parameters
     ----------
     hkl : tuple
-        The Miller indices (h, k, l).
+        The Miller indices (h, k, l) of a plane.
 
     Returns
     -------
     tuple
-        The Miller-Bravais indices (H, K, I, L).
+        The Miller-Bravais indices (h, k, i, l) of the same plane.
     """
     h, k, l = hkl  # noqa: E741
 
-    H = 2 * h - k
-    K = 2 * k - h
-    I = -H - K  # noqa: E741
-    L = l
-
-    return H, K, I, L
+    return h, k, -(h + k), l

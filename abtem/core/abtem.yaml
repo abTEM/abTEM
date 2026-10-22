@@ -19,9 +19,11 @@ dask:
   # The target chunk size to use for dask arrays on the gpu
   chunk-size-gpu: 512 MB
 cupy:
-  # The size of the fft cache in MB used by cupy
+  # The memory bound on the workspace of the cuFFT plans cached by cupy, in each
+  # thread: a size such as "512 MB", "auto" (25% of the device memory), 0 MB to
+  # disable the cache, or -1 for no bound.
   # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache
-  fft-cache-size: 0 MB
+  fft-cache-size: auto
 mkl:
   # The number of threads to use for mkl
   threads: 2

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
+import io
+import threading
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -15,10 +16,12 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
+from dask.delayed import Delayed
 from scipy.interpolate import interp1d
 
 from abtem.atoms import is_cell_orthogonal, plane_to_axes
 from abtem.core.axes import AxisMetadata
+from abtem.core.backend import copy_to_device
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,
@@ -35,6 +38,7 @@ from abtem.inelastic.phonons import (
 from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.slicing import _integrate_planes
 
 try:
     from gpaw import GPAW
@@ -47,11 +51,21 @@ if GPAW is not None:
     from gpaw.mpi import SerialCommunicator
 
 
-def _get_gpaw_setups(atoms, mode, xc):
-    gpaw = GPAW(txt=None, mode=mode, xc=xc)
-    gpaw.initialize(atoms)
-
-    return gpaw.setups
+# GPAW keeps one FFT plan per grid shape and dtype for the whole process
+# (``gpaw.fftw.create_plans`` caches them in a module-level dict), and each plan
+# owns the scratch arrays (``tmp_R``, ``tmp_Q``) that every transform writes its
+# input to and reads its output from. All calculators on the same grid share
+# these arrays, so two threads evaluating GPAW at once overwrite each other's
+# transforms: a read gives a wrong potential without an error, and concurrent
+# ``_DummyGPAW.setups`` calls can make GPAW itself fail. Dask's threaded
+# scheduler runs the tasks of a multi-file ``GPAWPotential`` in parallel, and
+# tasks of an earlier build can still be running when the caller's thread
+# returns to GPAW. Every abTEM call that makes a GPAW calculator compute on its
+# grids (reading a ``.gpw`` file, initializing, evaluating a density or
+# potential) therefore holds this lock; attribute reads, and GPAW's radial atom
+# solvers, which create no FFT plans, do not. The lock is re-entrant because
+# ``_read_gpw`` calls ``_DummyGPAW.from_gpaw``.
+_GPAW_LOCK = threading.RLock()
 
 
 @dataclass
@@ -70,27 +84,43 @@ class _DummyGPAW:
 
     @property
     def setups(self):
-        gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
-        gpaw.initialize(self.atoms)
-        return gpaw.setups
+        with _GPAW_LOCK:
+            gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
+            gpaw.initialize(self.atoms)
+            return gpaw.setups
 
     @classmethod
     def from_gpaw(cls, gpaw, lazy: bool = True):
         # if lazy:
         #    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
 
+        with _GPAW_LOCK:
+            return cls._from_gpaw(gpaw)
+
+    @classmethod
+    def _from_gpaw(cls, gpaw):
         atoms = gpaw.atoms.copy()
         atoms.calc = None
 
+        valence_potential = gpaw.get_electrostatic_potential()
+
+        # GPAW's new-style calculator (default since GPAW 26) renames the
+        # compensation charge coefficients from Q_aL to ccc_aL. Read it after
+        # get_electrostatic_potential(), which fills in Q_aL on a restarted
+        # old-style calculator.
+        Q_aL = getattr(gpaw.density, "Q_aL", None)
+        if Q_aL is None:
+            Q_aL = gpaw.density.ccc_aL
+
         kwargs = {
-            "setup_mode": gpaw.parameters["mode"],
-            "setup_xc": gpaw.parameters["xc"],
+            "setup_mode": gpaw.parameters.mode,
+            "setup_xc": gpaw.parameters.xc,
             "nt_sG": gpaw.density.nt_sG.copy(),
             "gd": gpaw.density.gd.new_descriptor(comm=SerialCommunicator()),
             "D_asp": dict(gpaw.density.D_asp),
             "atoms": atoms,
-            "valence_potential": gpaw.get_electrostatic_potential(),
-            "Q_aL": dict(gpaw.density.Q_aL),
+            "valence_potential": valence_potential,
+            "Q_aL": dict(Q_aL),
         }
 
         return cls(**kwargs)
@@ -98,11 +128,9 @@ class _DummyGPAW:
     @classmethod
     def from_file(cls, path: str, lazy: bool = True):
         if lazy:
-            return dask.delayed(cls.from_file)(path, lazy=False)
+            return dask.delayed(_read_gpw)(path)
 
-        calc = GPAW(path)
-
-        return cls.from_gpaw(calc)
+        return _read_gpw(path)
 
     @classmethod
     def from_generic(cls, calculator, lazy: bool = True):
@@ -114,6 +142,69 @@ class _DummyGPAW:
             return calculator
         else:
             raise RuntimeError()
+
+
+def _read_gpw(path: str) -> _DummyGPAW:
+    # Module level, so that a task calling it pickles it by reference; a
+    # classmethod in a task is pickled by value together with the globals it
+    # uses, and the lock cannot be pickled.
+    with _GPAW_LOCK:
+        return _DummyGPAW.from_gpaw(GPAW(path))
+
+
+class _LastRead:
+    # Reads the ``.gpw`` placeholders of one eager ``_partition_args`` call and
+    # keeps only the calculator read last. Consecutive blocks that share a
+    # placeholder (one path with ``FrozenPhonons``) reuse it; a block with
+    # another placeholder drops it before reading. An eager build therefore
+    # holds one read calculator while it generates slices, and two while it
+    # reads the next file, since the caller still holds the previous block's
+    # potential. The object lives in that call's block array and goes with
+    # it, so no calculator outlives the build.
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._placeholder = None
+        self._calculator = None
+
+    def read(self, placeholder: Delayed) -> "_DummyGPAW":
+        with self._lock:
+            if placeholder is not self._placeholder:
+                self._placeholder = None
+                self._calculator = None
+                # Synchronous: one task, and no thread pool started from
+                # inside a caller's task. ``_read_gpw`` takes the GPAW lock.
+                self._calculator = placeholder.compute(scheduler="synchronous")
+                self._placeholder = placeholder
+            return self._calculator
+
+
+class _PendingRead:
+    # A ``.gpw`` placeholder in an eager block, read when the block's potential
+    # is made (``GPAWPotential._gpaw_potential``), not when the blocks are.
+    __slots__ = ("placeholder", "reads")
+
+    def __init__(self, placeholder: Delayed, reads: _LastRead):
+        self.placeholder = placeholder
+        self.reads = reads
+
+
+def _defer_placeholders(calculators, reads: _LastRead):
+    # ``from_file`` leaves each ``.gpw`` path as a ``Delayed`` read. A lazy
+    # graph resolves it as a task argument; eager blocks read it one block at
+    # a time through ``reads``.
+    if isinstance(calculators, list):
+        return [_defer_placeholders(calculator, reads) for calculator in calculators]
+    if isinstance(calculators, Delayed):
+        return _PendingRead(calculators, reads)
+    return calculators
+
+
+def _read_pending(calculators):
+    if isinstance(calculators, list):
+        return [_read_pending(calculator) for calculator in calculators]
+    if isinstance(calculators, _PendingRead):
+        return calculators.reads.read(calculators.placeholder)
+    return calculators
 
 
 def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
@@ -150,18 +241,43 @@ def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
     return interpolators
 
 
+def _same_elements_and_cell(atoms, other):
+    """Whether two atoms have the same elements in the same order and cell."""
+    return (
+        len(atoms) == len(other)
+        and np.array_equal(atoms.numbers, other.numbers)
+        and np.allclose(np.array(atoms.cell), np.array(other.cell))
+    )
+
+
 def integrate_slice(array, gpts, a, b, thickness):
-    dz = thickness / array.shape[2]
-    na = int(np.floor(a / dz))
-    nb = int(np.floor(b / dz))
-    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
-    new_shape = (nb - na,) + gpts
-    old_shape = (nb - na,) + slice_array.shape
+    """
+    Integrate the planes of `array` along its last axis between the heights `a`
+    and `b`, and Fourier interpolate the result to `gpts`.
+
+    Plane k is the sample at the height k * dz, with dz the plane spacing, and
+    stands for the heights from k * dz - dz / 2 to k * dz + dz / 2; the grid is
+    periodic, so plane 0 also stands for the heights within dz / 2 below the
+    thickness. A slice takes each plane times the length of the plane's heights
+    that lie between `a` and `b`. Consecutive slices share their limit, so the
+    weights of every plane add up to dz. A limit on a plane splits it between the
+    slices on either side (the trapezoidal rule), so the integral of a slice is
+    centred on the slice. Taking the planes from floor(a / dz) to floor(b / dz)
+    whole (a left Riemann sum) put it dz / 2 below the slice.
+    """
+    nz = array.shape[2]
+    dz = thickness / nz
+    # The limits in plane spacings; the grid ends at plane nz.
+    start, stop = a / dz, min(b / dz, nz)
+
+    if stop <= start:
+        return np.zeros(gpts, dtype=array.dtype)
+
+    slice_array = _integrate_planes(array, start, stop) * dz
+    old_shape = slice_array.shape
     slice_array = np.fft.fftn(slice_array)
     slice_array = fft_crop(slice_array, gpts)
-    slice_array = (
-        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
-    )
+    slice_array = np.fft.ifftn(slice_array).real * np.prod(gpts) / np.prod(old_shape)
     return slice_array
 
 
@@ -187,19 +303,32 @@ def _generate_slices(
     plane="xy",
     first_slice=0,
     last_slice=None,
+    device=None,
 ):
-    potential_generators = []
+    # `atoms` is the calculator's atoms or whole copies of them one after another
+    # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
+    # correction of atom i of the calculator.
+    n = len(interpolators)
+    potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
         potential = Potential(
             gpts=gpts,
-            atoms=atoms[i : i + 1],
+            atoms=atoms[i::n],
             parametrization=parametrization,
             slice_thickness=slice_thickness,
             projection="finite",
             plane=plane,
+            device=device,
         )
-        potential_generators.append(potential.generate_slices())
+        potentials.append(potential)
+
+    if last_slice is None:
+        last_slice = len(potential)
+
+    potential_generators = [
+        potential.generate_slices(first_slice, last_slice) for potential in potentials
+    ]
 
     transform_valence_potential = None
     if potential.plane != "xy":
@@ -219,9 +348,6 @@ def _generate_slices(
     elif transform_valence_potential is None:
         transform_valence_potential = True
 
-    if last_slice is None:
-        last_slice = len(potential)
-
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
 
@@ -230,14 +356,17 @@ def _generate_slices(
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array
 
+        # The valence potential is on the host; its slice is moved to the device
+        # of the slice array.
         if transform_valence_potential:
-            slic.array[:] -= _interpolate_slice(
+            valence_slice = _interpolate_slice(
                 valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
             )
         else:
-            slic.array[:] -= integrate_slice(
+            valence_slice = integrate_slice(
                 valence_potential, potential.gpts, a, b, potential.thickness
             )
+        slic.array[:] -= copy_to_device(valence_slice, slic.array)
 
         yield slic
 
@@ -301,7 +430,9 @@ class GPAWPotential(_PotentialBuilder):
         cut out of a larger repeated potential, which may not preserve periodicity.
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
         Approximates frozen phonons for a single GPAW calculator by displacing only the
-        nuclear core potentials. Supercedes the atoms from the calculator.
+        nuclear core potentials. Supercedes the atoms from the calculator. A
+        trajectory (:class:`~abtem.inelastic.phonons.AtomsEnsemble`) is not accepted:
+        pass one calculator per frame instead.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -356,11 +487,24 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif frozen_phonons.ensemble_shape and not isinstance(
+                frozen_phonons, FrozenPhonons
+            ):
+                raise ValueError(
+                    "One calculator takes `FrozenPhonons`; for a trajectory, pass "
+                    "one calculator per frame."
+                )
+            elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
+                raise ValueError(
+                    "The frozen phonons must have the calculator's atoms: the same "
+                    "elements in the same order and the same cell, with positions "
+                    "that may differ. Repeat the cell with `repetitions`."
+                )
 
         self._calculators = calculators
         self._frozen_phonons = frozen_phonons
         self._gridrefinement = gridrefinement
-        self._repetitions = repetitions
+        self._repetitions = tuple(repetitions)
 
         cell = frozen_phonons.atoms.cell * repetitions
         frozen_phonons.atoms.calc = None
@@ -384,8 +528,9 @@ class GPAWPotential(_PotentialBuilder):
         return self._frozen_phonons
 
     @property
-    def num_configurations(self):
-        return self.frozen_phonons.num_configs
+    def num_configurations(self) -> int:
+        """Number of potential configurations; 1 when there is no ensemble axis."""
+        return len(self.frozen_phonons)
 
     @property
     def repetitions(self):
@@ -501,8 +646,11 @@ class GPAWPotential(_PotentialBuilder):
         calculator = _DummyGPAW.from_generic(calculator)
 
         atoms = self.frozen_phonons.atoms
+        valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
+            # The valence potential is periodic with the calculator's cell.
+            valence_potential = np.tile(valence_potential, self.repetitions)
             # cell_cv = calculator.gd.cell_cv * self.repetitions
             # N_c = tuple(
             #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
@@ -531,12 +679,13 @@ class GPAWPotential(_PotentialBuilder):
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
-            valence_potential=calculator.valence_potential,
+            valence_potential=valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
             slice_thickness=self.slice_thickness,
             first_slice=first_slice,
             last_slice=last_slice,
+            device=self.device,
         ):
             yield slic
         # for slic in _generate_slices(
@@ -550,7 +699,7 @@ class GPAWPotential(_PotentialBuilder):
 
     @property
     def num_frozen_phonons(self):
-        return len(self.calculators)
+        return self.num_configurations
 
     @property
     def ensemble_shape(self):
@@ -564,10 +713,11 @@ class GPAWPotential(_PotentialBuilder):
 
         if args["frozen_phonons"] is not None:
             frozen_phonons = frozen_phonons_partial(args["frozen_phonons"])
+            frozen_phonons = frozen_phonons.item()
         else:
             frozen_phonons = None
 
-        calculators = args["calculators"]
+        calculators = _read_pending(args["calculators"])
 
         new_potential = GPAWPotential(
             calculators, frozen_phonons=frozen_phonons, **kwargs
@@ -598,11 +748,21 @@ class GPAWPotential(_PotentialBuilder):
 
         calculators = self.calculators
 
+        if not lazy:
+            calculators = _defer_placeholders(calculators, _LastRead())
+
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
-            for i, fp in enumerate(
-                self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
-            ):
+            partitioned = self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+
+            # Iterating a dask array yields per-element dask array slices;
+            # passing those into dask.delayed() and wrapping the result with
+            # another from_delayed()/concatenate() confuses dask's shape
+            # inference (IndexError deep in dask.array.core during compute).
+            # Delayed objects from to_delayed() compose correctly instead.
+            fp_chunks = partitioned.to_delayed().ravel() if lazy else partitioned
+
+            for i, fp in enumerate(fp_chunks):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
 
@@ -693,25 +853,45 @@ class GPAWParametrization:
         return electrons
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
-        from gpaw.atom.aeatom import AllElectronAtom
-
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
 
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
+        added_electrons = self._get_added_electrons(symbol, charge)
+
+        try:
+            return self._run_all_electron_atom(symbol, added_electrons, spinpol=True)
+        except AssertionError:
+            # GPAW's radial solver fails to find a bound state for some open-shell
+            # atoms (e.g. Pm, Sm, Eu, Pu) in the spin-polarized calculation,
+            # independent of the SCF mixing. The spin-polarized and unpolarized
+            # total densities differ by only ~0.1 electrons, which is negligible
+            # for the independent-atom potential.
+            warnings.warn(
+                f"The spin-polarized all-electron calculation for {symbol} failed "
+                "to converge in GPAW; falling back to a non-spin-polarized "
+                "calculation."
+            )
+            return self._run_all_electron_atom(symbol, added_electrons, spinpol=False)
+
+    @staticmethod
+    def _run_all_electron_atom(symbol, added_electrons, spinpol):
+        from gpaw.atom.aeatom import AllElectronAtom
+
+        ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE", log=io.StringIO())
+
+        for n, l, df in added_electrons:
+            ae.add(n, l, df)
+
+        if added_electrons:
+            # The occupations perturbed by add() need a more conservative
+            # mixing schedule to reach self-consistency than the default,
+            # which is tuned for the unperturbed (neutral) configuration.
+            ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+        else:
             ae.run()
-            ae.scalar_relativistic = True
-            ae.refine()
 
-        # added_electrons = self._get_added_electrons(symbol, charge)
-        #
-        # for added_electron in added_electrons:
-        #     ae.add(*added_electron[:2], added_electron[-1])
-
-        # # ae.run()
-        # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        # maxiter=5000, mix=0.005, dnmax=1e-5)
+        ae.scalar_relativistic = True
+        ae.refine()
 
         return ae
 

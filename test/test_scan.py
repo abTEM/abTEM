@@ -1,12 +1,15 @@
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase.build import bulk
 from hypothesis import given
 from hypothesis import strategies as st
+from utils import gpu
 
 from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
-from abtem.scan import CustomScan, LineScan
+from abtem.potentials.iam import Potential
+from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.waves import Probe
 
 
@@ -23,10 +26,49 @@ def test_linescan_at_position(position, extent, angle):
     vector = np.array(linescan.end) - np.array(linescan.start)
 
     assert np.allclose(extent, np.linalg.norm(vector))
-    # assert np.allclose(angle, np.rad2deg(np.arctan2(vector[1], vector[0])) % 360, atol=1.)
+    # The line points along angle (degrees from the x-axis, counter-clockwise).
+    # Compare unit vectors rather than angles, so 0 and 360 deg (and any
+    # angle near the arctan2 branch cut) are equivalent.
+    expected_direction = (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)))
+    assert np.allclose(vector / np.linalg.norm(vector), expected_direction)
+    # LineScan.angle is documented in degrees.
+    reported = np.deg2rad(linescan.angle)
+    assert np.allclose((np.cos(reported), np.sin(reported)), expected_direction)
     assert np.allclose(
         position, (np.array(linescan.start) + np.array(linescan.end)) / 2
     )
+
+
+@pytest.mark.parametrize("angle", [0.0, 30.0, 135.0, 250.0])
+def test_linescan_add_to_plot_width_is_centred_on_line(angle):
+    # interpolate_line averages over +-width/2 about the line, so the drawn
+    # band must be centred on it: its centre is the line's midpoint and its
+    # corners lie width/2 to either side of start and end.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    position, extent, width = (3.0, 2.0), 4.0, 1.0
+    linescan = LineScan.at_position(center=position, extent=extent, angle=angle)
+    fig, ax = plt.subplots()
+    try:
+        rect = linescan.add_to_plot(ax, width=width)
+        corners = rect.get_patch_transform().transform([(0, 0), (1, 0), (1, 1), (0, 1)])
+    finally:
+        plt.close(fig)
+
+    direction = np.array(linescan.direction)
+    perpendicular = np.array([-direction[1], direction[0]]) * width / 2
+    start, end = np.array(linescan.start), np.array(linescan.end)
+    expected = [
+        start - perpendicular,
+        end - perpendicular,
+        end + perpendicular,
+        start + perpendicular,
+    ]
+    assert np.allclose(corners, expected)
+    assert np.allclose(corners.mean(axis=0), position)
 
 
 # --- CustomScan tests ---
@@ -100,6 +142,61 @@ def test_custom_scan_detector_ensemble_shape(detector_cls, kwargs):
     measurement = detector.detect(waves)
     # The scan positions axis must appear somewhere in the measurement shape
     assert measurement.ensemble_shape == (3,)
+
+
+# --- GridScan tests ---
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_single_point_grid_scan_partition_round_trip(endpoint):
+    """A GridScan with gpts=(1, 1) has a degenerate extent, but a well-defined
+    position. Partitioning it into blocks and rebuilding the scan from those blocks
+    must not raise and must give back the same position."""
+    scan = GridScan(
+        start=(1.0, 1.0), end=(1.0 + 4.05, 1.0 + 4.05), gpts=(1, 1), endpoint=endpoint
+    )
+
+    blocks = scan._partition_args(chunks=(1, 1), lazy=False)
+    args = tuple(block[0] for block in blocks)
+    block_scan = scan._from_partitioned_args()(*args).item()
+
+    assert block_scan.shape == (1, 1)
+    assert np.allclose(block_scan.get_positions(), scan.get_positions())
+    assert np.allclose(block_scan.get_positions().ravel(), (1.0, 1.0))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_single_point_grid_scan_lazy(device, endpoint):
+    """Regression test: building the wave functions of a one-point GridScan lazily used
+    to raise "scan extent must be positive" from the partitioning path. The lazy result
+    must match the eager one and the equivalent CustomScan."""
+    potential = Potential(
+        bulk("Al", "fcc", a=4.05, cubic=True), gpts=64, slice_thickness=1.0
+    )
+    scan = GridScan(
+        start=(1.0, 1.0), end=(1.0 + 4.05, 1.0 + 4.05), gpts=(1, 1), endpoint=endpoint
+    )
+
+    def multislice(scan, lazy):
+        probe = Probe(energy=100e3, semiangle_cutoff=15.0, device=device)
+        probe.grid.match(potential)
+        waves = probe.build(scan=scan, lazy=lazy).multislice(potential).compute()
+        return waves.to_cpu()
+
+    lazy_waves = multislice(scan, lazy=True)
+    eager_waves = multislice(scan, lazy=False)
+    custom_waves = multislice(CustomScan([[1.0, 1.0]]), lazy=False)
+
+    assert lazy_waves.shape == (1, 1) + potential.gpts
+    assert np.allclose(lazy_waves.array, eager_waves.array)
+    assert np.allclose(lazy_waves.array.reshape(custom_waves.shape), custom_waves.array)
+
+
+def test_grid_scan_zero_extent_rejected():
+    """A degenerate extent is only allowed for a single-point scan."""
+    with pytest.raises(ValueError, match="scan extent must be positive"):
+        GridScan(start=(1.0, 1.0), end=(1.0, 1.0), gpts=(4, 4))
 
 
 # def test_source_offset():

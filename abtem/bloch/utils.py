@@ -123,12 +123,18 @@ def reciprocal_space_gpts(
     cell: np.ndarray | Cell,
     g_max: float,
 ) -> tuple[int, int, int]:
-    dk = 1 / cell_bounds(cell)
+    # The largest Miller index along axis i over the ellipsoid {hkl : |hkl @ B| <=
+    # g_max} is g_max * sqrt((B B^T)^-1)_ii = g_max * |a_i| (the lattice-vector
+    # length). Using the Cartesian bounding box instead under-sizes the grid for a
+    # non-orthogonal cell (the box can be smaller than |a_i| along some axis),
+    # dropping reflection differences from the dynamical matrix. For an orthogonal
+    # cell |a_i| equals the bounding box.
+    lengths = np.linalg.norm(np.array(cell, dtype=float), axis=1)
 
     gpts = (
-        int(np.ceil(g_max / dk[0])) * 2 + 1,
-        int(np.ceil(g_max / dk[1])) * 2 + 1,
-        int(np.ceil(g_max / dk[2])) * 2 + 1,
+        int(np.ceil(g_max * lengths[0])) * 2 + 1,
+        int(np.ceil(g_max * lengths[1])) * 2 + 1,
+        int(np.ceil(g_max * lengths[2])) * 2 + 1,
     )
     return gpts
 
@@ -207,11 +213,11 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     elif centering.lower() == "i":
         return hkl.sum(axis=1) % 2 == 0
     elif centering.lower() == "a":
-        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [1, 2]].sum(axis=1) % 2 == 0
     elif centering.lower() == "b":
-        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [0, 2]].sum(axis=1) % 2 == 0
     elif centering.lower() == "c":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [0, 1]].sum(axis=1) % 2 == 0
     elif centering.lower() == "p":
         return np.ones(len(hkl), dtype=bool)
     else:
@@ -433,19 +439,19 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
         "A": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.5, 0.0, 0.0],
+                [0.0, 0.5, 0.5],
             ]
         ),
         "B": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.5, 0.0],
+                [0.5, 0.0, 0.5],
             ]
         ),
         "C": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.5],
+                [0.5, 0.5, 0.0],
             ]
         ),
         "P": np.array([[0.0, 0.0, 0.0]]),
@@ -543,6 +549,10 @@ def auto_detect_centering(
                 positions[atoms.numbers == number], relative_positions[centering]
             )
         }
+
+    # The F-centering translations include those of A-, B- and C-centering.
+    if "F" in centerings_to_check:
+        centerings_to_check = centerings_to_check - {"A", "B", "C"}
 
     if len(centerings_to_check) == 1:
         return next(iter(centerings_to_check))

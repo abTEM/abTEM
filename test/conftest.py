@@ -1,8 +1,12 @@
+import os
 import warnings
+import zlib
 
+import pytest
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
+from abtem.core.backend import cp
 
 config.set({"diagnostics.progress_bar": False})
 
@@ -23,6 +27,63 @@ def pytest_configure(config):
         "ignore",
         category=UserWarning,
     )
+
+    # Under pytest-xdist the tests on the GPU share one worker (see
+    # pytest_collection_modifyitems), which xdist only honours with the
+    # loadgroup scheduler. An explicitly chosen scheduler is left alone.
+    if config.pluginmanager.hasplugin("xdist") and (
+        getattr(config.option, "dist", None) == "load"
+    ):
+        config.option.dist = "loadgroup"
+    # The workers parse the original command line again, so the scheduler chosen
+    # above does not reach them; xdist reads the group of a test from the marker
+    # only if the worker was told to use loadgroup.
+    if hasattr(config, "workerinput"):
+        config.option.loadgroup = True
+
+
+# How many xdist workers may run GPU tests at the same time. 1 (the default) is
+# safe on any card; on one with memory to spare, more (ABTEM_TEST_GPU_WORKERS=4)
+# shortens a run whose wall time is otherwise that of the GPU tests one after
+# another.
+_GPU_WORKERS = max(int(os.environ.get("ABTEM_TEST_GPU_WORKERS", "1")), 1)
+
+
+def _gpu_group(item) -> str:
+    """The xdist group of a GPU test: one of _GPU_WORKERS, chosen by its test
+    function, so the cases of one function (and their fixtures) stay on one
+    worker."""
+    if _GPU_WORKERS == 1:
+        return "gpu"
+    function = item.nodeid.split("[")[0]
+    return f"gpu{zlib.crc32(function.encode()) % _GPU_WORKERS}"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Confine the tests on the GPU to a single pytest-xdist worker.
+
+    ``-n auto`` sizes the pool from the CPU core count, with no idea that the
+    "gpu" device parametrization means real device memory. Each worker that
+    lands a GPU test brings up its own CUDA context, and enough of them at once
+    exhaust the card; the failure is an error deep inside a kernel or cuFFT
+    launch (``CUFFT_EXEC_FAILED``), not a clean skip. Routing every such test
+    into one ``xdist_group`` runs at most one at a time whatever ``-n`` is,
+    while the CPU tests still fan out over all workers.
+
+    ``tryfirst``: xdist's own hook builds the group suffix of the node ids from
+    the markers, so the marker must be added before it runs.
+    """
+    if cp is None or not config.pluginmanager.hasplugin("xdist"):
+        return
+
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec is not None and any(
+            isinstance(value, str) and value == "gpu"
+            for value in callspec.params.values()
+        ):
+            item.add_marker(pytest.mark.xdist_group(_gpu_group(item)))
 
 
 # def pytest_addoption(parser):

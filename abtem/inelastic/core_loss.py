@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import contextlib
+import io
 import itertools
-import os
+import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -47,7 +47,7 @@ from abtem.core.energy import (
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
-from abtem.core.utils import CopyMixin
+from abtem.core.utils import CopyMixin, get_dtype
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
@@ -112,6 +112,19 @@ def _validate_transition_potentials(transition_potentials):
     return transition_potentials
 
 
+def _eager_waves(waves):
+    """The waves as an eager object; a lazy one is computed into a copy.
+
+    For the methods that reduce the whole wave intensity to a host-side result
+    (a threshold, a site subset): a lazy array would otherwise meet in-place
+    NumPy/CuPy operations it cannot take part in, or be recomputed piecewise.
+    abTEM's compute() works in place, so the caller's waves are copied first.
+    """
+    if waves.is_lazy:
+        return waves.copy().compute(progress_bar=False)
+    return waves
+
+
 class RadialWavefunction:
     def __init__(
         self,
@@ -134,19 +147,25 @@ class RadialWavefunction:
 
         self._radial_grid = radial_grid
         self._radial_values = radial_values
+        self._interpolator = None
 
     def __call__(self, r):
-        f = interp1d(
-            self._radial_grid,
-            self._radial_values,
-            kind=2,
-            fill_value="extrapolate",
-        )
-        return f(r)
+        # Built once and reused: the overlap integral evaluates each radial
+        # function several times, and the continuum grid can hold millions of
+        # points at low continuum energy.
+        if self._interpolator is None:
+            self._interpolator = interp1d(
+                self._radial_grid,
+                self._radial_values,
+                kind=2,
+                fill_value="extrapolate",
+            )
+        return self._interpolator(r)
 
     @property
     def bound(self):
-        return self.n > 0
+        # Continuum states carry n=None, so comparing n to 0 raised TypeError.
+        return self._n is not None
 
     @property
     def energy(self):
@@ -214,7 +233,12 @@ def numerov(f, x0, dx, dh):
     """Given precomputed function f(x), solves for x(t), which satisfies:
     x''(t) = f(t) x(t)
     """
-    x = np.zeros(len(f))
+    # f.copy() rather than np.zeros(len(f)): some numba/numpy pairings
+    # (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's internal
+    # np.zeros -> np.empty lowering inside @jit, while ndarray.copy() is
+    # unaffected. Every element of x is overwritten below before being
+    # read, so the borrowed initial values from f are never used.
+    x = f.copy()
     x[0] = x0
     x[1] = x0 + dh * dx
     h2 = dh**2
@@ -242,8 +266,7 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
     )
     subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
-    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], xcname=xc)
+    with AllElectron(chemical_symbols[Z], xcname=xc, txt=None) as ae:
         ae.run()
 
     energy = ae.e_j[subshell_index] * units.Hartree
@@ -258,41 +281,192 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
 
 
 def radial_schroedinger_equation(ef, l, r, vr):
-    return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
+    return l * (l + 1) / r**2 - vr(r) / r - ef
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+# Radial step of the continuum integration grid [Bohr], and the largest grid we
+# are willing to build before giving up on resolving the asymptotic region.
+_CONTINUUM_STEP = 20.0 / (1000000 - 1)
+_CONTINUUM_MAX_RADIUS = 150.0
+
+# The outer region must span this many oscillations, and the centrifugal term
+# throughout it must be this small a fraction of the kinetic energy, for the
+# wave to be free-particle-like enough to read off its amplitude. The envelope
+# of a free wave is exactly constant, so one oscillation is enough to sample it;
+# the spread of the envelope is checked separately as a diagnostic.
+_CONTINUUM_PERIODS = 1.0
+_CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
+
+# Fraction of the grid, measured from the outer edge, used to read the amplitude.
+_ASYMPTOTIC_REGION_FRACTION = 0.25
+
+
+def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
+    """
+    Radial grid whose outer quarter is asymptotically free.
+
+    The amplitude of the continuum wave can only be read off where the
+    centrifugal barrier is negligible and the wave has completed several
+    oscillations. Both conditions are hardest to satisfy at low continuum
+    energy and high angular momentum, so the grid is extended as needed.
+
+    Parameters
+    ----------
+    ef : float
+        Continuum energy [Rydberg].
+    lprime : int
+        Angular momentum of the continuum state.
+
+    Returns
+    -------
+    r : np.ndarray
+        Radial grid [Bohr].
+    """
+    k = np.sqrt(ef)
+
+    fraction = _ASYMPTOTIC_REGION_FRACTION
+
+    # The outer region spans `fraction` of the grid and must contain enough
+    # oscillations to sample the envelope.
+    radius = max(20.0, _CONTINUUM_PERIODS * 2 * np.pi / (k * fraction))
+
+    if lprime > 0:
+        # The centrifugal term is largest at the inner edge of the outer region.
+        free_radius = np.sqrt(
+            lprime * (lprime + 1) / (_CONTINUUM_CENTRIFUGAL_TOLERANCE * ef)
+        )
+        radius = max(radius, free_radius / (1.0 - fraction))
+
+    if radius > _CONTINUUM_MAX_RADIUS:
+        warnings.warn(
+            f"the continuum state (epsilon={ef * units.Rydberg:.3g} eV, "
+            f"l'={lprime}) does not reach its asymptotic form within "
+            f"{_CONTINUUM_MAX_RADIUS} Bohr; its normalisation, and hence the "
+            "absolute scale of the transition potential, may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        radius = _CONTINUUM_MAX_RADIUS
+
+    return np.linspace(1e-12, radius, int(round(radius / _CONTINUUM_STEP)) + 1)
+
+
+def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
+    """
+    Amplitude of the asymptotic oscillation ``u(r) -> A sin(k r + delta)``.
+
+    Taken from the envelope ``sqrt(u^2 + (u'/k)^2)`` over the outer region,
+    which is constant wherever the wave is free.
+
+    Using ``max(u)`` instead, as earlier versions of abTEM did, is wrong in two
+    regimes: at low continuum energy the grid spans less than one oscillation,
+    and for ``l' >= 2`` the envelope overshoots its asymptotic value near the
+    turning point of the centrifugal barrier, so the maximum is attained well
+    inside the atom.
+
+    Parameters
+    ----------
+    r : np.ndarray
+        Radial grid [Bohr].
+    u : np.ndarray
+        Radial wavefunction on that grid.
+    k : float
+        Asymptotic wavenumber [1/Bohr].
+
+    Returns
+    -------
+    amplitude : float
+    """
+    outer = r > (1.0 - _ASYMPTOTIC_REGION_FRACTION) * r[-1]
+
+    du = np.gradient(u, r)
+    envelope = np.sqrt(u[outer] ** 2 + (du[outer] / k) ** 2)
+
+    mean = float(np.mean(envelope))
+    if mean <= 0.0:
+        raise RuntimeError(
+            "the continuum wavefunction vanishes in the asymptotic region"
+        )
+
+    spread = float(np.std(envelope)) / mean
+    if spread > 0.05:
+        warnings.warn(
+            f"the continuum wavefunction amplitude varies by {spread:.1%} over "
+            "the asymptotic region, so it has not reached its free-particle "
+            "form; its normalisation may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    return float(np.median(envelope))
+
+
+# GPAW's xc kernels clamp the density from below at this value (measured: an
+# LDA/PBE atom's vxc is exactly constant wherever n < 1e-10).
+_GPAW_XC_DENSITY_FLOOR = 1e-10
+
+
+def _atomic_rv(Z, xc="PBE"):
+    """r*V(r) of the neutral ground-state atom [Rydberg * Bohr], from a scalar-
+    relativistic GPAW all-electron calculation. The potential the continuum
+    states are solved in.
+
+    GPAW evaluates the xc potential at a floored density, so in the vacuum
+    beyond ~17 Bohr (LDA) / ~27 Bohr (PBE) its vxc sits at a constant
+    -8.5e-4 Hartree instead of vanishing -- the same for every element, and
+    however far the radial grid extends. That constant made r*V grow
+    linearly to the edge of the grid and, extrapolated beyond it, shifted
+    the continuum's asymptotic wavenumber (q/k = 1.012 at 1 eV). Below the
+    floor vxc is scaled as n^(1/3), the low-density limit of LDA exchange and
+    correlation, which is continuous at the floor and vanishes in vacuum; r*V
+    of the neutral atom then goes to ~0 by the edge of the grid and is held
+    constant beyond it.
+    """
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
-    def f(self, *args, **kwargs):
-        pass
+    ae = AllElectronAtom(chemical_symbols[Z], xc=xc, log=io.StringIO())
+    # ae.f_j[subshell_index] -= 0.0
+    ae.run()
+    ae.scalar_relativistic = True
+    ae.refine()
 
-    AllElectronAtom.log = f
+    r = ae.rgd.r_g
+    n = ae.n_sg.sum(0)
+    vr = ae.vr_sg[0].copy()  # r * (vxc + vH) - Z [Hartree * Bohr]
+    below_floor = n < _GPAW_XC_DENSITY_FLOOR
+    vxc = ae.vxc_sg[0][below_floor]
+    vr[below_floor] -= r[below_floor] * vxc * (
+        1 - np.cbrt(n[below_floor] / _GPAW_XC_DENSITY_FLOOR)
+    )
 
+    # -2: to the sign and Rydberg units of radial_schroedinger_equation.
+    rv = -2 * vr
+
+    return interp1d(r, rv, fill_value=(rv[0], rv[-1]), bounds_error=False)
+
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     check_valid_quantum_number(Z, n, l)
     # config_tuples = config_str_to_config_tuples(
     #     electron_configurations[chemical_symbols[Z]]
     # )
     # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
-    ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
-    # ae.f_j[subshell_index] -= 0.0
-    ae.run()
-    ae.scalar_relativistic = True
-    ae.refine()
-
-    vr = interp1d(
-        ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
-    )
+    vr = _atomic_rv(Z, xc=xc)
 
     ef = epsilon / units.Rydberg
 
-    r = np.linspace(1e-12, 20, 1000000)
+    r = _continuum_radial_grid(ef, lprime)
     f = radial_schroedinger_equation(ef, lprime, r, vr)
 
     ur = numerov(f, 0.0, 1e-12, r[1] - r[0])
-    ur = ur / ur.max() / (np.sqrt(np.pi) * ef ** (1 / 4))
+
+    # Energy normalisation, <eps|eps'> = delta(eps - eps') with eps in Rydberg:
+    # u(r) -> sin(k r + delta) / sqrt(pi k), so the asymptotic amplitude is
+    # 1 / sqrt(pi k) with k = sqrt(ef).
+    ur = ur / _asymptotic_amplitude(r, ur, k=np.sqrt(ef))
+    ur = ur / (np.sqrt(np.pi) * ef ** (1 / 4))
 
     return RadialWavefunction(
         n=None,
@@ -552,7 +726,13 @@ class TransitionPotential(BaseTransitionPotential):
         ]
 
     def _calculate_overlap_integral(self, lprimeprime, bound, excited, k):
-        radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
+        # np.arange stops short of its end by up to one step, so with only the 5 %
+        # margin a coarse grid (max(k) * extent below ~20, e.g. 16 pixels) ended
+        # below max(k) and interp1d refused the largest k. Reach at least one step
+        # past max(k); grids that already did are unchanged.
+        step = 1 / max(self.extent)
+        k_max = np.max(k)
+        radial_grid = np.arange(0, max(k_max * 1.05, k_max + step), step)
         integration_grid = np.linspace(0, bound.radial_grid[-1], 20000)
 
         values = (
@@ -633,7 +813,11 @@ class TransitionPotential(BaseTransitionPotential):
         cumulative = np.cumsum(integrated_intensities / integrated_intensities.sum())
 
         n = np.searchsorted(cumulative, threshold) + 1
-        transitions = self.transitions[:n]
+
+        # Keep the n strongest transitions. Earlier versions sliced the
+        # unsorted list instead, which kept an arbitrary subset; the sibling
+        # TransitionPotentialArray.filter_by_intensity has always used `order`.
+        transitions = [self.transitions[i] for i in order[:n]]
 
         if not len(transitions) > 0:
             raise RuntimeError()
@@ -647,7 +831,9 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        array = np.zeros((len(self._transitions),) + self.gpts, dtype=np.complex64)
+        array = np.zeros(
+            (len(self._transitions),) + self.gpts, dtype=get_dtype(complex=True)
+        )
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
@@ -664,15 +850,24 @@ class TransitionPotential(BaseTransitionPotential):
             array[i] = self._calculate_form_factor(bound, excited, k, phi, theta)
 
             if self._orbital_filling_factor:
-                array[i] *= np.sqrt(4 * bound.l + 2)
+                # 4*l+2 is the full subshell's electron count: spin (2) times
+                # orbital degeneracy (2*l+1). The orbital part is already
+                # realised explicitly -- SubshellTransitions.get_transitions
+                # builds one bound state per ml and this array is summed
+                # incoherently over all of them -- so only the spin factor
+                # belongs here. Applying 4*l+2 per ml double-counts the
+                # orbital degeneracy by (2*l+1); invisible for l=0, where
+                # 4*l+2 reduces to the spin-only factor of 2.
+                array[i] *= np.sqrt(2)
 
             array[i] *= relativistic_mass_correction(self.energy) / (
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
-        array = array / np.prod(self.sampling)
-
-        # array = array.astype(xp.complex64)
+        # In place: `array / np.prod(...)` divides by a float64 numpy scalar,
+        # which under NEP 50 promotes the whole array to complex128 and silently
+        # discards the dtype the array was allocated with.
+        array /= np.prod(self.sampling)
 
         return TransitionPotentialArray(
             self.Z,
@@ -849,20 +1044,32 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return self[included]
 
     def absolute_threshold(self, waves: Waves, threshold: float = 1.0):
+        """The overlap cut that ``filter_sites`` applies for a relative
+        ``threshold``: ranking the overlap of a site placed at every pixel
+        with ``waves``, the most-overlapping pixels that together carry the
+        fraction ``threshold`` of the total overlap all lie above the cut.
+        Evaluate it on the waves that the sites are then filtered against
+        -- applied to a different (e.g. further propagated) wave, a group of
+        symmetry-tied sites at the cut falls below it all at once.
+
+        Returns 0.0, which disables filtering, for ``threshold >= 1``.
+        """
         if threshold >= 1.0:
             return 0.0
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        waves = _eager_waves(waves).ensure_real_space()
 
         local_potential = self.local_potential(space="real").sum(0)
         array = abs2(waves.array)
 
         local_potential = copy_to_device(local_potential, array)
 
+        complex_dtype = get_dtype(complex=True)
         overlap = fft2_convolve(
-            local_potential[(None,) * (len(array.shape) - 2)].astype(np.complex64),
-            fft2(array.astype(np.complex64)),
+            local_potential[(None,) * (len(array.shape) - 2)].astype(complex_dtype),
+            fft2(array.astype(complex_dtype)),
         ).real
 
         overlap = copy_to_device(overlap, "cpu")
@@ -871,7 +1078,25 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         cumulative = np.cumsum(overlap) / overlap.sum()
 
-        return overlap[np.searchsorted(cumulative, threshold, side="left") - 1]
+        # The pixels ranked 0..index together carry at least the fraction
+        # ``threshold`` of the overlap, so the cut is the overlap of pixel
+        # ``index`` itself -- not of pixel ``index - 1``, which stopped the
+        # retained set short of the requested fraction (and, for a threshold
+        # below the largest single-pixel fraction, wrapped to -1, i.e. the
+        # *smallest* overlap, keeping almost every site).
+        index = min(
+            int(np.searchsorted(cumulative, threshold, side="left")),
+            len(overlap) - 1,
+        )
+
+        # filter_sites keeps sites whose overlap is strictly greater than the
+        # returned value, recomputing it by direct summation, which differs
+        # from this FFT convolution by float round-off (~1 ulp of the largest
+        # overlap). Lower the cut by a few such ulps so that the pixel at the
+        # cut -- and any group of (symmetry-)tied pixels with it -- is kept
+        # whole rather than partly lost to round-off.
+        tolerance = 8 * np.finfo(overlap.dtype).eps * float(overlap[0])
+        return max(float(overlap[index]) - tolerance, 0.0)
 
     def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):
@@ -880,21 +1105,47 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             if sites.number == self.Z:
                 sites = sites.position[:2]
             else:
-                sites = np.zeros((0, 2), dtype=np.float32)
+                sites = np.zeros((0, 2), dtype=get_dtype())
         else:
             sites = np.array(sites)
 
         if len(sites.shape) == 1:
             sites = sites[None]
 
-        sites = np.array(sites, dtype=np.float32)
+        sites = np.array(sites, dtype=get_dtype())
         return sites
 
     def filter_sites(self, waves, sites, threshold):
+        """The sites at which the transition potential overlaps the waves.
+
+        Parameters
+        ----------
+        waves : Waves or Probe
+            The waves that are scattered.
+        sites : Atoms, Atom or numpy.ndarray
+            The candidate sites, as atoms or as an (n, 2) array of positions.
+        threshold : float, optional
+            The absolute overlap threshold; sites with an overlap above it are kept.
+            Without a threshold all sites are kept.
+
+        Returns
+        -------
+        Atoms or numpy.ndarray
+            The sites that are kept, in the form they were given: the atoms of the
+            transition potential's element for `Atoms`, positions otherwise. Without
+            a threshold nothing is filtered and an `Atoms` or `Atom` is returned as
+            it is; with a threshold a single `Atom` gives an array of positions.
+        """
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        waves = _eager_waves(waves).ensure_real_space()
 
+        # The mask below is computed over the validated array, which subsets an
+        # Atoms input to this element: apply it to that subset, not to the whole
+        # of the caller's atoms, or the two lengths disagree.
+        original_sites = sites
         validated_sites = self.validate_sites(sites)
+        kept = validated_sites
 
         if threshold is not None and threshold > 0.0:
             xp = get_array_module(waves.array)
@@ -973,13 +1224,24 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
             # print(type(mask), type(sites))
 
-            sites = sites[mask]
+            kept = kept[mask]  # on the host: validated_sites was moved to the device
+            if isinstance(original_sites, Atoms):
+                return original_sites[original_sites.numbers == self.Z][mask]
 
-        return sites
+            return kept
+
+        # without a threshold nothing is filtered: the sites are returned as given
+        if isinstance(original_sites, (Atoms, Atom)):
+            return original_sites
+
+        return kept
 
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
     ) -> Waves:
+        """Scatter ``waves`` at ``sites``. Waves in reciprocal space are converted to
+        real space, and the scattered waves are in real space."""
+        waves = waves.ensure_real_space()
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -996,7 +1258,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             self._array = copy_to_device(self.array, waves.array)
             sites = copy_to_device(sites, waves.array)
 
-            sites = sites / xp.array(self.sampling, dtype=xp.float32)
+            sites = sites / xp.array(self.sampling, dtype=get_dtype())
 
             array = ifft2(
                 self.array[None]
@@ -1034,6 +1296,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_batch: int = "auto",
         threshold=None,
     ):
+        """Yield ``(sites, scattered_waves)`` for chunks of ``sites``. Waves in
+        reciprocal space are converted to real space once, and the scattered waves
+        are in real space."""
+        waves = waves.ensure_real_space()
         sites = self.validate_sites(sites)
 
         if isinstance(max_batch, int):

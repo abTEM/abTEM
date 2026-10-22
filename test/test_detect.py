@@ -2,6 +2,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase.build import bulk
 from hypothesis import assume, given
 
 import abtem
@@ -192,3 +193,349 @@ def test_pixelated_detector_resample_uniform(lazy, extent, gpts):
     assert np.isclose(sampling[0], sampling[1]), (
         f"Sampling should be uniform but got {sampling}"
     )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_annular_detector_offset(lazy):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=10, gpts=128, defocus=100
+    ).build(lazy=lazy)
+
+    diffraction_patterns = waves.diffraction_patterns(
+        max_angle="full", parity="same", fftshift=False
+    )
+
+    results = []
+    for offset in [(0.0, 0.0), (8.0, 8.0)]:
+        detected = abtem.AnnularDetector(inner=5, outer=20, offset=offset).detect(waves)
+        expected = diffraction_patterns.integrate_radial(5, 20, offset=offset)
+        assert np.allclose(detected.compute().array, expected.compute().array)
+        results.append(float(detected.compute().array))
+
+    assert not np.isclose(results[0], results[1])
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_annular_detector_line_scan_with_ensemble_axis(lazy):
+    """An AnnularDetector over a LineScan (one scan axis) keeps every other
+    ensemble axis, here a defocus series.
+
+    It used to drop the last two entries of the ensemble shape regardless of
+    how many scan axes there were, so with a single scan axis it also
+    discarded the defocus axis, and the declared shape no longer matched the
+    data.
+    """
+    atoms = bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms, gpts=64, slice_thickness=2, projection="infinite"
+    )
+    defocus = [0.0, 50.0]
+    scan = abtem.LineScan(start=(0, 0), end=(2, 0), gpts=3)
+    detector = abtem.AnnularDetector(inner=30, outer=80)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, defocus=defocus)
+    measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+
+    assert measurement.ensemble_shape == (2,)
+    assert measurement.base_shape == (3,)
+    measurement = measurement.compute()
+    assert measurement.shape == (2, 3)
+
+    for i, value in enumerate(defocus):
+        single = abtem.Probe(energy=100e3, semiangle_cutoff=20, defocus=value).scan(
+            potential, scan=scan, detectors=detector
+        )
+        assert np.allclose(measurement.array[i], single.array)
+
+
+@pytest.mark.parametrize(
+    "detector_cls, kwargs",
+    [
+        (abtem.AnnularDetector, dict(inner=0, outer=20)),
+        (abtem.FlexibleAnnularDetector, dict()),
+        (
+            abtem.SegmentedDetector,
+            dict(inner=0, outer=20, nbins_radial=2, nbins_azimuthal=4),
+        ),
+        (abtem.PixelatedDetector, dict()),
+    ],
+)
+def test_measurement_detectors_default_to_cpu(detector_cls, kwargs):
+    """Every detector producing a measurement returns it on the host by
+    default.
+
+    SegmentedDetector used to default to ``to_cpu=False`` while its own
+    docstring (and every sibling detector) said True, so on a GPU run its
+    measurements came back as CuPy arrays while the others were NumPy.
+    """
+    assert detector_cls(**kwargs).to_cpu is True
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(64, 65), (65, 64)])
+def test_annular_detector_region_is_centred_on_offset(fftshift, gpts):
+    # An annulus inner <= |alpha - offset| < outer is symmetric under reflection
+    # through `offset`; with `offset` on a grid point and the ring well inside
+    # the grid, the reflected grid coincides with itself, so the region's center
+    # of mass is exactly `offset`, in whichever storage order it was requested.
+    waves = abtem.Waves(
+        np.zeros(gpts, dtype=np.complex64), energy=100e3, extent=(32.0, 32.5)
+    )
+    ax, ay = waves.angular_sampling
+    offset = (3 * ax, -2 * ay)
+    # Radii off-grid (x.3 pixels) so no pixel sits on a boundary; the ring
+    # reaches <= 13.3 px from the centre, inside the >= 20 px half-width of
+    # the region within the antialias cutoff.
+    detector = abtem.AnnularDetector(inner=2.3 * ax, outer=10.3 * ax, offset=offset)
+
+    region = detector.get_detector_region(waves, fftshift=fftshift)
+
+    com = complex(region.center_of_mass(units="mrad").array)
+    # float32 angular coordinates: ~1e-7 relative; a one-pixel error is
+    # >= 1 / 3.6 of |offset|.
+    assert com == pytest.approx(offset[0] + 1.0j * offset[1], rel=1e-5)
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_annular_detector_region_is_in_percent(fftshift):
+    # The region is labelled as a detector efficiency in %: a fully sensitive pixel
+    # is 100, not 1, and the others are 0.
+    waves = abtem.Waves(
+        np.zeros((64, 65), dtype=np.complex64), energy=100e3, extent=(32.0, 32.5)
+    )
+
+    region = abtem.AnnularDetector(inner=5, outer=15).get_detector_region(
+        waves, fftshift=fftshift
+    )
+
+    assert region.metadata["units"] == "%"
+    assert np.issubdtype(region.array.dtype, np.floating)
+    np.testing.assert_array_equal(np.unique(region.array), [0.0, 100.0])
+
+
+def test_waves_detector_keeps_data_on_device_by_default():
+    """WavesDetector is deliberately the exception: it returns the (large)
+    wave functions themselves and is the implicit detector when none is
+    given, so it must not force a device-to-host copy of every exit wave.
+    """
+    from abtem.detectors import WavesDetector
+
+    assert WavesDetector().to_cpu is False
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=10, outer=40),
+        abtem.FlexibleAnnularDetector(outer=40),
+        abtem.SegmentedDetector(inner=10, outer=40, nbins_radial=2, nbins_azimuthal=4),
+    ],
+    ids=["annular", "flexible_annular", "segmented"],
+)
+def test_radial_detector_show_without_waves_defaults_units(detector):
+    """show() from energy, gpts and sampling alone draws in mrad by default."""
+    import matplotlib.pyplot as plt
+
+    def drawn(**kwargs):
+        detector.show(energy=100e3, gpts=64, sampling=0.05, **kwargs)
+        image = np.ma.filled(plt.gcf().axes[0].images[0].get_array(), np.nan)
+        plt.close("all")
+        return image
+
+    np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=30, outer=100, offset=(5.0, -3.0)),
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        abtem.PixelatedDetector(max_angle=60, resample="uniform"),
+        abtem.WavesDetector(),
+        abtem.WavesDetector(gpts=(16, 16)),
+    ],
+    ids=lambda detector: type(detector).__name__,
+)
+def test_lazy_detect_matches_eager_detect(detector):
+    """A lazy block rebuilds the detector from its constructor arguments, which
+    must give back the detector itself."""
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    waves = abtem.Waves(
+        array.astype(np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[abtem.core.axes.UnknownAxis()],
+    )
+
+    eager = detector.detect(waves)
+    lazy = detector.detect(waves.ensure_lazy()).compute(progress_bar=False)
+
+    np.testing.assert_array_equal(lazy.array, eager.array)
+
+
+@pytest.fixture
+def float64_numpy_fft():
+    with abtem.config.set({"precision": "float64", "fft": "numpy"}):
+        yield
+
+
+def _real_space_setup(sampling, energy=60e3, scan_gpts=(3, 4), cells=(2, 1, 1)):
+    import ase.build
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * cells
+    potential = abtem.Potential(atoms, sampling=sampling, slice_thickness=2)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(0.5, 1), fractional=True, potential=potential, gpts=scan_gpts
+    )
+    return potential, probe, scan
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("resample", [False, 0.1])
+@pytest.mark.parametrize("entry_point", ["detect", "detect_lazy", "scan", "scan_lazy"])
+def test_real_space_pixelated_detector_declares_what_it_returns(entry_point, resample):
+    """PixelatedDetector(reciprocal_space=False) declares the shape and sampling
+    of the intensity image it returns, |psi|^2 on the waves' grid or on the grid
+    `resample` gives, through every entry point."""
+    potential, probe, scan = _real_space_setup(sampling=0.05)
+    waves = probe.scan(
+        potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+    )
+    detector = abtem.PixelatedDetector(reciprocal_space=False, resample=resample)
+
+    expected = np.abs(waves.array) ** 2
+    expected_sampling = waves.sampling
+    if resample:
+        gpts = tuple(int(np.ceil(e / resample)) for e in waves.extent)
+        expected_sampling = tuple(e / n for e, n in zip(waves.extent, gpts))
+        expected = waves.intensity().interpolate(sampling=resample).array
+        assert expected.shape[-2:] == gpts
+
+    if entry_point == "detect":
+        result = detector.detect(waves)
+    elif entry_point == "detect_lazy":
+        result = detector.detect(waves.copy().ensure_lazy())
+    else:
+        result = probe.scan(
+            potential, scan=scan, detectors=detector, lazy=entry_point == "scan_lazy"
+        )
+
+    assert result.shape == expected.shape
+    result = result.compute(scheduler="synchronous") if result.is_lazy else result
+    assert result.shape == expected.shape
+    np.testing.assert_allclose(
+        (result.axes_metadata[-2].sampling, result.axes_metadata[-1].sampling),
+        expected_sampling,
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+    )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_real_space_pixelated_detector_multislice(lazy):
+    potential, probe, _ = _real_space_setup(sampling=0.05)
+    waves = probe.multislice(potential, detectors=abtem.WavesDetector(), lazy=False)
+    expected = np.abs(waves.array) ** 2
+
+    result = probe.multislice(
+        potential,
+        detectors=abtem.PixelatedDetector(reciprocal_space=False),
+        lazy=lazy,
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    assert result.shape == expected.shape == (128, 221)
+    np.testing.assert_allclose(
+        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+    )
+
+
+def test_real_space_pixelated_detector_refuses_uniform_resampling():
+    # "uniform" equalises the angular sampling of diffraction patterns
+    with pytest.raises(ValueError, match="diffraction patterns only"):
+        abtem.PixelatedDetector(reciprocal_space=False, resample="uniform")
+
+
+def _waves_detector_setup():
+    import ase.build
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+    probe = abtem.Probe(energy=60e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(
+        (0, 0), (0.5, 1), fractional=True, potential=potential, gpts=(3, 4)
+    )
+    return potential, probe, scan
+
+
+def _run_waves_detector(entry, potential, probe, scan, detector, lazy):
+    if entry == "detect":
+        waves = probe.scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        if lazy:
+            waves = waves.copy().ensure_lazy()
+        return detector.detect(waves)
+    if entry == "scan":
+        return probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    if entry == "multislice":
+        return probe.multislice(potential, detectors=detector, lazy=lazy)
+    if entry == "prism":
+        s_matrix = abtem.SMatrix(potential=potential, energy=60e3, semiangle_cutoff=20)
+        return s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
+    raise ValueError(entry)
+
+
+# (32, 48) crops, (80, 128) pads the (64, 111) exit-wave grid; both differ along
+# x and y and from the (3, 4) scan, so a swapped or misplaced axis changes the shape
+@pytest.mark.parametrize("gpts", [(32, 48), (80, 128)])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("entry", ["detect", "scan", "multislice", "prism"])
+def test_waves_detector_gpts_matches_downsample(entry, lazy, gpts):
+    """`WavesDetector(gpts)` gives what `Waves.downsample(gpts)` gives on the
+    full-grid waves: `gpts` points over the unchanged extent."""
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+        potential, probe, scan = _waves_detector_setup()
+        full = _run_waves_detector(
+            entry, potential, probe, scan, abtem.WavesDetector(), lazy
+        )
+        full = full.compute() if lazy else full
+        expected = full.downsample(gpts=gpts)
+
+        result = _run_waves_detector(
+            entry, potential, probe, scan, abtem.WavesDetector(gpts=gpts), lazy
+        )
+        declared_shape = result.shape
+        result = result.compute() if lazy else result
+
+    assert declared_shape == result.shape == expected.shape
+    assert np.allclose(result.sampling, expected.sampling, rtol=1e-12, atol=0)
+    assert np.allclose(result.extent, full.extent, rtol=1e-12, atol=0)
+    assert result.antialias_cutoff_gpts == expected.antialias_cutoff_gpts
+    scale = np.abs(expected.array).max()
+    np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-12 * scale)
+
+
+@pytest.mark.parametrize("gpts", [None, ()])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
+    """No `gpts`, as `None` or an empty tuple, leaves ensemble waves as they are."""
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+        potential, probe, scan = _waves_detector_setup()
+        waves = probe.scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        source = waves.copy().ensure_lazy() if lazy else waves
+        result = abtem.WavesDetector(gpts=gpts).detect(source)
+        result = result.compute() if lazy else result
+
+    assert result.shape == waves.shape
+    assert np.array_equal(result.sampling, waves.sampling)
+    assert np.array_equal(result.array, waves.array)

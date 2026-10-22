@@ -1,10 +1,12 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
+import threading
 import warnings
-from typing import Tuple, TypeVar, overload
+from typing import Optional, Tuple, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.array.core import broadcast_chunks
 from threadpoolctl import threadpool_limits  # type: ignore
 
 from abtem.core import config
@@ -51,15 +53,52 @@ def _fft_name_to_fftw_direction(name: str) -> str:
     return direction
 
 
-def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
-    dummy = np.zeros_like(array)
+def _fftw_aligned_copy(array: np.ndarray) -> np.ndarray:
+    """A C-contiguous copy of ``array`` aligned for FFTW's SIMD codelets."""
+    copy = pyfftw.empty_aligned(array.shape, dtype=array.dtype)
+    copy[...] = array
+    return copy
+
+
+def _fftw_aligned(array: np.ndarray) -> np.ndarray:
+    """
+    ``array`` in the one layout the FFTW plans in this module are made for.
+
+    pyfftw quietly adds ``FFTW_UNALIGNED`` to a plan whose buffer is not
+    ``pyfftw.simd_alignment``-aligned, and an unaligned plan selects different
+    codelets that round differently (~1e-7 relative, the order of float32
+    epsilon). That alignment is 32 bytes on x86 while malloc only guarantees 16,
+    so planning for whatever buffer arrives would make the result depend on
+    where malloc happened to place it. Every buffer is instead brought to an
+    aligned, C-contiguous layout -- by copying when it is not in it already,
+    which changes no arithmetic -- so that it always gets the same plan.
+
+    A copy is a new buffer, so a caller passing ``overwrite_x=True`` must use the
+    returned result rather than expect its own array to hold it.
+    """
+    if array.flags.c_contiguous and pyfftw.is_byte_aligned(array):
+        return array
+    return _fftw_aligned_copy(array)
+
+
+def _new_fftw_object(
+    array: np.ndarray,
+    name: str,
+    flags: tuple[str, ...] = (),
+    axes: tuple[int, ...] = (-2, -1),
+):
+    # Planning overwrites the buffer, hence the scratch array. It must be laid out
+    # like `array` and as aligned (see `_fftw_aligned`), both for
+    # `update_arrays` to accept `array` and for the wisdom it leaves behind to be
+    # the wisdom for `array`'s plan.
+    dummy = pyfftw.zeros_aligned(array.shape, dtype=array.dtype)
 
     direction = _fft_name_to_fftw_direction(name)
 
     fftw_object = pyfftw.FFTW(
         dummy,
         dummy,
-        axes=(-2, -1),
+        axes=axes,
         direction=direction,
         threads=config.get("fftw.threads"),
         flags=(config.get("fftw.planning_effort"),) + flags,
@@ -79,6 +118,8 @@ class CachedFFTWConvolution:
     def __call__(
         self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool
     ) -> np.ndarray:
+        array = _fftw_aligned(array) if overwrite_x else _fftw_aligned_copy(array)
+
         if array.shape != self._shape:
             self._fftw_objects = None
 
@@ -88,10 +129,8 @@ class CachedFFTWConvolution:
             }
             self._fftw_objects = fftw_objects
 
-        if not overwrite_x:
-            array = array.copy()
-            self._fftw_objects["fft2"].update_arrays(array, array)
-            self._fftw_objects["ifft2"].update_arrays(array, array)
+        for fftw_object in self._fftw_objects.values():
+            fftw_object.update_arrays(array, array)
 
         array = self._fftw_objects["fft2"]()
         array *= kernel
@@ -107,8 +146,13 @@ def get_fftw_object(
     axes: tuple[int, ...] = (-2, -1),
 ):
     """
-    Get a pyfftw object for a given array and a given FFT function.
-    The object is cached and reused if the array shape is the same.
+    Get an in-place pyfftw object for a given array and a given FFT function.
+    The plan is made from FFTW wisdom, which is created and kept the first time a
+    layout is seen.
+
+    The object transforms ``array`` itself if it is aligned and C-contiguous, and
+    otherwise an aligned copy of it (see ``_fftw_aligned``), so the result must be
+    taken from calling the object, not read back from ``array``.
 
     Parameters
     ----------
@@ -120,12 +164,15 @@ def get_fftw_object(
         Allow new wisdom to be created.
     overwrite_x : bool, optional
         Allow the input array to be overwritten.
+    axes : tuple of int, optional
+        Axes over which to compute the FFT.
 
     Returns
     -------
     pyfftw.FFTW
         FFTW object.
     """
+    array = _fftw_aligned(array)
 
     direction = _fft_name_to_fftw_direction(name)
 
@@ -147,12 +194,12 @@ def get_fftw_object(
             raise
 
         if not allow_new_wisdom and config.get("fftw.allow_fallback"):
-            return getattr(pyfftw.builders, name)(array)
+            return getattr(pyfftw.builders, name)(array, axes=axes)
 
         elif not allow_new_wisdom:
             raise
 
-        _new_fftw_object(array, name, flags=flags)
+        _new_fftw_object(array, name, flags=flags, axes=axes)
 
         return get_fftw_object(
             array, name, allow_new_wisdom=False, overwrite_x=overwrite_x, axes=axes
@@ -178,12 +225,125 @@ def _fftw_dispatch(
         _raise_fft_lib_not_present("pyfftw")
 
     if not overwrite_x:
-        x = x.copy()
+        # the copy is made aligned, so `get_fftw_object` need not copy again
+        x = _fftw_aligned_copy(x)
 
     return get_fftw_object(x, func_name, overwrite_x=overwrite_x, **kwargs)()
 
 
 U = TypeVar("U", np.ndarray, da.core.Array)
+
+# The plan-cache state applied to CuPy, to skip the work when the config is
+# unchanged (the common case in a hot loop). CuPy's plan cache is per thread
+# (and per device), so the applied state must be thread-local as well: a
+# process-global slot would configure only the first dispatching thread and
+# leave every other dask worker thread's cache at CuPy's defaults.
+_CUFFT_CACHE_STATE = threading.local()
+
+
+def _reset_cufft_cache_state():
+    """Forget the applied plan-cache state for the calling thread (tests)."""
+    for attr in ("token", "limit"):
+        try:
+            delattr(_CUFFT_CACHE_STATE, attr)
+        except AttributeError:
+            pass
+
+
+def _configure_cufft_cache():
+    """Apply ``cupy.fft-cache-size`` from the abTEM config to the cuFFT plan cache.
+
+    Called on every GPU FFT dispatch, from the thread that runs the transform,
+    so that runtime config changes take effect and every dask worker thread has
+    its own plan cache bounded. The config value is a memory limit on the total
+    workspace held by cached plans:
+
+    * ``0 MB``     -- disable plan caching entirely (plans destroyed after each
+                      call, workspace freed immediately).
+    * positive     -- allow up to N bytes of cached workspace (``set_memsize``).
+    * ``-1`` or null -- unlimited (CuPy's own default).
+    * ``auto``     -- 25 % of the device's total memory, resolved per device.
+                      This is the default.
+
+    Without a bound, a transform in a worker thread can fail with
+    ``CUFFT_EXEC_FAILED`` after a transform of the same grid in another thread
+    (seen with CuPy 14.2, for example on a 160 x 147 grid).
+    """
+    raw = config.get("cupy.fft-cache-size", "auto")
+
+    # The plan cache and the resolved "auto" limit are per device, so the
+    # applied state is keyed on the current device as well as the raw value.
+    device = cp.cuda.Device()
+    if getattr(_CUFFT_CACHE_STATE, "token", None) == (raw, device.id):
+        return
+
+    if raw is None:
+        limit = -1
+    elif raw == "auto":
+        limit = device.mem_info[1] // 4
+    elif isinstance(raw, str):
+        from dask.utils import parse_bytes
+
+        limit = parse_bytes(raw)
+    else:
+        limit = int(raw)
+
+    cache = cp.fft.config.get_plan_cache()
+    if limit == 0:
+        cache.set_size(0)
+    else:
+        if cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
+        # An explicit -1 restores "unlimited": an earlier bound (e.g. from the
+        # "auto" default) must be undoable at runtime.
+        cache.set_memsize(limit if limit > 0 else -1)
+
+    _CUFFT_CACHE_STATE.token = (raw, device.id)
+    _CUFFT_CACHE_STATE.limit = limit
+
+
+_warned_plan_cache_bypass = False
+
+
+def _cupy_fft_with_cache_fallback(func, x, **kwargs):
+    """Run a CuPy FFT, bypassing the plan cache for oversized plans.
+
+    A bounded plan cache refuses to admit a single plan larger than its
+    memsize bound, and CuPy raises instead of running the transform uncached
+    (CUDA only; the ROCm path does not track plan memsize). Retry such calls
+    with the cache temporarily disabled: the plan is built, used and
+    discarded, costing replanning time per call instead of a crash.
+    """
+    global _warned_plan_cache_bypass
+    try:
+        return func(x, **kwargs)
+    except RuntimeError as exc:
+        if "plan memsize is too large" not in str(exc).lower():
+            raise
+    cache = cp.fft.config.get_plan_cache()
+    size = cache.get_size()
+    memsize = cache.get_memsize()
+    if not _warned_plan_cache_bypass:
+        _warned_plan_cache_bypass = True
+        # The exceeded bound is positive in practice (CuPy only raises the
+        # too-large error for bounded caches); guard the arithmetic anyway.
+        bound = f" of {memsize / 1e9:.1f} GB" if memsize > 0 else ""
+        suggested = f"{2 * memsize / 1e9:.0f} GB" if memsize > 0 else "32 GB"
+        warnings.warn(
+            f"A single cuFFT plan for shape {x.shape} exceeds the plan-cache "
+            f"bound{bound}; running the transform uncached, which replans on "
+            "every call for this shape. To avoid the replanning cost, either "
+            "raise the bound, e.g. abtem.config.set({'cupy.fft-cache-size': "
+            f"'{suggested}'"
+            "}) (-1 = unlimited), or reduce the wave-function batch size, "
+            "e.g. with max_batch=8."
+        )
+    cache.set_size(0)
+    try:
+        return func(x, **kwargs)
+    finally:
+        cache.set_size(size)
+        cache.set_memsize(memsize)
 
 
 def _fft_dispatch(
@@ -217,7 +377,8 @@ def _fft_dispatch(
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
-        return getattr(cp.fft, func_name)(x, **kwargs)
+        _configure_cufft_cache()
+        return _cupy_fft_with_cache_fallback(getattr(cp.fft, func_name), x, **kwargs)
 
 
 @overload
@@ -299,6 +460,41 @@ def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
     return ifft2(x, overwrite_x=overwrite_x)
 
 
+def _chunk_kernel_like(kernel, x: da.core.Array) -> Optional[da.core.Array]:
+    """
+    The kernel as a dask array chunked like `x` along every axis where both are
+    longer than 1, and in one chunk along the axes where either has length 1 or `x`
+    has no axis. The axes are aligned from the end, as in NumPy broadcasting.
+
+    None if a kernel axis longer than 1 meets an axis of `x` of unknown length
+    (NaN, as after a filtering operation): the blocks of the kernel cannot be
+    matched to those of `x` then.
+    """
+    # Raises the ValueError of the eager product for shapes that do not broadcast;
+    # an axis of unknown length is checked when the blocks are computed.
+    np.broadcast_shapes(
+        tuple(1 if np.isnan(length) else length for length in x.shape), kernel.shape
+    )
+    offset = x.ndim - kernel.ndim
+    chunks = []
+    for axis, n in enumerate(kernel.shape):
+        x_axis = axis + offset
+        if x_axis < 0 or n == 1:
+            chunks.append((n,))
+        elif np.isnan(x.shape[x_axis]):
+            return None
+        elif x.shape[x_axis] == 1:
+            chunks.append((n,))
+        else:
+            chunks.append(x.chunks[x_axis])
+
+    if isinstance(kernel, da.core.Array):
+        return kernel.rechunk(tuple(chunks))
+    # A random name: the default names the array by a hash of its data, which
+    # reads the whole kernel on every call.
+    return da.from_array(kernel, chunks=tuple(chunks), name=False)
+
+
 @overload
 def fft2_convolve(
     x: np.ndarray, kernel: np.ndarray, overwrite_x: bool = False
@@ -337,12 +533,34 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
+        dtype = get_dtype(complex=True)
+        # The kernel goes in as a second dask array, so each block of x meets
+        # the matching block of the kernel. Passed whole, it is broadcast
+        # against every block, and a kernel axis longer than a block of x
+        # would make each block as long as the kernel.
+        chunked_kernel = _chunk_kernel_like(kernel, x)
+        if chunked_kernel is None:
+            # An axis of x of unknown length: the kernel goes in whole, which is
+            # right where it fits every block of x along that axis.
+            return da.map_blocks(
+                _fft2_convolve,
+                x,
+                kernel=kernel,
+                overwrite_x=overwrite_x,
+                meta=xp.array((), dtype=dtype),
+            )
+        chunks = broadcast_chunks(x.chunks, chunked_kernel.chunks)
+        if chunks != x.chunks:
+            # x is the side that broadcasts, so the product cannot be taken in
+            # place and is promoted to the dtype of the kernel, as eagerly.
+            dtype = np.result_type(dtype, kernel.dtype)
         return da.map_blocks(
             _fft2_convolve,
             x,
-            kernel=kernel,
+            chunked_kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            chunks=chunks,
+            meta=xp.array((), dtype=dtype),
         )
 
     check_cupy_is_installed()  # type: ignore
@@ -510,7 +728,12 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[: -len(new_shape)] + new_shape
+        # Not `array.shape[: -len(new_shape)]`: -0 is 0, not "the end", so
+        # for `new_shape == ()` that slice was `[:0]`, always empty, rather
+        # than `[:len(array.shape)]` -- every dimension is a batch
+        # dimension when none are being resized.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        new_shape = array.shape[:n_batch_dims] + new_shape
 
     mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
 
@@ -549,7 +772,11 @@ def fft_interpolate(
     np.ndarray
         Interpolated array.
     """
-    old_size = np.prod(array.shape[-len(new_shape) :])
+    # Not `array.shape[-len(new_shape):]`: the same -0 problem, mirrored --
+    # for `new_shape == ()` that slice was `[0:]`, everything, rather than
+    # `[len(array.shape):]`, nothing (no axes are being resized).
+    n_batch_dims = len(array.shape) - len(new_shape)
+    old_size = np.prod(array.shape[n_batch_dims:])
 
     is_complex = np.iscomplexobj(array)
 
@@ -573,7 +800,9 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
+        # See the comment above old_size: same -0 fix, same reasoning.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        array *= np.prod(array.shape[n_batch_dims:]) / old_size
     elif normalization in ("amplitude", "intensity"):
         pass
     else:

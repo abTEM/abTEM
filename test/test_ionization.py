@@ -17,7 +17,7 @@ import pytest
 
 import abtem
 from abtem.core.axes import OrdinalAxis
-from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll
+from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll, numerov
 from abtem.waves import Probe
 
 try:
@@ -349,3 +349,304 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
     )
 
 
+def test_numerov_solves_harmonic_oscillator():
+    omega = 2.0
+    t = np.linspace(0, 5, 2001)
+    f = np.full(t.shape, -(omega**2))
+
+    x = numerov(f, 0.0, 1.0, t[1] - t[0])
+
+    assert np.allclose(x, np.sin(omega * t) / omega, atol=1e-6)
+    assert np.all(f == -(omega**2))
+
+
+def _spin_factor_ratio(transitions, Z=14):
+    """Intensity of the transition potential with ``orbital_filling_factor`` on,
+    relative to the one with it off."""
+    from abtem.inelastic.core_loss import TransitionPotential
+
+    kwargs = dict(extent=6.0, gpts=32, energy=100e3, double_channel=False)
+    with_factor = TransitionPotential(
+        Z, transitions, orbital_filling_factor=True, **kwargs
+    ).build()
+    without_factor = TransitionPotential(
+        Z, transitions, orbital_filling_factor=False, **kwargs
+    ).build()
+
+    intensity_with = float((np.abs(with_factor.array) ** 2).sum())
+    intensity_without = float((np.abs(without_factor.array) ** 2).sum())
+    return intensity_with / intensity_without
+
+
+# Building a transition potential evaluates spherical harmonics (with
+# SciPy < 1.17 through the deprecated `sph_harm`) and Wigner 3j symbols (which
+# trigger a deprecation warning in some mpmath versions).
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("l", [0, 1, 2])
+def test_orbital_filling_factor_is_spin_only_for_explicit_ml(l):
+    """Regression test for a (2*l+1) orbital-degeneracy double-count.
+
+    ``SubshellTransitions.get_transitions()`` realises a subshell's orbital
+    degeneracy explicitly, with one bound state per ``ml``, and
+    ``TransitionPotential.build()`` sums them incoherently. The
+    ``orbital_filling_factor`` therefore has to contribute only the remaining
+    spin degeneracy (2), not the full subshell occupancy ``4*l+2``. For a
+    single explicit ``ml`` state it must scale the intensity by exactly 2,
+    whatever ``l`` is. The old factor was invisible for K edges (l=0), where
+    ``4*l+2`` is 2, and overcounted p and d subshells by 3 and 5.
+    """
+    from abtem.inelastic.core_loss import AtomicWaveFunction, RadialWavefunction
+
+    r = np.linspace(1e-12, 20.0, 20000)
+    k = 1.3
+    bound = RadialWavefunction(
+        n=l + 1,
+        l=l,
+        energy=-1839.0,
+        radial_grid=r,
+        radial_values=r ** (l + 1) * np.exp(-r),
+    )
+    continuum = RadialWavefunction(
+        n=None,
+        l=l + 1,
+        energy=25.0,
+        radial_grid=r,
+        radial_values=np.sin(k * r) / np.sqrt(np.pi * k),
+    )
+    transitions = [(AtomicWaveFunction(bound, 0), AtomicWaveFunction(continuum, 0))]
+
+    assert _spin_factor_ratio(transitions) == pytest.approx(2.0, rel=1e-6)
+
+
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("Z, n, l", [(14, 1, 0), (14, 2, 1), (22, 3, 2)])
+def test_orbital_filling_factor_is_spin_only_for_subshell_transitions(Z, n, l):
+    """The same check on the transitions of a SubshellTransitions (needs GPAW)."""
+    pytest.importorskip("gpaw")
+    from abtem.inelastic.core_loss import SubshellTransitions
+
+    transitions = SubshellTransitions(Z, n, l, epsilon=25.0)
+    one_ml_transitions = [t for t in transitions.get_transitions() if t[0].ml == 0]
+    assert len(one_ml_transitions) > 0
+
+    assert _spin_factor_ratio(one_ml_transitions, Z) == pytest.approx(2.0, rel=1e-6)
+
+
+def _probe_waves(gpts=(32, 32), extent=(8.0, 8.0), device="cpu"):
+    probe = Probe(
+        energy=100e3, extent=extent, gpts=gpts, semiangle_cutoff=30, device=device
+    )
+    return probe.build(lazy=False)
+
+
+def _symmetric_gaussian_transition_potential(gpts, extent, width=0.5, device="cpu"):
+    """A single-transition potential whose real-space form is a Gaussian
+    centred on pixel (0, 0) of a periodic grid.
+
+    Its local potential |H(r)|^2 is centrosymmetric, V(r) = V(-r), as for
+    any real transition potential (|Y_lm|^2 is inversion-symmetric). That
+    matters because ``absolute_threshold`` ranks a *convolution* of V with
+    |psi|^2 while ``filter_sites`` evaluates a *correlation*; the two agree
+    only for centrosymmetric V.
+    """
+    from abtem.core.backend import copy_to_device
+    from abtem.core.utils import get_dtype
+
+    x = np.fft.fftfreq(gpts[0], 1 / gpts[0]) * extent[0] / gpts[0]
+    y = np.fft.fftfreq(gpts[1], 1 / gpts[1]) * extent[1] / gpts[1]
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    H = np.exp(-(X**2 + Y**2) / (2 * width**2))
+    array = np.fft.fft2(H)[None].astype(get_dtype(complex=True))
+    array = copy_to_device(array, device)
+    return TransitionPotentialArray(
+        Z=5,
+        array=array,
+        energy=100e3,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        metadata={"Z": 5, "n": 1, "l": 0},
+    )
+
+
+def _pixel_dense_boron_sites(gpts, extent, z=0.5):
+    """One B site on every pixel of the grid, all in the first slice."""
+    ij = np.stack(
+        np.meshgrid(np.arange(gpts[0]), np.arange(gpts[1]), indexing="ij"), -1
+    ).reshape(-1, 2)
+    sampling = np.array(extent) / np.array(gpts)
+    positions = np.concatenate([ij * sampling, np.full((len(ij), 1), z)], axis=1)
+    return ij, ase.Atoms(
+        numbers=[5] * len(ij), positions=positions, cell=(*extent, 1.0)
+    )
+
+
+def _oracle_overlaps(tp, waves, ij):
+    """Overlap of each pixel site with the probe, straight from the
+    definition: sum_r V(r - s) |psi(r)|^2, with V the transition
+    potential's local potential |ifft2(H)|^2, evaluated with np.roll in
+    float64 (independent of filter_sites' fast_roll and of
+    absolute_threshold's FFT convolution)."""
+    from abtem.core.backend import asnumpy
+
+    V = np.abs(np.fft.ifft2(asnumpy(tp.array).astype(np.complex128))) ** 2
+    V = V.sum(0)
+    psi2 = np.abs(asnumpy(waves.array).astype(np.complex128)) ** 2
+    return np.array([(np.roll(V, tuple(s), (0, 1)) * psi2).sum() for s in ij])
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_threshold_retains_requested_fraction_of_overlap(device):
+    """``threshold=t`` means: keep the sites that together carry at least a
+    fraction t of the probe/local-potential overlap (``absolute_threshold``
+    ranks the overlap at every pixel, accumulates it in descending order and
+    cuts where the cumulative fraction reaches t). With a site on every
+    pixel the retained sites are exactly those ranked pixels, so their
+    summed overlap must be >= t of the total, and for t < 1 some must be
+    dropped.
+
+    The cut used to be the overlap of the pixel *before* the one where the
+    cumulative fraction reaches t, kept strictly above, so the retained set
+    stopped ~2 pixels short (t=0.5 retained 0.487, t=0.1 retained 0.088);
+    and float32 round-off between the FFT ranking and filter_sites' direct
+    sum split groups of symmetry-tied pixels at the cut (t=0.99 ~1e-4
+    short). 0.99 and 0.999 cover that tie handling."""
+    gpts, extent = (32, 32), (8.0, 8.0)
+    tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
+    waves = _probe_waves(gpts=gpts, extent=extent, device=device)
+    ij, sites = _pixel_dense_boron_sites(gpts, extent)
+    overlaps = _oracle_overlaps(tp, waves, ij)
+    total = overlaps.sum()
+
+    for t in (0.001, 0.1, 0.5, 0.9, 0.99, 0.999):
+        kept = tp.filter_sites(waves, sites, threshold=tp.absolute_threshold(waves, t))
+        kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
+        kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
+        assert len(kept) < len(ij), f"t={t}: no site was dropped"
+        assert (
+            kept_overlap >= t * total
+        ), f"t={t}: retained only {kept_overlap / total:.4f} of the overlap"
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
+    """A threshold below the largest single-pixel overlap fraction asks for
+    exactly the single most-overlapping site. The cut index used to wrap to
+    -1 there -- the *smallest* overlap -- so filter_sites kept 1023 of 1024
+    sites, silently running the full unfiltered cost."""
+    gpts, extent = (32, 32), (8.0, 8.0)
+    tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
+    waves = _probe_waves(gpts=gpts, extent=extent, device=device)
+    ij, sites = _pixel_dense_boron_sites(gpts, extent)
+    overlaps = _oracle_overlaps(tp, waves, ij)
+    assert overlaps.max() / overlaps.sum() > 1e-3
+
+    kept = tp.filter_sites(waves, sites, threshold=tp.absolute_threshold(waves, 1e-3))
+    kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
+    kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
+    # The top pixel is unique (the next-ranked group of four ties sits ~15%
+    # below it), so it survives alone.
+    top_two = np.sort(overlaps)[::-1][:2]
+    assert top_two[1] < top_two[0] * (1 - 1e-3)
+    np.testing.assert_array_equal(kept_flat, [np.argmax(overlaps)])
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_threshold_drops_sites_and_bounds_the_eels_signal(device):
+    """End-to-end purpose of ``threshold``: through the EELS driver, t < 1
+    must actually drop sites (a smaller integrated signal), dropping more
+    as t decreases, yet retain at least the fraction t of the signal, while
+    t = 1 (the driver's default) is the unfiltered result.
+
+    Setup: one slice of vacuum, a B site on every pixel, a centrosymmetric
+    Gaussian transition potential. With one slice and single-channel, each
+    site's integrated EELS intensity is sum_q |FT[H(r - s) psi(r)]|^2, i.e.
+    by Parseval its overlap sum_r |H(r - s)|^2 |psi(r)|^2 (up to the
+    antialias aperture), so the retained signal fraction tracks the
+    retained-overlap fraction, which is >= t.
+
+    The driver used to rank the cut once on the entrance wave and apply it
+    to the wave at the slice; even one 1 A vacuum slice of propagation then
+    pushed the symmetry-tied group of sites at the cut below it together:
+    t=0.1 retained 0.048 of the signal, t=0.5 0.446, and t=0.001 nothing.
+    """
+    gpts, extent = (32, 32), (8.0, 8.0)
+    tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
+    potential = abtem.Potential(
+        ase.Atoms(cell=(*extent, 1.0)),
+        gpts=gpts,
+        slice_thickness=1.0,
+        device=device,
+    )
+    assert potential.num_slices == 1
+    ij, sites = _pixel_dense_boron_sites(gpts, extent)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=30, device=device)
+    probe.grid.match(potential)
+
+    # t = 1 disables filtering at the source: the absolute cut is 0 and
+    # filter_sites keeps every site.
+    waves = probe.build(scan=(4.0, 4.0), lazy=False)
+    assert tp.absolute_threshold(waves, 1.0) == 0.0
+    assert len(tp.filter_sites(waves, sites, threshold=0.0)) == len(ij)
+
+    def integrated(**kwargs):
+        result = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=(4.0, 4.0),
+            detectors=abtem.FlexibleAnnularDetector(to_cpu=True),
+            sites=sites,
+            double_channel=False,
+            lazy=False,
+            **kwargs,
+        )
+        return float(np.asarray(result.array).sum())
+
+    unfiltered = integrated(threshold=1.0)
+    assert unfiltered > 0
+
+    thresholds = (0.001, 0.1, 0.5, 0.9, 0.99)
+    ratios = [integrated(threshold=t) / unfiltered for t in thresholds]
+    assert 0 < ratios[0] and all(np.diff(ratios) > 0) and ratios[-1] < 1
+    for t, ratio in zip(thresholds, ratios):
+        # Measured: ratio = 0.048, 0.210, 0.613, 0.902, 0.990, each within
+        # ~1e-3 (the antialias aperture) of the retained-overlap fraction.
+        assert ratio >= t, f"t={t}: retained only {ratio:.4f} of the signal"
+
+
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("gpts", [16, 17])
+def test_transition_potential_builds_on_a_coarse_grid(gpts):
+    """The radial grid of the overlap integral must reach the largest k of the
+    grid: with only a 5 % margin past it, np.arange ended below it on coarse
+    grids (16 pixels on a 6 A cell) and interp1d raised."""
+    from abtem.inelastic.core_loss import (
+        AtomicWaveFunction,
+        RadialWavefunction,
+        TransitionPotential,
+    )
+
+    r = np.linspace(1e-3, 20.0, 4000)
+    bound = RadialWavefunction(
+        n=1, l=0, energy=-100.0, radial_grid=r, radial_values=r * np.exp(-r)
+    )
+    excited = RadialWavefunction(
+        n=None, l=1, energy=25.0, radial_grid=r, radial_values=r * np.exp(-0.1 * r)
+    )
+    transitions = [(AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=0))]
+    built = TransitionPotential(
+        14, transitions, extent=6.0, gpts=gpts, energy=100e3, double_channel=False
+    ).build()
+
+    assert built.array.shape == (1, gpts, gpts)
+    assert np.all(np.isfinite(built.array))
+    assert np.abs(built.array).max() > 0

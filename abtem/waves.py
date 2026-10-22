@@ -52,7 +52,9 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
 )
 from abtem.multislice import (
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, validate_potential
@@ -106,6 +108,14 @@ def _antialias_cutoff_gpts(
     extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+
+
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -348,6 +358,15 @@ class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
         self._in_place = in_place
+        super().__init__()
+
+    @property
+    def space(self) -> str:
+        return self._space
+
+    @property
+    def in_place(self) -> bool:
+        return self._in_place
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -592,7 +611,8 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        return transform.apply(self)
+        # The norm sums over the whole grid, so a lazy block must hold all of it.
+        return transform.apply(self.no_base_chunks())
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -630,7 +650,7 @@ class Waves(BaseWaves, ArrayObject):
         kwargs["array"] = array
 
         if renormalize:
-            kwargs["array"] /= xp.asarray(np.prod(repetitions))
+            kwargs["array"] /= int(np.prod(repetitions))
 
         return self.__class__(**kwargs)
 
@@ -698,12 +718,15 @@ class Waves(BaseWaves, ArrayObject):
         """
 
         def _phase_shift(array):
-            xp = get_array_module(self.array)
-            return xp.exp(1.0j * amount) * array
+            # np.exp of a Python complex is a NumPy complex128 scalar, which
+            # under NEP 50 promotes complex64 waves to complex128. The factor is
+            # a host scalar in the waves' own dtype, which every backend and dask
+            # multiply into the array without changing its dtype.
+            factor = np.exp(1.0j * amount).astype(array.dtype)
+            return factor * array
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = _phase_shift(self.array)
-        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:
@@ -714,15 +737,17 @@ class Waves(BaseWaves, ArrayObject):
         images : Images
             The wave functions as an image.
         """
-        array = self.array.copy()
-        metadata = copy(self.metadata)
+        waves = self.ensure_real_space()
+        # The inverse FFT of reciprocal-space waves is already a new array.
+        array = waves.array.copy() if waves is self else waves.array
+        metadata = copy(waves.metadata)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
         images = Images(
             array,
-            sampling=self._valid_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            sampling=waves._valid_sampling,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
             metadata=metadata,
         )
 
@@ -804,9 +829,12 @@ class Waves(BaseWaves, ArrayObject):
         Returns
         -------
         depth_profile : Images
-            2D image(s) with the depth (z) as the first base axis and the
-            remaining spatial axis as the second. Any additional ensemble axes
-            (e.g. scan positions) are preserved.
+            2D image(s) with the remaining spatial axis as the first base axis
+            and the depth (z) as the second, with one z row per exit plane.
+            The z sampling is the exit-plane spacing. Since images have no
+            coordinate offset, z is measured from the first exit plane (the
+            entrance surface, z = 0, for integer ``exit_planes``). Any
+            additional ensemble axes (e.g. scan positions) are preserved.
         """
         thickness_idx = None
         for i, ax in enumerate(self.ensemble_axes_metadata):
@@ -855,10 +883,26 @@ class Waves(BaseWaves, ArrayObject):
         else:
             array = xp.moveaxis(array, thickness_idx, -1)
 
-        thickness_values = self.ensemble_axes_metadata[thickness_idx].values
-        z_extent = max(thickness_values)
+        thickness_values = np.array(
+            self.ensemble_axes_metadata[thickness_idx].values, dtype=float
+        )
         n_z = len(thickness_values)
-        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+        if n_z > 1:
+            # One row per exit plane: n_z points spanning [t_0, t_{n_z-1}] are
+            # separated by n_z - 1 intervals. For uniformly spaced exit planes
+            # this is exactly their spacing.
+            z_sampling = (thickness_values[-1] - thickness_values[0]) / (n_z - 1)
+            if not np.allclose(np.diff(thickness_values), z_sampling):
+                warnings.warn(
+                    "The exit planes are not uniformly spaced (thicknesses "
+                    f"{np.round(thickness_values, 3).tolist()} Å), but the depth "
+                    "profile has a uniform z-axis with their mean spacing "
+                    f"({z_sampling:.3f} Å); intermediate rows are not drawn at "
+                    "their exact thickness. Use exit_planes that evenly divide "
+                    "the number of slices for an exact z-axis."
+                )
+        else:
+            z_sampling = thickness_values[0] if thickness_values[0] > 0 else 1.0
 
         remaining_metadata = [
             ax
@@ -1010,13 +1054,22 @@ class Waves(BaseWaves, ArrayObject):
         visualization.set_xlabel(f"{spatial_label} [Å]")
         visualization.set_ylabel("z [Å]")
 
-        z_sampling = profile.sampling[1]
+        # The profile's z-axis starts at 0 with row i centred on
+        # i * sampling; shift it so that row i is centred on the thickness of
+        # exit plane i, which need not start at 0 for explicit exit_planes.
+        z_offset = float(
+            next(
+                ax_meta.values[0]
+                for ax_meta in self.ensemble_axes_metadata
+                if isinstance(ax_meta, ThicknessAxis)
+            )
+        )
         for idx in np.ndindex(visualization.axes.shape):
             artist = visualization.artists[idx]
             xlim = artist.get_xlim()
             ylim = artist.get_ylim()
             artist.set_extent(
-                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+                (xlim[0], xlim[1], ylim[0] + z_offset, ylim[1] + z_offset)
             )
 
         visualization.adjust_coordinate_limits_to_artists()
@@ -1084,44 +1137,55 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        xp = get_array_module(self.array)
+        waves = self.ensure_real_space()
+        xp = get_array_module(waves.array)
 
         if gpts is None:
-            gpts = self._gpts_within_angle(max_angle)
+            gpts = waves._gpts_within_angle(max_angle)
 
-        if self.is_lazy:
+        if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
-                self.array,
+                waves.array,
                 new_shape=gpts,
                 normalization=normalization,
-                chunks=self._lazy_array.chunks[:-2] + gpts,
+                chunks=waves._lazy_array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = fft_interpolate(
-                self._eager_array, new_shape=gpts, normalization=normalization
+                waves._eager_array, new_shape=gpts, normalization=normalization
             )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["sampling"] = (
-            self._valid_extent[0] / gpts[0],
-            self._valid_extent[1] / gpts[1],
+            waves._valid_extent[0] / gpts[0],
+            waves._valid_extent[1] / gpts[1],
         )
         kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            self.antialias_cutoff_gpts
+            waves.antialias_cutoff_gpts
         )
-        return self.__class__(**kwargs)
+        downsampled = self.__class__(**kwargs)
+        if self.reciprocal_space:
+            return downsampled.ensure_reciprocal_space()
+        return downsampled
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
+    def _diffraction_pattern(
+        array, new_gpts, return_complex, fftshift, normalize, reciprocal_space
+    ):
         xp = get_array_module(array)
 
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
+        elif reciprocal_space:
+            # a new array, as the FFT would return
+            array = array.copy()
 
-        array = fft2(array, overwrite_x=False)
+        # A reciprocal-space array already holds the Fourier coefficients.
+        if not reciprocal_space:
+            array = fft2(array, overwrite_x=False)
 
         if array.shape[-2:] != new_gpts:
             array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
@@ -1167,8 +1231,12 @@ class Waves(BaseWaves, ArrayObject):
                     [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float,
-            masks up to that scattering angle [mrad].
+            If True the direct beam is masked (default is False): the bright-field disk
+            and its margin if the metadata has a finite ``semiangle_cutoff`` larger
+            than half the smaller angular sampling, otherwise (a plane wave, or an
+            ensemble of cutoffs) the zero-angle pixel only. If given as a float,
+            masks up to that scattering angle [mrad], plus the same margin when the
+            metadata has a ``semiangle_cutoff``.
         fftshift : bool, optional
             If False, do not shift the direct beam to the center of the diffraction
             patterns (default is True).
@@ -1210,7 +1278,13 @@ class Waves(BaseWaves, ArrayObject):
                 )
 
         if self.is_lazy:
-            dtype = get_dtype(complex=return_complex)
+            # Declare the precision the blocks return, which follows the waves
+            # as in the eager branch: complex128 waves give float64 patterns
+            # under a float32 configuration. A declared dtype below the blocks'
+            # would make later dask reductions (e.g. sum) accumulate in it.
+            dtype = (
+                self.array.dtype if return_complex else np.finfo(self.array.dtype).dtype
+            )
 
             pattern = da.map_blocks(
                 self._diffraction_pattern,
@@ -1219,6 +1293,7 @@ class Waves(BaseWaves, ArrayObject):
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
+                reciprocal_space=self.reciprocal_space,
                 chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
@@ -1229,6 +1304,7 @@ class Waves(BaseWaves, ArrayObject):
                 return_complex=return_complex,
                 fftshift=fftshift,
                 normalize=normalize,
+                reciprocal_space=self.reciprocal_space,
             )
 
         diffraction_patterns = DiffractionPatterns(
@@ -1242,12 +1318,7 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
-        return diffraction_patterns
+        return diffraction_patterns._apply_block_direct(block_direct)
 
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
@@ -1276,15 +1347,36 @@ class Waves(BaseWaves, ArrayObject):
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        if not ctf.accelerator.energy:
-            ctf.accelerator.match(self.accelerator)
-
-        self.accelerator.match(ctf.accelerator, check_match=True)
+        # Match a stand-in for the CTF's accelerator, so that a CTF without an energy
+        # does not take on that of these wave functions.
+        self.accelerator.match(Accelerator(energy=ctf.energy), check_match=True)
         self.accelerator.check_is_defined()
 
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
+
+    @staticmethod
+    def _stack_over_transitions(measurements, transition_potentials):
+        """Stack one detector's measurements over the transition-potential axis."""
+        if len(measurements) == 1:
+            return reduce_ensemble(measurements[0])
+
+        axis_metadata = OrdinalAxis(
+            label="Z, n, l",
+            values=tuple(
+                ",".join(
+                    (
+                        str(transition_potential.metadata["Z"]),
+                        str(transition_potential.metadata["n"]),
+                        str(transition_potential.metadata["l"]),
+                    )
+                )
+                for transition_potential in transition_potentials
+            ),
+            tex_label=r"$Z, n, \ell$",
+        )
+        return reduce_ensemble(stack_array_object(measurements, axis_metadata))
 
     def transition_potential_multislice(
         self,
@@ -1297,9 +1389,15 @@ class Waves(BaseWaves, ArrayObject):
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
+
         potential = validate_potential(potential, self)
 
-        measurements: list[Waves | BaseMeasurements] = []
+        # One entry per transition potential, each a list over detectors. The
+        # elastic multislice and the scattered waves are shared across
+        # detectors, so several can be filled in a single pass; this used to
+        # assert on the list that apply_transform returns for more than one.
+        per_transition: list[list[Waves | BaseMeasurements]] = []
         for transition_potential in transition_potentials:
             multislice_transform = MultisliceTransform(
                 potential=potential,
@@ -1310,8 +1408,26 @@ class Waves(BaseWaves, ArrayObject):
                 **multislice_func_kwargs,
             )
             new_measurements = self.apply_transform(multislice_transform)
-            assert isinstance(new_measurements, (Waves, BaseMeasurements))
-            measurements.append(new_measurements)
+            if not isinstance(new_measurements, list):
+                new_measurements = [new_measurements]
+            per_transition.append(new_measurements)
+
+        num_detectors = len(per_transition[0])
+        if any(len(entry) != num_detectors for entry in per_transition):
+            raise RuntimeError(
+                "every transition potential must produce the same number of "
+                "measurements"
+            )
+
+        if num_detectors > 1:
+            return [
+                self._stack_over_transitions(
+                    [entry[i] for entry in per_transition], transition_potentials
+                )
+                for i in range(num_detectors)
+            ]
+
+        measurements = [entry[0] for entry in per_transition]
 
         if len(measurements) > 1:
             axis_metadata = OrdinalAxis(
@@ -1394,14 +1510,16 @@ class Waves(BaseWaves, ArrayObject):
 
         Parameters
         ----------
-        potential : BasePotential or Atoms
-            The scattering potential.
-        scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire
-            potential at Nyquist sampling.
+        scan : BaseScan or np.ndarray
+            Positions of the probe wave functions.
+        potential : BasePotential or Atoms, optional
+            The scattering potential. If not given, the shifted wave functions are
+            returned without running the multislice algorithm.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`).
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -1413,11 +1531,9 @@ class Waves(BaseWaves, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
         scan = validate_scan(scan)
 
@@ -2096,7 +2212,9 @@ class Probe(WavesBuilder):
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
             converted to measurements after running the multislice algorithm. If not
-            given, defaults to the flexible annular detector.
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`). Use :meth:`Probe.scan` for a STEM simulation
+            that defaults to the :class:`FlexibleAnnularDetector`.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -2111,6 +2229,8 @@ class Probe(WavesBuilder):
         Returns
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
+            The detected measurement(s), or the exit wave functions if no detector is
+            given.
         """
         probe = self.copy()
 
@@ -2166,7 +2286,9 @@ class Probe(WavesBuilder):
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------
@@ -2179,6 +2301,8 @@ class Probe(WavesBuilder):
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
+
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         probe = self.copy()
         potential = validate_potential(potential)
@@ -2216,7 +2340,10 @@ class Probe(WavesBuilder):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector` or use
+            :meth:`Probe.multislice`.
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -2231,11 +2358,9 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:

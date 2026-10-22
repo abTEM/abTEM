@@ -10,6 +10,7 @@ from numba import cuda, njit  # type: ignore
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.utils import get_dtype
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -191,8 +192,10 @@ def _laplace_stencil_array(accuracy):
 
 
 def _laplace_operator_stencil(
-    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
+    accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
+    if dtype is None:
+        dtype = get_dtype(complex=True)
     c = finite_difference_coefficients(2, accuracy)
     c = c * prefactor
     c = c.astype(dtype)
@@ -386,6 +389,11 @@ def _multislice_exponential_series(
 ):
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
+
+    if initial_amplitude == 0:
+        # Every term of the series is linear in the wave, so a zero wave is
+        # returned unchanged; the convergence ratio below would be 0 / 0.
+        return waves
 
     if fully_corrected:
         temp = full_series(

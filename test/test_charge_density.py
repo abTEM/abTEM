@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from abtem.potentials.charge_density import ChargeDensityPotential
+import abtem
+from abtem.potentials.charge_density import (
+    ChargeDensityPotential,
+    _interpolate_between_cells,
+)
 
 
 @pytest.fixture
@@ -103,3 +107,162 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
         carbon_atoms, charge_density_3d, sampling=0.1, repetitions=reps
     )
     assert pot.repetitions == reps
+
+
+def test_float64_precision_keeps_charge_density(carbon_atoms):
+    """The charge density must not be rounded to float32 when the configured
+    precision is float64."""
+    charge_density = np.random.RandomState(0).rand(32, 32, 32) * 0.1
+
+    with abtem.config.set({"precision": "float64"}):
+        pot = ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+        np.testing.assert_array_equal(pot._charge_density, charge_density)
+        assert pot.build(lazy=False).array.dtype == np.float64
+
+
+_CD_CELL = 8.0
+_CD_GRID = 64  # charge-density grid points per axis (0.125 A)
+
+
+def _gaussian_electrons(Z, z0, sigma):
+    """-Z electrons in a normalised 3D Gaussian of std `sigma` on the atom
+    (minimum-image in all directions, so the density is periodic)."""
+    x = np.arange(_CD_GRID) * _CD_CELL / _CD_GRID
+    d = [
+        (x - c + _CD_CELL / 2) % _CD_CELL - _CD_CELL / 2
+        for c in (_CD_CELL / 2,) * 2 + (z0,)
+    ]
+    r2 = d[0][:, None, None] ** 2 + d[1][None, :, None] ** 2 + d[2][None, None, :] ** 2
+    return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
+
+
+@pytest.mark.parametrize("z0", (3.3, 4.0))
+def test_neutral_atom_matches_screened_coulomb_per_slice(z0):
+    """Nucleus Z plus -Z electrons in a Gaussian of std 0.7 A on it: a neutral
+    atom, whose potential is V(r) = Z/(4 pi eps0) erfc(r / (sqrt(2) s)) / r.
+
+    Oracle: that V integrated over each slice along z with scipy.integrate.quad
+    (plus the +-Lz images). The long-range part of every slice used to be
+    sampled from the slice's left edge instead of at midpoints, which shifted it
+    by dz/2 against the short-range part: the slices above and below an atom on
+    a slice boundary differed and the potential 3 A from the atom was not ~0.
+    Summed over a full period the error cancels, so only per-slice values see it.
+    """
+    from scipy import integrate
+    from scipy.special import erfc
+
+    from abtem.core.constants import eps0
+
+    Z, sigma, dz = 6, 0.7, 0.5
+    atoms = Atoms(
+        [Z], positions=[(_CD_CELL / 2, _CD_CELL / 2, z0)], cell=[_CD_CELL] * 3, pbc=True
+    )
+    with abtem.config.set({"precision": "float64"}):
+        potential = ChargeDensityPotential(
+            atoms, _gaussian_electrons(Z, z0, sigma), sampling=0.05, slice_thickness=dz
+        )
+        array = potential.build(lazy=False).array
+
+    C = Z / (4 * np.pi * eps0)
+
+    def V(r):
+        return C * erfc(r / (np.sqrt(2) * sigma)) / r
+
+    s = potential.sampling
+    i0 = int(round(_CD_CELL / 2 / s[0]))
+    offsets = np.array([4, 10, 20, 40, 60])  # 0.2, 0.5, 1, 2, 3 A
+    numeric = array[:, i0 + offsets, i0]
+    oracle = np.zeros_like(numeric)
+    for j, (a, b) in enumerate(potential.slice_limits):
+        for k, offset in enumerate(offsets):
+            rho = offset * s[0]
+            for image in (-1, 0, 1):
+                lo, hi = a - z0 - image * _CD_CELL, b - z0 - image * _CD_CELL
+                oracle[j, k] += integrate.quad(
+                    lambda z: V(np.hypot(rho, z)), lo, hi, limit=200
+                )[0]
+    tolerance = 2e-3 * oracle.max()
+    assert np.abs(numeric - oracle).max() < tolerance
+    # Far from the atom a neutral atom's potential is ~0 in every slice.
+    assert np.abs(numeric[:, -1]).max() < tolerance
+
+
+# A periodic field on a hexagonal cell, sampled on a grid whose size differs along every
+# axis. Its exact values are known everywhere, so the interpolation can be checked
+# against the field itself and against the invariances of a periodic interpolant.
+_HEX_A, _HEX_C = 2.5, 4.0
+_HEX_CELL = np.array(
+    [[_HEX_A, 0, 0], [-_HEX_A / 2, _HEX_A * np.sqrt(3) / 2, 0], [0, 0, _HEX_C]]
+)
+_HEX_BOX = np.diag([_HEX_A, _HEX_A * np.sqrt(3), _HEX_C])
+_HEX_GPTS = (24, 20, 40)
+
+
+def _periodic_field(fractional):
+    reciprocal = 2 * np.pi * np.linalg.inv(_HEX_CELL).T
+    terms = zip(
+        [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)],
+        [1.0, 0.7, 0.5, 0.4],
+        [0.3, 1.1, 2.0, 0.7],
+    )
+    positions = fractional @ _HEX_CELL
+    return sum(
+        amplitude * np.cos(positions @ (np.array(hkl) @ reciprocal) + phase)
+        for hkl, amplitude, phase in terms
+    )
+
+
+def _fractional_grid(shape):
+    axes = [np.arange(n) / n for n in shape]
+    return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+
+
+@pytest.fixture(scope="module")
+def hexagonal_field():
+    return _periodic_field(_fractional_grid(_HEX_GPTS)).reshape(_HEX_GPTS)
+
+
+def test_interpolation_between_cells_reproduces_a_periodic_field(hexagonal_field):
+    """Against the exact field, including the target points next to the cell faces."""
+    shape = (25, 43, 40)
+    interpolated = _interpolate_between_cells(
+        hexagonal_field, shape, _HEX_CELL, _HEX_BOX
+    )
+    fractional = _fractional_grid(shape) @ _HEX_BOX @ np.linalg.inv(_HEX_CELL)
+    exact = _periodic_field(fractional % 1.0).reshape(shape)
+
+    scale = np.abs(hexagonal_field).max()
+    assert np.abs(interpolated - exact).max() < 3e-4 * scale
+
+
+def test_interpolation_between_cells_is_invariant_to_whole_point_rolls(
+    hexagonal_field,
+):
+    shape = (25, 43, 40)
+    rolls = (5, 7, 9)
+    shift = np.array(rolls) / np.array(_HEX_GPTS) @ _HEX_CELL
+
+    rolled = _interpolate_between_cells(
+        np.roll(hexagonal_field, rolls, axis=(0, 1, 2)),
+        shape,
+        _HEX_CELL,
+        _HEX_BOX,
+        offset=shift,
+    )
+    original = _interpolate_between_cells(hexagonal_field, shape, _HEX_CELL, _HEX_BOX)
+
+    scale = np.abs(hexagonal_field).max()
+    np.testing.assert_allclose(rolled, original, rtol=0, atol=1e-12 * scale)
+
+
+def test_interpolation_between_cells_is_invariant_to_tiling(hexagonal_field):
+    shape = (25, 43, 40)
+    tiled_cell = _HEX_CELL * np.array([[2], [1], [1]])
+
+    tiled = _interpolate_between_cells(
+        np.tile(hexagonal_field, (2, 1, 1)), shape, tiled_cell, _HEX_BOX
+    )
+    original = _interpolate_between_cells(hexagonal_field, shape, _HEX_CELL, _HEX_BOX)
+
+    scale = np.abs(hexagonal_field).max()
+    np.testing.assert_allclose(tiled, original, rtol=0, atol=1e-12 * scale)

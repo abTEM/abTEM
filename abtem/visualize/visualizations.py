@@ -90,6 +90,21 @@ def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasureme
     return measurement
 
 
+def _sum_ensemble_range(measurement, axes: tuple[int, ...]):
+    """Sum a selected range of ensemble members.
+
+    Axes carrying probability weights are summed with their weights scaled to
+    average one over the range, ``N Σ p_i I_i / Σ p_i``, so that equal weights give
+    the plain sum and the plotted scale does not depend on whether the axis is
+    weighted.
+    """
+    if not measurement._weighted_axes(axes):
+        return measurement.sum(axis=axes)
+
+    num_members = int(np.prod([measurement.shape[axis] for axis in axes]))
+    return measurement._weighted_ensemble_mean(axes) * num_members
+
+
 def _validate_artist_type(measurement, complex_conversion, artist_type=None):
     if artist_type is not None:
         return artist_type
@@ -348,7 +363,7 @@ class Visualization:
 
         measurement = self._measurement[validated_indices]
         if len(summed_axes) > 0:
-            measurement = measurement.sum(axis=summed_axes)
+            measurement = _sum_ensemble_range(measurement, summed_axes)
 
         measurement = convert_complex(measurement, self._complex_conversion)
 

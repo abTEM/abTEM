@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import operator
 import warnings
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager, nullcontext
@@ -37,21 +38,25 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
 )
 from abtem.core.backend import (
+    asnumpy,
     check_cupy_is_installed,
     copy_to_device,
     cp,
     device_name_from_array_module,
     get_array_module,
+    push_config_to_workers,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    get_dtype,
     interleave,
     itemset,
     normalize_axes,
@@ -219,6 +224,69 @@ def multi_output_blockwise(
     return outputs
 
 
+# Codecs (Blosc/zlib) reject a single buffer over 2**31 - 1 bytes. Writing a
+# whole array as one zarr chunk -- as this module used to always do -- hits
+# that limit for any reasonably large array, especially at float64. Stay well
+# under it (also a more sensible chunk size for parallel IO in general) by
+# halving the largest axis of the chunk shape until it fits the budget.
+_MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
+
+
+def _safe_zarr_chunks(
+    shape: tuple[int, ...],
+    itemsize: int,
+    max_bytes: Optional[int] = None,
+    n_fixed_trailing_axes: int = 0,
+) -> tuple[int, ...]:
+    """Pick a chunk shape that stays under ``max_bytes``, preferring to
+    shrink leading (ensemble) axes and never touching the trailing
+    ``n_fixed_trailing_axes`` (an ArrayObject's ``_base_dims``) unless there
+    is no other choice.
+
+    Several of abTEM's own lazy dask operations on measurements (e.g.
+    ``interpolate_line``'s ``da.map_blocks(..., drop_axis=...)``) require
+    their base/measurement axes to be a single dask chunk -- splitting them
+    doesn't raise, it silently produces wrong results (confirmed by direct
+    reproduction: a DiffractionPatterns array whose spatial axes were split
+    this way, then reloaded lazily, gave an all-zero momentum-resolved
+    spectrum while eagerly-computed data from the same file was correct).
+    Chunking only the ensemble axes keeps a round-tripped array safe for
+    every lazy operation that already assumes whole base-axis chunks,
+    matching e.g. ``PotentialArray``'s own ``("auto",) * n + (-1,) *
+    _base_dims`` convention elsewhere in this module.
+    """
+    if max_bytes is None:
+        # Read fresh rather than as a default-argument value, so overriding
+        # the module-level budget (e.g. in tests) takes effect.
+        max_bytes = _MAX_ZARR_CHUNK_BYTES
+
+    chunks = list(shape)
+
+    def nbytes() -> int:
+        n = itemsize
+        for c in chunks:
+            n *= c
+        return n
+
+    n_fixed = min(n_fixed_trailing_axes, len(chunks))
+    splittable = list(range(len(chunks) - n_fixed))
+
+    while nbytes() > max_bytes and any(chunks[i] > 1 for i in splittable):
+        i = max(splittable, key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    # Only reached if the base axes are themselves so large that shrinking
+    # every ensemble axis to 1 still isn't enough (e.g. a single very large
+    # image with little to no ensemble axis to shrink) -- fall back to
+    # splitting them too rather than failing outright; this is the one case
+    # where the lazy-op hazard described above is genuinely unavoidable.
+    while nbytes() > max_bytes and any(c > 1 for c in chunks):
+        i = max(range(len(chunks)), key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    return tuple(chunks)
+
+
 class ComputableList(list):
     """A list with methods for conveniently computing its items."""
 
@@ -309,6 +377,7 @@ class ComputableList(list):
 
         arrays_to_write = []
         metadata_list = []
+        base_dims_by_index = {}
 
         for i, has_array in enumerate(self):
             has_array = has_array.ensure_lazy()
@@ -326,6 +395,7 @@ class ComputableList(list):
 
             arrays_to_write.append((i, array))
             metadata_list.append({f"metadata{i}": metadata_dict})
+            base_dims_by_index[i] = has_array._base_dims
 
         if is_zip:
             # Use ZipStore for .zip files
@@ -361,11 +431,27 @@ class ComputableList(list):
                             root.create_array(
                                 name=f"array{i}",
                                 data=computed_array,
-                                chunks=computed_array.shape,
+                                chunks=_safe_zarr_chunks(
+                                    computed_array.shape,
+                                    computed_array.dtype.itemsize,
+                                    n_fixed_trailing_axes=base_dims_by_index[i],
+                                ),
                                 overwrite=True,
                                 compressors=compressors,
                             )
-                    finally:
+                    except BaseException:
+                        # A failed write (e.g. a chunk still over a codec's
+                        # buffer limit) can leave a .zip with valid-looking
+                        # metadata (shape/dtype/chunks) but no actual chunk
+                        # data -- silently readable later as all zeros
+                        # (zarr's fill_value for a declared-but-missing
+                        # chunk) instead of raising again. Don't leave that
+                        # behind.
+                        store.close()
+                        if os.path.exists(url):
+                            os.remove(url)
+                        raise
+                    else:
                         store.close()
 
                 return url
@@ -388,6 +474,13 @@ class ComputableList(list):
 
                 root = zarr.open(url, mode="w")
 
+                def _close():
+                    store = getattr(root, "store", None)
+                    if store is not None:
+                        close_fn = getattr(store, "close", None)
+                        if callable(close_fn):
+                            close_fn()
+
                 try:
                     for metadata_dict in metadata_list:
                         for key, value in metadata_dict.items():
@@ -397,15 +490,23 @@ class ComputableList(list):
                         root.create_array(
                             name=f"array{i}",
                             data=computed_array,
-                            chunks=computed_array.shape,
+                            chunks=_safe_zarr_chunks(
+                                computed_array.shape,
+                                computed_array.dtype.itemsize,
+                                n_fixed_trailing_axes=base_dims_by_index[i],
+                            ),
                             overwrite=True,
                         )
-                finally:
-                    store = getattr(root, "store", None)
-                    if store is not None:
-                        close_fn = getattr(store, "close", None)
-                        if callable(close_fn):
-                            close_fn()
+                except BaseException:
+                    # See the matching comment in write_to_zipstore: don't
+                    # leave a partially-written store with valid-looking
+                    # metadata but missing/incomplete chunk data.
+                    _close()
+                    if os.path.exists(url):
+                        shutil.rmtree(url)
+                    raise
+                else:
+                    _close()
 
                 return url
 
@@ -417,7 +518,12 @@ class ComputableList(list):
             )
 
         if not compute:
+            # The arrays are computed later, inside a task on the client's
+            # workers, which must then hold the configuration of this call.
+            _push_config_to_active_client()
             return delayed_write
+
+        _push_config_to_active_client()
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
@@ -492,6 +598,23 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _push_config_to_active_client():
+    """Mirror the configuration onto an active distributed client's workers.
+
+    Any distributed client (a CPU LocalCluster, a SLURMCluster, ...) executes
+    tasks in worker processes that never saw the client's ``abtem.config.set``.
+    Deduplicated inside push_config_to_workers, so calling this on every
+    dispatch is cheap.
+    """
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return
+    push_config_to_workers(client)
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -502,6 +625,8 @@ def _compute(
     is_gpu = config.get("device") == "gpu" or any(
         hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
     )
+
+    _push_config_to_active_client()
 
     if is_gpu:
         check_cupy_is_installed()
@@ -779,8 +904,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
         array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        # by keyword: not every subclass takes the array as its first argument
         kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -882,6 +1009,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "mean")
         return self._reduction(
             "mean", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -911,6 +1039,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "sum")
         return self._reduction(
             "sum", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1006,6 +1135,115 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             "max", axes=axis, keepdims=keepdims, split_every=split_every
         )
 
+    def _weighted_axes(self, axes: tuple[int, ...]) -> dict[int, np.ndarray]:
+        """Normalized probability weights of the given (non-negative) axes, for the
+        axes that carry non-uniform weights."""
+        weights = {}
+        for axis in axes:
+            axis_weights = _normalized_axis_weights(
+                self.axes_metadata[axis], self.shape[axis]
+            )
+            if axis_weights is not None:
+                weights[axis] = axis_weights
+        return weights
+
+    def _warn_if_weighted_axes(
+        self, axes: Optional[int | tuple[int, ...]], reduction_func: str
+    ) -> None:
+        if axes is None:
+            # A reduction over all axes includes every ensemble axis.
+            axes = tuple(range(len(self.ensemble_shape)))
+        else:
+            axes = tuple(
+                axis if axis >= 0 else len(self.shape) + axis
+                for axis in number_to_tuple(axes)
+            )
+            if any(axis >= len(self.ensemble_shape) for axis in axes):
+                return  # _reduction raises for base axes
+
+        if self._weighted_axes(axes):
+            warnings.warn(
+                f"`{reduction_func}` over an ensemble axis carrying distribution "
+                "(probability) weights ignores the weights. The ensemble members "
+                "are unweighted and the distribution weights are applied when the "
+                "ensemble is reduced: use `reduce_ensemble(axis=...)` for the "
+                "probability-weighted mean.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _weighted_ensemble_mean(
+        self, axes: int | tuple[int, ...], split_every: int = 2
+    ) -> Self:
+        """Probability-weighted mean over ensemble axes.
+
+        Computes ``Σ_i p_i A_i / Σ_i p_i`` over each axis, where ``p_i`` are the
+        weights carried by the axis metadata (see :class:`OrdinalAxis`); axes
+        without (or with equal) weights are averaged with a plain mean. Over
+        several axes the weights are the outer product of the per-axis weights.
+        Works for NumPy, CuPy and lazy Dask arrays (the result stays lazy) and
+        preserves the array dtype.
+        """
+        axes = tuple(
+            axis if axis >= 0 else len(self.shape) + axis
+            for axis in number_to_tuple(axes)
+        )
+
+        if self._is_base_axis(axes):
+            raise RuntimeError("base axes cannot be reduced")
+
+        weights = self._weighted_axes(axes)
+
+        if not weights:
+            # Equal weights (e.g. frozen phonons): the plain mean is exact, and
+            # keeping it leaves such results bitwise unchanged.
+            return self._reduction("mean", axes=axes, split_every=split_every)
+
+        # Integer arrays (e.g. counts) take the configured float precision rather
+        # than truncating the weights.
+        array_object = self
+        if self.array.dtype.kind not in "fc":
+            array_object = self.__class__(
+                **{
+                    **self._copy_kwargs(exclude=("array",)),
+                    "array": self.array.astype(get_dtype(complex=False)),
+                }
+            )
+
+        # Average the equal-weight axes first: it shrinks the array before the
+        # weighted pass, and the outer-product weights factorize over the axes.
+        unweighted = tuple(axis for axis in axes if axis not in weights)
+        if unweighted:
+            array_object = array_object._reduction(
+                "mean", axes=unweighted, split_every=split_every
+            )
+            weights = {
+                axis - sum(other < axis for other in unweighted): axis_weights
+                for axis, axis_weights in weights.items()
+            }
+
+        # A single multiply by the outer product of the per-axis weights, a small
+        # host array spanning only the weighted axes. The real dtype matches the
+        # array's precision (complex64 -> float32, ...), so the weights never
+        # promote the result.
+        ndim = len(array_object.shape)
+        combined = np.ones((1,) * ndim)
+        for axis, axis_weights in weights.items():
+            shape = [1] * ndim
+            shape[axis] = len(axis_weights)
+            combined = combined * axis_weights.reshape(shape)
+
+        xp = get_array_module(array_object.array)
+        real_dtype = np.finfo(array_object.array.dtype).dtype
+        array = array_object.array * xp.asarray(combined, dtype=real_dtype)
+
+        weighted = array_object.__class__(
+            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
+        )
+        return weighted._reduction(
+            "sum", axes=tuple(weights), split_every=split_every
+        )
+
     def _reduction(
         self,
         reduction_func: str,
@@ -1061,15 +1299,62 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
+            cp is not None and isinstance(other, cp.ndarray)
+        ):
             other_array = other
+        elif func.startswith("__r"):
+            # The left operand's own method has already declined, so Python
+            # raises its usual TypeError naming both types.
+            return NotImplemented
         else:
             raise NotImplementedError(
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
+        self_array = self.array
+        if (
+            cp is not None
+            and isinstance(other_array, (np.ndarray, cp.ndarray, da.core.Array))
+            and {get_array_module(self_array), get_array_module(other_array)}
+            == {np, cp}
+        ):
+            # CuPy refuses a host array as an operand, a 0-d one included,
+            # though it takes a NumPy scalar. The side on the host, measurement
+            # or operand, is moved to the device, so both operand orders give
+            # the same result there. A lazy host operand is copied to the device
+            # block by block when the result is computed.
+            if get_array_module(self_array) is cp:
+                other_array = copy_to_device(other_array, "gpu")
+            else:
+                self_array = copy_to_device(self_array, "gpu")
+
+        name = func.strip("_")
+        if isinstance(self_array, da.core.Array) or isinstance(
+            other_array, da.core.Array
+        ):
+            # CuPy raises on a dask operand instead of deferring to it, so the
+            # operation is carried out by the dask array's own method, which
+            # accepts NumPy and CuPy operands alike.
+            if isinstance(self_array, da.core.Array):
+                array = getattr(self_array, func)(other_array)
+            else:  # "__add__" is other.__radd__(self), "__rsub__" other.__sub__(self)
+                if func.startswith("__r"):
+                    reflected = "__" + func[3:]
+                else:
+                    reflected = "__r" + func[2:]
+                array = getattr(other_array, reflected)(self_array)
+        elif hasattr(operator, name):
+            # Through the operator module rather than a direct call of the method
+            # named by func, so that an operand that returns NotImplemented hands
+            # over to the other operand's reflected method, and a pair neither
+            # side supports raises TypeError.
+            array = getattr(operator, name)(self_array, other_array)
+        else:  # a reflected operation: "__rtruediv__" is other / self
+            array = getattr(operator, name[1:])(other_array, self_array)
+
         kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = getattr(self.array, func)(other_array)
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(
@@ -1096,10 +1381,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__truediv__")
 
     def __itruediv__(self, other: Self) -> Self:
-        return self._arithmetic(other, "__itruediv__")
+        return self._in_place_arithmetic(other, "__itruediv__")
+
+    def __rtruediv__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rtruediv__")
 
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
+
+    def __rsub__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rsub__")
 
     def __isub__(self, other: Self) -> Self:
         return self._in_place_arithmetic(other, "__isub__")
@@ -1113,8 +1404,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __pow__(self, other: Self) -> Self:
         return self._arithmetic(other, "__pow__")
 
-    __rmul__ = __mul__
-    __rtruediv__ = __truediv__
+    def __radd__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__radd__")
+
+    def __rmul__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rmul__")
+
+    def __rpow__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rpow__")
+
+    # NumPy scalars and arrays, dask arrays and CuPy arrays on the left of an
+    # operator defer to the reflected methods above, instead of coercing this
+    # object to an array through __len__ and __getitem__, because their priority
+    # is lower. __array_ufunc__ = None would also defer them, but dask treats any
+    # object with shape, dtype and __array_ufunc__ as array-like and then reads
+    # its ndim, which an ArrayObject lacks. The same deferral applies to NumPy's
+    # in-place operators: `ndarray += m` leaves the ndarray unchanged and binds
+    # the name to the new object returned by `m.__radd__`.
+    __array_priority__ = 1000
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
@@ -1244,7 +1551,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             axis = normalize_axes(axis, self.shape)
 
-        shape = self.shape[: -len(self.base_shape)]
+        # Not `self.shape[: -len(self.base_shape)]`: Python has no negative
+        # zero, so for a base-less object (base_shape == ()) that slice is
+        # `[:0]`, always empty, rather than `[:len(self.shape)]`.
+        n_ensemble_dims = len(self.shape) - len(self.base_shape)
+        shape = self.shape[:n_ensemble_dims]
 
         squeezed = tuple(
             np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0]
@@ -1286,7 +1597,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+        # by keyword: not every subclass takes the array as its first argument
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
@@ -1439,6 +1753,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = self.array
         if self.is_lazy:
             warnings.warn("Lazy arrays are computed in memory before writing to tiff.")
+            _push_config_to_active_client()
             array = self._lazy_array.compute()
 
         return tifffile.imwrite(
@@ -1464,16 +1779,20 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(self.array, da.core.Array):
             return False
 
-        base_chunks = self.array.chunks[-len(self.base_shape) :]
+        # Not `chunks[-len(self.base_shape):]`: the same -0 problem, mirrored --
+        # for a base-less object that slice is `[0:]`, everything, rather than
+        # `[len(chunks):]`, nothing.
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        base_chunks = self.array.chunks[n_ensemble_dims:]
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
         """Rechunk to remove chunks across the base dimensions."""
         if not self._has_base_chunks:
             return self
-        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
-            self.base_shape
-        )
+        # See the comment in _has_base_chunks: -0 is 0, not "the end".
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(self.base_shape)
         return self.rechunk(chunks)
 
     @staticmethod
@@ -1483,11 +1802,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial: Callable,
         array_object_partial: Callable,
         base_ndims: int,
+        out_ndim: int,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
         array_axes = axes[: len(array.shape)]
-        ensemble_axes = array_axes[:-base_ndims]
+        # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
+        # comment in ArrayObject.squeeze for a base-less array_object.
+        n_ensemble_axes = len(array_axes) - base_ndims
+        ensemble_axes = array_axes[:n_ensemble_axes]
         transform_axes = axes[len(array.shape) :]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
@@ -1498,8 +1821,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
-        ndims = len(transform_axes) + len(array.shape)
-        packing = np.zeros((1,) * ndims, dtype=object)
+        packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
 
@@ -1557,6 +1879,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 validated_chunks[: len(transform.ensemble_shape)]
             )
 
+            # A block of multi_output_blockwise has one dimension per axis of
+            # this array plus one per dimension of each partitioned transform
+            # argument, not one per argument: MultisliceTransform passes a
+            # frozen-phonon potential with several exit planes as one 2D
+            # argument, and large constants as 0D arguments whose blocks can be
+            # bare objects, so the count comes from the declared arguments. A
+            # packed block with fewer dimensions breaks dask's concatenation
+            # over dropped axes (AnnularDetector drops the wave-function axes).
+            out_ndim = len(self.shape) + sum(len(axis.shape) for axis in new_axes)
+
             num_dropped_axes = tuple(
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
             )
@@ -1598,6 +1930,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
+                out_ndim=out_ndim,
             )
         else:
             new_arrays = transform._calculate_new_array(self)
@@ -1768,14 +2101,28 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             coords[axis.label] = dr
 
-        attrs = self.metadata
-        attrs["long_name"] = self.metadata["label"]
+        attrs = copy.deepcopy(self.metadata)
+        if "label" in attrs:
+            attrs["long_name"] = attrs["label"]
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
     def to_quantem(self):
         """
         Convert ArrayObject to quantem Dataset object.
+
+        The units of the axes are converted to quantem's spelling (for example "A" and
+        "A^-1"), and an axis without units gets "pixels". The signal units are the
+        "units" entry of the metadata, passed on unchanged; if there is none they are
+        "arb. unit". The metadata is deep-copied into the metadata of the Dataset, so
+        changing one does not change the other.
+
+        A quantem Dataset holds NumPy arrays only: a lazy object is computed (the
+        object itself stays lazy) and an array on a GPU is copied to the host.
+
+        Returns
+        -------
+        dataset : quantem.core.datastructures.Dataset
         """
 
         if em is None:
@@ -1807,21 +2154,32 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             units.append(_normalize_unit(getattr(axis, "units", None)))
             origin.append(0.0)
 
-        if self.is_lazy:
-            self.compute()
+        # The signal units are the metadata units, as abTEM's own measurements set them
+        # ("arb. unit" by default). quantem only displays them, and reads the same
+        # symbols as abTEM ("Å", "%", "electrons"), so they are not normalized like
+        # the axis units. An empty string is a dimensionless signal and stays empty.
+        signal_units = self.metadata.get("units")
+        if signal_units is None:
+            signal_units = "arb. unit"
 
+        # compute() replaces the array of the object it is called on; computing a
+        # shallow copy leaves the caller lazy.
+        exported = copy.copy(self).compute() if self.is_lazy else self
+
+        # A quantem Dataset holds NumPy arrays only: it rejects CuPy arrays.
         dataset = em.core.datastructures.Dataset.from_array(
-            array=self.array,
+            array=asnumpy(exported.array),
             name=type(self).__name__,
             origin=tuple(origin),
             sampling=tuple(sampling),
             units=tuple(units),
-            signal_units=getattr(self, "units", "arb. units"),
+            signal_units=signal_units,
         )
 
-        # preserve abTEM metadata if present
-        if hasattr(self, "metadata"):
-            dataset._metadata = dict(self.metadata)
+        # Dataset.from_array takes no metadata; Dataset.metadata is the dict it
+        # holds, empty for a new dataset. Deep-copied, as in to_data_array, so that
+        # nested values are not shared with this object.
+        dataset.metadata.update(copy.deepcopy(self.metadata))
 
         return dataset
 
@@ -1885,7 +2243,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         if chunks is None and self.is_lazy:
-            chunks = self._lazy_array.chunks[: -len(self.base_shape)]
+            # See the comment in ArrayObject.squeeze: -0 is 0, not "the end".
+            n_ensemble_dims = len(self._lazy_array.chunks) - len(self.base_shape)
+            chunks = self._lazy_array.chunks[:n_ensemble_dims]
         elif chunks is None:
             chunks = (1,) * len(self.ensemble_shape)
 
@@ -1921,7 +2281,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            array = self.compute().array
+            # compute() works in place: materialise a copy, so that partitioning
+            # (e.g. of a lazy potential for an eager multislice) leaves the
+            # caller's object lazy
+            array = self.copy().compute().array if self.is_lazy else self.array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:
@@ -2057,7 +2420,16 @@ def _from_zarr_canonical(root, chunks, decode_types):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = "auto"
+            # Respect cls._base_dims the same way the legacy loader below
+            # already does: dask's own "auto" heuristic doesn't know which
+            # trailing axes are an ArrayObject's base (measurement) axes, and
+            # several of abTEM's own lazy operations (e.g. interpolate_line)
+            # assume those are never split across chunks. chunks=None (the
+            # default) already avoids this by mirroring whatever to_zarr
+            # actually wrote, which itself never splits base axes -- this
+            # branch only matters if a caller explicitly opts into "auto".
+            num_ensemble_axes = zarr_array.ndim - cls._base_dims
+            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
@@ -2221,7 +2593,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
 
     xp = get_array_module(arrays[0].array)
 
-    if arrays[0].is_lazy:
+    if any(has_array.is_lazy for has_array in arrays):
         array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
         array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)
