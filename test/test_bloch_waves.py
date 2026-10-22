@@ -22,6 +22,7 @@ from abtem.bloch.utils import (
 from abtem.core.backend import asnumpy
 from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
+from abtem.tilt import precession_tilts
 
 
 @st.composite
@@ -1647,3 +1648,248 @@ def test_cupy_expm_matches_scipy(dtype, tolerance):
     np.testing.assert_allclose(
         result, reference, atol=tolerance * np.abs(reference).max()
     )
+
+
+def _cbed_silicon(device="cpu", semiangle_cutoff=9.0, cells=4, **probe_kwargs):
+    # Si [001] in a 2 x 2 cell window at 200 kV, with 2.3 mrad pixels: 9 mrad
+    # discs overlap the (220) discs, 13 mrad away. The multislice reference uses
+    # the potential of the same structure factor, built on the host.
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+
+    def structure_factor(device):
+        return StructureFactor(
+            atoms, g_max=3.0, parametrization="lobato", thermal_sigma=0.0, device=device
+        )
+
+    bloch_waves = BlochWaves(
+        structure_factor=structure_factor(device),
+        energy=200e3,
+        sg_max=0.3,
+        g_max=1.5,
+        device=device,
+    )
+    potential = abtem.CrystalPotential(
+        structure_factor("cpu").get_projected_potential(
+            slice_thickness=atoms.cell[2, 2] / 4, lazy=False
+        ),
+        repetitions=(2, 2, cells),
+    )
+    probe = abtem.Probe(
+        semiangle_cutoff=semiangle_cutoff, energy=200e3, device=device, **probe_kwargs
+    ).match_grid(potential)
+    return bloch_waves, probe, potential
+
+
+@pytest.fixture(scope="module")
+def silicon_cbed():
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves, probe, potential = _cbed_silicon(defocus=50.0)
+        position = (1.6, 3.0)
+        thicknesses = [0.0, potential.thickness]
+        pacbed = bloch_waves.calculate_cbed_patterns(probe, thicknesses).compute()
+        coherent = bloch_waves.calculate_cbed_patterns(
+            probe, thicknesses, scan=[position]
+        ).compute()
+    return probe, potential, position, pacbed.array, coherent.array
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_at_zero_thickness_is_the_probe(silicon_cbed):
+    # Only the direct beam leaves a crystal of zero thickness, so every plane
+    # wave stays in its pixel: both patterns are the probe's own diffraction
+    # pattern, zero outside the aperture, with its soft edge.
+    probe, _, _, pacbed, coherent = silicon_cbed
+    expected = probe.build(lazy=False).diffraction_patterns(max_angle=None).array
+    np.testing.assert_allclose(pacbed[0], expected, atol=1e-12)
+    np.testing.assert_allclose(coherent[0], expected, atol=1e-12)
+
+
+def _r_factor(result, reference):
+    return np.abs(result - reference).sum() / reference.sum()
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_matches_multislice(silicon_cbed):
+    # Oracle: multislice of the same potential. Without a scan the plane waves
+    # add incoherently, which is the pattern averaged over probe positions (a
+    # 4 x 4 grid in one cell averages out the interference of the overlapping
+    # discs); at one position they add coherently, with the probe's defocus.
+    probe, potential, position, pacbed, coherent = silicon_cbed
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=4, endpoint=False)
+    averaged = probe.multislice(potential, scan=scan, lazy=False)
+    averaged = averaged.diffraction_patterns(max_angle=None).array.mean((0, 1))
+    at_position = probe.multislice(potential, scan=[position], lazy=False)
+    at_position = at_position.diffraction_patterns(max_angle=None).array
+
+    assert _r_factor(pacbed[1], averaged) < 0.01
+    assert _r_factor(coherent[1], at_position) < 0.01
+    # the discs overlap: the averaged pattern is not that at one position
+    assert _r_factor(pacbed[1], at_position) > 10 * _r_factor(coherent[1], at_position)
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_of_a_tilted_beam_matches_multislice():
+    # A probe tilted by -tau in x meets the crystal as in multislice, with the
+    # pattern centred on the beam. Rotating the crystal by +tau about y instead
+    # sends the beam along -tau in x of the crystal: the same pattern, unlike
+    # that of a tilt of +tau.
+    bloch_waves, probe, potential = _cbed_silicon(semiangle_cutoff=4.0, cells=12)
+    references = {}
+    for tilt in (-10.0, 10.0):
+        tilted = probe.copy()
+        tilted.tilt = (tilt, 0.0)
+        reference = tilted.multislice(potential, lazy=False)
+        references[tilt] = reference.diffraction_patterns(max_angle=None).array
+
+    tilted.tilt = (-10.0, 0.0)
+    result = bloch_waves.calculate_cbed_patterns(tilted, potential.thickness)
+    assert _r_factor(result.compute().array, references[-10.0]) < 0.03
+
+    rotated = bloch_waves.rotate("y", 0.01).calculate_cbed_patterns(
+        probe, potential.thickness
+    )
+    rotated = rotated.compute().array
+    assert _r_factor(rotated, references[-10.0]) < 0.03
+    assert _r_factor(rotated, references[10.0]) > 0.1
+
+    # Looking along x, Si shows the same projected lattice. The orientations
+    # are passed as matrices, so a 90 degree rotation meets no gimbal lock.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="Gimbal lock")
+        along_x = bloch_waves.rotate("y", np.pi / 2).calculate_cbed_patterns(
+            probe, potential.thickness
+        )
+    along_z = bloch_waves.calculate_cbed_patterns(probe, potential.thickness)
+    assert _r_factor(along_x.compute().array, along_z.compute().array) < 0.01
+
+
+def test_cbed_axes_and_laziness():
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=(2, 3))
+    for kwargs, ensemble_shape in (
+        (dict(thicknesses=20.0), ()),
+        (dict(thicknesses=[10.0, 20.0]), (2,)),
+        (dict(thicknesses=20.0, scan=[(1.0, 2.0)]), ()),
+        (dict(thicknesses=[10.0, 20.0], scan=scan), (2, 3, 2)),
+    ):
+        lazy = bloch_waves.calculate_cbed_patterns(probe, **kwargs)
+        assert isinstance(lazy, abtem.DiffractionPatterns)
+        assert lazy.ensemble_shape == ensemble_shape
+        assert lazy.base_shape == probe.gpts
+        assert lazy.sampling == pytest.approx(probe.reciprocal_space_sampling)
+        assert lazy.metadata["energy"] == 200e3
+
+        eager = bloch_waves.calculate_cbed_patterns(probe, lazy=False, **kwargs)
+        np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+
+    # a probe's own scan positions are the scan
+    own_positions = probe.copy()
+    own_positions.scan_positions = scan
+    result = bloch_waves.calculate_cbed_patterns(own_positions, [10.0, 20.0])
+    assert result.ensemble_axes_metadata == lazy.ensemble_axes_metadata
+    np.testing.assert_allclose(result.compute().array, eager.array, atol=1e-6)
+
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            result = bloch_waves.calculate_cbed_patterns(probe, 20.0)
+            assert result.compute().array.dtype == np.dtype(precision)
+
+
+def test_cbed_probe_ensembles_match_their_members():
+    # Aberration and aperture series share the Bloch-wave solutions, a tilt
+    # series and several energies do not; every member is the pattern of the
+    # probe with that member's values.
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    bloch_waves = BlochWaves(
+        structure_factor=bloch_waves.structure_factor,
+        energy=[150e3, 200e3],
+        sg_max=0.3,
+        g_max=1.5,
+    )
+    tilts = abtem.distributions.from_values([0.0, 2.0])
+    semiangles = abtem.distributions.from_values([2.5, 3.5])
+    ensemble = abtem.Probe(
+        semiangle_cutoff=semiangles,
+        defocus=[0.0, 40.0],
+        tilt=(tilts, 1.0),
+        extent=probe.extent,
+        gpts=probe.gpts,
+    )
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=(1, 2))
+    patterns = bloch_waves.calculate_cbed_patterns(ensemble, [10.0, 20.0], scan=scan)
+
+    assert patterns.ensemble_shape == (2, 2, 2, 1, 2, 2, 2)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "AxisAlignedTiltAxis",
+        "ParameterAxis",
+        "ParameterAxis",
+        "ScanAxis",
+        "ScanAxis",
+        "EnergyAxis",
+        "ThicknessAxis",
+    ]
+    assert patterns.metadata["energy"] is None
+
+    patterns = patterns.compute().array
+    for tilt, defocus, semiangle, energy in ((0, 1, 0, 1), (1, 0, 1, 0)):
+        member = abtem.Probe(
+            semiangle_cutoff=semiangles.values[semiangle],
+            defocus=[0.0, 40.0][defocus],
+            tilt=(tilts.values[tilt], 1.0),
+            energy=bloch_waves._energies[energy],
+            extent=probe.extent,
+            gpts=probe.gpts,
+        )
+        expected = bloch_waves.calculate_cbed_patterns(member, [10.0, 20.0], scan=scan)
+        np.testing.assert_allclose(
+            patterns[tilt, defocus, semiangle, :, :, energy],
+            expected.compute().array,
+            atol=1e-6,
+        )
+
+    # paired tilts, as in precession, are members as well
+    tilts = precession_tilts(2.0, 3)
+    precession = probe.copy()
+    precession.tilt = tilts
+    patterns = bloch_waves.calculate_cbed_patterns(precession, 20.0)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "TiltAxis"
+    ]
+    patterns = patterns.compute().array
+    for i, tilt in enumerate(tilts):
+        member = probe.copy()
+        member.tilt = tuple(tilt)
+        expected = bloch_waves.calculate_cbed_patterns(member, 20.0)
+        np.testing.assert_allclose(patterns[i], expected.compute().array, atol=1e-6)
+
+
+def test_cbed_rejects_invalid_inputs():
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    other_energy = abtem.Probe(
+        semiangle_cutoff=3.0, energy=100e3, extent=probe.extent, gpts=probe.gpts
+    )
+    with pytest.raises(ValueError, match="not among"):
+        bloch_waves.calculate_cbed_patterns(other_energy, 20.0)
+
+    off_grid = abtem.Probe(semiangle_cutoff=3.0, energy=200e3, extent=15.0, gpts=48)
+    with pytest.warns(UserWarning, match="projected lattice"):
+        bloch_waves.calculate_cbed_patterns(off_grid, 20.0)
+
+    own_positions = probe.copy()
+    own_positions.scan_positions = [(1.0, 2.0)]
+    with pytest.raises(ValueError, match="not both"):
+        bloch_waves.calculate_cbed_patterns(own_positions, 20.0, scan=[(1.0, 2.0)])
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_cbed_matches_cpu(device):
+    kwargs = dict(thicknesses=[10.0, 20.0], scan=[(1.0, 2.0)])
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves, probe, _ = _cbed_silicon("cpu", semiangle_cutoff=3.0)
+        reference = bloch_waves.calculate_cbed_patterns(probe, **kwargs)
+        reference = reference.compute().array
+    bloch_waves, probe, _ = _cbed_silicon(device, semiangle_cutoff=3.0)
+    result = asnumpy(
+        bloch_waves.calculate_cbed_patterns(probe, **kwargs).compute().array
+    )
+    np.testing.assert_allclose(result, reference, atol=1e-5 * reference.max())

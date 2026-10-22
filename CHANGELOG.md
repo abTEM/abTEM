@@ -97,6 +97,12 @@ Features:
   `get_kinematical_diffraction_pattern()` returns patterns with an `EnergyAxis`, and the new
   `select_energy(energy)` returns the single-energy Bloch waves; `calculate_structure_matrix` and
   `calculate_scattering_matrix` still need a single energy and point to it ([PR #456](https://github.com/abTEM/abTEM/pull/456))
+- Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
+  plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
+  position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so
+  overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
+  ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
+  `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 Performance:
 
@@ -121,6 +127,15 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
+  beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
+  ensembles) without any message, in both expansion scopes and in the core-loss multislice
+  ([Issue #627](https://github.com/abTEM/abTEM/issues/627), [PR #628](https://github.com/abTEM/abTEM/pull/628))
+- `FresnelPropagator(order="exact")`, the default of `FourierMultislice`, propagates tilted beams exactly: it applied
+  tilt as the first-order translation `tan(theta) * dz`, so the wave was propagated paraxially about the beam
+  direction (a phase error of 0.015 rad per 1 Å slice at 100 mrad and 200 eV, 0.09 rad at 300 mrad). Results for
+  tilted beams change, growing with the tilt; untilted beams and `order=1` and `2` are unchanged
+  ([PR #626](https://github.com/abTEM/abTEM/pull/626))
 - `block_direct=True` in `Waves.diffraction_patterns` blocked a fixed 1 mrad radius. It now blocks the
   bright-field disk plus a margin for a probe with a semiangle cutoff, as `DiffractionPatterns.block_direct()`
   does. For a plane wave, or a cutoff below half a pixel, it blocks the zero-frequency pixel only, now also
@@ -395,7 +410,6 @@ Planned for this release (not yet merged):
 - Support for skewed pixels (non-orthogonal x,y,z cell axes) ([PR #282](https://github.com/abTEM/abTEM/pull/282))
 - Radially variable detector sensitivity ([PR #283](https://github.com/abTEM/abTEM/pull/283))
 - Plasmons: fast `PhaseScramblePlasmons` for multislice and PRISM, and `MonteCarloPlasmons` for Bloch wave
-- CBED patterns for Bloch waves ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
 ## 1.0.11
 
