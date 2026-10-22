@@ -14,8 +14,11 @@ the largest value, which in float32 is dominated by the rounding of the phases.
 
 Usage
 -----
-    python benchmarks/bench_bloch_exit_waves.py [device] [g_max] [gpts] [n_rotations]
+    python benchmarks/bench_bloch_exit_waves.py [device] [g_max] [gpts] [n_rotations] [old]
     python benchmarks/bench_bloch_exit_waves.py gpu 4.0 256 8
+
+The old formula needs beams x pixels x thicknesses x 16 bytes (about 5 GB for 479 beams, 5
+thicknesses and 256 x 256 in double precision); pass `old` = 0 to time only the new one.
 """
 
 import sys
@@ -36,6 +39,7 @@ device = sys.argv[1] if len(sys.argv) > 1 else "cpu"
 g_max = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
 n = int(sys.argv[3]) if len(sys.argv) > 3 else 256
 n_rotations = int(sys.argv[4]) if len(sys.argv) > 4 else 8
+with_old = bool(int(sys.argv[5])) if len(sys.argv) > 5 else True
 thicknesses = np.linspace(20, 100, 5)
 repeats = 5
 
@@ -118,6 +122,9 @@ def measure(function):
 
 def report(label, results):
     (t_old, m_old, old), (t_new, m_new, new) = results
+    if old is None:
+        print(f"  {label:<32} old {'skipped':>26}   new {t_new * 1e3:9.1f} ms {m_new:9.0f} MB")
+        return
     old, new = asnumpy(old), asnumpy(new)
     difference = np.abs(old - new).max() / np.abs(old).max()
     print(
@@ -125,6 +132,18 @@ def report(label, results):
         f"new {t_new * 1e3:9.1f} ms {m_new:9.0f} MB   "
         f"speedup {t_old / t_new:6.1f}x   difference {difference:.1e}"
     )
+
+
+def candidates(function_old, function_new):
+    """The functions to time, with a stand-in for the old one if it is skipped."""
+    return [function_old if with_old else None, function_new]
+
+
+def measure_all(run, functions):
+    return [
+        measure(lambda f=f: run(f)) if f is not None else (np.nan, np.nan, None)
+        for f in functions
+    ]
 
 
 atoms = bulk("Si", cubic=True)
@@ -164,32 +183,34 @@ for precision in ("float64", "float32"):
         g = xp.asarray(bloch_waves.g_vec, dtype=dtype)
         report(
             "synthesis, 5 thicknesses",
-            [
-                measure(lambda f=f: f(amplitudes, g, x, y, z))
-                for f in (old_plane_wave_expansion, new_plane_wave_expansion)
-            ],
+            measure_all(
+                lambda f: f(amplitudes, g, x, y, z),
+                candidates(old_plane_wave_expansion, new_plane_wave_expansion),
+            ),
         )
         z0 = xp.asarray(thicknesses[0], dtype=dtype)
         amplitudes0 = amplitudes[0]
         report(
             "synthesis, scalar thickness",
-            [
-                measure(lambda f=f: f(amplitudes0, g, x, y, z0))
-                for f in (old_plane_wave_expansion, new_plane_wave_expansion)
-            ],
+            measure_all(
+                lambda f: f(amplitudes0, g, x, y, z0),
+                candidates(old_plane_wave_expansion, new_plane_wave_expansion),
+            ),
         )
 
         # 2. the whole calculation over a rotation series
         rotated = bloch_waves.rotate("x", np.linspace(0, 0.02, n_rotations))
-        results = []
-        for f in (old_plane_wave_expansion, new_plane_wave_expansion):
+        def calculate(f):
             dynamical.plane_wave_expansion = f
-            results.append(
-                measure(
-                    lambda: rotated.calculate_exit_waves(
-                        thicknesses, gpts=(n, n), lazy=False
-                    ).array
-                )
+            return rotated.calculate_exit_waves(
+                thicknesses, gpts=(n, n), lazy=False
+            ).array
+
+        try:
+            results = measure_all(
+                calculate,
+                candidates(old_plane_wave_expansion, new_plane_wave_expansion),
             )
-        dynamical.plane_wave_expansion = new_plane_wave_expansion
+        finally:
+            dynamical.plane_wave_expansion = new_plane_wave_expansion
         report(f"calculate_exit_waves, {n_rotations} rot.", results)
