@@ -64,7 +64,7 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
-from abtem.measurements import IndexedDiffractionPatterns
+from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.slicing import _integrate_planes
@@ -72,10 +72,10 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Waves
+from abtem.waves import Probe, Waves
 
 if TYPE_CHECKING:
-    pass
+    from abtem.scan import BaseScan
 
 
 class BlochWavePrecisionWarning(UserWarning):
@@ -1305,15 +1305,27 @@ def exctinction_distances(
     return np.pi * V / (xp.abs(structure_factor) * energy2wavelength(energy) + 1e-12)
 
 
-def plane_wave_basis(
-    g: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray
+def plane_wave_expansion(
+    amplitudes: np.ndarray,
+    g: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
 ) -> np.ndarray:
     """
-    Calculate a plane wave basis for a given set of reciprocal space vectors
-    at a set of real space positions.
+    Sum a plane wave expansion on a real space grid,
+
+    ``wave[..., t, x, y] = sum_g amplitudes[..., t, g] exp(2 pi i g . r)``,
+
+    where ``r = (x, y, z_t)``. The plane waves are separable in x, y and z, so the sum is
+    evaluated as a matrix product over the beams and the (beams x pixels x thicknesses)
+    array of plane waves is never formed.
 
     Parameters
     ----------
+    amplitudes : numpy.ndarray
+        The expansion coefficients, with beams on the last axis and, unless `z` is a
+        scalar, the thicknesses on the axis before it. Any leading axes are kept.
     g : numpy.ndarray
         The reciprocal space vectors as an Nx3 array [1 / Å].
     x : numpy.ndarray
@@ -1321,31 +1333,24 @@ def plane_wave_basis(
     y : numpy.ndarray
         The y positions as a 1D array [Å].
     z : numpy.ndarray
-        The z positions as a 1D array [Å].
+        The z positions (thicknesses) as a 1D array or a scalar [Å].
 
     Returns
     -------
     numpy.ndarray
-        The plane wave basis at the given positions.
+        The wave function, with the shape of `amplitudes` without the beam axis,
+        followed by the x and y axes.
     """
-    g = get_array_module(x).asarray(g)  # on the device of the positions
-    plane_waves_x = complex_exponential(
-        2 * np.pi * g[None, :, 0, None, None] * x[None, None, :, None]
-    )
-    plane_waves_y = complex_exponential(
-        2 * np.pi * g[None, :, 1, None, None] * y[None, None, None, :]
-    )
-    plane_waves_z = complex_exponential(
-        2 * np.pi * g[None, :, 2, None, None] * z[..., None, None, None]
-    )
-    plane_waves = plane_waves_x * plane_waves_y * plane_waves_z
-    return plane_waves
+    xp = get_array_module(amplitudes)
+    g = xp.asarray(g)
 
+    # phase factors of the beams, with the beam axis last for z and first for x and y
+    exp_x = complex_exponential(2 * np.pi * x[:, None] * g[None, :, 0])  # (nx, G)
+    exp_y = complex_exponential(2 * np.pi * g[:, 1, None] * y[None, :])  # (G, ny)
+    exp_z = complex_exponential(2 * np.pi * z[..., None] * g[:, 2])  # (..., G)
 
-def reduce_plane_wave_expansion(values, plane_waves):
-    wave = values[..., None, None] * plane_waves
-    wave = wave.sum(-3)
-    return wave
+    weights = amplitudes * exp_z
+    return xp.matmul(exp_x, weights[..., None] * exp_y)
 
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
@@ -1359,9 +1364,7 @@ def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
     )
     z = xp.asarray(thicknesses, dtype=get_dtype())
 
-    basis = plane_wave_basis(g_vec, x, y, z)
-    wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
-    return wave_functions
+    return plane_wave_expansion(amplitudes, g_vec, x, y, z)
 
 
 AllowedRotations = Union[BaseDistribution, np.ndarray, SupportsFloat]
@@ -2067,13 +2070,7 @@ class BlochWaves:
         y = xp.asarray(y, dtype=get_dtype())
         z = xp.asarray(z, dtype=get_dtype())
 
-        basis = plane_wave_basis(g_vec, x, y, z)
-
-        if not z.ndim:
-            basis = basis[0]
-
-        wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
-        return wave_functions
+        return plane_wave_expansion(amplitudes, g_vec, x, y, z)
 
     def calculate_exit_waves(
         self,
@@ -2201,12 +2198,6 @@ class BlochWaves:
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
 
-            if thicknesses.ndim == 0:
-                # a scalar thickness has no ensemble (thickness) axis; drop the spurious
-                # leading size-1 axis so the array matches the empty axis metadata (the
-                # lazy path already returns a 2D array in this case).
-                array = array[0]
-
         ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
@@ -2312,6 +2303,76 @@ class BlochWaves:
 
         return bloch_waves
 
+    def calculate_cbed_patterns(
+        self,
+        probe: Probe,
+        thicknesses: float | Sequence[float] | np.ndarray,
+        scan: Optional[Sequence | np.ndarray | BaseScan] = None,
+        lazy: bool = True,
+        pbar: Optional[bool] = None,
+    ) -> DiffractionPatterns:
+        """Calculate convergent-beam electron diffraction (CBED) patterns.
+
+        Each plane wave of the probe, one per pixel of its reciprocal-space grid
+        inside the aperture, is a Bloch-wave calculation of the crystal rotated to
+        bring the plane wave's direction onto the optic axis. Its beams are placed
+        on the probe's grid, at the plane wave's wave vector plus the beam's
+        transverse reciprocal lattice vector.
+
+        Without a scan, the result is the position-averaged (PACBED) pattern: the
+        incoherent sum over the plane waves, weighted by the aperture. It is also
+        the CBED pattern at any position when the discs do not overlap. With a
+        scan, the plane waves add coherently at each probe position, with the
+        probe's aberrations, which gives the interference where discs overlap.
+
+        The probe may have ensemble axes. Members of an aberration or aperture
+        series, such as a defocus series, share the Bloch-wave solutions; members
+        of a tilt series or an energy ensemble are solved separately. A tilted
+        probe meets the crystal at its tilt, with the pattern centred on the beam,
+        as in multislice. Bloch waves of several energies give an energy axis.
+
+        The probe's extent should be a whole number of unit cells, so that the
+        reciprocal lattice falls on its grid; the crystal must then have an
+        orthogonal cell. A beam that misses the grid is placed at the nearest
+        pixel, with a warning.
+
+        Parameters
+        ----------
+        probe : Probe
+            The probe. Its grid (extent and gpts or sampling) sets the detector:
+            the patterns have its gpts and a sampling of 1 / extent [1/Å]. Its
+            energies, if given, must be among those of the Bloch waves; if not
+            given, the Bloch waves' energies are used. Its scan positions, if it
+            has any, are the scan.
+        thicknesses : float or sequence of floats
+            The thicknesses of the sample [Å].
+        scan : array of xy-positions or BaseScan, optional
+            Probe positions [Å]. If neither this nor the probe gives positions,
+            the position-averaged pattern is calculated.
+        lazy : bool
+            If True (default), the calculation is done lazily using dask. If False,
+            the calculation is done eagerly.
+        pbar : bool, optional
+            If True, a progress bar over the plane waves is shown when the
+            calculation is eager; a lazy result shows its progress when it is
+            computed. Default is None, which means the value is taken from the
+            configuration.
+
+        Returns
+        -------
+        DiffractionPatterns
+            The CBED patterns. Their ensemble axes are those of the probe (tilt,
+            aberrations, aperture), the scan's, an energy axis if there are several
+            energies, and a thickness axis if several thicknesses are given. For
+            a single position, the intensities sum to the fraction of the probe
+            that the beams carry onto the grid.
+        """
+        from abtem.bloch.cbed import calculate_cbed_patterns
+
+        return calculate_cbed_patterns(
+            self, probe, thicknesses, scan=scan, lazy=lazy, pbar=pbar
+        )
+
 
 def is_base_distribution_tuple(
     rotations: tuple[BaseDistribution | np.ndarray | float, ...],
@@ -2331,6 +2392,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         device: Optional[str] = None,
         use_wave_eq: bool | Literal["exact"] = "exact",
         use_degrees: bool = False,
+        orientation_matrix: Optional[np.ndarray] = None,
     ):
         axes = args[::2]
         if not is_valid_rotation_axes(axes):
@@ -2368,6 +2430,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._g_max = g_max
         self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
+        self._orientation_matrix = orientation_matrix
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # Every block (one per dask chunk of the rotation ensemble, see
@@ -2444,11 +2507,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
             orientation_matrices = orientation_matrices @ R
 
+        # a fixed orientation, applied before the rotations
+        if self._orientation_matrix is not None:
+            orientation_matrices = orientation_matrices @ self._orientation_matrix
+
         return orientation_matrices
 
     @property
     def structure_factor(self) -> BaseStructureFactor:
         return self._structure_factor
+
+    @property
+    def orientation_matrix(self) -> Optional[np.ndarray]:
+        return self._orientation_matrix
 
     @property
     def axes(self) -> Sequence[str]:

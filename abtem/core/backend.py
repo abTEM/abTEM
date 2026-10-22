@@ -343,8 +343,14 @@ def _make_config_plugin(snapshot):
 
         def __init__(self, snapshot):
             self._snapshot = snapshot
+            self._origin_pid = os.getpid()
 
         def setup(self, worker=None):
+            # In-process workers (e.g. LocalCluster(processes=False)) share the
+            # client's configuration; replaying an older snapshot into it would
+            # undo configuration changes made after the push.
+            if os.getpid() == self._origin_pid:
+                return
             _apply_config_snapshot(self._snapshot)
 
     return _AbtemConfigPlugin(snapshot)

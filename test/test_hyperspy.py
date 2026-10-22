@@ -560,8 +560,14 @@ def test_exports_invert_to_the_stored_coefficients(device):
 @devices
 def test_lazy_exports_match_eager_exports(device):
     pytest.importorskip("xarray")
-    eager = _waves(False, device, reciprocal_space=True).to_data_array()
-    lazy_export = _waves(True, device, reciprocal_space=True).to_data_array()
+    # Both exports start from the same stored array. Building the eager waves
+    # separately would compare two FFTs of the same data (one batch of three
+    # against three batches of one), which Metal rounds differently in float32:
+    # 11% of the elements differ by 6e-7 relative, before any export. The export
+    # itself only shifts and relabels, so it is bit-exact.
+    lazy_waves = _waves(True, device, reciprocal_space=True)
+    eager = lazy_waves.ensure_computed().to_data_array()
+    lazy_export = lazy_waves.to_data_array()
 
     np.testing.assert_array_equal(_host(lazy_export.data), _host(eager.data))
     for dim in eager.dims:
