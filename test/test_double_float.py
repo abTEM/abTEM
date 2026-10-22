@@ -487,3 +487,69 @@ def test_emulated_multislice_handles_a_tilt_axis(tilt):
 
     assert emulated.ndim >= 3
     assert np.abs(emulated - reference).max() < 1e-10
+
+
+def test_emulated_multislice_runs_on_the_processes_of_a_distributed_cluster():
+    # The option has to reach the worker processes, and each of them drives its
+    # own Metal context from two threads.
+    distributed = pytest.importorskip("distributed")
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 2)
+
+    def scan(emulate):
+        with config.set(
+            {
+                "precision": "float64",
+                "torch.emulate-float64": emulate,
+                "dask.chunk-size": "128 kB",
+            }
+        ):
+            potential = abtem.Potential(
+                abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.05, seed=1),
+                gpts=64,
+                slice_thickness=1.0,
+            )
+            probe = abtem.Probe(energy=200e3, semiangle_cutoff=20)
+            probe.grid.match(potential)
+            grid = abtem.GridScan(
+                start=(0, 0), end=(4, 4), gpts=(4, 4), potential=potential
+            )
+            measurement = probe.scan(potential, grid, abtem.PixelatedDetector(40))
+            return np.asarray(measurement.compute().array)
+
+    reference = scan(False)
+    with (
+        distributed.LocalCluster(
+            n_workers=2, threads_per_worker=2, processes=True, dashboard_address=":0"
+        ) as cluster,
+        distributed.Client(cluster) as client,
+    ):
+        emulated = scan(True)
+        loaded = list(client.run(lambda: "torch" in __import__("sys").modules).values())
+
+    assert any(loaded), "no worker ran the Metal kernels"
+    assert np.abs(emulated - reference).max() < 1e-12 * np.abs(reference).max()
+
+
+def test_bloch_waves_run_on_the_host_with_the_option_on():
+    # Bloch waves have no multislice and their linear algebra is faster on the
+    # host's BLAS and LAPACK than it could be in double-float on the GPU, so the
+    # option leaves them alone: the same float64 result, to the last bit.
+    atoms = bulk("Si", cubic=True)
+
+    def exit_waves(emulate):
+        with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
+            bloch = abtem.BlochWaves(atoms, energy=200e3, sg_max=0.1, g_max=3.0)
+            waves = bloch.calculate_exit_waves(
+                thicknesses=[50.0, 100.0], gpts=(48, 48), lazy=False
+            )
+            patterns = bloch.calculate_diffraction_patterns(
+                thicknesses=[50.0, 100.0], lazy=False
+            )
+            return np.asarray(waves.array), np.asarray(patterns.array)
+
+    waves_host, patterns_host = exit_waves(False)
+    waves_gpu, patterns_gpu = exit_waves(True)
+
+    assert waves_gpu.dtype == np.complex128
+    np.testing.assert_allclose(waves_gpu, waves_host, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(patterns_gpu, patterns_host, rtol=0, atol=1e-12)

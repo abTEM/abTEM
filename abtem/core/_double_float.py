@@ -521,7 +521,7 @@ _NO_MAPS: dict = {}
 _FACTOR_MAPS: dict = {}
 
 
-def _empty_map():  
+def _empty_map():
     """An index table the kernel is told not to read."""
     if "map" not in _NO_MAPS:
         _NO_MAPS["map"] = torch.zeros(1, dtype=torch.int32, device="mps")
