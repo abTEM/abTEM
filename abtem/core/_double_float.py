@@ -275,14 +275,18 @@ def _fft_source(n: int, group: int = 1) -> str:
 // by post; with tw_on, element i of line j by exp(-2 pi i i j / N') from the
 // table v, N' the length of the whole four-step axis. The table w holds
 // exp(-2 pi i k / N) for k < N. An array is its four planes one after the
-// other; PL, WL, VL and QL are the lengths of the planes of x and y, w, v and
-// pre and post.
+// other; PL, WL, VL, PQ and OQ are the lengths of the planes of x and y, w, v,
+// pre and post. The factor post may hold several images, one per entry of the
+// batch of x or shared by several: with pmap_on, image pmap[b] of post, of OI
+// elements each, is the factor of image b of x.
 kernel void fft_df(
     device const float* x, device float* y,
     device const float* wt, device const float* vt,
-    device const float* pre, device const float* post,
-    constant uint& PL, constant uint& WL, constant uint& VL, constant uint& QL,
+    device const float* pre, device const float* post, device const int* pmap,
+    constant uint& PL, constant uint& WL, constant uint& VL,
+    constant uint& PQ, constant uint& OQ, constant uint& OI,
     constant uint& tw_on, constant uint& pre_on, constant uint& post_on,
+    constant uint& pmap_on,
     constant uint& C, constant uint& J, constant uint& bs, constant uint& cs,
     constant uint& js_in, constant uint& js_out,
     constant uint& es_in, constant uint& es_out,
@@ -290,12 +294,13 @@ kernel void fft_df(
     uint tgid [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]]) {{
   threadgroup float buf[4 * NL];
-  uint jl[L], local_in[L], local_out[L], base_in[L], base_out[L];
+  uint jl[L], bl[L], local_in[L], local_out[L], base_in[L], base_out[L];
   for (uint l = 0; l < L; l++) {{
     uint line = tgid * L + l;
     uint j = line % J, rest = line / J;
     uint c = rest % C, b = rest / C;
     jl[l] = j;
+    bl[l] = b;
     local_in[l] = c * cs + j * js_in;
     local_out[l] = c * cs + j * js_out;
     base_in[l] = b * bs + local_in[l];
@@ -309,8 +314,8 @@ kernel void fft_df(
     cdf v = cdf{{float2(x[g], x[PL + g]), float2(x[2*PL + g], x[3*PL + g])}};
     if (pre_on != 0u) {{
       uint q = local_in[l] + i * es_in;
-      v = cmul(v, cdf{{float2(pre[q], pre[QL + q]),
-                       float2(pre[2*QL + q], pre[3*QL + q])}});
+      v = cmul(v, cdf{{float2(pre[q], pre[PQ + q]),
+                       float2(pre[2*PQ + q], pre[3*PQ + q])}});
     }}
     uint a = l * N + i;
     buf[0*NL+a] = v.re.x; buf[1*NL+a] = v.re.y;
@@ -332,8 +337,9 @@ kernel void fft_df(
     }}
     if (post_on != 0u) {{
       uint q = local_out[l] + i * es_out;
-      v = cmul(v, cdf{{float2(post[q], post[QL + q]),
-                       float2(post[2*QL + q], post[3*QL + q])}});
+      if (pmap_on != 0u) {{ q += uint(pmap[bl[l]]) * OI; }}
+      v = cmul(v, cdf{{float2(post[q], post[OQ + q]),
+                       float2(post[2*OQ + q], post[3*OQ + q])}});
     }}
     float2 sc = float2(scale_hi, scale_lo);
     float2 re = df_mul(v.re, sc);
@@ -511,6 +517,49 @@ def multiply(x: DoubleFloatArray, kernel: DoubleFloatArray) -> DoubleFloatArray:
     return y
 
 
+_NO_MAPS: dict = {}
+_FACTOR_MAPS: dict = {}
+
+
+def _empty_map():  
+    """An index table the kernel is told not to read."""
+    if "map" not in _NO_MAPS:
+        _NO_MAPS["map"] = torch.zeros(1, dtype=torch.int32, device="mps")
+    return _NO_MAPS["map"]
+
+
+def _factor_map(factor_batch, batch):
+    """The image of a factor with leading shape ``factor_batch`` that goes with
+    each image of a batch of shape ``batch``, as NumPy would broadcast them, as
+    a device table of one index per image."""
+    key = (tuple(factor_batch), tuple(batch))
+    if key not in _FACTOR_MAPS:
+        if len(factor_batch) > len(batch):
+            extra = factor_batch[: len(factor_batch) - len(batch)]
+            if any(n != 1 for n in extra):
+                raise ValueError(
+                    f"a factor with leading shape {factor_batch} does not "
+                    f"broadcast over a batch of shape {batch}"
+                )
+            factor_batch = factor_batch[len(extra) :]
+        padded = (1,) * (len(batch) - len(factor_batch)) + tuple(factor_batch)
+        try:
+            index = np.broadcast_to(
+                np.arange(int(np.prod(padded))).reshape(padded), batch
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"a factor with leading shape {factor_batch} does not broadcast "
+                f"over a batch of shape {batch}"
+            ) from error
+        if len(_FACTOR_MAPS) > 64:
+            _FACTOR_MAPS.clear()
+        _FACTOR_MAPS[key] = torch.from_numpy(
+            np.ascontiguousarray(index.reshape(-1), dtype=np.int32)
+        ).to("mps")
+    return _FACTOR_MAPS[key]
+
+
 def _launch(
     n,
     src,
@@ -523,11 +572,13 @@ def _launch(
     twiddle_length=None,
     pre=None,
     post=None,
+    post_map=None,
 ):
     """One kernel launch: ``lines = (C, J)`` lines per image of length ``n`` with
     the strides ``(bs, cs, js_in, js_out, es_in, es_out)``, ``twiddle_length`` the
     length of the whole axis of a four-step pass, and ``pre`` and ``post`` the
-    factors multiplied on at the loads and the stores."""
+    factors multiplied on at the loads and the stores, ``post`` with a ``post_map``
+    from the batch of ``src`` to the images of ``post`` if it holds several."""
     batch = src.data.shape[1]
     scale_hi = float(np.float32(scale))
     scale_lo = float(np.float32(scale - scale_hi))
@@ -535,6 +586,7 @@ def _launch(
     fused = _twiddles(twiddle_length) if twiddle_length else tables
     # A table the kernel is told not to read still has to be bound.
     first, last = pre or tables, post or tables
+    image_post = int(np.prod(post.shape[-2:])) if post else 1
     c, j = lines
     group = _group(n, batch * c * j, strides) if j == 1 else 1
     _library(n, group).fft_df(
@@ -544,13 +596,17 @@ def _launch(
         fused.data,
         first.data,
         last.data,
+        post_map if post_map is not None else _empty_map(),
         src.data[0].numel(),
         tables.data[0].numel(),
         fused.data[0].numel(),
-        first.data[0].numel() if pre else (last.data[0].numel() if post else 1),
+        first.data[0].numel(),
+        last.data[0].numel(),
+        image_post,
         1 if twiddle_length else 0,
         1 if pre else 0,
         1 if post else 0,
+        1 if post_map is not None else 0,
         c,
         j,
         *strides,
@@ -563,7 +619,17 @@ def _launch(
 
 
 def _transform_axis(
-    src, dst, length, element, lines, image, sign, scale, pre=None, post=None
+    src,
+    dst,
+    length,
+    element,
+    lines,
+    image,
+    sign,
+    scale,
+    pre=None,
+    post=None,
+    post_map=None,
 ):
     """Transform ``lines`` lines of ``length`` points per image, each element of
     a line ``element`` apart and the lines laid out by ``lines = (count, stride)``.
@@ -591,6 +657,7 @@ def _transform_axis(
             strides=(image, line_stride, 0, 0, element, element),
             pre=pre,
             post=post,
+            post_map=post_map,
         )
         return
 
@@ -618,6 +685,7 @@ def _transform_axis(
         lines=(count, n1),
         strides=(image, line_stride, n2 * element, element, element, n1 * element),
         post=post,
+        post_map=post_map,
     )
 
 
@@ -630,10 +698,12 @@ def fft2(
 ) -> DoubleFloatArray:
     """The 2D FFT over the last two axes, normalised like ``numpy.fft``.
 
-    ``pre`` and ``post``, each an array of one image, are multiplied on in the
-    same kernels, to the input before the transform and to the result after it:
-    ``fft2(x, pre=a, post=b)`` is ``b * fft2(a * x)`` without the two products as
-    passes of their own over the data.
+    ``pre`` and ``post`` are multiplied on in the same kernels, to the input before
+    the transform and to the result after it: ``fft2(x, pre=a, post=b)`` is
+    ``b * fft2(a * x)`` without the two products as passes of their own over the
+    data. ``pre`` is an array of one image; ``post`` may have leading axes too,
+    broadcast against those of ``x`` as NumPy does, so that each image of a batch
+    can have a factor of its own (a Fresnel propagator for every tilt).
 
     The input is left untouched.
     """
@@ -642,12 +712,19 @@ def fft2(
     _check_axis(n1)
     _check_size(x)
     warn_if_slow_emulated_fft((n0, n1))
-    for factor in (pre, post):
-        if factor is not None and factor.shape != (n0, n1):
+    if pre is not None and pre.shape != (n0, n1):
+        raise ValueError(
+            f"a factor of shape {pre.shape} does not fit images of shape {(n0, n1)}"
+        )
+    post_map = None
+    if post is not None:
+        if post.shape[-2:] != (n0, n1):
             raise ValueError(
-                f"a factor of shape {factor.shape} does not fit images of "
+                f"a factor of shape {post.shape} does not fit images of "
                 f"shape {(n0, n1)}"
             )
+        if post.shape != (n0, n1):
+            post_map = _factor_map(post.shape[:-2], tuple(batch_shape))
 
     sign = 1.0 if inverse else -1.0
     # 1 / (n0 n1) is not a float32 unless the grid is a power of two: scale in
@@ -660,5 +737,7 @@ def fft2(
     # Along the last axis: n0 lines per image, contiguous.
     _transform_axis(x, rows, n1, 1, (n0, n1), image, sign, 1.0, pre=pre)
     # Along the first: n1 lines per image, strided by the row length.
-    _transform_axis(rows, out, n0, n1, (n1, 1), image, sign, scale, post=post)
+    _transform_axis(
+        rows, out, n0, n1, (n1, 1), image, sign, scale, post=post, post_map=post_map
+    )
     return out

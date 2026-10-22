@@ -441,3 +441,49 @@ def test_host_ffts_are_untouched_without_the_option(double_float, monkeypatch):
         fft2(x)
 
     assert not calls
+
+
+@pytest.mark.parametrize(
+    "batch, factor_batch",
+    [((2, 3), (3,)), ((2, 3), (2, 1)), ((2, 3), (2, 3)), ((4,), (1, 4)), ((3,), ())],
+)
+def test_fft2_applies_a_factor_per_image_of_the_batch(
+    double_float, batch, factor_batch
+):
+    rng = np.random.default_rng(len(batch) + len(factor_batch))
+    n0, n1 = 12, 20
+    x = _random_complex(rng, (*batch, n0, n1))
+    factor = _random_complex(rng, (*factor_batch, n0, n1))
+    xd, fd = double_float.from_numpy(x), double_float.from_numpy(factor)
+
+    out = double_float.to_numpy(double_float.fft2(xd, post=fd))
+
+    seen_x, seen_f = double_float.to_numpy(xd), double_float.to_numpy(fd)
+    assert _relative_error(out, np.fft.fft2(seen_x) * seen_f) < 1e-13
+
+
+def test_fft2_rejects_a_factor_that_does_not_broadcast_over_the_batch(double_float):
+    x = double_float.from_numpy(np.ones((2, 3, 8, 8), dtype=np.complex128))
+    factor = double_float.from_numpy(np.ones((4, 8, 8), dtype=np.complex128))
+
+    with pytest.raises(ValueError, match="broadcast"):
+        double_float.fft2(x, post=factor)
+
+
+@pytest.mark.parametrize(
+    "tilt", [([0.0, 5.0, 0.0], [0.0, 0.0, 8.0]), ([0.0, 4.0], 0.0)]
+)
+def test_emulated_multislice_handles_a_tilt_axis(tilt):
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 4)
+
+    def exit_wave(emulate):
+        with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
+            potential = abtem.Potential(atoms, gpts=64, slice_thickness=1.0)
+            wave = abtem.PlaneWave(energy=200e3, tilt=tilt)
+            wave.grid.match(potential)
+            return np.asarray(wave.multislice(potential).compute().array)
+
+    reference, emulated = exit_wave(False), exit_wave(True)
+
+    assert emulated.ndim >= 3
+    assert np.abs(emulated - reference).max() < 1e-10

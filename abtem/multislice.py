@@ -482,8 +482,6 @@ class _EmulatedDoubleMultislice:
             isinstance(waves._array, np.ndarray) and waves._array.dtype == np.complex128
         ):
             problems.append("the waves must be a complex128 NumPy array on the host")
-        elif len(_get_tilt_axes(waves)) > 0:
-            problems.append("waves with a tilt axis are not supported")
         if problems:
             raise NotImplementedError(
                 "torch.emulate-float64 is set, but " + "; ".join(problems) + "."
@@ -491,15 +489,21 @@ class _EmulatedDoubleMultislice:
 
     def _propagator_array(self, waves: Waves, thickness: float):
         if thickness not in self._propagators:
-            array = self._propagator.get_array(waves, thickness, order=self._order)
-            if np.ndim(array) != 2:
-                raise NotImplementedError(
-                    "torch.emulate-float64 supports a single propagator per grid, "
-                    f"got an array of shape {np.shape(array)}."
-                )
-            self._propagators[thickness] = self._df.from_numpy(
-                np.asarray(array, dtype=np.complex128)
+            array = np.asarray(
+                self._propagator.get_array(waves, thickness, order=self._order),
+                dtype=np.complex128,
             )
+            # One propagator per image of the batch at most (a tilt axis has one
+            # for each tilt), and no more than the waves have.
+            if np.broadcast_shapes(array.shape, waves._array.shape) != tuple(
+                waves._array.shape
+            ):
+                raise NotImplementedError(
+                    "torch.emulate-float64 supports propagators that broadcast "
+                    f"over the waves, got shape {array.shape} for waves of shape "
+                    f"{waves._array.shape}."
+                )
+            self._propagators[thickness] = self._df.from_numpy(array)
         return self._propagators[thickness]
 
     def _transmission(self, waves: Waves, potential_slice):
