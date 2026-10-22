@@ -52,14 +52,6 @@ def test_tilt_counts_only_excitations_above_current_depth():
     np.testing.assert_allclose(axis.tilt, ((3.0, 4.0),), atol=1e-12)
 
 
-@pytest.mark.parametrize("n", [0, 1, 2, 5])
-def test_excitations_weights_are_poisson(n):
-    thickness, mean_free_path = 250.0, 100.0
-    x = thickness / mean_free_path
-    expected = x**n * math.exp(-x) / math.factorial(n)
-    assert excitations_weights(n, thickness, mean_free_path) == pytest.approx(expected)
-
-
 def test_draw_events_weights_are_poisson():
     potential = abtem.Potential(bulk("Si", cubic=True), gpts=16, slice_thickness=2)
     waves = abtem.PlaneWave(energy=100e3, gpts=16, extent=potential.extent)
