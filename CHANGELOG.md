@@ -105,11 +105,6 @@ Features:
   reflection, evanescent beams are dropped), refuses tilted waves and `TransmissionFunction` slices, and is
   validated for thin specimens only. `multislice` hands any other algorithm to its own `make_step(waves)`
   ([PR #622](https://github.com/abTEM/abTEM/pull/622))
-    - **Behaviour change:** the new `RealSpaceMultislice(backscatter_correction=...)` option defaults to
-      `False`. `expansion_scope="full"` used to always subtract the backscattered wave of each slice from the
-      forward wave (Eq. 10, Micron 190 (2025) 103778), which degrades the forward beams at low energies
-      (−23 % against −4 % on the {200} beams of graphene at 1 keV); pass `backscatter_correction=True` for the
-      previous result
 - Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
   plane wave of a probe and places its beams on the probe's grid. Without a scan it gives the
   position-averaged (PACBED) pattern; with one, the plane waves add coherently at each position, so
