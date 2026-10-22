@@ -129,7 +129,7 @@ Performance:
   differences; on the GPU that lookup took two thirds of the time of a rotation series at 13,903 beams.
   The eigendecomposition reuses the structure matrix's memory where the backend allows (CuPy, and NumPy
   in double precision), and the beam amplitudes no longer form two more beams x beams arrays
-  ([issue #632](https://github.com/abTEM/abTEM/issues/632))
+  ([PR #635](https://github.com/abTEM/abTEM/pull/635))
     - A centrosymmetric crystal is solved as a real symmetric eigenproblem, that of the crystal moved
       to its inversion center, which halves the memory of the structure matrix and its eigenvectors
       and is several times faster to factorize; results agree with the complex solve to rounding.
@@ -409,7 +409,7 @@ Bugfixes:
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
 - `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
   more than that g_max apart set to zero as its warning says, where building the structure matrix raised
-  `ValueError: invalid entry in coordinates array` ([issue #632](https://github.com/abTEM/abTEM/issues/632))
+  `ValueError: invalid entry in coordinates array` ([PR #635](https://github.com/abTEM/abTEM/pull/635))
 
 Documentation:
 
