@@ -626,12 +626,20 @@ class RealSpaceMultislice:
         Finite-difference accuracy for Laplace operator (default 6)
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
+    backscatter_correction : bool, optional
+        Only for ``expansion_scope="full"``. If True, the backscattered component of
+        each slice, calculated from the next slice, is subtracted from the forward
+        wave (Eq. 10 in Micron 190 (2025) 103778). The default is False: the forward
+        wave is the plain full-scope series, which is closer to the exact solution at
+        low energies; ``return_backscattered=True`` still returns the backscattered
+        component. Before this option existed, the correction was always applied.
     """
 
     order: int = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
+    backscatter_correction: bool = False
 
 
 def multislice_and_detect(
@@ -728,16 +736,19 @@ def multislice_and_detect(
 
     else:
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+        # The next slice is only needed to calculate the backscattered component.
+        look_ahead = algorithm.backscatter_correction or return_backscattered
 
         def multislice_step(waves, potential_slice, next_slice=None):
             return realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
-                next_slice=next_slice,
+                next_slice=next_slice if look_ahead else None,
                 laplace=laplace_operator,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
+                correct_forward=algorithm.backscatter_correction,
             )
 
     (

@@ -685,6 +685,7 @@ def multislice_step(
     max_terms: int = 300,
     order: int = 1,
     fully_corrected: bool = False,
+    correct_forward: bool = True,
 ) -> Waves | Sequence[Waves]:
     """
     Performs a single multislice step.
@@ -708,6 +709,10 @@ def multislice_step(
     fully_corrected: bool
         If True, transmission and propagator operators are expanded to specified order.
         If next_slice is not None, the backscattered wave component is also computed.
+    correct_forward: bool
+        If True (default), the backscattered component is subtracted from the forward
+        wave (Eq. 10 in Micron 190 (2025) 103778). If False, the forward wave is the
+        plain expansion and the backscattered component is only returned.
 
     """
     xp = get_array_module(waves.array)
@@ -813,7 +818,8 @@ def multislice_step(
             )
 
         # Eq.10 in Micron 190 (2025) 103778.
-        waves._array = waves._array - backscatter
+        if correct_forward:
+            waves._array = waves._array - backscatter
 
     if fully_corrected:
         kwargs = waves._copy_kwargs(exclude=("array",))
