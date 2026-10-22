@@ -535,6 +535,73 @@ def test_cropped_spectrum_shows_without_error():
     assert ax.get_xlim()[1] < spec.q_values[-1]
 
 
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_explode_title_shows_label_only_on_first_panel():
+    """Matches the convention used elsewhere (e.g. DiffractionPatterns'
+    exploded grids): only the first panel along each exploded axis carries
+    the "Label = value" form; the rest show just the bare value, since
+    repeating the label on every panel of a single row/column is
+    redundant."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_multiaxis_spectrum()
+
+    fig, axes = spec.show(explode=[1])  # axis1 has 3 values -> one row of 3
+    axes_flat = axes.flatten()
+    titles = [ax.get_title() for ax in axes_flat[:3]]
+
+    assert titles[0] == "axis1 = 0"
+    assert titles[1] == "1"
+    assert titles[2] == "2"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_suptitle_sets_whole_figure_title():
+    """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
+    per-panel `title` -- and must be a dedicated parameter, not something
+    picked up from **kwargs: kwargs here goes straight to pcolormesh (an
+    Axes/Artist-level call), so a caller passing suptitle that way gets a
+    bare matplotlib AttributeError instead of what they wanted. Checked on
+    both the single-panel and the exploded figure paths."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    single, _ = _make_simple_spectrum()  # no ensemble axes -- no collapse warning
+    multi, _ = _make_multiaxis_spectrum()
+    for case, (spec, kwargs) in {
+        "single panel": (single, {}),
+        "exploded": (multi, {"explode": [1]}),
+    }.items():
+        fig, _ = spec.show(suptitle="Whole-figure title", **kwargs)
+        assert fig._suptitle is not None, case
+        assert fig._suptitle.get_text() == "Whole-figure title", case
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_rasterizes_pcolormesh_by_default():
+    """pcolormesh draws each cell as its own vector polygon; in vector
+    output (PDF/SVG/EPS) anti-aliasing at adjacent cell edges shows up as a
+    fine grid of seams over the data. rasterized=True (the default) embeds
+    the mesh as a bitmap instead, avoiding it -- explicit rasterized=False
+    must still give true vector output for anyone who wants it."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()
+
+    fig, ax = spec.show()
+    assert ax.collections[0].get_rasterized() is True
+
+    fig, ax = spec.show(rasterized=False)
+    assert ax.collections[0].get_rasterized() is False
+
+    multi_spec, _ = _make_multiaxis_spectrum()
+    fig, axes = multi_spec.show(explode=[1])
+    for a in axes.flatten()[:3]:
+        assert a.collections[0].get_rasterized() is True
+
+
 # ---- MomentumResolvedSpectrum.show(logscale=...) -----------------------------
 
 
