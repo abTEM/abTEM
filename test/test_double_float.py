@@ -65,7 +65,8 @@ def test_fft2_matches_numpy_float64(double_float, shape):
 
 @pytest.mark.parametrize(
     "length",
-    [2, 3, 5, 6, 7, 9, 10, 12, 15, 21, 25, 35, 49, 60, 120, 245, 343, 360, 500, 1000],
+    [2, 3, 5, 6, 7, 9, 10, 12, 15, 21, 25, 35, 49, 60, 120, 245, 343, 360, 500, 1000]
+    + [1024, 1536, 2048],
 )
 def test_fft2_is_accurate_for_every_supported_length(double_float, length):
     rng = np.random.default_rng(length)
@@ -81,7 +82,7 @@ def test_fft2_is_accurate_for_every_supported_length(double_float, length):
 
 @pytest.mark.parametrize(
     "shape",
-    [(2, 4, 1280), (2, 1280, 4), (1, 8, 2048), (1, 2048, 8), (1, 1050, 1050)],
+    [(2, 4, 2560), (2, 2560, 4), (1, 8, 4096), (1, 4096, 8), (1, 2100, 64)],
 )
 def test_axes_beyond_one_threadgroup_use_a_four_step_transform(double_float, shape):
     rng = np.random.default_rng(sum(shape))
@@ -108,7 +109,7 @@ def test_inverse_fft2_undoes_fft2(double_float, shape):
     )
 
 
-@pytest.mark.parametrize("shape", [(3, 16, 24), (2, 45, 8), (2, 8, 1280), (1, 1280, 8)])
+@pytest.mark.parametrize("shape", [(3, 16, 24), (2, 45, 8), (2, 8, 2560), (1, 2560, 8)])
 def test_fft2_applies_its_factors_like_separate_products(double_float, shape):
     rng = np.random.default_rng(sum(shape))
     x = double_float.from_numpy(_random_complex(rng, shape))
@@ -156,12 +157,27 @@ def test_multiply_broadcasts_a_kernel_over_the_batch(double_float):
     assert _relative_error(product, seen_x * seen_k) < 1e-13
 
 
-@pytest.mark.parametrize("shape", [(11, 8), (16, 13), (2**21, 4), (1, 8), (8, 22)])
+@pytest.mark.parametrize("shape", [(11, 8), (16, 13), (1, 8), (8, 22)])
 def test_unsupported_sizes_raise(double_float, shape):
     x = double_float.from_numpy(np.ones(shape, dtype=np.complex128))
 
     with pytest.raises(ValueError, match="no prime factor above 7"):
         double_float.fft2(x)
+
+
+def test_axes_too_long_to_split_in_two_raise(double_float):
+    # 2**23 = 2048 * 4096: one of any two factors exceeds a threadgroup.
+    with pytest.raises(ValueError, match="no prime factor above 7"):
+        double_float._check_axis(2**23)
+    double_float._check_axis(2**22)
+
+
+def test_arrays_too_large_to_address_raise(double_float):
+    class Huge:
+        shape = (2**10, 2**10, 2**10)
+
+    with pytest.raises(ValueError, match="smaller chunks"):
+        double_float._check_size(Huge())
 
 
 def _exit_wave(emulate, gpts):
@@ -270,8 +286,7 @@ def test_emulation_refuses_to_load_torch_after_pyfftw():
     import sys
     import textwrap
 
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         import pyfftw
         import ase.build, abtem
@@ -289,8 +304,7 @@ def test_emulation_refuses_to_load_torch_after_pyfftw():
             assert "pyfftw" in str(error), error
             assert "torch" not in sys.modules
             print("refused")
-        """
-    )
+        """)
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=300
     )

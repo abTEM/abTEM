@@ -57,10 +57,9 @@ def _on_metal(func):
     return wrapper
 
 
-# One threadgroup transforms one row, ping-ponging between two buffers of four
-# float32 planes each: 2 * 4 * 4 bytes per element, against Metal's 32 KiB of
-# threadgroup memory.
-MAX_FFT_SIZE = 1024
+# One threadgroup transforms a line in place in one buffer of four float32
+# planes: 16 bytes per element, against Metal's 32 KiB of threadgroup memory.
+MAX_FFT_SIZE = 2048
 
 _HELPERS = """
 #include <metal_stdlib>
@@ -196,37 +195,57 @@ def radices(n: int) -> list[int] | None:
     return factors + [4] * (twos // 2) + [2] * (twos % 2)
 
 
-def _fft_source(n: int) -> str:
+def _fft_source(n: int, group: int = 1) -> str:
     passes = radices(n)
-    threads = _width(n)
+    threads = _width(n, group)
     body, length, stride = [], n, 1
     for index, r in enumerate(passes):
         m = length // r
+        count = n // r  # butterflies in the pass, per line
+        per_thread = -(-count * group // threads)
+        guard = "" if count * group % threads == 0 else f"if (bt < {count * group}u) "
         body.append(f"""
-  // pass {index}: radix {r}, length {length}, stride {stride}
-  for (uint bt = t; bt < {n // r}u; bt += {threads}u) {{
-    uint p = bt / {stride}u, q = bt - p * {stride}u;
-    cdf x[{r}];
-    for (uint j = 0; j < {r}u; j++) {{
-      uint i = q + {stride}u * (p + j * {m}u);
-      x[j] = cdf{{float2(src[0*N+i], src[1*N+i]), float2(src[2*N+i], src[3*N+i])}};
-    }}
-    bfly{r}(x, sign);
-    for (uint k = 0; k < {r}u; k++) {{
-      cdf v = x[k];
-      if (k > 0) {{
-        uint w = p * k * {n // length}u;
-        cdf tw = cdf{{float2(wt[w], wt[WL + w]), float2(wt[2*WL + w], wt[3*WL + w])}};
-        if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
-        v = cmul(v, tw);
+  // pass {index}: radix {r}, length {length}, stride {stride}. The inputs of
+  // this thread's butterflies are read into registers before anything is
+  // written, so the pass works in place in one buffer.
+  {{
+    cdf x[{per_thread}][{r}];
+    for (uint u = 0; u < {per_thread}u; u++) {{
+      uint bt = t + u * {threads}u;
+      {guard}{{
+        uint l = bt / {count}u, f = bt - l * {count}u;
+        uint p = f / {stride}u, q = f - p * {stride}u;
+        for (uint j = 0; j < {r}u; j++) {{
+          uint i = l * N + q + {stride}u * (p + j * {m}u);
+          x[u][j] = cdf{{float2(buf[0*NL+i], buf[1*NL+i]),
+                        float2(buf[2*NL+i], buf[3*NL+i])}};
+        }}
       }}
-      uint o = q + {stride}u * ({r}u * p + k);
-      dst[0*N+o] = v.re.x; dst[1*N+o] = v.re.y;
-      dst[2*N+o] = v.im.x; dst[3*N+o] = v.im.y;
     }}
-  }}
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  {{ threadgroup float* tmp = src; src = dst; dst = tmp; }}""")
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint u = 0; u < {per_thread}u; u++) {{
+      uint bt = t + u * {threads}u;
+      {guard}{{
+        uint l = bt / {count}u, f = bt - l * {count}u;
+        uint p = f / {stride}u, q = f - p * {stride}u;
+        bfly{r}(x[u], sign);
+        for (uint k = 0; k < {r}u; k++) {{
+          cdf v = x[u][k];
+          if (k > 0) {{
+            uint w = p * k * {n // length}u;
+            cdf tw = cdf{{float2(wt[w], wt[WL + w]),
+                         float2(wt[2*WL + w], wt[3*WL + w])}};
+            if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
+            v = cmul(v, tw);
+          }}
+          uint o = l * N + q + {stride}u * ({r}u * p + k);
+          buf[0*NL+o] = v.re.x; buf[1*NL+o] = v.re.y;
+          buf[2*NL+o] = v.im.x; buf[3*NL+o] = v.im.y;
+        }}
+      }}
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }}""")
         length, stride = m, stride * r
 
     # Each radix's butterfly once, however many passes use it.
@@ -235,12 +254,16 @@ def _fft_source(n: int) -> str:
     )
     return _HELPERS + _COMPLEX + _MULTIPLY + butterflies + f"""
 #define N {n}u
-// A Stockham mixed-radix FFT of one line per threadgroup, {threads} threads
-// wide. A line is addressed as base + i * es, with the base of line number
-// tgid = (b * C + c) * J + j being b * bs + c * cs + j * js, and the input and
-// the output addressed apart. So one kernel transforms the rows (es = 1) and
-// the columns (es = row length) of a batch of images without a transpose, and,
-// with J > 1, a pass of a four-step transform. sign < 0 is the forward
+#define L {group}u
+#define NL {n * group}u
+// A Stockham mixed-radix FFT of L lines per threadgroup, {threads} threads
+// wide; several lines let the loads and stores of strided lines (columns)
+// touch neighbouring addresses together. A line is addressed as base + i * es,
+// with the base of line number tgid * L + l = (b * C + c) * J + j being
+// b * bs + c * cs + j * js, and the input and the output addressed apart. So
+// one kernel transforms the rows (es = 1) and the columns (es = row length) of a
+// batch of images without a transpose, and, with J > 1, a pass of a four-step
+// transform. sign < 0 is the forward
 // transform. `scale`, a double-float constant, multiplies the output.
 //
 // Three optional factors ride on the loads and the stores, each a table of
@@ -264,40 +287,49 @@ kernel void fft_df(
     constant float& sign, constant float& scale_hi, constant float& scale_lo,
     uint tgid [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]]) {{
-  threadgroup float buf_a[4 * N];
-  threadgroup float buf_b[4 * N];
-  uint j = tgid % J, rest = tgid / J;
-  uint c = rest % C, b = rest / C;
-  uint local_in = c * cs + j * js_in;
-  uint local_out = c * cs + j * js_out;
-  uint base_in = b * bs + local_in;
-  uint base_out = b * bs + local_out;
-  for (uint i = t; i < N; i += {threads}u) {{
-    uint g = base_in + i * es_in;
+  threadgroup float buf[4 * NL];
+  uint jl[L], local_in[L], local_out[L], base_in[L], base_out[L];
+  for (uint l = 0; l < L; l++) {{
+    uint line = tgid * L + l;
+    uint j = line % J, rest = line / J;
+    uint c = rest % C, b = rest / C;
+    jl[l] = j;
+    local_in[l] = c * cs + j * js_in;
+    local_out[l] = c * cs + j * js_out;
+    base_in[l] = b * bs + local_in[l];
+    base_out[l] = b * bs + local_out[l];
+  }}
+  // Element i of line l at l * N + i in the buffer; consecutive threads take
+  // consecutive lines, which for columns are neighbours in memory.
+  for (uint e = t; e < NL; e += {threads}u) {{
+    uint l = e % L, i = e / L;
+    uint g = base_in[l] + i * es_in;
     cdf v = cdf{{float2(x[g], x[PL + g]), float2(x[2*PL + g], x[3*PL + g])}};
     if (pre_on != 0u) {{
-      uint q = local_in + i * es_in;
+      uint q = local_in[l] + i * es_in;
       v = cmul(v, cdf{{float2(pre[q], pre[QL + q]),
                        float2(pre[2*QL + q], pre[3*QL + q])}});
     }}
-    buf_a[0*N+i] = v.re.x; buf_a[1*N+i] = v.re.y;
-    buf_a[2*N+i] = v.im.x; buf_a[3*N+i] = v.im.y;
+    uint a = l * N + i;
+    buf[0*NL+a] = v.re.x; buf[1*NL+a] = v.re.y;
+    buf[2*NL+a] = v.im.x; buf[3*NL+a] = v.im.y;
   }}
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  threadgroup float* src = buf_a;
-  threadgroup float* dst = buf_b;
 {"".join(body)}
-  for (uint i = t; i < N; i += {threads}u) {{
-    uint g = base_out + i * es_out;
-    cdf v = cdf{{float2(src[0*N+i], src[1*N+i]), float2(src[2*N+i], src[3*N+i])}};
+  for (uint e = t; e < NL; e += {threads}u) {{
+    uint l = e % L, i = e / L;
+    uint g = base_out[l] + i * es_out;
+    uint a = l * N + i;
+    cdf v = cdf{{float2(buf[0*NL+a], buf[1*NL+a]),
+                float2(buf[2*NL+a], buf[3*NL+a])}};
     if (tw_on != 0u) {{
-      uint w = i * j;
+      uint w = i * jl[l];
       cdf tw = cdf{{float2(vt[w], vt[VL + w]), float2(vt[2*VL + w], vt[3*VL + w])}};
       if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
       v = cmul(v, tw);
     }}
     if (post_on != 0u) {{
-      uint q = local_out + i * es_out;
+      uint q = local_out[l] + i * es_out;
       v = cmul(v, cdf{{float2(post[q], post[QL + q]),
                        float2(post[2*QL + q], post[3*QL + q])}});
     }}
@@ -317,10 +349,10 @@ _LIBRARIES: dict = {}
 _TWIDDLES: dict = {}
 
 
-def _library(n: int):
-    if n not in _LIBRARIES:
-        _LIBRARIES[n] = torch.mps.compile_shader(_fft_source(n))
-    return _LIBRARIES[n]
+def _library(n: int, group: int = 1):
+    if (n, group) not in _LIBRARIES:
+        _LIBRARIES[n, group] = torch.mps.compile_shader(_fft_source(n, group))
+    return _LIBRARIES[n, group]
 
 
 def _multiply_library():
@@ -375,10 +407,29 @@ class DoubleFloatArray:
 _MAX_THREADS = 256
 
 
-def _width(n: int) -> int:
+def _width(n: int, group: int = 1) -> int:
     """Threads per threadgroup: one per butterfly of the smallest radix, up to
     :data:`_MAX_THREADS`."""
-    return min(n // min(radices(n)), _MAX_THREADS)
+    return min(group * n // min(radices(n)), _MAX_THREADS)
+
+
+# Lines per threadgroup for strided lines, the first that fits is used. Two was
+# measured fastest on Apple M2: 15% off the column pass against one, while four
+# and eight lose more to the larger threadgroup memory than they gain.
+GROUP_LINES = (2,)
+
+
+def _group(n: int, lines: int, strides) -> int:
+    """The lines per threadgroup of a launch: one for contiguous lines, several
+    for lines whose elements are apart but that are each other's neighbours
+    (columns), as long as the threadgroup memory holds them."""
+    bs, cs, js_in, js_out, es_in, es_out = strides
+    if es_in == 1 or cs != 1:
+        return 1
+    for group in GROUP_LINES:
+        if lines % group == 0 and 16 * n * group <= 32768:
+            return group
+    return 1
 
 
 def _split_axis(n: int) -> tuple[int, int] | None:
@@ -474,7 +525,8 @@ def _launch(
     # A table the kernel is told not to read still has to be bound.
     first, last = pre or tables, post or tables
     c, j = lines
-    _library(n).fft_df(
+    group = _group(n, batch * c * j, strides) if j == 1 else 1
+    _library(n, group).fft_df(
         src.data,
         dst.data,
         tables.data,
@@ -494,8 +546,8 @@ def _launch(
         sign,
         scale_hi,
         scale_lo,
-        threads=batch * c * j * _width(n),
-        group_size=_width(n),
+        threads=batch * c * j // group * _width(n, group),
+        group_size=_width(n, group),
     )
 
 
