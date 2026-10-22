@@ -1563,7 +1563,8 @@ class TestBackscatterEnergy:
 
     def test_a_distribution_is_averaged_with_its_weights(self):
         # as abTEM averages any ensemble_mean axis, with the distribution's
-        # weights; kept apart, the weights stay on the axis
+        # weights and in the configured precision; kept apart, the weights stay
+        # on the axis
         from abtem.distributions import from_values
 
         slab = silicon_slab()
@@ -1577,7 +1578,12 @@ class TestBackscatterEnergy:
             averaged = make_ebsd(slab, detector, backscatter_energy=spread)
             averaged = averaged.build(lazy=lazy).compute()
             assert averaged.ensemble_shape == ()
+            assert averaged.array.dtype == apart.array.dtype, lazy
             assert averaged.metadata["energy"] == 30e3
+            # the mean energy, e.g. as the energy bin of an EMsoft file
+            assert averaged.metadata["backscatter_energy"] == pytest.approx(
+                weights @ energies
+            )
             assert np.allclose(averaged.array, expected, rtol=1e-5), lazy
 
         kept = make_ebsd(
@@ -1651,6 +1657,7 @@ class TestDevices:
         for lazy in lazies:
             result = build(device, lazy)
             got = host(result.compute() if lazy else result)
+            assert got.dtype == expected.dtype, lazy
             assert np.allclose(got, expected, rtol=1e-4, atol=1e-6), lazy
 
     def test_the_engine(self, device):
@@ -1676,6 +1683,11 @@ class TestDevices:
 
     @pytest.mark.filterwarnings(PARTIAL)
     def test_the_builders(self, device):
+        # every patch averages over the energies on the device
+        spread = abtem.distributions.from_values(
+            [30e3, 26e3], weights=[0.7, 0.3], ensemble_mean=True
+        )
+
         def reference(on, lazy):
             return EBSDReferencePattern(
                 SILICON,
@@ -1687,15 +1699,16 @@ class TestDevices:
                 max_angle=200.0,
                 hemisphere="both",
                 centrosymmetric=True,
+                backscatter_energy=spread,
                 device=on,
             ).build(lazy=lazy, pbar=False)
 
         def detector(on, lazy):
             # the incident beam on the device too, scanned
             probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
-            return detector_builder(n_patches=None, sampling=0.25, device=on).scan(
-                probe, scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]), lazy=lazy
-            )
+            return detector_builder(
+                n_patches=None, sampling=0.25, backscatter_energy=spread, device=on
+            ).scan(probe, scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]), lazy=lazy)
 
         self.agree(reference, device)
         self.agree(detector, device)

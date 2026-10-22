@@ -42,6 +42,7 @@ from abtem.core.axes import (
     BackscatterEnergyAxis,
     NonLinearAxis,
     OrdinalAxis,
+    _normalized_axis_weights,
 )
 from abtem.core.backend import (
     asnumpy,
@@ -199,16 +200,24 @@ def _sum_dtype(xp) -> np.dtype:
     return np.dtype(np.float64)
 
 
-def _energy_metadata(beam_energy: float, backscatter_energies: np.ndarray) -> dict:
+def _energy_metadata(
+    beam_energy: float,
+    backscatter_energies: np.ndarray,
+    energy_axis: Optional[BackscatterEnergyAxis],
+) -> dict:
     """The energy metadata of a pattern.
 
     ``energy`` is the incident beam's, as everywhere in abTEM. A single
-    backscattered energy is recorded as ``backscatter_energy``; several are the
-    values of a :class:`~abtem.core.axes.BackscatterEnergyAxis` instead.
+    backscattered energy is recorded as ``backscatter_energy``, and so is the
+    weighted mean of energies averaged over; energies kept apart are the values
+    of a :class:`~abtem.core.axes.BackscatterEnergyAxis` instead.
     """
     metadata: dict = {"energy": float(beam_energy)}
     if len(backscatter_energies) == 1:
         metadata["backscatter_energy"] = float(backscatter_energies[0])
+    elif _averaged(energy_axis):
+        weights = _energy_weights(energy_axis)
+        metadata["backscatter_energy"] = float(weights @ backscatter_energies)
     return metadata
 
 
@@ -263,11 +272,21 @@ def _averaged(axis: Optional[BackscatterEnergyAxis]) -> bool:
     return axis is not None and axis._ensemble_mean
 
 
+def _energy_weights(axis: BackscatterEnergyAxis) -> np.ndarray:
+    """The normalized weights of the energies, as ``reduce_ensemble`` takes them."""
+    weights = _normalized_axis_weights(axis, len(axis))
+    return np.full(len(axis), 1.0 / len(axis)) if weights is None else weights
+
+
 def _energy_mean(array, axis: BackscatterEnergyAxis):
-    """The probability-weighted mean over the leading backscatter-energy axis."""
-    weights = np.ones(len(axis)) if axis.weights is None else np.asarray(axis.weights)
-    weights = weights / weights.sum()
-    return (array * weights.reshape((-1,) + (1,) * (array.ndim - 1))).sum(axis=0)
+    """The probability-weighted mean over the leading backscatter-energy axis.
+
+    As ``reduce_ensemble``, which a :class:`SphericalPattern` does not have; the
+    weights take the array's precision and device.
+    """
+    xp = get_array_module(array)
+    weights = xp.asarray(_energy_weights(axis), dtype=np.finfo(array.dtype).dtype)
+    return xp.sum(array * weights.reshape((-1,) + (1,) * (array.ndim - 1)), axis=0)
 
 
 def _resolve_energy_axis(
@@ -466,9 +485,9 @@ class EBSD(CopyMixin, EqualityMixin):
 
         ``metadata["energy"]`` is the beam's energy, as everywhere in abTEM, and
         ``metadata["backscatter_energy"]`` that of the backscattered electrons
-        when there is one. A :class:`.DiffractionPatterns` is calibrated with
-        the beam energy, which gives the detector grid's angles at every
-        backscattered energy.
+        when there is one, or their weighted mean when they are averaged over.
+        A :class:`.DiffractionPatterns` is calibrated with the beam energy,
+        which gives the detector grid's angles at every backscattered energy.
     depth_tolerance : float, optional
         Stop propagating once the depth weight still to be collected falls
         below this fraction of the total (default 1e-4); the error in a
@@ -763,6 +782,7 @@ class EBSD(CopyMixin, EqualityMixin):
             intensities,
             ensemble_axes_metadata=ensemble_axes_metadata,
             backscatter_energies=backscatter_energies,
+            energy_axis=energy_axis,
             extra_metadata=extra_metadata,
         )
 
@@ -854,6 +874,7 @@ class EBSD(CopyMixin, EqualityMixin):
             array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             backscatter_energies=backscatter_energies,
+            energy_axis=energy_axis,
             extra_metadata=extra_metadata,
         )
 
@@ -975,6 +996,7 @@ class EBSD(CopyMixin, EqualityMixin):
         intensities,
         ensemble_axes_metadata: list[AxisMetadata],
         backscatter_energies: np.ndarray,
+        energy_axis: Optional[BackscatterEnergyAxis],
         extra_metadata: Optional[dict] = None,
     ) -> DiffractionPatterns | SphericalPattern:
         """Wrap the collected intensities in the matching measurement type."""
@@ -984,7 +1006,7 @@ class EBSD(CopyMixin, EqualityMixin):
         else:
             array = asnumpy(intensities)
         metadata = {
-            **_energy_metadata(self._energy, backscatter_energies),
+            **_energy_metadata(self._energy, backscatter_energies, energy_axis),
             "label": "backscattered intensity",
             "source": "uniform" if self._illumination is None else "illumination",
             **(extra_metadata or {}),

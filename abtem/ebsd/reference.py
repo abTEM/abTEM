@@ -564,7 +564,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         pattern = SphericalPattern.concatenate(patterns)
         pattern.metadata.update(
             {
-                **_energy_metadata(self._energy, energies),
+                **_energy_metadata(self._energy, energies, energy_axis),
                 "label": "backscattered intensity",
                 "n_patches": self._n_patches,
                 "max_angle": self._max_angle,

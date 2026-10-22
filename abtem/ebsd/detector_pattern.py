@@ -636,7 +636,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         array = _detector_to_image(array.reshape(output_shape + (rows, columns)))
 
         metadata = {
-            **_energy_metadata(self._energy, energies),
+            **_energy_metadata(self._energy, energies, energy_axis),
             "label": "backscattered intensity",
             "source": "uniform" if source is None else type(source).__name__,
             "euler": [float(a) for a in self._euler],
