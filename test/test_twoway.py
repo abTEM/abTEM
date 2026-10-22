@@ -4,15 +4,24 @@ import ase
 import ase.build
 import numpy as np
 import pytest
+from utils import _ACCELERATOR, to_host_array
 
 import abtem
 from abtem.core.energy import energy2wavelength
 from abtem.multislice import FourierMultislice
 from abtem.twoway import TwoWaySolver, structure_symmetry
 
-# The two-way solver runs on the CPU only, so these tests are not parametrised over
-# devices.
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
+
+# The solver runs on the CPU and on CUDA devices (not on Metal, which has no double
+# precision and no complex linear algebra).
+cuda = pytest.param(
+    "gpu",
+    marks=(
+        pytest.mark.gpu,
+        pytest.mark.skipif(_ACCELERATOR != "gpu", reason="no CUDA device"),
+    ),
+)
 
 
 def graphene_atoms(vacuum=6.0):
@@ -305,6 +314,91 @@ def test_agrees_with_multislice_for_a_tilted_wave():
     assert np.abs(reflected.array).max() < 1e-4
 
 
+def single_precision_pair(energy, solver_kwargs=None):
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    results = {}
+    for precision in ("float64", "float32"):
+        with abtem.config.set({"precision": "float64"}):
+            transmitted, reflected = TwoWaySolver(
+                cutoff=3.0, precision=precision, **(solver_kwargs or {})
+            ).scatter(abtem.PlaneWave(energy=energy), potential)
+        results[precision] = (beam_amplitudes(transmitted), beam_amplitudes(reflected))
+    return results
+
+
+@pytest.mark.parametrize("energy", [200.0, 1000.0])
+def test_single_precision_is_accurate_to_1e_3_on_the_strong_beams(energy):
+    # Oracle: the double precision solution. The evanescent beams make the blocks
+    # ill-conditioned, but the error stays about 1e-4 relative on the strong beams
+    # and 1e-5 absolute on the reflected wave, and it is not zero (a single precision
+    # solve was done).
+    results = single_precision_pair(energy)
+    t64, r64 = results["float64"]
+    t32, r32 = results["float32"]
+    strong = np.abs(t64) > 1e-3
+    relative = np.abs((t32 - t64)[strong] / t64[strong]).max()
+    assert 1e-9 < relative < 1e-3
+    assert np.abs(r32 - r64).max() < 1e-4
+
+
+def test_the_precision_follows_the_configuration_by_default():
+    # Oracle: the explicit precisions. The default follows abtem.config["precision"]
+    # (single precision gives the single precision result, not the double one), and
+    # the dtype of the waves follows it too.
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    arrays = {}
+    for configured in ("float32", "float64"):
+        with abtem.config.set({"precision": configured}):
+            transmitted, _ = TwoWaySolver(cutoff=3.0).scatter(
+                abtem.PlaneWave(energy=1000.0), potential
+            )
+        assert transmitted.array.dtype == (
+            np.complex64 if configured == "float32" else np.complex128
+        )
+        arrays[configured] = beam_amplitudes(transmitted)
+    explicit = single_precision_pair(1000.0)
+    np.testing.assert_allclose(arrays["float64"], explicit["float64"][0], atol=1e-12)
+    # (the potential of the single precision configuration is itself single precision)
+    np.testing.assert_allclose(arrays["float32"], explicit["float32"][0], atol=5e-5)
+    assert np.abs(arrays["float32"] - arrays["float64"]).max() > 1e-9
+
+
+@pytest.mark.parametrize("device", [cuda, "cpu"])
+@pytest.mark.parametrize("tilt", [(0.0, 0.0), (60.0, -20.0)])
+def test_the_device_gives_the_waves_of_the_cpu(device, tilt):
+    # Oracle: the CPU result in double precision, to rounding (the CUDA case is skipped
+    # without a CUDA device).
+    kwargs = dict(
+        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
+    )
+    with abtem.config.set({"precision": "float64"}):
+        reference = TwoWaySolver(cutoff=2.0).scatter(
+            abtem.PlaneWave(energy=1000.0, tilt=tilt),
+            abtem.Potential(graphene_atoms(), **kwargs),
+        )
+        result = TwoWaySolver(cutoff=2.0).scatter(
+            abtem.PlaneWave(energy=1000.0, tilt=tilt, device=device),
+            abtem.Potential(graphene_atoms(), device=device, **kwargs),
+        )
+    for a, b in zip(result, reference):
+        host = np.asarray(to_host_array(a))
+        np.testing.assert_allclose(
+            np.fft.fft2(host) / host.size, beam_amplitudes(b), atol=1e-9
+        )
+
+
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
@@ -385,6 +479,9 @@ def test_the_solver_refuses_unsupported_input():
 
     with pytest.raises(ValueError, match="cutoff"):
         TwoWaySolver(cutoff=0.0)
+
+    with pytest.raises(ValueError, match="precision"):
+        TwoWaySolver(precision="float16")
 
 
 def spglib_inplane_symmetry(atoms, symprec=1e-4):
