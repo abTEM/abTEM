@@ -931,10 +931,10 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             positions = (positions[:, :2] / sampling).astype(np.float64)
             deltas = superpose_deltas(positions, np.zeros(gpts, dtype=np.float64))
 
-            spectrum = double_float.fft2(double_float.from_numpy(deltas))
-            spectrum = double_float.multiply(
-                spectrum,
-                self._emulated_kernel(chemical_symbols[number], gpts, sampling),
+            # The factor rides on the stores of the forward transform.
+            spectrum = double_float.fft2(
+                double_float.from_numpy(deltas),
+                post=self._emulated_kernel(chemical_symbols[number], gpts, sampling),
             )
             array += double_float.to_numpy(
                 double_float.fft2(spectrum, inverse=True)

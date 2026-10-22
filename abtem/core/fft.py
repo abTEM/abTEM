@@ -108,21 +108,17 @@ def next_fast_fft_size(n: int) -> int:
 
 _METAL_DEVICES = ("mps", "metal", "torch")
 
-# Relative cost per pixel of a transform on Metal, against a power of two,
-# measured on Apple silicon: Metal's FFT runs powers of two 2-4x faster per
-# pixel than any other length (float32: 0.38 ns/pixel against 0.72-1.5), and the
-# emulated double precision FFT (abtem.core._double_float) is fastest there too.
-# One number for every other fast length, as what separates them is smaller than
-# what separates them from a power of two.
+# Relative cost per pixel of a float32 transform on Metal, against a power of
+# two, measured on Apple silicon: Metal's FFT runs powers of two 2-4x faster per
+# pixel than any other length (0.38 ns/pixel against 0.72-1.5). One number for
+# every other fast length, as what separates them is smaller than what separates
+# them from a power of two.
 _METAL_NON_POWER_OF_TWO_COST = 2.5
 
 
 def prefers_powers_of_two(device: Optional[str] = None) -> bool:
     """
-    Whether FFTs are fastest on powers of two on the device.
-
-    True on Metal, and for the emulated float64 multislice (the
-    ``torch.emulate-float64`` option), whose kernels run on Metal too.
+    Whether FFTs are much faster on powers of two on the device: on Metal.
 
     Parameters
     ----------
@@ -131,7 +127,28 @@ def prefers_powers_of_two(device: Optional[str] = None) -> bool:
     """
     if device is None:
         device = config.get("device")
-    return str(device).lower() in _METAL_DEVICES or bool(
+    return str(device).lower() in _METAL_DEVICES
+
+
+def avoids_factors_of_seven(device: Optional[str] = None) -> bool:
+    """
+    Whether FFTs of lengths with a factor 7 are much slower on the device.
+
+    True for the emulated float64 of ``torch.emulate-float64`` on the host
+    device, whose transforms run on Metal in double-float
+    (:mod:`abtem.core._double_float`). Unlike Metal's float32 FFT, that one costs
+    about the same per pixel for powers of two and for lengths with factors 3
+    and 5 (1.7-2.8 ns/pixel, measured on Apple silicon), so rounding up to a
+    power of two would only add pixels; its radix-7 passes are 1.3-3.6x slower.
+
+    Parameters
+    ----------
+    device : str, optional
+        The device, defaults to the configured one.
+    """
+    if device is None:
+        device = config.get("device")
+    return str(device).lower() in ("cpu", "numpy") and bool(
         config.get("torch.emulate-float64", False)
     )
 
@@ -140,8 +157,20 @@ def _is_power_of_two(n: int) -> bool:
     return n > 0 and n & (n - 1) == 0
 
 
+def _is_five_smooth(n: int) -> bool:
+    return is_fast_fft_size(n) and n % 7 != 0
+
+
+def _next_five_smooth(n: int) -> int:
+    n = max(1, int(n))
+    while not _is_five_smooth(n):
+        n += 1
+    return n
+
+
 def _pixel_cost(n: int) -> float:
-    """The relative time of a 2D transform of an ``n`` by ``n`` grid on Metal."""
+    """The relative time of a float32 transform of an ``n`` by ``n`` grid on
+    Metal."""
     return n * n * (1.0 if _is_power_of_two(n) else _METAL_NON_POWER_OF_TWO_COST)
 
 
@@ -151,11 +180,11 @@ def next_preferred_fft_size(n: int, device: Optional[str] = None) -> int:
 
     Where all fast lengths cost alike (CPU and CUDA) this is
     :func:`next_fast_fft_size`. On Metal a power of two is much faster per pixel
-    than any other length, so it is chosen unless a fast length leaves out so
-    much of the way to it that the saved pixels outweigh the difference: for
+    than any other length, so it is chosen unless the next fast length falls so
+    far short of it that the saved pixels outweigh the difference: for
     ``n = 300`` that is 300 itself, for ``n = 330`` it is 512 rather than 336.
-    The result is never below ``n``, so the sampling is never coarser than the
-    plain fast length would give.
+    With ``torch.emulate-float64`` lengths with a factor 7 are avoided. The
+    result is never below ``n``.
 
     Parameters
     ----------
@@ -170,19 +199,14 @@ def next_preferred_fft_size(n: int, device: Optional[str] = None) -> int:
         The preferred transform length.
     """
     fast = next_fast_fft_size(n)
-    if not prefers_powers_of_two(device):
-        return fast
-
-    n = max(1, int(n))
-    power = 1 << (n - 1).bit_length()
-    best = fast
-    # Only lengths up to the next power of two can beat it.
-    candidate = fast
-    while candidate < power:
-        if _pixel_cost(candidate) < _pixel_cost(best):
-            best = candidate
-        candidate = next_fast_fft_size(candidate + 1)
-    return power if _pixel_cost(power) <= _pixel_cost(best) else best
+    if prefers_powers_of_two(device):
+        # Every other fast length costs the same per pixel, so the next one is
+        # the cheapest of them.
+        power = 1 << (max(1, int(n)) - 1).bit_length()
+        return power if _pixel_cost(power) <= _pixel_cost(fast) else fast
+    if avoids_factors_of_seven(device):
+        return _next_five_smooth(n)
+    return fast
 
 
 def next_preferred_fft_multiplier(
@@ -195,7 +219,8 @@ def next_preferred_fft_multiplier(
     ``period`` must itself be a fast length, so that ``q * period`` is fast
     exactly when ``q`` is. Where all fast lengths cost alike this is the next
     fast ``q``. On Metal, a ``period`` that is a power of two lets ``q * period``
-    be one too, and then :func:`next_preferred_fft_size` decides among them.
+    be one too, and the rule of :func:`next_preferred_fft_size` decides; with
+    ``torch.emulate-float64``, factors of 7 are avoided where the period allows.
 
     Parameters
     ----------
@@ -207,18 +232,14 @@ def next_preferred_fft_multiplier(
         The device, defaults to the configured one.
     """
     multiplier = next_fast_fft_size(start)
-    if not (prefers_powers_of_two(device) and _is_power_of_two(period)):
+    if prefers_powers_of_two(device) and _is_power_of_two(period):
+        power = 1 << (max(1, int(start)) * period - 1).bit_length()
+        if _pixel_cost(power) <= _pixel_cost(multiplier * period):
+            return power // period
         return multiplier
-    # The smallest length that is a multiple of the period and cheapest, by the
-    # same rule as for a plain length; only the multiples of the period count.
-    best = multiplier
-    power = 1 << (start * period - 1).bit_length()
-    candidate = multiplier
-    while candidate * period < power:
-        if _pixel_cost(candidate * period) < _pixel_cost(best * period):
-            best = candidate
-        candidate = next_fast_fft_size(candidate + 1)
-    return power // period if _pixel_cost(power) <= _pixel_cost(best * period) else best
+    if avoids_factors_of_seven(device) and _is_five_smooth(period):
+        return _next_five_smooth(start)
+    return multiplier
 
 
 _warned_slow_fft_shapes: set = set()

@@ -242,3 +242,58 @@ def test_emulated_potential_keeps_its_cache_out_of_the_pickle():
         restored = pickle.loads(pickle.dumps(integrator))
 
     assert len(restored._emulated_kernels) == 0
+
+
+def test_emulated_multislice_uses_a_transmission_function_as_given():
+    # Not band-limited: the multislice must use it exactly as it is, as it does
+    # on the host.
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 4)
+
+    def exit_wave(emulate):
+        with config.set({"precision": "float64", "torch.emulate-float64": emulate}):
+            potential = abtem.Potential(atoms, gpts=64, slice_thickness=1.0)
+            transmission = potential.build().compute().transmission_function(200e3)
+            wave = abtem.PlaneWave(energy=200e3)
+            wave.grid.match(potential)
+            return np.asarray(wave.multislice(transmission).compute().array)
+
+    reference, emulated = exit_wave(False), exit_wave(True)
+
+    assert np.abs(emulated - reference).max() < 1e-10
+
+
+def test_emulation_refuses_to_load_torch_after_pyfftw():
+    # Loading PyTorch after pyfftw's OpenMP runtime makes torch's CPU work crash
+    # the process, so the emulation must refuse like the 'mps' device does,
+    # without importing torch.
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import sys
+        import pyfftw
+        import ase.build, abtem
+        from abtem.core import config
+        config.set({"precision": "float64", "torch.emulate-float64": True})
+        potential = abtem.Potential(
+            ase.build.bulk("Si", "diamond", a=5.431, cubic=True),
+            gpts=32, slice_thickness=1.0,
+        )
+        wave = abtem.PlaneWave(energy=200e3)
+        wave.grid.match(potential)
+        try:
+            wave.multislice(potential).compute()
+        except RuntimeError as error:
+            assert "pyfftw" in str(error), error
+            assert "torch" not in sys.modules
+            print("refused")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=300
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "refused" in result.stdout

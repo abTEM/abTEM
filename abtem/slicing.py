@@ -255,7 +255,8 @@ def commensurate_gpts(
     device : str, optional
         The device the grid is used on, defaults to the configured one. On Metal,
         where powers of two are much faster to transform than other lengths, a
-        grid that can be a power of two is preferred (see
+        grid that can be a power of two is preferred, and with
+        ``torch.emulate-float64`` factors of 7 are avoided (see
         :func:`abtem.core.fft.next_preferred_fft_size`).
     round_to_fast_fft : bool
         If True (default), prefer grids that are also fast FFT sizes (all prime

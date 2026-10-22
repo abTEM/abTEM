@@ -139,6 +139,58 @@ def check_mps_is_available():
     module
         The Metal array namespace, as returned by ``get_array_module('mps')``.
     """
+    _load_torch()
+
+    if config.get("precision") != "float32":
+        raise RuntimeError(
+            "Metal (MPS) is a single-precision backend, but the configured "
+            f"precision is '{config.get('precision')}'. Set "
+            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
+            "'gpu' device for double precision."
+        )
+
+    return tp
+
+
+def check_metal_kernels_are_available():
+    """
+    Load PyTorch for abTEM's own Metal kernels, raising if they cannot run.
+
+    The emulated double precision of ``torch.emulate-float64``
+    (:mod:`abtem.core._double_float`) runs float64 work on the GPU, so unlike
+    :func:`check_mps_is_available` it takes any precision; it needs the real
+    Metal device and a PyTorch that compiles Metal shaders. Loading goes
+    through the same guards: importing PyTorch any other way would skip the
+    refusal to load it after pyfftw, after which torch's CPU work crashes the
+    process.
+
+    Returns
+    -------
+    module
+        ``abtem.core._torch``.
+    """
+    _load_torch()
+
+    from abtem.core import _torch
+
+    if _torch.DEVICE != "mps":
+        raise RuntimeError(
+            "torch.emulate-float64 runs Metal kernels, so it needs the 'mps' torch "
+            f"device, but the configuration key 'torch.device' is "
+            f"'{_torch.DEVICE}'."
+        )
+    if not hasattr(_torch.torch.mps, "compile_shader"):
+        raise RuntimeError(
+            "torch.emulate-float64 compiles Metal kernels with "
+            "torch.mps.compile_shader, which PyTorch "
+            f"{_torch.torch.__version__} does not have. Upgrade PyTorch."
+        )
+    return _torch
+
+
+def _load_torch():
+    """Import PyTorch and the Metal array namespace once, behind the guards
+    against the crashes an unguarded import can cause."""
     global tp, TorchNDArray
 
     if tp is None:
@@ -182,16 +234,6 @@ def check_mps_is_available():
                 # not see it before TorchNDArray is in place too.
                 TorchNDArray = _torch.TorchNDArray
                 tp = _torch.torch_numpy
-
-    if config.get("precision") != "float32":
-        raise RuntimeError(
-            "Metal (MPS) is a single-precision backend, but the configured "
-            f"precision is '{config.get('precision')}'. Set "
-            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
-            "'gpu' device for double precision."
-        )
-
-    return tp
 
 
 _cuda_cluster_client = None

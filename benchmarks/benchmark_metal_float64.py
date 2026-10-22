@@ -149,12 +149,10 @@ def benchmark_fft(torch, grids, repeats):
 
 
 def simulation(grid, probes, slices):
-    """The simulation, unbuilt, so that building the potential is part of it."""
-    cell = ase.build.bulk("Si", "diamond", a=5.431, cubic=True) * (
-        2,
-        2,
-        slices // 5 + 1,
-    )
+    """The simulation, unbuilt, so that building the potential is part of it, and
+    its number of slices."""
+    repeats = max(1, round(slices / 5.431))
+    cell = ase.build.bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, repeats)
     potential = abtem.Potential(cell, gpts=grid, slice_thickness=1.0)
     probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, defocus=50)
     probe.grid.match(potential)
@@ -163,7 +161,11 @@ def simulation(grid, probes, slices):
         start=(0, 0), end=(5, 5), gpts=(side, side), potential=potential
     )
     detector = abtem.PixelatedDetector(max_angle=60)
-    return lambda: np.asarray(probe.scan(potential, scan, detector).compute().array)
+
+    def run():
+        return np.asarray(probe.scan(potential, scan, detector).compute().array)
+
+    return run, potential.num_slices
 
 
 def timed(function):
@@ -173,15 +175,16 @@ def timed(function):
 
 
 def benchmark_multislice(grids, probe_counts, slices, repeats):
-    rows = []
+    """The table, and the number of slices the crystal came out with."""
+    rows, num_slices = [], slices
     for grid in grids:
         for probes in probe_counts:
             with config.set({"precision": "float64", "torch.emulate-float64": False}):
-                run = simulation(grid, probes, slices)
+                run, num_slices = simulation(grid, probes, slices)
                 reference, _ = timed(run)  # warm FFTW plans, caches
                 t_cpu = min(timed(run)[1] for _ in range(repeats))
             with config.set({"precision": "float64", "torch.emulate-float64": True}):
-                run = simulation(grid, probes, slices)
+                run, _ = simulation(grid, probes, slices)
                 emulated, t_cold = timed(run)
                 t_warm = min(timed(run)[1] for _ in range(repeats))
             difference = np.abs(emulated - reference).max() / np.abs(reference).max()
@@ -201,7 +204,7 @@ def benchmark_multislice(grids, probe_counts, slices, repeats):
                 file=sys.stderr,
                 flush=True,
             )
-    return table(
+    return num_slices, table(
         (
             "grid",
             "probes",
@@ -223,20 +226,21 @@ def main():
     parser.add_argument(
         "--probes", type=int, nargs="+", help="probe positions (squares)"
     )
-    parser.add_argument("--slices", type=int, default=136, help="slices of the crystal")
+    parser.add_argument(
+        "--slices", type=int, default=136, help="slices of the crystal, roughly"
+    )
     parser.add_argument("--repeats", type=int, help="repetitions, the best is reported")
     parser.add_argument("--skip-fft", action="store_true")
     parser.add_argument("--skip-multislice", action="store_true")
     parser.add_argument("--output", help="also write the report to this Markdown file")
     args = parser.parse_args()
 
-    from abtem.core.backend import check_mps_is_available
+    from abtem.core.backend import check_metal_kernels_are_available
 
     try:
-        check_mps_is_available()
+        torch = check_metal_kernels_are_available().torch
     except RuntimeError as error:
-        sys.exit(f"This benchmark needs the Metal (MPS) backend: {error}")
-    import torch
+        sys.exit(f"This benchmark needs abTEM's Metal kernels: {error}")
 
     config.set(
         {"diagnostics.progress_bar": False, "local_diagnostics.progress_bar": False}
@@ -253,12 +257,12 @@ def main():
         + table(("setting", "value"), [list(row) for row in environment(torch)])
     ]
     if not args.skip_multislice:
+        num_slices, result = benchmark_multislice(grids, probes, args.slices, repeats)
         sections.append(
-            f"## Multislice\n\nSi, {args.slices} slices, 200 keV probe scan with a "
+            f"## Multislice\n\nSi, {num_slices} slices, 200 keV probe scan with a "
             "`PixelatedDetector`, unbuilt potential. Warm times are the best of "
             f"{repeats} runs; the first call at a grid size also compiles the Metal "
-            "kernels for it.\n\n"
-            + benchmark_multislice(grids, probes, args.slices, repeats)
+            "kernels for it, unless macOS has them cached.\n\n" + result
         )
     if not args.skip_fft:
         sections.append(

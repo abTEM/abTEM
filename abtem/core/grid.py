@@ -497,7 +497,8 @@ class Grid(CopyMixin, EqualityMixin):
         on cuFFT the Bluestein algorithm, which additionally allocates a
         workspace of several times the transform size. On Metal powers of two
         are strongly preferred, being 2-4x faster per pixel than any other
-        length (see :func:`abtem.core.fft.next_preferred_fft_size`). Rounding
+        length, and with ``torch.emulate-float64`` factors of 7 are avoided
+        (see :func:`abtem.core.fft.next_preferred_fft_size`). Rounding
         is always upward, so the realized sampling is never coarser than before.
 
         Every gpts is rounded, including on an endpoint grid -- unlike the

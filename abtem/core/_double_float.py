@@ -24,9 +24,38 @@ silent fall back to float32 accuracy.
 
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
-from abtem.core._torch import DEVICE, _serialized, torch
+# PyTorch and abtem.core._torch, loaded on first use by _load(): importing them
+# here would bypass the guards of abtem.core.backend._load_torch.
+torch = None
+_TORCH_MODULE = None
+
+
+def _load():
+    global torch, _TORCH_MODULE
+    if _TORCH_MODULE is None:
+        from abtem.core.backend import check_metal_kernels_are_available
+
+        module = check_metal_kernels_are_available()
+        torch = module.torch
+        _TORCH_MODULE = module
+    return _TORCH_MODULE
+
+
+def _on_metal(func):
+    """Run ``func`` with PyTorch loaded and holding the Metal lock, which also
+    covers the kernel and table caches (see ``abtem.core._torch._TORCH_LOCK``)."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _load()._TORCH_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
+
 
 # One threadgroup transforms one row, ping-ponging between two buffers of four
 # float32 planes each: 2 * 4 * 4 bytes per element, against Metal's 32 KiB of
@@ -316,7 +345,7 @@ def _twiddles(n: int):
 
 def _upload(x: np.ndarray) -> "DoubleFloatArray":
     planes = (*_split(x.real), *_split(x.imag))
-    return DoubleFloatArray(torch.from_numpy(np.stack(planes)).to(DEVICE))
+    return DoubleFloatArray(torch.from_numpy(np.stack(planes)).to("mps"))
 
 
 class DoubleFloatArray:
@@ -374,7 +403,21 @@ def _check_axis(n: int) -> None:
         )
 
 
-@_serialized
+# The kernels address the four planes of an array with 32-bit unsigned
+# integers, the last at 3 * plane + i: an array of 2**30 elements or more would
+# wrap around silently.
+_MAX_ELEMENTS = 2**30 - 1
+
+
+def _check_size(x: DoubleFloatArray) -> None:
+    if int(np.prod(x.shape)) > _MAX_ELEMENTS:
+        raise ValueError(
+            f"emulated double precision on Metal handles arrays of up to "
+            f"{_MAX_ELEMENTS} elements, got shape {x.shape}. Use smaller chunks."
+        )
+
+
+@_on_metal
 def from_numpy(x: np.ndarray) -> DoubleFloatArray:
     """Upload a float64 or complex128 array, keeping all of its precision."""
     x = np.asarray(x)
@@ -383,14 +426,14 @@ def from_numpy(x: np.ndarray) -> DoubleFloatArray:
     return _upload(x)
 
 
-@_serialized
+@_on_metal
 def to_numpy(x: DoubleFloatArray) -> np.ndarray:
     """Download as a complex128 array."""
     rh, rl, ih, il = (p.astype(np.float64) for p in x.data.cpu().numpy())
     return (rh + rl) + 1j * (ih + il)
 
 
-@_serialized
+@_on_metal
 def multiply(x: DoubleFloatArray, kernel: DoubleFloatArray) -> DoubleFloatArray:
     """The product ``x * kernel``, with the (2D) kernel broadcast over the
     leading axes of ``x``."""
@@ -399,6 +442,7 @@ def multiply(x: DoubleFloatArray, kernel: DoubleFloatArray) -> DoubleFloatArray:
         raise ValueError(
             f"kernel of shape {kernel.shape} does not broadcast over {x.shape}"
         )
+    _check_size(x)
     y = x.empty_like()
     n = int(np.prod(x.shape))
     _multiply_library().multiply_df(x.data, kernel.data, y.data, n, nk, threads=n)
@@ -514,7 +558,7 @@ def _transform_axis(
     )
 
 
-@_serialized
+@_on_metal
 def fft2(
     x: DoubleFloatArray,
     inverse: bool = False,
@@ -533,6 +577,7 @@ def fft2(
     *batch_shape, n0, n1 = x.shape
     _check_axis(n0)
     _check_axis(n1)
+    _check_size(x)
     for factor in (pre, post):
         if factor is not None and factor.shape != (n0, n1):
             raise ValueError(

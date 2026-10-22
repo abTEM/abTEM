@@ -484,7 +484,10 @@ class _EmulatedDoubleMultislice:
         not updated until :meth:`sync`."""
         df = self._df
 
-        if isinstance(potential_slice, TransmissionFunction):
+        # As conventional_multislice_step: a transmission function is used as
+        # given, one made here from a potential slice is band-limited.
+        given = isinstance(potential_slice, TransmissionFunction)
+        if given:
             transmission = potential_slice
         else:
             transmission = potential_slice.transmission_function(
@@ -496,12 +499,13 @@ class _EmulatedDoubleMultislice:
                 "torch.emulate-float64 supports a single potential configuration "
                 f"per slice, got a transmission function of shape {array.shape}."
             )
-        array = array.reshape(waves._array.shape[-2:]).astype(np.complex128)
+        t = df.from_numpy(
+            array.reshape(waves._array.shape[-2:]).astype(np.complex128)
+        )
 
-        # Band-limit on the device: the same two transforms as the host would
-        # take, but on one image, where the GPU is cheap.
-        t = df.fft2(df.from_numpy(array))
-        t = df.fft2(df.multiply(t, self._aperture), inverse=True)
+        if not given:
+            # Band-limit on the device, the aperture riding on the transform.
+            t = df.fft2(df.fft2(t, post=self._aperture), inverse=True)
 
         # The product with the transmission function and with the propagator ride
         # on the loads of the forward transform and on its stores.

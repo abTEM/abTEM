@@ -7,6 +7,7 @@ from ase.build import bulk
 import abtem
 from abtem.core import config
 from abtem.core.fft import (
+    avoids_factors_of_seven,
     next_fast_fft_size,
     next_preferred_fft_multiplier,
     next_preferred_fft_size,
@@ -53,10 +54,27 @@ def test_the_configured_device_is_the_default():
     assert next_preferred_fft_size(330) == 336
 
 
-def test_emulated_float64_prefers_powers_of_two_too():
+@pytest.mark.parametrize(
+    "n, expected", [(343, 360), (330, 360), (448, 450), (200, 200), (360, 360)]
+)
+def test_emulated_float64_avoids_factors_of_seven_not_other_lengths(n, expected):
+    # The double-float FFT costs about the same per pixel for any length with
+    # factors 2, 3 and 5, so rounding up to a power of two would only add pixels.
+    assert not avoids_factors_of_seven("cpu")
     with config.set({"torch.emulate-float64": True}):
-        assert prefers_powers_of_two("cpu")
-        assert next_preferred_fft_size(330, "cpu") == 512
+        assert avoids_factors_of_seven("cpu")
+        assert not prefers_powers_of_two("cpu")
+        assert next_preferred_fft_size(n, "cpu") == expected
+        # Other devices are not affected by the option.
+        assert next_preferred_fft_size(n, "gpu") == next_fast_fft_size(n)
+
+
+def test_emulated_float64_multiplier_avoids_factors_of_seven():
+    with config.set({"torch.emulate-float64": True}):
+        # 8 * 42 = 336 = 2^4 * 3 * 7: the next multiplier without a 7 is 45.
+        assert next_preferred_fft_multiplier(41, 8, "cpu") == 45
+        # A period with a factor 7 leaves no choice.
+        assert next_preferred_fft_multiplier(41, 7, "cpu") == next_fast_fft_size(41)
 
 
 def test_multiplier_matches_the_fast_one_unless_the_period_is_a_power_of_two():
