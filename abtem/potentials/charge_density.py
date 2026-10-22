@@ -4,7 +4,7 @@ electrostatic potential in multislice simulations."""
 from __future__ import annotations
 
 from functools import partial
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import dask
 import dask.array as da
@@ -54,6 +54,77 @@ def _spatial_frequencies(shape, cell):
 def _spatial_frequencies_squared(shape, cell: Cell):
     kx, ky, kz = _spatial_frequencies(shape, cell)
     return kx**2 + ky**2 + kz**2
+
+
+def band_limit_fourier(
+    array: np.ndarray,
+    cell: Cell,
+    g_max: Optional[float],
+    taper: str = "cosine",
+) -> np.ndarray:
+    """
+    Apply an isotropic band limit to an array in Fourier space.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to band limit. The last three dimensions are taken as the
+        spatial dimensions; any preceding dimensions (e.g. vector
+        components) are treated as batch dimensions.
+    cell : ase.cell.Cell
+        ASE `Cell` object defining the region of space the array spans.
+    g_max : float or None
+        Band limit as a spatial frequency in reciprocal Ångström (cycles
+        per Ångström, *not* angular frequency), consistent with abTEM's
+        reciprocal-space convention. `None` (or a non-finite value) returns
+        the array unchanged.
+    taper : {"cosine", "gaussian", "sharp"}
+        Shape of the filter's roll-off. A ``"sharp"`` (brick-wall) cutoff
+        is a sinc-like kernel in real space and therefore rings around
+        localized features -- visible as concentric fringes -- so it is not
+        the default despite being the most literal reading of "band
+        limit". ``"cosine"`` (default) applies a raised-cosine (Hann)
+        roll-off over ``g_max / 2 <= |g| <= g_max``, which suppresses that
+        ringing while still removing all content beyond ``g_max``
+        exactly. ``"gaussian"`` applies ``exp(-(|g| / g_max)**2)``, which
+        rings least of all but decays smoothly rather than reaching zero,
+        so a little content beyond ``g_max`` survives.
+
+    Returns
+    -------
+    band_limited : np.ndarray
+        The band-limited array, with the same shape and dtype kind as the
+        input.
+    """
+    if g_max is None or not np.isfinite(g_max):
+        return array
+
+    kx, ky, kz = _spatial_frequencies(array.shape[-3:], cell)
+    k = np.sqrt(kx**2 + ky**2 + kz**2)
+
+    if taper == "sharp":
+        window = (k <= g_max).astype(array.real.dtype)
+    elif taper == "gaussian":
+        window = np.exp(-((k / g_max) ** 2))
+    elif taper == "cosine":
+        g_inner = g_max / 2
+        window = np.clip((k - g_inner) / (g_max - g_inner), 0.0, 1.0)
+        window = 0.5 * (1 + np.cos(np.pi * window))
+        window[k >= g_max] = 0.0
+    else:
+        raise ValueError(
+            f"taper must be 'cosine', 'gaussian' or 'sharp', got {taper!r}"
+        )
+
+    array_hat = np.fft.fftn(array, axes=(-3, -2, -1))
+    array_hat *= window
+
+    band_limited = np.fft.ifftn(array_hat, axes=(-3, -2, -1))
+
+    if not np.iscomplexobj(array):
+        band_limited = band_limited.real
+
+    return band_limited
 
 
 def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
