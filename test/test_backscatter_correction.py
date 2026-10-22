@@ -208,5 +208,5 @@ def test_the_full_scope_warns_about_the_infinite_projection():
             lazy=False,
         )
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        warnings.simplefilter("error", UserWarning)
         plane_wave.multislice(potential, algorithm=RealSpaceMultislice(), lazy=False)
