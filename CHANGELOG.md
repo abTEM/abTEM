@@ -128,7 +128,8 @@ Dependencies:
 Bugfixes:
 
 - `RealSpaceMultislice(expansion_scope="full")` no longer subtracts the backscattered wave of each slice from the
-  forward wave (Eq. 10 of Micron 190 (2025) 103778) unless `backscatter_correction=True` is given.
+  forward wave (Eq. 10 of Micron 190 (2025) 103778), at any series `order`, unless `backscatter_correction=True` is
+  given. `expansion_scope="propagator"` never had the correction.
     - **Behaviour change:** the correction used to be always applied. The authors validated it at 30 and 200 keV
       with a converged series. Against an exact two-way solution of graphene it makes the strong beams less
       accurate between 1 and 5 keV (16 % against 7 % at 1 keV and order 1, 5.5 % against 1.2 % at 2 keV and order 2)

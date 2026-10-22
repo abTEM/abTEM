@@ -759,9 +759,10 @@ class RealSpaceMultislice:
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
     backscatter_correction : bool, optional
-        Only for ``expansion_scope="full"``. If True, the backscattered component of
-        each slice, calculated from the next slice, is subtracted from the forward
-        wave (Eq. 10 in Micron 190 (2025) 103778, as published). The default is
+        Only for ``expansion_scope="full"``, at every ``order`` (``"propagator"`` has no
+        such correction). If True, the backscattered component of each slice,
+        calculated from the next slice, is subtracted from the forward wave (Eq. 10 in
+        Micron 190 (2025) 103778, as published). The default is
         False: the authors validated the correction at 30 and 200 keV with a converged
         series, and against an exact two-way solution of graphene it makes the strong
         beams less accurate between 1 and 5 keV (for example 16 % against 7 % at 1 keV
