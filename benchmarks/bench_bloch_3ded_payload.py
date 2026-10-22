@@ -27,6 +27,12 @@ Usage
     --tilt-range MIN MAX     [deg] (default 0 4, or the config's)
     --axis DEG               azimuth of the tilt axis [deg] (default 0, or the config's)
     --gpts N                 grid points per side of the exit waves (default 256)
+    --split                  split the diffraction-pattern stage into the structure
+                             matrix, the eigendecomposition (`eigh`) and the rest
+                             (synchronising the device around each, so use it for
+                             one diagnostic run, not for the totals; the times are sums over
+                             the threads that run the tilts, so with several tilts they can
+                             exceed the wall time: read them as proportions)
     --old                    also time the old synthesis, whose (beams x gpts**2 x
                              thicknesses x 16 bytes) basis must fit
     --g-max, --sg-max, --energy, --thermal-sigma, --centering, --precision,
@@ -60,6 +66,7 @@ parser.add_argument("--tilt-range", type=float, nargs=2)
 parser.add_argument("--axis", type=float)
 parser.add_argument("--gpts", type=int, default=256)
 parser.add_argument("--old", action="store_true")
+parser.add_argument("--split", action="store_true")
 parser.add_argument("--g-max", type=float)
 parser.add_argument("--sg-max", type=float)
 parser.add_argument("--energy", type=float)
@@ -180,6 +187,45 @@ def peak_gpu_memory(record):
     record["peak_mb"] = round(hook.peak / 1e6)
 
 
+@contextmanager
+def split_timers(record):
+    """Record the time spent in the structure matrix and in `eigh` over the block, in
+    record['split'] [s], as sums over every call; the rest is the total minus these."""
+    import numpy as np_module
+
+    if device == "gpu":
+        import cupy as xp_module
+    elif device == "cpu":
+        xp_module = np_module
+    else:
+        yield
+        return
+
+    totals = {"structure matrix": 0.0, "eigh": 0.0}
+
+    def timed(name, function):
+        def wrapper(*args, **kwargs):
+            synchronize()
+            start = time.perf_counter()
+            result = function(*args, **kwargs)
+            synchronize()
+            totals[name] += time.perf_counter() - start
+            return result
+
+        return wrapper
+
+    structure_matrix = dynamical.calculate_structure_matrix
+    eigh = xp_module.linalg.eigh
+    dynamical.calculate_structure_matrix = timed("structure matrix", structure_matrix)
+    xp_module.linalg.eigh = timed("eigh", eigh)
+    try:
+        yield
+    finally:
+        dynamical.calculate_structure_matrix = structure_matrix
+        xp_module.linalg.eigh = eigh
+        record["split"] = {name: round(value, 3) for name, value in totals.items()}
+
+
 def stage(name, function, results, warm_up=False):
     """Time `function`, recording failures (out of memory) instead of raising."""
     record = {}
@@ -262,6 +308,18 @@ if bloch_waves is not None:
         lambda: rotated.calculate_diffraction_patterns(thicknesses).compute(),
         stages,
     )
+    if args.split:
+        # a second, instrumented run: the timers synchronise the device, which the
+        # run above must not pay for
+        split_record = {}
+        with split_timers(split_record):
+            stage(
+                "diffraction patterns (split)",
+                lambda: rotated.calculate_diffraction_patterns(thicknesses).compute(),
+                stages,
+            )
+        stages["diffraction patterns (split)"].update(split_record)
+        print(f"  split: {split_record.get('split')}", flush=True)
 
     for label, function in (
         (("old", old_plane_wave_expansion) if with_old else (None, None)),
