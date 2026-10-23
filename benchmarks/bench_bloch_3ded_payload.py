@@ -191,13 +191,7 @@ def peak_gpu_memory(record):
 def split_timers(record):
     """Record the time spent in the structure matrix and in `eigh` over the block, in
     record['split'] [s], as sums over every call; the rest is the total minus these."""
-    import numpy as np_module
-
-    if device == "gpu":
-        import cupy as xp_module
-    elif device == "cpu":
-        xp_module = np_module
-    else:
+    if device not in ("cpu", "gpu"):
         yield
         return
 
@@ -214,15 +208,17 @@ def split_timers(record):
 
         return wrapper
 
+    # dynamical._eigh, not xp.linalg.eigh: the eigendecomposition calls the private
+    # in-place solvers of CuPy and SciPy where it can
     structure_matrix = dynamical.calculate_structure_matrix
-    eigh = xp_module.linalg.eigh
+    eigh = dynamical._eigh
     dynamical.calculate_structure_matrix = timed("structure matrix", structure_matrix)
-    xp_module.linalg.eigh = timed("eigh", eigh)
+    dynamical._eigh = timed("eigh", eigh)
     try:
         yield
     finally:
         dynamical.calculate_structure_matrix = structure_matrix
-        xp_module.linalg.eigh = eigh
+        dynamical._eigh = eigh
         record["split"] = {name: round(value, 3) for name, value in totals.items()}
 
 
