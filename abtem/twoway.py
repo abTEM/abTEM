@@ -29,6 +29,7 @@ import numpy as np
 import scipy.linalg as sla
 
 from abtem.core import config
+from abtem.core.axes import EnergyAxis
 from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.potentials.iam import PotentialArray
@@ -505,8 +506,9 @@ class TwoWaySolver:
     almost all of it through evanescent beams) and change the transmitted beams by tens
     of percent. The cost grows with the cube of the number of beams: use it for the
     small cells of crystals and 2D materials. A plane wave of any direction is
-    supported, with ensembles of tilts (the directions are solved one after the other),
-    on the CPU and on CUDA devices, in single or double precision, without absorption.
+    supported, with ensembles of tilts and energies (the members are solved one after
+    the other), on the CPU and on CUDA devices, in single or double precision, without
+    absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -565,11 +567,12 @@ class TwoWaySolver:
         Parameters
         ----------
         plane_wave : PlaneWave
-            The incident wave. Its energy and its tilt, or its ensemble of tilts, are
-            used, and its grid is matched to the potential. A tilted wave travels
-            along (tan x, tan y, 1) and, as in multislice, is stored without the carrier
-            of its direction: the beam g of the result is the plane wave g + k_t, the
-            incident one is g = 0, and the result carries the tilt in its metadata.
+            The incident wave. Its energy and its tilt, or its ensembles of energies and
+            of tilts, are used, and its grid is matched to the potential. A tilted wave
+            travels along (tan x, tan y, 1) and, as in multislice, is stored without the
+            carrier of its direction: the beam g of the result is the plane wave g +
+            k_t, the incident one is g = 0, and the result carries the tilt in its
+            metadata.
         potential : BasePotential
             The slab. A :class:`.Potential` or a built :class:`.PotentialArray`, without
             an ensemble axis.
@@ -586,18 +589,19 @@ class TwoWaySolver:
         from abtem.waves import Waves
 
         waves = plane_wave.match_grid(potential).build(lazy=False)
-        if any(not hasattr(axis, "tilt") for axis in waves.ensemble_axes_metadata):
+        if any(
+            not (hasattr(axis, "tilt") or isinstance(axis, EnergyAxis))
+            for axis in waves.ensemble_axes_metadata
+        ):
             raise NotImplementedError(
-                "TwoWaySolver supports ensembles of tilts only, not of other "
-                "parameters."
+                "TwoWaySolver supports ensembles of tilts and energies only, not of "
+                "other parameters."
             )
         if potential.ensemble_shape:
             raise NotImplementedError(
                 "TwoWaySolver does not support ensemble potentials."
             )
 
-        energy = waves._valid_energy
-        wavelength = energy2wavelength(energy)
         built = (
             potential
             if isinstance(potential, PotentialArray)
@@ -645,10 +649,6 @@ class TwoWaySolver:
                     self.symmetry_tolerance,
                 )
 
-        wave_number = 2 * np.pi / wavelength
-        sigma = energy2sigma(energy)
-        _check_step(h, wave_number, self.cutoff)
-
         # the potential's Fourier coefficients, with the origin moved onto the symmetry
         # axis
         fx = np.fft.fftfreq(nx, sampling[0])[:, None]
@@ -659,9 +659,14 @@ class TwoWaySolver:
             complex_dtype
         )
 
-        def solve(tilt):
+        def solve(tilt, energy):
             """The transmitted and the reflected wave [arrays of the grid, on the host]
-            of the wave of this tilt [mrad]."""
+            of the wave of this tilt [mrad] and energy [eV]."""
+            wavelength = energy2wavelength(energy)
+            wave_number = 2 * np.pi / wavelength
+            sigma = energy2sigma(energy)
+            _check_step(h, wave_number, self.cutoff)
+
             # The incident wave travels along (tan x, tan y, 1), and is stored without
             # its carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored
             # beam g is the plane wave g + k_t, and the incident one is g = 0.
@@ -751,19 +756,33 @@ class TwoWaySolver:
             return to_array(transmitted), to_array(reflected)
 
         # the total tilt of every member of the ensemble: the base tilt plus the value
-        # of each tilt axis, broadcast over the ensemble axes in their order
+        # of each tilt axis, and its energy: that of the energy axis (or the energy of
+        # the wave), broadcast over the ensemble axes in their order
         axes = waves.ensemble_axes_metadata
         ensemble_shape = waves.shape[:-2]
         tilts = np.broadcast_to(
             np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
         ).copy()
+        energies = np.full(ensemble_shape, np.nan)
+        if waves.energy is not None:
+            energies[...] = waves.energy
         for i, axis in enumerate(axes):
-            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
-            shape = [1] * len(axes) + [2]
-            shape[i] = len(values)
-            tilts += values.reshape(shape)
+            if isinstance(axis, EnergyAxis):
+                shape = [1] * len(axes)
+                shape[i] = len(axis.values)
+                energies = np.broadcast_to(
+                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
+                ).copy()
+            else:
+                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+                shape = [1] * len(axes) + [2]
+                shape[i] = len(values)
+                tilts += values.reshape(shape)
 
-        results = [solve(tilt) for tilt in tilts.reshape(-1, 2)]
+        results = [
+            solve(tilt, energy)
+            for tilt, energy in zip(tilts.reshape(-1, 2), energies.ravel())
+        ]
         module = get_array_module(waves.device)
 
         def to_waves(index):
