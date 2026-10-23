@@ -386,19 +386,46 @@ def _numerov_wave_numbers(kz2, h):
     return phase / h
 
 
-def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex128):
-    """Solve the Numerov equations for waves incident from below (z < 0) on the slab.
+def _solve_blocks(
+    coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex128, source=None
+):
+    """Solve the Numerov equations for waves incident from below (z < 0) on the slab,
+    and for sources inside it.
 
     ``coupling(n)`` is the coupling matrix of slice n (an array of ``xp``), ``kz2`` the
     squared longitudinal wave numbers of the beams in vacuum, ``kappa`` the wave numbers
     of the Numerov recurrence in vacuum (:func:`_numerov_wave_numbers`), ``incident``
-    the amplitudes (n_beams,) of the incident beams at z = 0, all of them on the host.
-    Returns the amplitudes phi (nz, n_beams), of the complex type ``dtype`` and the
-    array module ``xp``, at the slice centres z_n = (n + 1/2) h, in the block-Thomas
-    solve with checkpointing.
+    the amplitudes of the incident beams at z = 0 on the host: (n_beams,), or
+    (n_beams, m) for m right-hand sides that share the factorisation of the blocks.
+    ``source`` is the source S_n of the equation phi'' + (kz2 + U) phi = -S at the slice
+    centres: an array (nz, n_beams, m), or a function n -> (n_beams, m) that is called
+    once for every n in order (so that the sources need not be stored); a one-column
+    ``incident`` is shared by all of its m columns. Returns the amplitudes phi (nz,
+    n_beams), or (nz, n_beams, m) with a source or several columns, of the complex type
+    ``dtype`` and the array module ``xp``, at the slice centres z_n = (n + 1/2) h, in
+    the block-Thomas solve with checkpointing.
     """
     lu_factor, lu_solve = _linear_algebra(xp)
     nb = len(kz2)
+    incident = np.asarray(incident)
+    squeeze = incident.ndim == 1 and source is None
+    if incident.ndim == 1:
+        incident = incident[:, None]
+    get_source = (lambda n: source[n]) if source is not None and not callable(
+        source
+    ) else source
+    columns = incident.shape[1]
+    first_source = None
+    if get_source is not None:
+        first_source = xp.asarray(get_source(0)).astype(dtype)
+        if first_source.ndim != 2 or first_source.shape[0] != nb:
+            raise ValueError("the source must have the shape (nz, n_beams, m)")
+        if columns == 1:
+            columns = first_source.shape[1]
+        elif first_source.shape[1] != columns:
+            raise ValueError("the source and the incident amplitudes differ in m")
+    incident = np.broadcast_to(incident, (nb, columns))
+
     identity = xp.eye(nb, dtype=dtype)
     c = h**2 / 12
     outgoing = xp.asarray((np.exp(1j * kappa * h)).astype(dtype))
@@ -408,13 +435,34 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex
         return base if n < 0 or n >= nz else base + coupling(n)
 
     vacuum_boundary = identity + c * operator(-1)
-    rhs = xp.zeros((nz, nb), dtype)
     z0 = h / 2
-    incident_at_first = xp.asarray((incident * np.exp(1j * kappa * z0)).astype(dtype))
+    incident_at_first = xp.asarray(
+        (incident * np.exp(1j * kappa * z0)[:, None]).astype(dtype)
+    )
     entrance = xp.asarray(
         (np.exp(-1j * kappa * h) - np.exp(1j * kappa * h)).astype(dtype)
     )
-    rhs[0] = -vacuum_boundary @ (incident_at_first * entrance)
+    cached = {0: first_source}
+
+    def source_at(n):
+        """The source at slice n, zero outside the slab."""
+        if n < 0 or n >= nz:
+            return 0.0
+        if n not in cached:
+            cached[n] = xp.asarray(get_source(n)).astype(dtype)
+        return cached[n]
+
+    def rhs(n):
+        """The right-hand side of slice n: the sources of its neighbours (the
+        Numerov average) and, at the entrance, the incident beams."""
+        right = xp.zeros((nb, columns), dtype)
+        if get_source is not None:
+            neighbours = source_at(n - 1) + 10 * source_at(n) + source_at(n + 1)
+            right = right - c * neighbours
+            cached.pop(n - 1, None)
+        if n == 0:
+            right = right - vacuum_boundary @ (incident_at_first * entrance[:, None])
+        return right
 
     def blocks(n):
         diagonal = -2 * (identity - 5 * c * operator(n))
@@ -443,24 +491,25 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex
         else int(np.ceil(np.sqrt(nz)))
     )
 
-    forward = xp.empty((nz, nb), dtype)
+    # the forward sweep, whose result is overwritten by the back substitution
+    phi = xp.empty((nz, nb, columns), dtype)
     stored, checkpoints = {}, {}
     previous = None
     for n in range(nz):
         factor, lower, eliminated = eliminate(n, previous)
-        right = rhs[n] - lower @ forward[n - 1] if n > 0 else rhs[n]
-        forward[n] = lu_solve(factor, right)
+        right = rhs(n)
+        if n > 0:
+            right = right - lower @ phi[n - 1]
+        phi[n] = lu_solve(factor, right)
         if stride == nz:
             stored[n] = eliminated
         elif n % stride == 0:
             checkpoints[n] = eliminated
         previous = eliminated
 
-    phi = xp.empty((nz, nb), dtype)
-    phi[-1] = forward[-1]
     if stride == nz:
         for n in range(nz - 2, -1, -1):
-            phi[n] = forward[n] - stored[n] @ phi[n + 1]
+            phi[n] -= stored[n] @ phi[n + 1]
     else:
         for start in sorted(checkpoints, reverse=True):
             end = min(start + stride, nz - 1)
@@ -468,25 +517,117 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex
             for n in range(start + 1, end):
                 segment[n] = eliminate(n, segment[n - 1])[2]
             for n in range(end - 1, start - 1, -1):
-                phi[n] = forward[n] - segment[n] @ phi[n + 1]
-    return phi
+                phi[n] -= segment[n] @ phi[n + 1]
+    return phi[..., 0] if squeeze else phi
 
 
-def _check_member(h, sampling, cutoff, tilt, energy):
-    """Raise for a member of the ensemble (tilt [mrad], energy [eV]) that the slices or
-    the sampling of the potential cannot resolve; it is cheap, so the solver runs it
-    for every member before it builds the potential."""
-    wavelength = energy2wavelength(energy)
-    _check_step(h, 2 * np.pi / wavelength, cutoff)
+def _tilt_to_offset(tilt, energy):
+    """The in-plane wave vector k_t [1/Å] of a wave of this tilt [mrad] and energy [eV]
+    that travels along (tan x, tan y, 1)."""
     tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
-    in_plane = tangent / (wavelength * np.sqrt(1.0 + np.sum(tangent**2)))
-    if 1 / (2 * max(sampling)) < 2 * cutoff + np.hypot(*in_plane):
+    return tangent / (energy2wavelength(energy) * np.sqrt(1.0 + np.sum(tangent**2)))
+
+
+def _fourier_coefficients(projected, h, sampling, origin, xp, dtype):
+    """The Fourier coefficients (nz, nx, ny) of the potential per unit length, the
+    projected potential over the slice thickness h, with the origin of the real space
+    moved to ``origin`` [Å] (the symmetry axis)."""
+    nz, nx, ny = projected.shape
+    fx = np.fft.fftfreq(nx, sampling[0])[:, None]
+    fy = np.fft.fftfreq(ny, sampling[1])[None, :]
+    shift = np.exp(2j * np.pi * (fx * origin[0] + fy * origin[1]))
+    fourier = xp.fft.fft2(projected / h, axes=(1, 2)) / (nx * ny)
+    return (fourier * xp.asarray(shift.astype(dtype))[None]).astype(dtype)
+
+
+def _check_offset(h, sampling, cutoff, offset, energy):
+    """Raise for an energy [eV] and an in-plane offset [1/Å] that the slices or the
+    sampling of the potential cannot resolve; it is cheap, so the solver runs it
+    before it builds the potential."""
+    _check_step(h, 2 * np.pi / energy2wavelength(energy), cutoff)
+    if 1 / (2 * max(sampling)) < 2 * cutoff + np.hypot(*offset):
         raise ValueError(
             f"The potential is sampled too coarsely for cutoff={cutoff}: "
             f"use a sampling of at most "
-            f"{1 / (4 * cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
+            f"{1 / (4 * cutoff + 2 * np.hypot(*offset)):.4f} Å or a "
             "lower cutoff."
         )
+
+
+def _ensemble_members(waves):
+    """The total tilt [mrad] (..., 2) of every member of the ensemble of waves, the base
+    tilt plus the value of each tilt axis, and its energy [eV] (...): that of the energy
+    axis (or the energy of the waves), broadcast over the ensemble axes in their
+    order."""
+    axes = waves.ensemble_axes_metadata
+    ensemble_shape = waves.shape[:-2]
+    tilts = np.broadcast_to(
+        np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
+    ).copy()
+    energies = np.full(ensemble_shape, np.nan)
+    if waves.energy is not None:
+        energies[...] = waves.energy
+    for i, axis in enumerate(axes):
+        if isinstance(axis, EnergyAxis):
+            shape = [1] * len(axes)
+            shape[i] = len(axis.values)
+            energies = np.broadcast_to(
+                np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
+            ).copy()
+        else:
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            shape = [1] * len(axes) + [2]
+            shape[i] = len(values)
+            tilts += values.reshape(shape)
+    return tilts, energies
+
+
+def beam_flux(waves: Waves) -> np.ndarray:
+    """The flux of every beam of the waves of :meth:`TwoWaySolver.scatter`, per unit
+    flux of the incident beam: ``|a_g|^2 kz_g / kz_incident``, with the amplitude
+    ``a_g`` of the beam and its longitudinal wave number ``kz_g``, zero for evanescent
+    beams.
+
+    The squared amplitude of a beam is not its flux: the beams of a wave that leaves the
+    slab at a large angle carry less than their intensity (kz / k of it), and the
+    evanescent ones none. The flux is what the solver conserves: the sums of the
+    transmitted and the reflected flux add up to 1 without absorption. Use it, not
+    ``|a_g|^2``, for the intensity of the beams that are reflected and transmitted.
+
+    Parameters
+    ----------
+    waves : Waves
+        The transmitted or the reflected waves of :meth:`TwoWaySolver.scatter`, with
+        their ensembles of tilts and energies.
+
+    Returns
+    -------
+    ndarray
+        The flux of every beam, (..., nx, ny), indexed like the FFT of the waves (the
+        beam g of the stored wave is the plane wave g + k_t of a tilted incident wave).
+    """
+    array = np.asarray(asnumpy(waves.array))
+    nx, ny = array.shape[-2:]
+    sampling = tuple(waves._valid_sampling)
+    tilts, energies = _ensemble_members(waves)
+    amplitudes = np.fft.fft2(array) / (nx * ny)
+    flux = np.empty(array.shape, dtype=np.float64)
+    for index in np.ndindex(*array.shape[:-2]):
+        wavelength = energy2wavelength(energies[index])
+        k_t = _tilt_to_offset(tilts[index], energies[index])
+        tangent = np.tan(np.asarray(tilts[index], dtype=float) / 1e3)
+        incident_kz = 2 * np.pi / (wavelength * np.sqrt(1.0 + np.sum(tangent**2)))
+        qx = np.fft.fftfreq(nx, sampling[0])[:, None] + k_t[0]
+        qy = np.fft.fftfreq(ny, sampling[1])[None, :] + k_t[1]
+        kz2 = (2 * np.pi / wavelength) ** 2 - 4 * np.pi**2 * (qx**2 + qy**2)
+        weights = np.sqrt(np.maximum(kz2, 0.0)) / incident_kz
+        flux[index] = np.abs(amplitudes[index]) ** 2 * weights
+    return flux
+
+
+def _check_member(h, sampling, cutoff, tilt, energy):
+    """:func:`_check_offset` for a member of an ensemble (tilt [mrad], energy [eV])."""
+    _check_offset(h, sampling, cutoff, _tilt_to_offset(tilt, energy), energy)
 
 
 def _check_step(h, wave_number, cutoff):
@@ -511,6 +652,123 @@ def _check_step(h, wave_number, cutoff):
             "thickness.",
             stacklevel=3,
         )
+
+
+@dataclass(frozen=True)
+class Beams:
+    """The beams of the solver for one energy and in-plane offset: the plane waves
+    ``exp(2 pi i (q + g) . r)`` of the reciprocal lattice of the grid with
+    ``|q + g| < cutoff``, evanescent ones included.
+
+    Attributes
+    ----------
+    indices : ndarray of int, shape (n, 2)
+        Indices of every beam in the (FFT-ordered) grid of the potential.
+    qx, qy : ndarray, shape (n,)
+        In-plane wave vector q + g of every beam [1/Å].
+    kz : ndarray of complex, shape (n,)
+        Longitudinal wave number [rad/Å] of every beam in vacuum, ``sqrt(k^2 - 4 pi^2
+        |q + g|^2)`` with a positive imaginary part for the evanescent beams.
+    wave_number : float
+        The wave number k = 2 pi / wavelength of the electron [rad/Å].
+    energy : float
+        The energy of the electron [eV].
+    gpts : tuple of int
+        The grid of the potential.
+    """
+
+    indices: np.ndarray
+    qx: np.ndarray
+    qy: np.ndarray
+    kz: np.ndarray
+    wave_number: float
+    energy: float
+    gpts: tuple[int, int]
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    @property
+    def propagating(self) -> np.ndarray:
+        """Whether each beam propagates in vacuum (it is not evanescent)."""
+        return self.kz.imag == 0.0
+
+    def flux_weights(self, reference_energy: float | None = None) -> np.ndarray:
+        """The flux of every beam per unit squared amplitude, ``kz / k``: zero for the
+        evanescent beams. ``k`` is the wave number of the electron of
+        ``reference_energy`` [eV], by default that of the beams: pass the energy of the
+        incident electron when the beams belong to an electron that has lost energy,
+        to measure their flux per unit incident flux."""
+        reference = self.wave_number
+        if reference_energy is not None:
+            reference = 2 * np.pi / energy2wavelength(reference_energy)
+        return np.where(self.propagating, self.kz.real, 0.0) / reference
+
+    def index(self, i: int, j: int) -> int:
+        """Position in the beams of the one with the grid index (i, j); the beam of the
+        wave itself (g = 0) is ``index(0, 0)``."""
+        match = np.flatnonzero(
+            (self.indices[:, 0] == i % self.gpts[0])
+            & (self.indices[:, 1] == j % self.gpts[1])
+        )
+        if len(match) == 0:
+            raise ValueError(f"the beam ({i}, {j}) is outside the cutoff")
+        return int(match[0])
+
+    def to_grid(self, amplitudes: np.ndarray) -> np.ndarray:
+        """Beam amplitudes (..., n) as an array (..., nx, ny) of the grid of the
+        potential, zero outside the beams."""
+        amplitudes = np.asarray(amplitudes)
+        grid = np.zeros(amplitudes.shape[:-1] + tuple(self.gpts), amplitudes.dtype)
+        grid[..., self.indices[:, 0], self.indices[:, 1]] = amplitudes
+        return grid
+
+    def from_grid(self, array: np.ndarray) -> np.ndarray:
+        """The amplitudes (..., n) of the beams in an array (..., nx, ny)."""
+        return np.asarray(array)[..., self.indices[:, 0], self.indices[:, 1]]
+
+
+@dataclass(frozen=True)
+class BeamSolution:
+    """The solution of :meth:`TwoWaySolver.solve`, per beam and per column ``m`` of the
+    incident amplitudes or the sources.
+
+    Attributes
+    ----------
+    beams : Beams
+        The beams of the amplitudes.
+    z : ndarray, shape (nz,)
+        The slice centres [Å] from the entrance plane of the slab, z = 0.
+    phi : ndarray of complex, shape (nz, n, m), optional
+        The amplitude of every beam at every slice centre (the interior wave), when it
+        was asked for; ``phi[n, g, i]`` is the coefficient of the beam g, the plane
+        wave ``exp(2 pi i (q + g) . r)``, in column i at ``z[n]``.
+    reflected : ndarray of complex, shape (n, m)
+        The wave leaving the slab on the entrance side, extrapolated to z = 0 in vacuum.
+    transmitted : ndarray of complex, shape (n, m)
+        The wave leaving the slab on the far side, extrapolated to its exit plane
+        z = nz h. In contrast to :meth:`TwoWaySolver.scatter`, neither carries a
+        vacuum phase that has been removed: the beams have their own phases from z = 0.
+    """
+
+    beams: Beams
+    z: np.ndarray
+    phi: np.ndarray | None
+    reflected: np.ndarray
+    transmitted: np.ndarray
+
+    def reflected_flux(self, reference_energy: float | None = None) -> np.ndarray:
+        """The flux (n, m) of the reflected beams, ``|amplitude|^2 kz / k``, zero for
+        the evanescent beams; see :meth:`Beams.flux_weights` for the reference. The
+        squared amplitudes are not the intensity that leaves the slab: at large angles
+        they overestimate it."""
+        weights = self.beams.flux_weights(reference_energy)
+        return weights[:, None] * np.abs(self.reflected) ** 2
+
+    def transmitted_flux(self, reference_energy: float | None = None) -> np.ndarray:
+        """The flux (n, m) of the transmitted beams, as :meth:`reflected_flux`."""
+        weights = self.beams.flux_weights(reference_energy)
+        return weights[:, None] * np.abs(self.transmitted) ** 2
 
 
 @dataclass(frozen=True)
@@ -678,6 +936,208 @@ class TwoWaySolver:
                 f"got {self.precision!r}"
             )
 
+    def _prepare(self, potential, absorptive_potential, thicknesses):
+        """The array module, the complex type and the projected potential (nz, nx, ny)
+        of the solve, complex with the absorption (``absorption`` and the
+        ``absorptive_potential``) as its imaginary part."""
+        built = (
+            potential
+            if isinstance(potential, PotentialArray)
+            else potential.build(lazy=False)
+        )
+        device = built.device
+        if device == "mps":
+            raise NotImplementedError(
+                "TwoWaySolver does not run on Metal (no complex linear algebra); use "
+                "the CPU or a CUDA device."
+            )
+        xp = get_array_module(device)
+        precision = self.precision or config.get("precision")
+        real_dtype = np.float32 if precision == "float32" else np.float64
+        complex_dtype = np.complex64 if precision == "float32" else np.complex128
+        projected = xp.asarray(built.array, dtype=real_dtype)
+        imaginary = self.absorption * projected
+        if absorptive_potential is not None:
+            absorbing = (
+                absorptive_potential
+                if isinstance(absorptive_potential, PotentialArray)
+                else absorptive_potential.build(lazy=False)
+            )
+            if absorbing.array.shape != projected.shape or not np.allclose(
+                absorbing.slice_thickness, thicknesses
+            ):
+                raise ValueError(
+                    "the absorptive potential must have the grid and the slices of the "
+                    "potential"
+                )
+            absorbing_array = xp.asarray(absorbing.array, dtype=real_dtype)
+            if absorbing_array.min() < -1e-6 * max(float(absorbing_array.max()), 1e-30):
+                raise ValueError("the absorptive potential must not be negative")
+            imaginary = imaginary + absorbing_array
+        if self.absorption or absorptive_potential is not None:
+            projected = projected + 1j * imaginary
+        return xp, complex_dtype, projected
+
+    def beams(
+        self,
+        potential: BasePotential,
+        energy: float,
+        offset: tuple[float, float] = (0.0, 0.0),
+    ) -> Beams:
+        """The beams of :meth:`solve` for a potential, an energy [eV] and an in-plane
+        offset [1/Å] (the wave vector of the beam g = 0), in the order of the
+        amplitudes of its ``incident`` and ``source``. The potential is not built."""
+        return self._beams(potential, energy, offset)[0]
+
+    def _beams(self, potential, energy, offset):
+        """The :class:`Beams` and the basis of the full set of them."""
+        gpts = tuple(int(n) for n in potential.gpts)
+        sampling = tuple(float(x) for x in potential.sampling)
+        offset = tuple(float(x) for x in offset)
+        basis = _BeamBasis(
+            gpts,
+            sampling,
+            self.cutoff,
+            (0.0, 0.0),
+            [("rot0", np.eye(2), np.zeros(2))],
+            [],
+            shift=offset,
+        )
+        wave_number = 2 * np.pi / energy2wavelength(energy)
+        kz2 = wave_number**2 - 4 * np.pi**2 * (basis.qx**2 + basis.qy**2)
+        beams = Beams(
+            indices=basis.indices,
+            qx=basis.qx,
+            qy=basis.qy,
+            kz=np.sqrt(kz2.astype(np.complex128)),
+            wave_number=float(wave_number),
+            energy=float(energy),
+            gpts=gpts,
+        )
+        return beams, basis, kz2
+
+    def solve(
+        self,
+        potential: BasePotential,
+        energy: float,
+        offset: tuple[float, float] = (0.0, 0.0),
+        incident: np.ndarray | None = None,
+        source=None,
+        absorptive_potential: BasePotential | None = None,
+        interior: bool = False,
+    ) -> BeamSolution:
+        """
+        Solve the scattering by the slab for any beams incident on it and any sources
+        in it, at one energy and in-plane offset, in the full beam basis.
+
+        This is the lower-level counterpart of :meth:`scatter`. It solves
+        ``phi'' + (k_z^2 + U) phi = -S`` for the amplitudes of the beams, ``U = 2 k
+        sigma V``, with outgoing waves in the vacuum on both sides, for ``m`` right-hand
+        sides at once with one factorisation of the blocks. A source has no incident
+        direction and breaks the symmetries of the structure, so the basis is never
+        reduced by symmetry (``symmetry`` is ignored), and the offset is any in-plane
+        wave vector, not that of a tilt.
+
+        Parameters
+        ----------
+        potential : BasePotential
+            The slab, as for :meth:`scatter`, with slices of equal thickness.
+        energy : float
+            Energy of the electron [eV]. For an ensemble of energies call this for each
+            energy.
+        offset : tuple of float, optional
+            In-plane wave vector q [1/Å] of the beam g = 0: the beam g is the plane wave
+            ``exp(2 pi i (q + g) . r)`` (default 0).
+        incident : ndarray, optional
+            Amplitudes at z = 0 of the beams incident from z < 0, evanescent ones
+            included, (n,) or (n, m), in the order of :meth:`beams`. A beam with an
+            imaginary ``kz`` decays from the plane z = 0 into the slab. By default, the
+            beam g = 0 with unit amplitude when there is no ``source``, else none.
+        source : ndarray or callable, optional
+            The source S inside the slab, as the amplitudes of the beams at the slice
+            centres: an array (nz, n, m), or a function of the slice index that returns
+            (n, m) and is called once per slice, in order, which avoids storing all of
+            them. A one-column ``incident`` is shared by all m columns of the sources.
+        absorptive_potential : BasePotential, optional
+            Imaginary part of the potential, as for :meth:`scatter`.
+        interior : bool, optional
+            Keep the amplitudes ``phi`` of every beam at every slice centre (the
+            interior wave) in the result (default False).
+
+        Returns
+        -------
+        BeamSolution
+            The reflected and transmitted amplitudes and, with ``interior``, ``phi``.
+        """
+        thicknesses = np.asarray(potential.slice_thickness, dtype=float)
+        h = float(thicknesses.mean())
+        if not np.allclose(thicknesses, h, rtol=1e-6):
+            raise ValueError("TwoWaySolver needs slices of equal thickness.")
+        if potential.ensemble_shape:
+            raise NotImplementedError(
+                "TwoWaySolver does not support ensemble potentials."
+            )
+        offset = tuple(float(x) for x in offset)
+        sampling = tuple(float(x) for x in potential.sampling)
+        _check_offset(h, sampling, self.cutoff, offset, energy)
+        beams, basis, kz2 = self._beams(potential, energy, offset)
+        nb = len(beams)
+
+        if incident is None:
+            incident = np.zeros(nb, np.complex128)
+            if source is None:
+                incident[beams.index(0, 0)] = 1.0
+        incident = np.asarray(incident, dtype=np.complex128)
+        if incident.shape[0] != nb or incident.ndim not in (1, 2):
+            raise ValueError(
+                f"incident must have the shape ({nb},) or ({nb}, m), got "
+                f"{incident.shape}"
+            )
+
+        xp, complex_dtype, projected = self._prepare(
+            potential, absorptive_potential, thicknesses
+        )
+        nz, nx, ny = projected.shape
+        sigma = energy2sigma(energy)
+        fourier = _fourier_coefficients(
+            projected, h, sampling, (0.0, 0.0), xp, complex_dtype
+        )
+        coupling = basis.coupling_function(fourier, beams.wave_number, sigma, xp)
+        itemsize = np.dtype(complex_dtype).itemsize
+        if nz * nb**2 * itemsize < _memory_budget(xp, _COUPLING_CACHE_BYTES):
+            cache = xp.stack([coupling(n) for n in range(nz)])
+            coupling = lambda n: cache[n]  # noqa: E731
+        kappa = _numerov_wave_numbers(kz2, h)
+        coupling = _with_absorber(
+            coupling, self.absorber, energy, h, nz, nb, xp, complex_dtype
+        )
+        if source is not None and not callable(source):
+            if not hasattr(source, "shape"):
+                source = np.asarray(source)
+            if source.ndim != 3 or source.shape[:2] != (nz, nb):
+                raise ValueError(
+                    f"source must have the shape ({nz}, {nb}, m), got {source.shape}"
+                )
+
+        phi = _solve_blocks(
+            coupling, kz2, kappa, h, nz, incident, xp, complex_dtype, source=source
+        )
+        phi = asnumpy(phi).astype(np.complex128, copy=False)
+        if phi.ndim == 2:
+            phi = phi[..., None]
+        half = np.exp(1j * kappa * h / 2)[:, None]
+        columns = phi.shape[2]
+        shared = np.broadcast_to(
+            incident if incident.ndim == 2 else incident[:, None], (nb, columns)
+        )
+        return BeamSolution(
+            beams=beams,
+            z=(np.arange(nz) + 0.5) * h,
+            phi=phi if interior else None,
+            reflected=(phi[0] - shared * half) * half,
+            transmitted=phi[-1] * half,
+        )
+
     def scatter(
         self,
         plane_wave: PlaneWave,
@@ -711,7 +1171,8 @@ class TwoWaySolver:
             wave leaving on the near side (at the entrance plane), both with the beams
             of the solution and the phase convention of multislice: the vacuum phase
             over the slab's thickness is removed, so an empty slab gives a transmitted
-            wave of 1 and no reflected wave.
+            wave of 1 and no reflected wave. The squared amplitude of a beam is its
+            intensity, not its flux (see :func:`beam_flux`).
         """
         from abtem.waves import Waves
 
@@ -729,29 +1190,8 @@ class TwoWaySolver:
                 "TwoWaySolver does not support ensemble potentials."
             )
 
-        # the total tilt of every member of the ensemble: the base tilt plus the value
-        # of each tilt axis, and its energy: that of the energy axis (or the energy of
-        # the wave), broadcast over the ensemble axes in their order
-        axes = waves.ensemble_axes_metadata
         ensemble_shape = waves.shape[:-2]
-        tilts = np.broadcast_to(
-            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
-        ).copy()
-        energies = np.full(ensemble_shape, np.nan)
-        if waves.energy is not None:
-            energies[...] = waves.energy
-        for i, axis in enumerate(axes):
-            if isinstance(axis, EnergyAxis):
-                shape = [1] * len(axes)
-                shape[i] = len(axis.values)
-                energies = np.broadcast_to(
-                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
-                ).copy()
-            else:
-                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
-                shape = [1] * len(axes) + [2]
-                shape[i] = len(values)
-                tilts += values.reshape(shape)
+        tilts, energies = _ensemble_members(waves)
 
         thicknesses = np.asarray(potential.slice_thickness, dtype=float)
         h = float(thicknesses.mean())
@@ -761,43 +1201,10 @@ class TwoWaySolver:
         for tilt, energy in zip(tilts.reshape(-1, 2), energies.ravel()):
             _check_member(h, sampling, self.cutoff, tilt, energy)
 
-        built = (
-            potential
-            if isinstance(potential, PotentialArray)
-            else potential.build(lazy=False)
+        xp, complex_dtype, projected = self._prepare(
+            potential, absorptive_potential, thicknesses
         )
-        device = built.device
-        if device == "mps":
-            raise NotImplementedError(
-                "TwoWaySolver does not run on Metal (no complex linear algebra); use "
-                "the CPU or a CUDA device."
-            )
-        xp = get_array_module(device)
-        precision = self.precision or config.get("precision")
-        real_dtype = np.float32 if precision == "float32" else np.float64
-        complex_dtype = np.complex64 if precision == "float32" else np.complex128
-        projected = xp.asarray(built.array, dtype=real_dtype)
         nz, nx, ny = projected.shape
-        imaginary = self.absorption * projected
-        if absorptive_potential is not None:
-            absorbing = (
-                absorptive_potential
-                if isinstance(absorptive_potential, PotentialArray)
-                else absorptive_potential.build(lazy=False)
-            )
-            if absorbing.array.shape != projected.shape or not np.allclose(
-                absorbing.slice_thickness, thicknesses
-            ):
-                raise ValueError(
-                    "the absorptive potential must have the grid and the slices of the "
-                    "potential"
-                )
-            absorbing_array = xp.asarray(absorbing.array, dtype=real_dtype)
-            if absorbing_array.min() < -1e-6 * max(float(absorbing_array.max()), 1e-30):
-                raise ValueError("the absorptive potential must not be negative")
-            imaginary = imaginary + absorbing_array
-        if self.absorption or absorptive_potential is not None:
-            projected = projected + 1j * imaginary
 
         origin, all_operations, translations = (
             (0.0, 0.0),
@@ -839,14 +1246,8 @@ class TwoWaySolver:
                     self.symmetry_tolerance,
                 )
 
-        # the potential's Fourier coefficients, with the origin moved onto the symmetry
-        # axis
-        fx = np.fft.fftfreq(nx, sampling[0])[:, None]
-        fy = np.fft.fftfreq(ny, sampling[1])[None, :]
-        shift = np.exp(2j * np.pi * (fx * origin[0] + fy * origin[1]))
-        fourier = xp.fft.fft2(projected / h, axes=(1, 2)) / (nx * ny)
-        fourier = (fourier * xp.asarray(shift.astype(complex_dtype))[None]).astype(
-            complex_dtype
+        fourier = _fourier_coefficients(
+            projected, h, sampling, origin, xp, complex_dtype
         )
 
         def solve(tilt, energy):
@@ -861,7 +1262,7 @@ class TwoWaySolver:
             # beam g is the plane wave g + k_t, and the incident one is g = 0.
             tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
             norm = np.sqrt(1.0 + np.sum(tangent**2))
-            in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
+            in_plane = tuple(_tilt_to_offset(tilt, energy))  # k_t [1/Å]
             incident_kz = 2 * np.pi / (wavelength * norm)
 
             # a tilted wave is invariant under the translations and under the point

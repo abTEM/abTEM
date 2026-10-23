@@ -12,6 +12,8 @@ from abtem.multislice import FourierMultislice
 from abtem.twoway import (
     MeanFreePathAbsorber,
     TwoWaySolver,
+    _tilt_to_offset,
+    beam_flux,
     structure_glides,
     structure_symmetry,
 )
@@ -809,6 +811,265 @@ def test_structure_symmetry_finds_what_spglib_finds_in_a_hexagonal_supercell(lay
     assert len(translations) == number_of_translations
 
 
+# --- the lower-level solve: beams, incident amplitudes, sources, the interior wave ---
+
+
+def empty_slab(thickness=3.0, step=0.02, gpts=(24, 42)):
+    """A slab without potential on the grid of graphene's orthogonal cell."""
+    count = int(round(thickness / step))
+    return abtem.PotentialArray(
+        np.zeros((count,) + gpts), slice_thickness=step, extent=(2.46, 4.2608)
+    )
+
+
+def test_solve_gives_the_beams_of_scatter_for_a_plane_wave():
+    # Oracle: scatter in the full basis. The reflected beams are defined identically;
+    # the transmitted ones differ by a phase of the vacuum that scatter removes, so
+    # their magnitudes are compared. A tilt is the same as its in-plane offset.
+    potential = coarse_graphene()
+    solver = TwoWaySolver(cutoff=1.5, symmetry=False)
+    for tilt in [(0.0, 0.0), (60.0, -20.0)]:
+        with abtem.config.set({"precision": "float64"}):
+            transmitted, reflected = solver.scatter(
+                abtem.PlaneWave(energy=COARSE_ENERGY, tilt=tilt), potential
+            )
+            solution = solver.solve(
+                potential, COARSE_ENERGY, offset=_tilt_to_offset(tilt, COARSE_ENERGY)
+            )
+        beams = solution.beams
+        np.testing.assert_allclose(
+            solution.reflected[:, 0],
+            beams.from_grid(beam_amplitudes(reflected)),
+            atol=1e-9,
+        )
+        np.testing.assert_allclose(
+            np.abs(solution.transmitted[:, 0]),
+            np.abs(beams.from_grid(beam_amplitudes(transmitted))),
+            atol=1e-9,
+        )
+        assert solution.phi is None
+        assert beams.propagating[beams.index(0, 0)]
+
+
+def test_solve_follows_a_flat_slab_through_its_interior():
+    # Oracle: a laterally uniform potential is a slab of a medium of wave number k2, and
+    # the interior wave of a plane wave is A exp(i k2 z) + B exp(-i k2 z), with A and B
+    # that match the amplitude and slope at the entrance plane to the reflection of the
+    # Fresnel formulas with the multiple reflection of the two faces.
+    energy, thickness, step, volts = 1000.0, 2.0, 0.01, 15.0
+    k, sigma = 2 * np.pi / energy2wavelength(energy), energy2sigma(energy)
+    count = int(round(thickness / step))
+    potential = abtem.PotentialArray(
+        np.full((count, 24, 24), volts * step), slice_thickness=step, extent=(3.0, 3.0)
+    )
+    with abtem.config.set({"precision": "float64"}):
+        solution = TwoWaySolver(cutoff=1.0, symmetry=False).solve(
+            potential, energy, interior=True
+        )
+    k2 = np.sqrt(k**2 + 2 * k * sigma * volts + 0j)
+    r12 = (k - k2) / (k + k2)
+    round_trip = np.exp(2j * k2 * thickness)
+    r = r12 + (1 - r12**2) * (-r12) * round_trip / (1 - r12**2 * round_trip)
+    a = ((1 + r) + (k / k2) * (1 - r)) / 2
+    b = ((1 + r) - (k / k2) * (1 - r)) / 2
+    z = solution.z
+    expected = a * np.exp(1j * k2 * z) + b * np.exp(-1j * k2 * z)
+    assert solution.phi.shape == (count, len(solution.beams), 1)
+    centre = solution.beams.index(0, 0)
+    np.testing.assert_allclose(solution.phi[:, centre, 0], expected, atol=5e-4)
+    assert abs(solution.reflected[centre, 0] - r) < 1e-4
+
+
+@pytest.mark.parametrize("columns", [1, 3])
+def test_solve_gives_the_field_of_a_source_in_vacuum(columns):
+    # Oracle: the Green function of the empty slab. phi'' + kz^2 phi = -S with outgoing
+    # waves on both sides is phi(z) = i / (2 kz) integral exp(i kz |z - z'|) S(z') dz'
+    # for every beam, evanescent ones too (kz imaginary), for every column. The wave
+    # leaving at either side is the same integral, extrapolated to the plane.
+    energy, cutoff = COARSE_ENERGY, 2.2
+    slab = empty_slab()
+    solver = TwoWaySolver(cutoff=cutoff)
+    beams = solver.beams(slab, energy)
+    assert (~beams.propagating).sum() > 20  # evanescent beams are in the set
+    nb, nz, step = len(beams), slab.num_slices, 3.0 / 150
+    z = (np.arange(nz) + 0.5) * step
+    rng = np.random.default_rng(1)
+    amplitudes = rng.normal(size=(nb, columns)) + 1j * rng.normal(size=(nb, columns))
+    profile = np.exp(-0.5 * ((z - 1.2) / 0.4) ** 2)
+    source = profile[:, None, None] * amplitudes[None]
+    with abtem.config.set({"precision": "float64"}):
+        solution = solver.solve(slab, energy, source=source, interior=True)
+    expected = np.empty((nz, nb, columns), complex)
+    distance = np.abs(z[:, None] - z[None, :])  # (nz, nz)
+    for i, beam_kz in enumerate(beams.kz):
+        kernel = 1j / (2 * beam_kz) * np.exp(1j * beam_kz * distance) * step
+        expected[:, i, :] = kernel @ source[:, i, :]
+    scale = np.abs(expected).max()
+    np.testing.assert_allclose(solution.phi, expected, atol=3e-3 * scale)
+    reflected = (
+        1j / (2 * beams.kz[:, None]) * np.exp(1j * beams.kz[:, None] * z[None, :])
+    )
+    np.testing.assert_allclose(
+        solution.reflected,
+        np.einsum("gz,zgm->gm", reflected * step, source),
+        atol=3e-3 * scale,
+    )
+    exit_distance = nz * step - z
+    transmitted = 1j / (2 * beams.kz[:, None]) * np.exp(
+        1j * beams.kz[:, None] * exit_distance[None, :]
+    )
+    np.testing.assert_allclose(
+        solution.transmitted,
+        np.einsum("gz,zgm->gm", transmitted * step, source),
+        atol=3e-3 * scale,
+    )
+
+
+def test_solve_carries_an_evanescent_incident_beam_through_an_empty_slab():
+    # Oracle: without a potential nothing scatters it: the beam decays as
+    # exp(i kz z), reflects nothing, and leaves with exp(i kz thickness).
+    energy = COARSE_ENERGY
+    slab = empty_slab(thickness=1.0)
+    solver = TwoWaySolver(cutoff=2.2)
+    beams = solver.beams(slab, energy)
+    evanescent = np.flatnonzero(~beams.propagating)
+    weakest = evanescent[np.argmin(beams.kz[evanescent].imag)]
+    incident = np.zeros((len(beams), 2), complex)
+    incident[weakest, 0] = 1.0
+    incident[beams.index(0, 0), 1] = 1.0
+    with abtem.config.set({"precision": "float64"}):
+        solution = solver.solve(slab, energy, incident=incident, interior=True)
+    expected = np.exp(1j * beams.kz[weakest] * solution.z)
+    np.testing.assert_allclose(solution.phi[:, weakest, 0], expected, atol=1e-3)
+    np.testing.assert_allclose(solution.reflected, 0.0, atol=1e-6)
+    np.testing.assert_allclose(
+        solution.transmitted[weakest, 0],
+        np.exp(1j * beams.kz[weakest] * 1.0),
+        atol=1e-3,
+    )
+    assert abs(solution.transmitted[beams.index(0, 0), 1]) == pytest.approx(
+        1.0, abs=1e-6
+    )
+
+
+def test_solve_columns_are_independent_and_checkpointing_does_not_change_them(
+    monkeypatch,
+):
+    # Oracle: each column alone; the checkpointed back substitution (forced by a
+    # memory limit of zero) against the one that stores every block; a source given as
+    # a function (called once per slice, in order) against the array.
+    import abtem.twoway as twoway
+
+    potential = coarse_graphene(slice_thickness=0.05)
+    solver = TwoWaySolver(cutoff=1.5)
+    beams = solver.beams(potential, COARSE_ENERGY)
+    nb, nz = len(beams), potential.num_slices
+    rng = np.random.default_rng(2)
+    source = rng.normal(size=(nz, nb, 3)) + 1j * rng.normal(size=(nz, nb, 3))
+    incident = rng.normal(size=(nb, 3)) + 1j * rng.normal(size=(nb, 3))
+
+    def solve(**kwargs):
+        with abtem.config.set({"precision": "float64"}):
+            return solver.solve(potential, COARSE_ENERGY, interior=True, **kwargs)
+
+    together = solve(incident=incident, source=source)
+    for i in range(3):
+        alone = solve(incident=incident[:, i], source=source[:, :, i : i + 1])
+        np.testing.assert_allclose(
+            alone.phi[:, :, 0], together.phi[:, :, i], atol=1e-9
+        )
+    calls = []
+
+    def generator(n):
+        calls.append(n)
+        return source[n]
+
+    streamed = solve(incident=incident, source=generator)
+    assert calls == list(range(nz))
+    np.testing.assert_allclose(streamed.phi, together.phi, atol=1e-12)
+    monkeypatch.setattr(twoway, "_CHECKPOINT_BYTES", 0.0)
+    checkpointed = solve(incident=incident, source=source)
+    np.testing.assert_allclose(checkpointed.phi, together.phi, atol=1e-9)
+
+
+def test_beams_is_cheap_and_solve_refuses_bad_input(monkeypatch):
+    # The beams need no potential: nothing is built to list them, nor before a refusal.
+    def refuse_to_build(*args, **kwargs):
+        raise AssertionError("the potential was built")
+
+    monkeypatch.setattr(abtem.Potential, "build", refuse_to_build)
+    potential = coarse_graphene(slice_thickness=0.05)
+    solver = TwoWaySolver(cutoff=1.5)
+    beams = solver.beams(potential, COARSE_ENERGY, offset=(0.1, 0.0))
+    assert len(beams) == len(beams.kz) == len(beams.indices)
+    assert np.all(np.hypot(beams.qx, beams.qy) < 1.5)
+    np.testing.assert_allclose(
+        beams.from_grid(beams.to_grid(beams.kz)), beams.kz, atol=0
+    )
+    with pytest.raises(ValueError, match="too coarsely"):
+        TwoWaySolver(cutoff=4.5).solve(
+            coarse_graphene(slice_thickness=0.01), COARSE_ENERGY
+        )
+    with pytest.raises(ValueError, match="incident must have the shape"):
+        solver.solve(potential, COARSE_ENERGY, incident=np.ones(3))
+
+
+def test_beam_flux_is_what_the_solver_conserves():
+    # Oracle: the flux of the incident beam. Without absorption the fluxes of the
+    # transmitted and the reflected beams add up to 1 (the sums of |amplitude|^2 do
+    # not), for a wave of any direction and for every member of an ensemble of tilts and
+    # energies; the helper agrees with the weights that the tests compute separately.
+    potential = coarse_graphene(slice_thickness=0.015)
+    tilts, energies = [0.0, 80.0], [200.0, 300.0]
+    solver = TwoWaySolver(cutoff=2.0)
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = solver.scatter(
+            abtem.PlaneWave(energy=energies, tilt=(tilts, 0.0)), potential
+        )
+    assert transmitted.shape[:-2] == (2, 2)  # the tilts, then the energies
+    flux_t, flux_r = beam_flux(transmitted), beam_flux(reflected)
+    assert flux_t.shape == transmitted.shape
+    total = flux_t.sum(axis=(-2, -1)) + flux_r.sum(axis=(-2, -1))
+    np.testing.assert_allclose(total, 1.0, atol=1e-4)
+    intensity = sum(
+        (np.abs(beam_amplitudes(w)) ** 2).sum(axis=(-2, -1))
+        for w in (transmitted, reflected)
+    )
+    assert np.abs(intensity - 1.0).max() > 1e-3  # the intensities do not
+    for i, tilt in enumerate(tilts):
+        for j, energy in enumerate(energies):
+            kz, incident_kz = tilted_beam_geometry(
+                transmitted.array.shape[-2:], potential.extent, energy, (tilt, 0.0)
+            )
+            np.testing.assert_allclose(
+                flux_t[i, j],
+                np.abs(np.fft.fft2(transmitted.array[i, j]) / (24 * 42)) ** 2
+                * kz
+                / incident_kz,
+                atol=1e-12,
+            )
+
+
+def test_flux_of_the_solution_beams():
+    # Oracle: conservation of flux for a plane wave (the g = 0 incident beam), and the
+    # weights kz / k for the evanescent beams (zero) and for a reference energy.
+    potential = coarse_graphene(slice_thickness=0.015)
+    solver = TwoWaySolver(cutoff=2.0)
+    with abtem.config.set({"precision": "float64"}):
+        solution = solver.solve(potential, 200.0)
+    flux = solution.reflected_flux().sum() + solution.transmitted_flux().sum()
+    assert flux == pytest.approx(1.0, abs=1e-4)
+    beams = solution.beams
+    assert not beams.propagating.all()
+    assert (beams.flux_weights()[~beams.propagating] == 0.0).all()
+    assert (solution.reflected_flux()[~beams.propagating] == 0.0).all()
+    ratio = beams.flux_weights(reference_energy=1000.0)[beams.propagating] / (
+        beams.flux_weights()[beams.propagating]
+    )
+    expected = energy2wavelength(1000.0) / energy2wavelength(200.0)
+    np.testing.assert_allclose(ratio, expected)
+
+
 # --- the absorber from an inelastic mean free path ---
 
 
@@ -920,6 +1181,24 @@ def test_the_absorber_follows_the_energy_of_every_member():
             abtem.PlaneWave(energy=COARSE_ENERGY), potential
         )
     np.testing.assert_allclose(transmitted.array[1], full[0].array, atol=5e-5)
+
+
+@pytest.mark.float64
+def test_solve_with_an_absorber_gives_the_reflection_of_scatter():
+    # Oracle: scatter in the full basis; the absorber is in the solve of beams too.
+    potential = coarse_graphene()
+    absorber = MeanFreePathAbsorber(3.0)
+    solver = TwoWaySolver(cutoff=1.5, symmetry=False, absorber=absorber)
+    with abtem.config.set({"precision": "float64"}):
+        _, reflected = solver.scatter(abtem.PlaneWave(energy=COARSE_ENERGY), potential)
+        solution = solver.solve(potential, COARSE_ENERGY)
+    np.testing.assert_allclose(
+        solution.reflected[:, 0],
+        solution.beams.from_grid(beam_amplitudes(reflected)),
+        atol=1e-9,
+    )
+    flux = solution.reflected_flux().sum() + solution.transmitted_flux().sum()
+    assert flux < 0.9  # the absorbed part is missing
 
 
 def test_the_absorber_is_validated():
