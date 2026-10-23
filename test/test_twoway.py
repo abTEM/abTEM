@@ -7,7 +7,7 @@ import pytest
 from utils import _ACCELERATOR, to_host_array
 
 import abtem
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.multislice import FourierMultislice
 from abtem.twoway import TwoWaySolver, structure_glides, structure_symmetry
 
@@ -578,6 +578,131 @@ def test_an_ensemble_of_energies_follows_the_wavelength():
         assert abs(r + t - 1.0) < 1e-4
         reflections.append(r)
     assert reflections[0] > 0.02 and reflections[1] < 0.01
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("absorption", [0.0, 0.1, 0.5])
+def test_a_flat_absorbing_slab_follows_the_airy_formulas(absorption):
+    # Oracle: a laterally uniform potential is a slab of a medium with the complex wave
+    # number k2 = sqrt(k^2 + 2 k sigma V (1 + i absorption)), and the amplitudes of a
+    # plane wave on it are the Fresnel coefficients with the multiple reflection of its
+    # two faces; the vacuum phase is removed. The step of the Numerov method costs 2e-4.
+    energy, thickness, step, volts = 1000.0, 2.0, 0.01, 15.0
+    wavelength = energy2wavelength(energy)
+    k, sigma = 2 * np.pi / wavelength, energy2sigma(energy)
+    count = int(round(thickness / step))
+    projected = np.full((count, 24, 24), volts * step)
+    potential = abtem.PotentialArray(projected, slice_thickness=step, extent=(3.0, 3.0))
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = TwoWaySolver(
+            cutoff=1.0, symmetry=False, absorption=absorption
+        ).scatter(abtem.PlaneWave(energy=energy), potential)
+
+    k2 = np.sqrt(k**2 + 2 * k * sigma * volts * (1 + 1j * absorption) + 0j)
+    r12, t12, t21 = (k - k2) / (k + k2), 2 * k / (k + k2), 2 * k2 / (k + k2)
+    r21 = -r12
+    round_trip = np.exp(2j * k2 * thickness)
+    expected_t = (
+        t12 * t21 * np.exp(1j * (k2 - k) * thickness) / (1 - r21**2 * round_trip)
+    )
+    expected_r = r12 + t12 * t21 * r21 * round_trip / (1 - r21**2 * round_trip)
+    t, r = transmitted.array[0, 0], reflected.array[0, 0]
+    assert abs(t - expected_t) < 5e-4
+    assert abs(r - expected_r) < 1e-4
+    flux = abs(t) ** 2 + abs(r) ** 2
+    assert (flux < 1 - 1e-3) == (absorption > 0)
+    # the absorbed part is what the analytic amplitudes lack
+    assert flux == pytest.approx(abs(expected_t) ** 2 + abs(expected_r) ** 2, abs=1e-3)
+
+
+@pytest.mark.float64
+def test_absorption_is_the_imaginary_potential_that_scatter_can_also_be_given():
+    # Oracle: absorption mu is an imaginary potential mu V, so the same result follows
+    # from an absorptive potential of mu V (built as an array), and the two add up.
+    kwargs = dict(
+        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
+    )
+    potential = abtem.Potential(graphene_atoms(), **kwargs)
+    wave = abtem.PlaneWave(energy=1000.0)
+    with abtem.config.set({"precision": "float64"}):
+        built = potential.build(lazy=False)
+        scaled = abtem.PotentialArray(
+            0.1 * np.asarray(built.array),
+            slice_thickness=built.slice_thickness,
+            extent=built.extent,
+        )
+        proportional = TwoWaySolver(cutoff=1.5, absorption=0.1).scatter(wave, potential)
+        separate = TwoWaySolver(cutoff=1.5).scatter(wave, potential, scaled)
+        both = TwoWaySolver(cutoff=1.5, absorption=0.05).scatter(
+            wave,
+            potential,
+            abtem.PotentialArray(
+                0.05 * np.asarray(built.array),
+                slice_thickness=built.slice_thickness,
+                extent=built.extent,
+            ),
+        )
+        lossless = TwoWaySolver(cutoff=1.5).scatter(wave, potential)
+    for a, b, c, d in zip(proportional, separate, both, lossless):
+        np.testing.assert_allclose(a.array, b.array, atol=1e-9)
+        np.testing.assert_allclose(a.array, c.array, atol=1e-9)
+        assert np.abs(a.array - d.array).max() > 1e-4
+
+
+@pytest.mark.float64
+def test_symmetry_reduction_with_absorption_gives_the_waves_of_the_full_basis():
+    # Oracle: the full beam basis. The symmetry does not need the coupling matrix to be
+    # Hermitian; the loss of flux is the same in both.
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    waves = {}
+    with abtem.config.set({"precision": "float64"}):
+        for symmetry in (True, False):
+            waves[symmetry] = TwoWaySolver(
+                cutoff=2.0, symmetry=symmetry, absorption=0.2
+            ).scatter(abtem.PlaneWave(energy=500.0), potential)
+    for reduced, full in zip(waves[True], waves[False]):
+        np.testing.assert_allclose(
+            beam_amplitudes(reduced), beam_amplitudes(full), atol=5e-6
+        )
+    weights = flux_weights((48, 84), potential.extent, 500.0)
+    flux = sum((np.abs(beam_amplitudes(w)) ** 2 * weights).sum() for w in waves[False])
+    assert flux < 0.95
+
+
+def test_absorption_is_validated():
+    with pytest.raises(ValueError, match="absorption"):
+        TwoWaySolver(absorption=-0.1)
+
+    kwargs = dict(
+        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
+    )
+    potential = abtem.Potential(graphene_atoms(), **kwargs)
+    built = potential.build(lazy=False)
+    negative = abtem.PotentialArray(
+        -np.asarray(built.array),
+        slice_thickness=built.slice_thickness,
+        extent=built.extent,
+    )
+    with pytest.raises(ValueError, match="must not be negative"):
+        TwoWaySolver(cutoff=1.5).scatter(
+            abtem.PlaneWave(energy=1000.0), potential, negative
+        )
+    other = abtem.Potential(
+        graphene_atoms(vacuum=5.0),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+    )
+    with pytest.raises(ValueError, match="same atoms|grid"):
+        TwoWaySolver(cutoff=1.5).scatter(
+            abtem.PlaneWave(energy=1000.0), potential, other
+        )
 
 
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():

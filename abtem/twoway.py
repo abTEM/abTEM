@@ -507,8 +507,8 @@ class TwoWaySolver:
     of percent. The cost grows with the cube of the number of beams: use it for the
     small cells of crystals and 2D materials. A plane wave of any direction is
     supported, with ensembles of tilts and energies (the members are solved one after
-    the other), on the CPU and on CUDA devices, in single or double precision, without
-    absorption.
+    the other), on the CPU and on CUDA devices, in single or double precision, with or
+    without absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -535,6 +535,12 @@ class TwoWaySolver:
     symmetry_tolerance : float, optional
         Largest displacement [Å] by which a symmetry operation may miss an atom (default
         1e-4).
+    absorption : float, optional
+        The imaginary part of the potential as a fraction of the real part (default 0,
+        no absorption): the solver uses ``V (1 + i absorption)``, so that the
+        transmitted and the reflected flux add up to less than 1 by what is absorbed.
+        For a different shape of the absorption give ``absorptive_potential`` to
+        :meth:`scatter`, which adds to it.
     precision : {"float32", "float64"}, optional
         Precision of the solve (complex64 or complex128). By default it is the
         ``precision`` of the configuration, as for the rest of abTEM. The evanescent
@@ -548,10 +554,13 @@ class TwoWaySolver:
     symmetry: bool = True
     symmetry_tolerance: float = 1e-4
     precision: str | None = None
+    absorption: float = 0.0
 
     def __post_init__(self):
         if self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
+        if self.absorption < 0.0:
+            raise ValueError("absorption must not be negative")
         if self.precision not in (None, "float32", "float64"):
             raise ValueError(
                 "precision must be 'float32', 'float64' or None, "
@@ -559,7 +568,10 @@ class TwoWaySolver:
             )
 
     def scatter(
-        self, plane_wave: PlaneWave, potential: BasePotential
+        self,
+        plane_wave: PlaneWave,
+        potential: BasePotential,
+        absorptive_potential: BasePotential | None = None,
     ) -> tuple[Waves, Waves]:
         """
         Scatter a plane wave from the slab.
@@ -576,6 +588,10 @@ class TwoWaySolver:
         potential : BasePotential
             The slab. A :class:`.Potential` or a built :class:`.PotentialArray`, without
             an ensemble axis.
+        absorptive_potential : BasePotential, optional
+            The imaginary part of the potential, of the same atoms, grid and slices as
+            ``potential`` and nowhere negative: the potential of the solver is
+            ``V (1 + i absorption) + i V_absorptive``. See also ``absorption``.
 
         Returns
         -------
@@ -623,6 +639,26 @@ class TwoWaySolver:
             raise ValueError("TwoWaySolver needs slices of equal thickness.")
         projected = xp.asarray(built.array, dtype=real_dtype)
         nz, nx, ny = projected.shape
+        imaginary = self.absorption * projected
+        if absorptive_potential is not None:
+            absorbing = (
+                absorptive_potential
+                if isinstance(absorptive_potential, PotentialArray)
+                else absorptive_potential.build(lazy=False)
+            )
+            if absorbing.array.shape != projected.shape or not np.allclose(
+                absorbing.slice_thickness, thicknesses
+            ):
+                raise ValueError(
+                    "the absorptive potential must have the grid and the slices of the "
+                    "potential"
+                )
+            absorbing_array = xp.asarray(absorbing.array, dtype=real_dtype)
+            if absorbing_array.min() < -1e-6 * max(float(absorbing_array.max()), 1e-30):
+                raise ValueError("the absorptive potential must not be negative")
+            imaginary = imaginary + absorbing_array
+        if self.absorption or absorptive_potential is not None:
+            projected = projected + 1j * imaginary
         sampling = tuple(waves._valid_sampling)
 
         origin, all_operations, translations = (
@@ -635,6 +671,22 @@ class TwoWaySolver:
                 atoms = potential.frozen_phonons.atoms  # type: ignore[attr-defined]
             except AttributeError:
                 atoms = None
+            other = getattr(
+                getattr(absorptive_potential, "frozen_phonons", None), "atoms", None
+            )
+            if (
+                atoms is not None
+                and other is not None
+                and (
+                    len(atoms) != len(other)
+                    or not np.array_equal(atoms.numbers, other.numbers)
+                    or not np.allclose(atoms.positions, other.positions, atol=1e-6)
+                )
+            ):
+                raise ValueError(
+                    "the absorptive potential must be of the same atoms as the "
+                    "potential"
+                )
             if atoms is not None and len(atoms) > 0:
                 origin, point_operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
