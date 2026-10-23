@@ -787,7 +787,10 @@ def _exact_root_step(
         def project(array):
             return ifft2(fft2(array) * band)
 
-        def operator(potential):
+        def operator(potential, stacked=False):
+            """The operator of a potential, or of a stack of two (2, 1, nx, ny), for a
+            batch made of two halves, one for each potential."""
+
             def apply(a):
                 kinetic = laplace_stencil(a)
                 if tilted:
@@ -797,7 +800,13 @@ def _exact_root_step(
                         * (momentum[0] * gradient_x(a) + momentum[1] * gradient_y(a))
                         - float(np.sum(momentum**2)) * a
                     )
-                return project(kinetic / (2 * k) + potential * a)
+                if stacked:
+                    local = (a.reshape((2, -1) + a.shape[1:]) * potential).reshape(
+                        a.shape
+                    )
+                else:
+                    local = potential * a
+                return project(kinetic / (2 * k) + local)
 
             return apply
 
@@ -820,21 +829,18 @@ def _exact_root_step(
             following = operator(potentials[1])
             # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
             # (2025) 103778 with the operators of both slices
-            difference = lanczos_function(
-                batch,
-                following,
-                wave_number(k),
-                correction_tolerance,
-                max_iterations,
-                xp,
-            ) - lanczos_function(
-                batch,
-                current,
+            # (the two wave numbers act on the same wave: one batch of two halves, one
+            # iteration, instead of two, which is what a GPU, not the arithmetic, pays)
+            members = batch.shape[0]
+            both = lanczos_function(
+                xp.concatenate([batch, batch]),
+                operator(xp.stack([potentials[1], potentials[0]])[:, None], True),
                 wave_number(k),
                 correction_tolerance,
                 max_iterations,
                 xp,
             )
+            difference = both[:members] - both[members:]
             backscatter = 0.5 * lanczos_function(
                 difference,
                 following,
