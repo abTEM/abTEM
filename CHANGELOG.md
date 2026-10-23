@@ -22,7 +22,7 @@ Features:
   `TwoWaySolver.solve` is the lower-level entry point: any incident beams (evanescent ones included) and sources inside the
   slab, many right-hand sides on one factorisation, an in-plane offset instead of a tilt, and the interior wave on every
   slice; `beam_flux` and `BeamSolution.reflected_flux` give the flux per beam, `|amplitude|^2 kz / k`, which the solver conserves
-  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634), [PR #636](https://github.com/abTEM/abTEM/pull/636), [PR #637](https://github.com/abTEM/abTEM/pull/637), [PR #638](https://github.com/abTEM/abTEM/pull/638))
+  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634), [PR #636](https://github.com/abTEM/abTEM/pull/636), [PR #637](https://github.com/abTEM/abTEM/pull/637), [PR #638](https://github.com/abTEM/abTEM/pull/638), [PR #641](https://github.com/abTEM/abTEM/pull/641))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
