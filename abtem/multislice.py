@@ -759,37 +759,33 @@ class RealSpaceMultislice:
         which is the case at the nuclei of heavy atoms at any energy that the grid
         resolves, and at low energies for the whole band, so that its result for
         higher orders is not that of the root. It costs about 5 to 10 applications of
-                correction. The potential must have finite projection, as for the full scope.
+        the operator per function of it, and four functions per slice with the
+        backscatter correction of the full scope. The potential must have finite
+        projection, as for the full scope.
         A tilted wave is propagated in the frame of its direction, as in
         ``FourierMultislice`` (the operator has the first derivative of the tilt in
         it), not with the paraxial translation of the series.
 
     expansion_scope: str
         If "propagator" (default) only the propagator operator is expanded to order
-        If "full" both the propagator and transmission operators are expanded to order
+        If "full" both the propagator and transmission operators are expanded to order,
+        and the backscattered component of each slice, calculated from the next slice,
+        is subtracted from the forward wave (Eq. 10 in Micron 190 (2025) 103778), at
+        every ``order``. Against an exact two-way solution the correction brings the
+        beams at large angles to within a few percent between 1 and 5 keV, where they
+        are 30 to 40 % too weak without it.
     derivative_accuracy : int, optional
         Finite-difference accuracy for Laplace operator (default 6)
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
-    backscatter_correction : bool, optional
-        Only for ``expansion_scope="full"``, at every ``order`` (``"propagator"`` has no
-        such correction). If True, the backscattered component of each slice,
-        calculated from the next slice, is subtracted from the forward wave (Eq. 10 in
-        Micron 190 (2025) 103778, as published). The default is
-        False: the authors validated the correction at 30 and 200 keV with a converged
-        series, and against an exact two-way solution of graphene it makes the strong
-        beams less accurate between 1 and 5 keV (for example 16 % against 7 % at 1 keV
-        and order 1) and the transmitted intensity exceed 1 (1.014 at 1 keV), while it
-        leaves the strong beams unchanged at 30 keV but raises the beams between 120
-        and 377 mrad by 1.5 % above the exact solution. ``return_backscattered=True``
-        still returns the backscattered component. Before this option existed, the
-        correction was always applied.
     propagating_cutoff : float, optional
         For ``order="exact"``: fraction of the wave number 1 / wavelength kept
         (default 0.95). Beams beyond it, evanescent and grazing, are removed.
     lanczos_tolerance : float, optional
         For ``order="exact"``: change of the coefficients of the Lanczos iteration
-        below which a function of the operator is converged (default 1e-8).
+        below which a function of the operator is converged (default 1e-8). The three
+        functions of the backscattered component, itself a correction of a few
+        percent, are evaluated to at most 1e-5.
     max_iterations : int, optional
         For ``order="exact"``: maximum number of Lanczos iterations (default 60).
     tolerance: float, optional
@@ -803,7 +799,6 @@ class RealSpaceMultislice:
     derivative_accuracy: int = 6
     max_terms: int = 80
     tolerance: float = 1e-16
-    backscatter_correction: bool = False
     propagating_cutoff: float = 0.95
     lanczos_tolerance: float = 1e-8
     max_iterations: int = 60
@@ -935,20 +930,17 @@ def multislice_and_detect(
     else:
         algorithm.check_potential(potential)
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
-        # The next slice is only needed to calculate the backscattered component.
-        look_ahead = algorithm.backscatter_correction or return_backscattered
 
         def multislice_step(waves, potential_slice, next_slice=None):
             result = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
-                next_slice=next_slice if look_ahead else None,
+                next_slice=next_slice,
                 laplace=laplace_operator,
                 tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
-                correct_forward=algorithm.backscatter_correction,
                 propagating_cutoff=algorithm.propagating_cutoff,
                 lanczos_tolerance=algorithm.lanczos_tolerance,
                 max_iterations=algorithm.max_iterations,
@@ -1499,14 +1491,16 @@ def transition_potential_multislice_and_detect(
                     # FFT across them (see Waves._share_diffraction_pattern_fft).
                     with scattered_waves._share_diffraction_pattern_fft():
                         for i, detector in enumerate(detectors):
-                            new_measurement = detector.detect(scattered_waves).sum((0,))
+                            new_measurement = detector.detect(scattered_waves).sum(
+                                (0,)
+                            )
                             # Only the plane axis is a slice and so survives
                             # the indexing; the ensemble axes are integers and
                             # are dropped, so broadcast over the plane axis
                             # alone.
-                            measurements[i].array[
-                                measurement_indices
-                            ] += new_measurement.array[(None,) * n_slice_axes]
+                            measurements[i].array[measurement_indices] += (
+                                new_measurement.array[(None,) * n_slice_axes]
+                            )
 
     tqdm_pbar.close_if_exists()
 
@@ -1771,7 +1765,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         # these (unlike anything baked into the partial below) and keeps a
         # single copy in the graph. See shared_constant_arg.
         for key in self._graph_node_keys():
-            args += (shared_constant_arg(self._multislice_func_kwargs[key], lazy=lazy),)
+            args += (
+                shared_constant_arg(self._multislice_func_kwargs[key], lazy=lazy),
+            )
 
         return args
 

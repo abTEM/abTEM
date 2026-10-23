@@ -1,4 +1,3 @@
-import functools
 import warnings
 
 import ase
@@ -13,11 +12,6 @@ from abtem.finite_difference import LaplaceOperator, multislice_step
 from abtem.multislice import RealSpaceMultislice
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
-
-
-def test_backscatter_correction_is_off_by_default():
-    assert RealSpaceMultislice().backscatter_correction is False
-    assert RealSpaceMultislice(expansion_scope="full").backscatter_correction is False
 
 
 def _sto_potential(**kwargs):
@@ -38,42 +32,37 @@ def _sto_potential(**kwargs):
     )
 
 
-def test_backscatter_correction_switch_is_eq_10_of_the_micron_paper():
-    # Oracle: for one slice with a next slice, the corrected forward wave is the plain
-    # series minus the backscattered wave (Eq. 10), and the backscattered wave itself
-    # does not depend on the switch, since it is computed from the same stepped forward
-    # wave.
+def test_the_forward_wave_of_the_full_scope_is_corrected_by_eq_10_of_the_micron_paper():
+    # Oracle: for one slice with a next slice, the forward wave is the plain series
+    # (the step without a next slice, which has no backscattered wave) minus the
+    # backscattered wave (Eq. 10), which is computed from the same stepped wave.
     slices = _sto_potential().build(lazy=False)
     waves = abtem.PlaneWave(energy=30e3).match_grid(slices).build(lazy=False)
 
-    def step(correction):
-        return tuple(
-            to_host_array(w)
-            for w in multislice_step(
-                waves.copy(),
-                slices[0],
-                slices[1],
-                LaplaceOperator(6),
-                order=3,
-                fully_corrected=True,
-                correct_forward=correction,
-            )
+    def step(next_slice):
+        result = multislice_step(
+            waves.copy(),
+            slices[0],
+            next_slice,
+            LaplaceOperator(6),
+            order=3,
+            fully_corrected=True,
         )
+        return tuple(to_host_array(w) for w in result)
 
-    forward_off, backscattered_off = step(False)
-    forward_on, backscattered_on = step(True)
+    plain = step(None)[0]
+    forward, backscattered = step(slices[1])
 
-    assert np.abs(backscattered_off).max() > 1e-3
-    np.testing.assert_allclose(backscattered_on, backscattered_off, atol=1e-7)
+    assert np.abs(backscattered).max() > 1e-3
     # the step returns the backscattered wave band-limited but subtracts it unfiltered
     mask = antialias_aperture(waves._valid_gpts, waves._valid_sampling, np)
-    subtracted = np.fft.ifft2(np.fft.fft2(forward_off - forward_on) * mask)
-    np.testing.assert_allclose(subtracted, backscattered_off, atol=1e-6)
+    subtracted = np.fft.ifft2(np.fft.fft2(plain - forward) * mask)
+    np.testing.assert_allclose(subtracted, backscattered, atol=1e-6)
 
 
-def test_forward_wave_is_independent_of_requesting_backscatter_when_correction_is_off():
-    # Oracle: with the correction off the next slice is only used for the backscattered
-    # wave, so asking for it must leave the forward wave bit-identical.
+def test_requesting_the_backscattered_wave_leaves_the_forward_wave_unchanged():
+    # Oracle: the correction is always applied, so the forward wave is the same
+    # whether or not the backscattered wave is returned too.
     potential = _sto_potential(exit_planes=1)
     algorithm = RealSpaceMultislice(order=3, expansion_scope="full")
     forward_only = abtem.PlaneWave(energy=30e3).multislice(
@@ -88,108 +77,76 @@ def test_forward_wave_is_independent_of_requesting_backscatter_when_correction_i
     )
 
 
-# Strong beams of a graphene monolayer, as the flux that the exact two-way solution
-# (Numerov, evanescent beams left out) puts in the three families of the hexagonal
-# lattice, at 0.469, 0.813 and 0.939 1/Å, at 1 keV.
-EXACT_FAMILY_FLUX_1_KEV = np.array([0.044630, 0.039530, 0.006040])
+# The exact two-way solution (TwoWaySolver: Numerov in steps of 0.25 / k, 4.5 1/Å of
+# beams, evanescent ones included) for graphene (48 x 84 points, 6 Å cell, finite
+# projection, slices of 0.05 Å) at 2 keV: the intensity |psi_g|^2 of the Bragg beams in
+# three bands of |g| (0.01-1.5, 1.5-3.0 and 3.0-4.4 1/Å) and in total.
+EXACT_BAND_INTENSITY_2_KEV = np.array([0.05449581, 0.00692510, 0.00045739])
+EXACT_TOTAL_INTENSITY_2_KEV = 1.0028191
 
 
-@functools.lru_cache(maxsize=None)
-def _graphene_exit_wave(correction):
-    atoms = abtem.orthogonalize_cell(ase.build.graphene(a=2.46, vacuum=1.0))
-    atoms.center(vacuum=6.0, axis=2)
-    potential = abtem.Potential(
-        atoms,
-        gpts=(48, 84),
-        slice_thickness=0.05,
-        projection="finite",
-        periodic=True,
-    )
-    algorithm = RealSpaceMultislice(
-        order=1, expansion_scope="full", backscatter_correction=correction
-    )
-    waves = abtem.PlaneWave(energy=1000.0).multislice(
-        potential, algorithm=algorithm, lazy=False
-    )
-    return to_host_array(waves)
-
-
-def _family_intensities(array):
+def _graphene_band_intensities(array):
     nx, ny = array.shape
     intensity = np.abs(np.fft.fft2(array) / (nx * ny)) ** 2
-    fx = np.fft.fftfreq(nx, 2.46 / nx)[:, None]
-    fy = np.fft.fftfreq(ny, 4.2608 / ny)[None]
-    radius = np.hypot(fx, fy)
+    radius = np.hypot(
+        np.fft.fftfreq(nx, 2.46 / nx)[:, None], np.fft.fftfreq(ny, 4.2608 / ny)[None]
+    )
+    edges = (0.01, 1.5, 3.0, 4.4)
     return np.array(
-        [intensity[np.abs(radius - f) < 0.01].sum() for f in (0.469, 0.813, 0.939)]
+        [
+            intensity[(radius >= low) & (radius < high)].sum()
+            for low, high in zip(edges[:-1], edges[1:])
+        ]
     )
 
 
-def test_the_published_correction_is_less_accurate_than_none_at_1_kev():
-    # Oracle: the exact two-way solution (stored above). The correction of Eq. 10 was
-    # validated at 30 and 200 keV; at 1 keV the strong beams are 16 % off with it
-    # and 7 % without it.
-    errors = {}
-    for correction in (False, True):
-        flux = _family_intensities(_graphene_exit_wave(correction))
-        errors[correction] = np.abs(flux / EXACT_FAMILY_FLUX_1_KEV - 1).max()
-
-    assert errors[False] < 0.10
-    assert errors[True] > 0.12
-    assert errors[True] > 1.5 * errors[False]
-
-
-def test_the_corrected_forward_wave_has_more_intensity_than_the_incident_wave():
-    # Oracle: the transmitted flux of the exact solution is 0.99988 (1.2e-4 is
-    # reflected), and the paper's own normalisation criterion is a total of at most 1.
-    # The unitary series keeps it, the correction adds 1.4 %.
-    total = {
-        correction: float((np.abs(_graphene_exit_wave(correction)) ** 2).mean())
-        for correction in (False, True)
-    }
-    assert total[False] == pytest.approx(0.9998, abs=5e-4)
-    assert total[True] > 1.005
-
-
-def _graphene_ring_flux(correction):
-    """Flux of the Bragg beams at 1.72-5.4 1/Å (120-377 mrad at 30 keV)."""
+@pytest.mark.slow
+def test_the_correction_brings_the_wide_angle_beams_to_the_exact_solution():
+    # Oracle: the exact two-way solution above. At 2 keV the one-way root without the
+    # correction (the step without a next slice) puts 19 % too little intensity in the
+    # beams at 1.5-3 1/Å and 65 % too little beyond; with the correction of Eq. 10 they
+    # are 1 % and 10 % off, and the total intensity is that of the exact wave (the
+    # exact wave has a total above 1, since what it conserves is the flux).
     atoms = abtem.orthogonalize_cell(ase.build.graphene(a=2.46, vacuum=1.0))
-    atoms.center(vacuum=6.0, axis=2)
+    atoms.center(vacuum=3.0, axis=2)
     potential = abtem.Potential(
-        atoms,
-        gpts=(64, 112),
-        slice_thickness=0.05,
-        projection="finite",
-        periodic=True,
-    )
-    algorithm = RealSpaceMultislice(
-        order=2, expansion_scope="full", backscatter_correction=correction
-    )
-    array = to_host_array(
-        abtem.PlaneWave(energy=30e3).multislice(
-            potential, algorithm=algorithm, lazy=False
+        atoms, gpts=(48, 84), slice_thickness=0.05, projection="finite"
+    ).build(lazy=False)
+    wave = abtem.PlaneWave(energy=2000.0)
+
+    corrected = to_host_array(
+        wave.multislice(
+            potential,
+            algorithm=RealSpaceMultislice(order="exact", expansion_scope="full"),
+            lazy=False,
         )
     )
-    nx, ny = array.shape
-    intensity = np.abs(np.fft.fft2(array) / (nx * ny)) ** 2
-    fx = np.fft.fftfreq(nx, 2.46 / nx)[:, None]
-    fy = np.fft.fftfreq(ny, 4.2608 / ny)[None]
-    radius = np.hypot(fx, fy)
-    ring = (radius >= 1.72) & (radius < 5.4)
-    return intensity[ring].sum()
+    plain = wave.match_grid(potential).build(lazy=False)
+    for index in range(len(potential)):
+        plain = multislice_step(
+            plain,
+            potential[index],
+            None,
+            LaplaceOperator(6),
+            order="exact",
+            fully_corrected=True,
+        )[0]
+    plain = to_host_array(plain)
 
-
-def test_the_correction_raises_the_high_angle_intensity_above_the_exact_one_at_30_kev():
-    # Oracle: the exact two-way solution of the Bragg beams of graphene at 30 keV
-    # between 1.72 and 5.4 1/Å (120-377 mrad): a flux of 3.7329e-4 (Numerov, 0.0033 Å
-    # steps, cutoff 5.4 1/Å), which the intensity of the multislice wave corresponds to.
-    # The series is 0.6 % above it, the correction adds 1.5 %.
-    exact = 3.73285e-4
-    without = _graphene_ring_flux(False) / exact - 1
-    with_correction = _graphene_ring_flux(True) / exact - 1
-    assert abs(without) < 0.012
-    assert with_correction > 0.015
-    assert with_correction - without > 0.01
+    error = {
+        name: np.abs(_graphene_band_intensities(array) / EXACT_BAND_INTENSITY_2_KEV - 1)
+        for name, array in (("plain", plain), ("corrected", corrected))
+    }
+    assert error["plain"][1] > 0.15 and error["plain"][2] > 0.5
+    assert error["corrected"][0] < 0.01
+    assert error["corrected"][1] < 0.03
+    assert error["corrected"][2] < 0.15
+    total = {
+        name: float((np.abs(array) ** 2).mean())
+        for name, array in (("plain", plain), ("corrected", corrected))
+    }
+    assert total["corrected"] == pytest.approx(EXACT_TOTAL_INTENSITY_2_KEV, abs=5e-4)
+    assert abs(total["plain"] - EXACT_TOTAL_INTENSITY_2_KEV) > 2e-3
 
 
 def test_the_full_scope_warns_about_the_infinite_projection():

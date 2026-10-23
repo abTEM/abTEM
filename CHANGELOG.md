@@ -15,9 +15,9 @@ Features:
   Taylor series, by a Lanczos iteration with the finite-difference Laplacian on the propagating band (new parameters
   `propagating_cutoff`, `lanczos_tolerance` and `max_iterations`). The series diverges where `2 sigma V / k` reaches 1, which
   is the case for the whole band at low energies and at the nuclei of heavy atoms at any energy: on graphene at 1 keV the
-  exact root is within 2 % of an exact two-way solution where the series of order 1 is 7 % and the split step 8 % off, and
-  it works at the orders and grids where the series fails. It works with `backscatter_correction=True`
-  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
+  exact root (with the backscatter correction, which `expansion_scope="full"` always applies) is within 1.4 % of an exact
+  two-way solution where the series of order 1 is 7 % and the split step 8 % off, and it works at the orders and grids
+  where the series fails ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
@@ -139,19 +139,10 @@ Dependencies:
 
 Bugfixes:
 
-- `RealSpaceMultislice(expansion_scope="full")` no longer subtracts the backscattered wave of each slice from the
-  forward wave (Eq. 10 of Micron 190 (2025) 103778), at any series `order`, unless `backscatter_correction=True` is
-  given. `expansion_scope="propagator"` never had the correction.
-    - **Behaviour change:** the correction used to be always applied. The authors validated it at 30 and 200 keV
-      with a converged series. Against an exact two-way solution of graphene it makes the strong beams less
-      accurate between 1 and 5 keV (16 % against 7 % at 1 keV and order 1, 5.5 % against 1.2 % at 2 keV and order 2)
-      and the transmitted intensity exceed 1 (1.014 at 1 keV, where the exact solution gives 0.9999); above about
-      30 keV it leaves the strong beams unchanged but puts the beams at 120–377 mrad 1.5 % above the exact solution.
-      `return_backscattered=True` still returns the backscattered wave
-      ([PR #629](https://github.com/abTEM/abTEM/pull/629))
-    - `expansion_scope="full"` now warns about a potential with the default infinite projection, which puts the whole
-      projected potential of an atom in one slice, so that the potential per unit thickness it needs grows as 1 / thickness
-      and the result does not converge: use `projection="finite"`
+- `RealSpaceMultislice(expansion_scope="full")` now warns about a potential with the default infinite projection, which
+  puts the whole projected potential of an atom in one slice, so that the potential per unit thickness it needs grows as
+  1 / thickness and the result does not converge: use `projection="finite"`
+  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice

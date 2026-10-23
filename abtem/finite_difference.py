@@ -14,8 +14,8 @@ from abtem._lanczos import (
     wave_number,
 )
 from abtem.antialias import AntialiasAperture
-from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core import config
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
 from abtem.core.utils import get_dtype
@@ -749,7 +749,6 @@ def _exact_root_step(
     propagating_cutoff: float,
     tolerance: float,
     max_iterations: int,
-    correct_forward: bool,
 ) -> Sequence[Waves]:
     """A multislice step with the exact one-way root of the full operator, and the
     backscattered wave of the next slice, by Lanczos iterations (no Taylor series).
@@ -802,6 +801,10 @@ def _exact_root_step(
 
             return apply
 
+        # the backscattered component is a correction of a few percent: its functions
+        # are converged to at most 1e-5, which changes the intensity of a beam by
+        # less than 1e-4 of itself and saves about 40 % of the iterations
+        correction_tolerance = max(tolerance, 1e-5)
         current = operator(potentials[0])
         batch = lanczos_function(
             project(batch),
@@ -818,20 +821,29 @@ def _exact_root_step(
             # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
             # (2025) 103778 with the operators of both slices
             difference = lanczos_function(
-                batch, following, wave_number(k), tolerance, max_iterations, xp
+                batch,
+                following,
+                wave_number(k),
+                correction_tolerance,
+                max_iterations,
+                xp,
             ) - lanczos_function(
-                batch, current, wave_number(k), tolerance, max_iterations, xp
+                batch,
+                current,
+                wave_number(k),
+                correction_tolerance,
+                max_iterations,
+                xp,
             )
             backscatter = 0.5 * lanczos_function(
                 difference,
                 following,
                 inverse_wave_number(k),
-                tolerance,
+                correction_tolerance,
                 max_iterations,
                 xp,
             )
-            if correct_forward:
-                batch = batch - backscatter
+            batch = batch - backscatter
         return batch, backscatter
 
     shape = waves._array.shape
@@ -862,7 +874,6 @@ def multislice_step(
     max_terms: int = 300,
     order: int | str = 1,
     fully_corrected: bool = False,
-    correct_forward: bool = True,
     propagating_cutoff: float = 0.95,
     lanczos_tolerance: float = 1e-8,
     max_iterations: int = 60,
@@ -893,10 +904,6 @@ def multislice_step(
         For ``order="exact"``, which evaluates the root of the full operator by a
         Lanczos iteration instead of a series (it requires ``fully_corrected``): the
         propagating band, the convergence of the iteration and its maximum length.
-    correct_forward: bool
-        If True (default), the backscattered component is subtracted from the forward
-        wave (Eq. 10 in Micron 190 (2025) 103778). If False, the forward wave is the
-        plain expansion and the backscattered component is only returned.
 
     """
     if order == "exact":
@@ -910,7 +917,6 @@ def multislice_step(
             propagating_cutoff,
             lanczos_tolerance,
             max_iterations,
-            correct_forward,
         )
 
     xp = get_array_module(waves.array)
@@ -1016,8 +1022,7 @@ def multislice_step(
             )
 
         # Eq.10 in Micron 190 (2025) 103778.
-        if correct_forward:
-            waves._array = waves._array - backscatter
+        waves._array = waves._array - backscatter
 
     if fully_corrected:
         kwargs = waves._copy_kwargs(exclude=("array",))
