@@ -16,17 +16,26 @@ use (gpu) or tracemalloc (cpu, which misses LAPACK's workspace: read it as a low
 bound). On the CPU single precision is solved in double precision by numpy, so the times
 there differ from the GPU's in kind.
 
+A version that runs out of memory is reported as such and the others still run. The old
+version is skipped when its host-side lookup (about 72 N**2 bytes) would not fit in the
+free host memory.
+
 Usage
 -----
     python benchmarks/bench_bloch_structure_matrix.py [device] [g_max] [sg_max]
-        [precision] [cif] [old]
-    python benchmarks/bench_bloch_structure_matrix.py gpu 6.0 1.0 float32
-    python benchmarks/bench_bloch_structure_matrix.py gpu 8.0 1.0 float32 ZrO2.cif 0
+        [precision] [crystal] [old]
+    python benchmarks/bench_bloch_structure_matrix.py gpu 8.0 1.0 float32 fluorite
+    python benchmarks/bench_bloch_structure_matrix.py gpu 8.0 1.0 float32 kyanite.cif 0
 
-The default crystal is monoclinic ZrO2 (baddeleyite, P2_1/c). Pass `old` = 0 to skip the
-old version, whose dense eigh needs about 6 N**2 complex numbers on the GPU.
+`crystal` is "fluorite" (cubic ZrO2, Fm-3m: 13,069 beams at g_max = 8 and sg_max = 1,
+close to the 13,903 of the py3DED ZrO2 configuration in #632), "baddeleyite"
+(monoclinic ZrO2, P2_1/c, the default: four times the primitive cell, so about four
+times the beams, 56,233 at those settings) or the path of a structure file. Pass `old` =
+0 to skip the old version, whose dense eigh needs about 6 N**2 complex numbers on the
+GPU.
 """
 
+import os
 import sys
 import time
 import tracemalloc
@@ -52,7 +61,7 @@ device = sys.argv[1] if len(sys.argv) > 1 else "cpu"
 g_max = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
 sg_max = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
 precision = sys.argv[4] if len(sys.argv) > 4 else "float32"
-cif = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "-" else None
+structure = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "-" else "baddeleyite"
 with_old = bool(int(sys.argv[6])) if len(sys.argv) > 6 else True
 energy = 200e3
 thicknesses = np.linspace(50, 500, 10)
@@ -133,10 +142,16 @@ def timed(function, *args):
     return time.perf_counter() - start, result
 
 
-atoms = (
-    read(cif)
-    if cif
-    else crystal(
+def free_host_memory():
+    """The free host memory in bytes, or None where it is not known."""
+    try:
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+if structure == "baddeleyite":
+    atoms = crystal(
         ["Zr", "O", "O"],
         basis=[
             (0.2754, 0.0395, 0.2083),
@@ -146,7 +161,15 @@ atoms = (
         spacegroup=14,
         cellpar=[5.1505, 5.2116, 5.3173, 90, 99.23, 90],
     )
-)
+elif structure == "fluorite":
+    atoms = crystal(
+        ["Zr", "O"],
+        basis=[(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=225,
+        cellpar=[5.07, 5.07, 5.07, 90, 90, 90],
+    )
+else:
+    atoms = read(structure)
 
 with abtem.config.set({"precision": precision}):
     structure_factor = StructureFactor(atoms, g_max=2 * g_max, device=device)
@@ -174,7 +197,14 @@ with abtem.config.set({"precision": precision}):
         )
 
     variants = {}
-    if with_old:
+    old_host_bytes = 72 * n**2
+    free = free_host_memory()
+    if with_old and free is not None and old_host_bytes > 0.8 * free:
+        print(
+            "  old      skipped: its host lookup needs about "
+            f"{old_host_bytes / 1e9:.0f} GB, {free / 1e9:.0f} GB free"
+        )
+    elif with_old:
         variants["old"] = (
             lambda: old_structure_matrix(built.array, built.hkl, hkl, cell, built.gpts),
             lambda A: old_dynamical_scattering(A, hkl),
@@ -184,24 +214,33 @@ with abtem.config.set({"precision": precision}):
         center = built.inversion_center
         variants["real"] = (lambda: new_build(center), lambda A: new_solve(A, center))
 
-    reference = None
+    reference, reference_label = None, None
     for label, (build, solve) in variants.items():
-        solve(build())  # warm-up
-        build_times, solve_times = [], []
-        for _ in range(repeats):
-            t_build, A = timed(build)
-            t_solve, amplitudes = timed(solve, A)
-            del A
-            build_times.append(t_build)
-            solve_times.append(t_solve)
-        peak = peak_memory(lambda: solve(build()))
+        try:
+            solve(build())  # warm-up
+            build_times, solve_times = [], []
+            for _ in range(repeats):
+                t_build, A = timed(build)
+                t_solve, amplitudes = timed(solve, A)
+                del A
+                build_times.append(t_build)
+                solve_times.append(t_solve)
+            peak = peak_memory(lambda: solve(build()))
+        except MemoryError as error:  # CuPy's OutOfMemoryError is one
+            A = amplitudes = None
+            if device == "gpu":
+                import cupy as cp
+
+                cp.get_default_memory_pool().free_all_blocks()
+            print(f"  {label:<8} out of memory: {str(error).splitlines()[0]}")
+            continue
         amplitudes = asnumpy(amplitudes)
         if reference is None:
-            reference = amplitudes
+            reference, reference_label = amplitudes, label
         difference = np.abs(amplitudes - reference).max() / np.abs(reference).max()
         print(
             f"  {label:<8} build {min(build_times):8.3f} s   solve "
             f"{min(solve_times):8.3f} s   peak {peak:9.0f} MB "
             f"({peak * 1e6 / (n**2 * itemsize):4.1f} complex matrices)   "
-            f"difference {difference:.1e}"
+            f"difference from {reference_label} {difference:.1e}"
         )
