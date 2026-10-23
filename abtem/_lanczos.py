@@ -174,6 +174,9 @@ def _lanczos_host(
     return result
 
 
+_DEVICE_EIGH_MEMBERS = 32  # batch from which CuPy diagonalises the tridiagonal matrices
+
+
 def _lanczos_device(
     a0,
     apply: Callable,
@@ -190,10 +193,10 @@ def _lanczos_device(
 
     The basis is one array, the orthogonalisation takes a few kernels whatever its
     size, and everything that the next iteration needs stays on the device. The small
-    tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy (or
-    ``diagonalise_on_device`` is true): a batch of hundreds of them costs more on the
-    host than an iteration on the device, and then the only transfer of an iteration is
-    one pair of numbers, for the convergence. Otherwise they are diagonalised on the
+    tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy and the
+    batch has at least 32 members (or ``diagonalise_on_device`` is true): a batch of
+    hundreds of them costs more on the host than an iteration on the device, and then
+    the only transfer of an iteration is one pair of numbers, for the convergence. Otherwise they are diagonalised on the
     host in double precision, with a transfer of the diagonal element and the norm of
     the residual per iteration. ``function`` maps the eigenvalues (B, m) to complex
     values of the same shape (and of the same array module).
@@ -201,7 +204,12 @@ def _lanczos_device(
     from abtem.finite_difference import NotConvergedError
 
     if diagonalise_on_device is None:
-        diagonalise_on_device = cp is not None and xp is cp
+        # the host takes about 8 us per matrix of a batch (europa: 2.0 ms for 256), the
+        # device about 0.5 ms for any batch (cuSOLVER, a few kernels): it wins above
+        # some tens of members, and loses for a single wave (0.06 ms on the host)
+        diagonalise_on_device = (
+            cp is not None and xp is cp and a0.shape[0] >= _DEVICE_EIGH_MEMBERS
+        )
     dtype = a0.dtype
     real_dtype = np.empty(0, dtype=dtype).real.dtype
     members, shape = a0.shape[0], a0.shape[1:]
