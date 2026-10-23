@@ -46,6 +46,14 @@ On a GPU (the solver and the multislice methods run on CUDA devices)::
 
     python benchmarks/benchmark_twoway_vs_multislice.py --device gpu --energy 5000
 
+A plane wave on a small grid is a batch of one, which a GPU cannot use: it pays for
+every small operation. ``--batch N`` propagates N probes at random positions instead,
+the way a scan does, and reports the time per probe (without the solver, which takes
+plane waves)::
+
+    python benchmarks/benchmark_twoway_vs_multislice.py --device gpu --batch 256 \\
+        --energy 1000 --methods fourier rs-full-exact
+
 Memory is reported in MB (10^6 bytes), times in s, lengths in Å as everywhere in abTEM.
 Set ``--threads`` (or the thread environment variables) when comparing runs: a BLAS
 that starts one thread per core on the small blocks of the solver is much slower.
@@ -217,6 +225,16 @@ def worker(args):
         args.system, args.cells[0], args.lateral[0], args.rattle, args.seed
     )
     wave = abtem.PlaneWave(energy=args.energy, device=device)
+    scan = None
+    if args.batch > 1:
+        # a batch of probes at random positions of the cell: the waves of one
+        # multislice step are a batch of this many members, which amortises what a
+        # GPU pays for each operation on a plane wave on a small grid
+        rng = np.random.default_rng(args.seed)
+        cell = atoms.cell
+        positions = rng.uniform(0.0, 1.0, (args.batch, 2)) * [cell[0, 0], cell[1, 1]]
+        scan = abtem.CustomScan(positions)
+        wave = abtem.Probe(energy=args.energy, semiangle_cutoff=20.0, device=device)
 
     def synchronize():
         if device == "gpu":
@@ -244,7 +262,9 @@ def worker(args):
 
         def run():
             potential = make_potential(atoms, gpts, args.slice_thickness, device)
-            exit_wave = wave.multislice(potential, algorithm=algorithm, lazy=False)
+            exit_wave = wave.multislice(
+                potential, scan=scan, algorithm=algorithm, lazy=False
+            )
             return exit_wave, potential, None
 
     times = []
@@ -254,6 +274,8 @@ def worker(args):
         synchronize()
         times.append(time.perf_counter() - start)
     array = np.asarray(asnumpy(result.array))
+    if args.batch > 1:  # the first probe stands for the batch
+        array = array.reshape((-1,) + array.shape[-2:])[0]
     bands, total, flux_bands, flux = band_sums(
         array, potential.extent, args.energy, band_edges(cutoff)
     )
@@ -262,6 +284,7 @@ def worker(args):
         "times": times,
         "peak_mb": _peak_rss_mb(),
         "baseline_mb": baseline,
+        "batch": args.batch,
         "bands": bands,
         "total": total,
         "flux_bands": flux_bands,
@@ -305,6 +328,8 @@ def run_worker(method, args, cells, lateral):
         str(args.rattle),
         "--seed",
         str(args.seed),
+        "--batch",
+        str(args.batch),
         "--device",
         args.device,
     ]
@@ -342,9 +367,14 @@ def format_row(label, result, reference, weighting="intensity"):
         key = "bands" if weighting == "intensity" else "flux_bands"
         for value, exact in zip(result[key], reference[key]):
             cells.append(f"{100 * (value / exact - 1):+9.2f}")
-    cells.append(f"{result['total']:8.4f}")
-    cells.append(f"{result['flux']:8.4f}")
+    if result.get("batch", 1) > 1:  # (the normalisation is that of a plane wave)
+        cells += ["        -"] * 2
+    else:
+        cells.append(f"{result['total']:9.4f}")
+        cells.append(f"{result['flux']:8.4f}")
     cells.append(f"{result['slices']:7d}")
+    if result.get("batch", 1) > 1:
+        cells.append(f"{1e3 * best / result['batch']:10.1f}")
     return " ".join(cells)
 
 
@@ -397,6 +427,13 @@ def main():
         help="random in-plane displacement of the atoms, standard deviation [Å]",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=1,
+        help="propagate this many probes at random positions in one batch instead of "
+        "a plane wave (multislice methods only; the solver takes plane waves)",
+    )
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument(
         "--repeats",
@@ -439,7 +476,10 @@ def main():
         raise SystemExit(f"unavailable methods {unknown}; available: {list(methods)}")
     # the errors are against the two-way solution, which therefore runs first, if it is
     # among the methods (it is the slowest: leave it out for times and memory only)
-    if "twoway" in selected:
+    if args.batch > 1:
+        selected = [m for m in selected if m != "twoway"]
+        print("a batch of probes: no two-way solution, only times and memory")
+    elif "twoway" in selected:
         selected.remove("twoway")
         selected.insert(0, "twoway")
     else:
@@ -453,6 +493,7 @@ def main():
                 f"{lateral}x{lateral} in the plane, {args.device}, "
                 f"multislice slices {args.slice_thickness} Å, precision "
                 f"{args.precision} (solver {args.solver_precision})"
+                + (f", a batch of {args.batch} probes" if args.batch > 1 else "")
                 + (f", rattle {args.rattle} Å" if args.rattle else "")
                 + (", no symmetry" if args.no_symmetry else "")
             )
@@ -461,6 +502,7 @@ def main():
                 + (f"{'pool [MB]':>9s} " if args.device == "gpu" else "")
                 + " ".join(f"{band + ' [%]':>9s}" for band in BANDS)
                 + f" {'sum|psi|2':>9s} {'flux':>8s} {'slices':>7s}"
+                + (f" {'ms/probe':>10s}" if args.batch > 1 else "")
             )
             print(header)
             reference = None
