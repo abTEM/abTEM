@@ -12,6 +12,7 @@ from abtem.multislice import FourierMultislice
 from abtem.twoway import (
     MeanFreePathAbsorber,
     TwoWaySolver,
+    _MemoryGate,
     _tilt_to_offset,
     beam_flux,
     structure_glides,
@@ -1210,3 +1211,69 @@ def test_the_absorber_is_validated():
         TwoWaySolver(absorber=3.0)
     with pytest.raises(ValueError, match="not positive"):
         MeanFreePathAbsorber(lambda energy: -1.0).imaginary_potential(100.0)
+
+
+# --- the members of an ensemble in parallel ---
+
+
+@pytest.mark.float64
+def test_members_in_parallel_are_the_members_in_sequence():
+    # Oracle: the sequential solve (workers=1) of the same ensemble of tilts and
+    # energies, to the rounding of the threads' BLAS; also with a memory limit that
+    # lets only one member run at a time (the gate must not deadlock).
+    potential = coarse_graphene(slice_thickness=0.05)
+    wave = abtem.PlaneWave(energy=[250.0, COARSE_ENERGY], tilt=([0.0, 60.0], 10.0))
+    with abtem.config.set({"precision": "float64"}):
+        sequential = TwoWaySolver(cutoff=1.0, workers=1).scatter(wave, potential)
+        parallel = TwoWaySolver(cutoff=1.0, workers=4).scatter(wave, potential)
+    assert sequential[0].shape[:-2] == (2, 2)
+    for a, b in zip(sequential, parallel):
+        np.testing.assert_allclose(a.array, b.array, atol=1e-10)
+
+
+@pytest.mark.float64
+def test_parallel_members_wait_for_memory_and_still_finish(monkeypatch):
+    import abtem.twoway as twoway
+
+    monkeypatch.setattr(twoway, "_available_memory", lambda: 1.0)
+    potential = coarse_graphene(slice_thickness=0.05)
+    wave = abtem.PlaneWave(energy=COARSE_ENERGY, tilt=([0.0, 40.0, 80.0], 0.0))
+    with abtem.config.set({"precision": "float64"}):
+        starved = TwoWaySolver(cutoff=1.0, workers=3).scatter(wave, potential)
+        alone = TwoWaySolver(cutoff=1.0, workers=1).scatter(wave, potential)
+    np.testing.assert_allclose(starved[0].array, alone[0].array, atol=1e-10)
+
+
+def test_the_memory_gate_keeps_the_reservations_within_the_total():
+    # Oracle: the reservations that are held together never exceed the total, except
+    # for one that is larger than the total, which runs alone.
+    import threading
+    import time
+
+    gate = _MemoryGate(10.0)
+    held, peak, lock = [0.0], [0.0], threading.Lock()
+
+    def member(nbytes):
+        with gate.reserve(nbytes):
+            with lock:
+                held[0] += nbytes
+                peak[0] = max(peak[0], held[0])
+            time.sleep(0.02)
+            with lock:
+                held[0] -= nbytes
+
+    sizes = [4.0, 4.0, 4.0, 4.0, 3.0, 3.0]
+    threads = [threading.Thread(target=member, args=(size,)) for size in sizes]
+    [thread.start() for thread in threads]
+    [thread.join() for thread in threads]
+    assert peak[0] <= 10.0
+    assert peak[0] >= 7.0  # two or more ran together
+    big = threading.Thread(target=member, args=(25.0,))
+    big.start()
+    big.join()
+    assert peak[0] == 25.0  # on its own
+
+
+def test_workers_is_validated():
+    with pytest.raises(ValueError, match="workers"):
+        TwoWaySolver(workers=0)

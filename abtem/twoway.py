@@ -21,12 +21,16 @@ symmetries (see :func:`structure_symmetry`).
 
 from __future__ import annotations
 
+import os
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-import scipy.linalg as sla
+from threadpoolctl import threadpool_info, threadpool_limits
 
 from abtem.core import config
 from abtem.core.axes import EnergyAxis
@@ -41,13 +45,15 @@ if TYPE_CHECKING:
     from abtem.waves import PlaneWave, Waves
 
 
-def _linear_algebra(xp):
-    """The LU factorisation and solve of the array module."""
+def _linear_solver(xp):
+    """``solve(a, b)`` of the array module. On the CPU it is NumPy's, which releases the
+    GIL (SciPy's ``lu_factor`` does not), so that members of an ensemble solved in
+    threads run in parallel."""
     if xp is np:
-        return sla.lu_factor, sla.lu_solve
+        return np.linalg.solve
     from cupyx.scipy import linalg as cupy_linalg  # type: ignore
 
-    return cupy_linalg.lu_factor, cupy_linalg.lu_solve
+    return lambda a, b: cupy_linalg.lu_solve(cupy_linalg.lu_factor(a), b)
 
 
 def _memory_budget(xp, limit: float) -> float:
@@ -57,6 +63,71 @@ def _memory_budget(xp, limit: float) -> float:
         return limit
     free, _ = cp.cuda.Device().mem_info
     return min(limit, 0.4 * free)
+
+
+def _available_memory() -> float:
+    """Bytes of memory available on the host, a conservative guess without psutil."""
+    try:
+        import psutil
+
+        return float(psutil.virtual_memory().available)
+    except ImportError:
+        pass
+    try:
+        return 0.5 * os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError, AttributeError):
+        return 8e9
+
+
+def _member_bytes(nz: int, size: int, itemsize: int) -> float:
+    """The bytes that the solve of one member keeps: the cached coupling matrices and
+    the elimination blocks of the back substitution (all of them, or the checkpoints
+    and one segment), by the limits of :func:`_solve_blocks`."""
+    full = nz * size**2 * itemsize
+    cache = full if full < _COUPLING_CACHE_BYTES else 0.0
+    stored = full
+    if full >= _CHECKPOINT_BYTES:
+        stored = 2 * np.ceil(np.sqrt(nz)) * size**2 * itemsize
+    return cache + stored + 16.0 * size**2 * itemsize
+
+
+def _blas_threads() -> int:
+    """The number of threads that the BLAS libraries use: the cores unless the
+    environment (``OMP_NUM_THREADS`` and the like) or a limit says otherwise."""
+    counts = [info["num_threads"] for info in threadpool_info()]
+    return max(counts) if counts else (os.cpu_count() or 1)
+
+
+def _default_workers() -> int:
+    """Members solved at the same time by default: a quarter of the BLAS threads, each
+    member with its share (the blocks are small, and more members than that gave no
+    speedup on a 10-core machine with 20 threads). A single thread solves one at a
+    time."""
+    return max(1, _blas_threads() // 4)
+
+
+class _MemoryGate:
+    """Lets members of an ensemble that run at the same time reserve the memory they
+    keep, so that together they stay within the total: a member waits until the others
+    leave room, and the only one running takes what it needs."""
+
+    def __init__(self, total: float):
+        self.total, self.used = total, 0.0
+        self.condition = threading.Condition()
+
+    @contextmanager
+    def reserve(self, nbytes: float):
+        with self.condition:
+            self.condition.wait_for(
+                lambda: self.used == 0.0 or self.used + nbytes <= self.total
+            )
+            self.used += nbytes
+        try:
+            yield
+        finally:
+            with self.condition:
+                self.used -= nbytes
+                self.condition.notify_all()
 
 
 _MAX_CENTRE_CANDIDATES = 24  # atoms of the smallest class tried for rotation centres
@@ -405,7 +476,7 @@ def _solve_blocks(
     ``dtype`` and the array module ``xp``, at the slice centres z_n = (n + 1/2) h, in
     the block-Thomas solve with checkpointing.
     """
-    lu_factor, lu_solve = _linear_algebra(xp)
+    solve = _linear_solver(xp)
     nb = len(kz2)
     incident = np.asarray(incident)
     squeeze = incident.ndim == 1 and source is None
@@ -472,16 +543,20 @@ def _solve_blocks(
         lower = identity + c * operator(n - 1) if n > 0 else None
         return diagonal, upper, lower
 
-    def eliminate(n, previous):
+    def eliminate(n, previous, right_hand_side=None):
+        """The elimination block of slice n and, with a right-hand side (a function of
+        the lower block), its solution after the elimination of the slices before it,
+        from one factorisation."""
         diagonal, upper, lower = blocks(n)
         if n > 0:
             diagonal = diagonal - lower @ previous
-        factor = lu_factor(diagonal)
-        return (
-            factor,
-            lower,
-            (lu_solve(factor, upper) if upper is not None else None),
-        )
+        right = None if right_hand_side is None else right_hand_side(lower)
+        if upper is None:
+            return solve(diagonal, right), lower, None
+        if right is None:
+            return None, lower, solve(diagonal, upper)
+        both = solve(diagonal, xp.concatenate([upper, right], axis=1))
+        return both[:, nb:], lower, both[:, :nb]
 
     itemsize = np.dtype(dtype).itemsize
     full_bytes = nz * nb * nb * itemsize
@@ -496,11 +571,12 @@ def _solve_blocks(
     stored, checkpoints = {}, {}
     previous = None
     for n in range(nz):
-        factor, lower, eliminated = eliminate(n, previous)
-        right = rhs(n)
-        if n > 0:
-            right = right - lower @ phi[n - 1]
-        phi[n] = lu_solve(factor, right)
+        solved, _, eliminated = eliminate(
+            n,
+            previous,
+            lambda lower, n=n: rhs(n) if n == 0 else rhs(n) - lower @ phi[n - 1],
+        )
+        phi[n] = solved
         if stride == nz:
             stored[n] = eliminated
         elif n % stride == 0:
@@ -895,6 +971,14 @@ class TwoWaySolver:
     symmetry_tolerance : float, optional
         Largest displacement [Å] by which a symmetry operation may miss an atom (default
         1e-4).
+    workers : int, optional
+        The number of members of an ensemble of tilts and energies that are solved at
+        the same time on the CPU, each with its share of the BLAS threads (default: a
+        quarter of the BLAS threads, at most the number of members; one thread solves
+        them one after another). The memory that the solves keep (the coupling and the
+        elimination blocks, up to 6 GB each) is shared: a member waits until the others
+        leave room for it. A CUDA device solves the members one after another. Use 1
+        for no parallelism.
     absorber : MeanFreePathAbsorber, optional
         An absorbing layer from an inelastic mean free path, which adds to the
         absorption of the other two options (default none). Its imaginary potential
@@ -920,12 +1004,15 @@ class TwoWaySolver:
     precision: str | None = None
     absorption: float = 0.0
     absorber: MeanFreePathAbsorber | None = None
+    workers: int | None = None
 
     def __post_init__(self):
         if self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
         if self.absorption < 0.0:
             raise ValueError("absorption must not be negative")
+        if self.workers is not None and self.workers < 1:
+            raise ValueError("workers must be at least 1")
         if self.absorber is not None and not isinstance(
             self.absorber, MeanFreePathAbsorber
         ):
@@ -1250,9 +1337,10 @@ class TwoWaySolver:
             projected, h, sampling, origin, xp, complex_dtype
         )
 
-        def solve(tilt, energy):
+        def solve_member(tilt, energy, reserve):
             """The transmitted and the reflected wave [arrays of the grid, on the host]
-            of the wave of this tilt [mrad] and energy [eV]."""
+            of the wave of this tilt [mrad] and energy [eV]; ``reserve(nbytes)`` holds
+            the memory that the solve keeps until the member is done."""
             wavelength = energy2wavelength(energy)
             wave_number = 2 * np.pi / wavelength
             sigma = energy2sigma(energy)
@@ -1282,8 +1370,15 @@ class TwoWaySolver:
                 translations,
                 shift=in_plane,
             )
-            coupling = basis.coupling_function(fourier, wave_number, sigma, xp)
             itemsize = np.dtype(complex_dtype).itemsize
+            reserve(
+                _member_bytes(
+                    nz,
+                    len(basis.representatives) if basis.reduced else len(basis.indices),
+                    itemsize,
+                )
+            )
+            coupling = basis.coupling_function(fourier, wave_number, sigma, xp)
             if nz * basis.number_of_orbits**2 * itemsize < _memory_budget(
                 xp, _COUPLING_CACHE_BYTES
             ):
@@ -1340,10 +1435,30 @@ class TwoWaySolver:
 
             return to_array(transmitted), to_array(reflected)
 
-        results = [
-            solve(tilt, energy)
-            for tilt, energy in zip(tilts.reshape(-1, 2), energies.ravel())
-        ]
+        gate = _MemoryGate(0.7 * _available_memory())
+        members = list(zip(tilts.reshape(-1, 2), energies.ravel()))
+        workers = 1 if xp is not np else self.workers or _default_workers()
+        workers = max(1, min(workers, len(members)))
+        # the cores are shared between the BLAS threads of the members that run at the
+        # same time; the limit is set in each thread, since the OpenMP thread count of
+        # a BLAS is a property of the thread that calls it
+        threads = max(1, _blas_threads() // workers) if workers > 1 else None
+
+        def solve(member):
+            with ExitStack() as stack:
+                if threads is not None:
+                    stack.enter_context(threadpool_limits(limits=threads))
+                return solve_member(
+                    *member, lambda nbytes: stack.enter_context(gate.reserve(nbytes))
+                )
+
+        if workers == 1:
+            results = [solve(member) for member in members]
+        else:
+            # the members are independent: one thread each (NumPy's solve and matmul
+            # release the GIL)
+            with ThreadPoolExecutor(workers) as pool:
+                results = list(pool.map(solve, members))
         module = get_array_module(waves.device)
 
         def to_waves(index):
