@@ -132,9 +132,14 @@ Performance:
   ([PR #635](https://github.com/abTEM/abTEM/pull/635))
     - A centrosymmetric crystal is solved as a real symmetric eigenproblem, that of the crystal moved
       to its inversion center, which halves the memory of the structure matrix and its eigenvectors
-      and is several times faster to factorize; results agree with the complex solve to rounding.
+      and is faster to factorize; results agree with the complex solve to rounding.
       `StructureFactor(inversion_center="auto")` detects the center from the atoms, and
       `inversion_center=None` keeps the complex solve
+    - Measured for one orientation of monoclinic ZrO2 (13,903 beams, float32) on a 24 GB RTX 4090:
+      the structure matrix takes 0.08 s instead of 10 s and the eigendecomposition 2.8 s instead of
+      5.7 s, with a peak of 3.9 GB instead of 9.3 GB (2.5 instead of 6 complex beams x beams
+      matrices); the error against double precision is 2.6e-4 instead of 4.3e-4. Kyanite's 28,898
+      beams, which ran out of memory, fit with a peak of 16.7 GB
     - A rotation series computes the structure factors once, not once per orientation or dask block
 
 Dependencies:
