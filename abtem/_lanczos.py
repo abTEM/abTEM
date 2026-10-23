@@ -197,10 +197,11 @@ def _lanczos_device(
     tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy and the
     batch has at least 32 members (or ``diagonalise_on_device`` is true): a batch of
     hundreds of them costs more on the host than an iteration on the device, and then
-    the only transfer of an iteration is one pair of numbers, for the convergence. Otherwise they are diagonalised on the
-    host in double precision, with a transfer of the diagonal element and the norm of
-    the residual per iteration. ``function`` maps the eigenvalues (B, m) to complex
-    values of the same shape (and of the same array module).
+    the only transfer of an iteration is one pair of numbers, for the convergence.
+    Otherwise they are diagonalised on the host in double precision, with a transfer of
+    the diagonal element and the norm of the residual per iteration. ``function`` maps
+    the eigenvalues (B, m) to complex values of the same shape (and of the same array
+    module).
     """
     from abtem.finite_difference import NotConvergedError
 
