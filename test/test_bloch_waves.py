@@ -5,6 +5,7 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from ase.build import bulk, graphene
+from ase.spacegroup import crystal
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from utils import gpu, requires_gpu
@@ -14,13 +15,19 @@ from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
 from abtem.bloch.dynamical import (
     BlochwaveEnsemble,
+    _eigh,
+    calculate_dynamical_scattering,
     calculate_structure_factors,
+    calculate_structure_matrix,
     plane_wave_expansion,
 )
 from abtem.bloch.utils import (
     auto_detect_centering,
+    calculate_g_vec,
+    find_inversion_center,
     get_reflection_condition,
     relative_positions_for_centering,
+    structure_factor_coupling_matrix,
     wrapped_is_close,
 )
 from abtem.core.backend import asnumpy, get_array_module
@@ -1998,3 +2005,245 @@ def test_exit_waves_match_direct_summation(device, thicknesses, lazy):
     assert result.shape == z.shape + gpts
     tol = 1e-12 if device == "cpu" else 1e-5
     np.testing.assert_allclose(result, reference, atol=tol * np.abs(reference).max())
+
+
+def _baddeleyite():
+    # monoclinic ZrO2 (P2_1/c): centrosymmetric, with a non-orthogonal cell
+    return crystal(
+        ["Zr", "O", "O"],
+        basis=[
+            (0.2754, 0.0395, 0.2083),
+            (0.0700, 0.3317, 0.3447),
+            (0.4496, 0.7569, 0.4792),
+        ],
+        spacegroup=14,
+        cellpar=[5.1505, 5.2116, 5.3173, 90, 99.23, 90],
+    )
+
+
+def test_coupling_matrix_matches_lookup_of_miller_index_differences():
+    structure_factor = StructureFactor(_baddeleyite(), g_max=3.0).build(lazy=False)
+    hkl = BlochWaves(structure_factor, energy=200e3, sg_max=0.1).hkl
+    values = dict(zip(map(tuple, structure_factor.hkl), structure_factor.array))
+    expected = np.array([[values[tuple(gj - gi)] for gj in hkl] for gi in hkl])
+
+    # a small block size gathers the matrix in several blocks
+    A = structure_factor_coupling_matrix(
+        structure_factor.array,
+        structure_factor.hkl,
+        hkl,
+        structure_factor.gpts,
+        max_block_size=10 * len(hkl),
+    )
+
+    assert len(hkl) > 50
+    assert A.flags.f_contiguous
+    np.testing.assert_array_equal(A, expected)
+
+
+def test_couplings_beyond_the_structure_factor_g_max_are_zero():
+    # With g_max above half the structure factor's, beams couple through reflection
+    # differences beyond its g_max and off its grid; they used to raise a ValueError
+    # in ravel_multi_index although the warning says they are left out.
+    atoms = bulk("Si", cubic=True)
+    small = StructureFactor(atoms, g_max=3.0, cutoff="hard").build(lazy=False)
+    large = StructureFactor(atoms, g_max=6.0, cutoff="hard").build(lazy=False)
+    with pytest.warns(UserWarning, match="not included"):
+        bloch_waves = BlochWaves(small, energy=200e3, sg_max=0.2, g_max=2.5)
+    hkl = bloch_waves.hkl
+
+    A = structure_factor_coupling_matrix(small.array, small.hkl, hkl, small.gpts)
+    full = structure_factor_coupling_matrix(large.array, large.hkl, hkl, large.gpts)
+
+    differences = calculate_g_vec(hkl[None] - hkl[:, None], atoms.cell)
+    beyond = np.linalg.norm(differences, axis=-1) > 3.0
+    assert beyond.any()
+    np.testing.assert_array_equal(A[beyond], 0.0)
+    np.testing.assert_allclose(A[~beyond], full[~beyond], rtol=1e-5)
+    bloch_waves.calculate_diffraction_patterns(50.0, lazy=False)
+
+
+@pytest.mark.parametrize("shift", [(0.0, 0.0, 0.0), (0.37, 0.11, 0.52)])
+def test_find_inversion_center(shift):
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + shift)
+
+    center = find_inversion_center(atoms)
+
+    positions = atoms.get_scaled_positions()
+    assert center is not None
+    assert wrapped_is_close(2 * center - positions, positions).all(-1).any(0).all()
+
+
+def test_find_inversion_center_needs_matching_atoms():
+    assert find_inversion_center(bulk("GaN", "wurtzite", a=3.19, c=5.19)) is None
+
+    # diamond's centers are at bond midpoints, between two atoms of the same kind
+    silicon = bulk("Si", cubic=True)
+    assert np.allclose(find_inversion_center(silicon) % 0.5, 0.125)
+    sigmas = np.full(len(silicon), 0.1)
+    sigmas[0] = 0.2
+    assert find_inversion_center(silicon, thermal_sigma=sigmas) is None
+    occupancies = np.ones(len(silicon))
+    occupancies[0] = 0.5
+    assert find_inversion_center(silicon, occupancy=occupancies) is None
+    # a second atom on one site doubles its occupancy, which its partner lacks
+    assert find_inversion_center(silicon + silicon[:1]) is None
+
+
+def test_structure_factor_carries_its_inversion_center():
+    atoms = _baddeleyite()
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    built = structure_factor.build(lazy=False)
+
+    np.testing.assert_allclose(
+        structure_factor.inversion_center, find_inversion_center(atoms)
+    )
+    np.testing.assert_array_equal(
+        built.inversion_center, structure_factor.inversion_center
+    )
+    assert built.centering == structure_factor.centering
+    without = StructureFactor(atoms, g_max=2.0, inversion_center=None)
+    assert without.inversion_center is None
+    with pytest.raises(ValueError, match="inversion_center"):
+        StructureFactor(atoms, g_max=2.0, inversion_center="yes")
+
+
+def test_centrosymmetric_structure_matrix_is_real():
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    structure_factor = StructureFactor(atoms, g_max=3.0).build(lazy=False)
+    bloch_waves = BlochWaves(structure_factor, energy=200e3, sg_max=0.1)
+    center = structure_factor.inversion_center
+    kwargs = dict(
+        structure_factor=structure_factor.array,
+        hkl=structure_factor.hkl,
+        hkl_selected=bloch_waves.hkl,
+        cell=bloch_waves.cell,
+        energy=bloch_waves.energy,
+        gpts=structure_factor.gpts,
+    )
+
+    real = calculate_structure_matrix(**kwargs, inversion_center=center)
+    A = calculate_structure_matrix(**kwargs)
+
+    assert real.dtype == A.real.dtype
+    d = np.exp(2j * np.pi * bloch_waves.hkl @ center)
+    np.testing.assert_allclose(
+        real, d[:, None] * A * d.conj()[None], atol=1e-5 * np.abs(A).max()
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", ["exact", True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_centrosymmetric_solve_matches_complex_solve(device, use_wave_eq):
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    thicknesses = [50.0, 300.0]
+
+    # Metal is single precision only
+    precision, tol = ("float32", 1e-4) if device == "mps" else ("float64", 1e-10)
+    results = {}
+    with abtem.config.set({"precision": precision}):
+        for inversion_center in ("auto", None):
+            structure_factor = StructureFactor(
+                atoms, g_max=3.0, inversion_center=inversion_center, device=device
+            )
+            bloch_waves = BlochWaves(
+                structure_factor,
+                energy=200e3,
+                sg_max=0.1,
+                use_wave_eq=use_wave_eq,
+                device=device,
+            )
+            patterns = bloch_waves.calculate_diffraction_patterns(
+                thicknesses, return_complex=True, lazy=False
+            )
+            results[inversion_center] = asnumpy(patterns.array)
+
+    assert structure_factor.inversion_center is None
+    reference = results[None]
+    np.testing.assert_allclose(
+        results["auto"], reference, atol=tol * np.abs(reference).max()
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype", [np.float32, np.float64, np.complex64, np.complex128]
+)
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
+    if device == "mps":
+        pytest.skip("torch has no in-place eigh")
+    xp = get_array_module(device)
+    rng = np.random.default_rng(0)
+    matrix = rng.normal(size=(40, 40))
+    if np.issubdtype(dtype, np.complexfloating):
+        matrix = matrix + 1j * rng.normal(size=(40, 40))
+    matrix = (matrix + matrix.conj().T).astype(dtype)
+    a = xp.asarray(np.asfortranarray(matrix))
+
+    w, v = _eigh(a, overwrite_a=True)
+    w, v = asnumpy(w), asnumpy(v)
+
+    # on the CPU single precision is copied, to keep numpy's double-precision solve
+    single = dtype in (np.float32, np.complex64)
+    in_place = device != "cpu" or not single
+    if device == "cpu":
+        assert np.shares_memory(v, a) == in_place
+    else:
+        assert v.data.ptr == a.data.ptr
+    tol = 40 * (1e-4 if single else 1e-12)
+    np.testing.assert_allclose(w, np.linalg.eigvalsh(matrix.astype(complex)), atol=tol)
+    np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
+
+
+def test_dynamical_scattering_keeps_the_structure_matrix_by_default():
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves = _silicon_bloch_waves("cpu")
+        A = bloch_waves.calculate_structure_matrix(lazy=False)
+        copy = A.copy()
+        kwargs = dict(
+            hkl=bloch_waves.hkl,
+            cell=bloch_waves.cell,
+            energy=bloch_waves.energy,
+            thicknesses=[50.0, 100.0],
+        )
+
+        kept = calculate_dynamical_scattering(A, **kwargs)
+        np.testing.assert_array_equal(A, copy)
+        overwritten = calculate_dynamical_scattering(
+            A, **kwargs, overwrite_structure_matrix=True
+        )
+
+    np.testing.assert_allclose(overwritten, kept, atol=1e-12)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize(
+    "method, kwargs",
+    [
+        ("calculate_diffraction_patterns", {}),
+        ("calculate_exit_waves", {"gpts": (16, 16)}),
+    ],
+)
+def test_rotation_series_builds_the_structure_factors_once(
+    monkeypatch, method, kwargs, lazy
+):
+    builds = []
+    build = StructureFactor.build
+
+    def counting_build(self, lazy=True):
+        builds.append(lazy)
+        return build(self, lazy=lazy)
+
+    monkeypatch.setattr(StructureFactor, "build", counting_build)
+    ensemble = _silicon_bloch_waves("cpu").rotate(
+        "x", abtem.distributions.uniform(0.0, 0.02, 3)
+    )
+
+    result = getattr(ensemble, method)([50.0], lazy=lazy, **kwargs)
+    if lazy:
+        result.compute(scheduler="synchronous")
+
+    assert builds == [False]

@@ -74,6 +74,13 @@ def _transition_potential_array():
     )
 
 
+def _spherical_pattern():
+    from abtem.ebsd import SphericalPattern, SquareLambertProjection
+
+    directions = SquareLambertProjection().grid(21)
+    return SphericalPattern(1.0 + 0.3 * directions[:, 0], directions)
+
+
 def _momentum_resolved_spectrum():
     from abtem.detectors import SpectralSlitDetector
 
@@ -123,6 +130,10 @@ CASES = {
     "VectorPotentialArray": lambda: VectorPotential(
         _magnetic_atoms(), gpts=(20, 16), slice_thickness=1.0
     ).build(lazy=False),
+    "EBSDPatternImages": lambda: _spherical_pattern().project(
+        abtem.ebsd.EBSDGeometry(shape=(8, 6)), euler=(30.0, 54.7, 45.0)
+    ),
+    "ReferencePatternImages": lambda: _spherical_pattern().interpolate(9, "lambert"),
     "StructureFactorArray": lambda: abtem.StructureFactor(
         bulk("Si", cubic=True), g_max=2.0
     ).build(lazy=False),

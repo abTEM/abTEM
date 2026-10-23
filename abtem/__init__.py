@@ -25,6 +25,13 @@ from abtem.detectors import (
     WavesDetector,
     WindowedPixelatedDetector,
 )
+from abtem.ebsd import (
+    EBSD,
+    BackscatterDetector,
+    EBSDPatternImages,
+    EBSDReferencePattern,
+    ReferencePatternImages,
+)
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -122,5 +129,10 @@ __all__ = [
     "transfer",
     "BlochWaves",
     "StructureFactor",
+    "EBSD",
+    "EBSDReferencePattern",
+    "BackscatterDetector",
+    "EBSDPatternImages",
+    "ReferencePatternImages",
     "StructureFactorArray",
 ]
