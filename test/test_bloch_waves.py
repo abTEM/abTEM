@@ -2182,15 +2182,16 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
     a = xp.asarray(np.asfortranarray(matrix))
 
     w, v = _eigh(a, overwrite_a=True)
-    w, v = asnumpy(w), asnumpy(v)
 
-    # on the CPU single precision is copied, to keep numpy's double-precision solve
+    # on the CPU single precision is copied, to keep numpy's double-precision solve;
+    # checked before asnumpy, which with CuPy installed copies a host array to C order
     single = dtype in (np.float32, np.complex64)
     in_place = device != "cpu" or not single
     if device == "cpu":
         assert np.shares_memory(v, a) == in_place
     else:
         assert v.data.ptr == a.data.ptr
+    w, v = asnumpy(w), asnumpy(v)
     tol = 40 * (1e-4 if single else 1e-12)
     np.testing.assert_allclose(w, np.linalg.eigvalsh(matrix.astype(complex)), atol=tol)
     np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
