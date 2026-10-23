@@ -17,9 +17,9 @@ method the table lists
   by kz / k (the flux, which the solver conserves) instead,
 * the sum of |psi_g|^2 and the flux of the exit wave.
 
-The methods that this checkout does not have are left out: the options
-``backscatter_correction`` and ``order="exact"`` of ``RealSpaceMultislice`` and
-``KrylovMultislice`` (see abTEM#629 and #622).
+``RealSpaceMultislice(expansion_scope="full")`` always applies the backscatter
+correction; its ``order="exact"`` (abTEM#629) is left out of the methods of a checkout
+that does not have it (see ``--list``).
 
 Examples
 --------
@@ -137,30 +137,11 @@ def available_methods():
     from abtem.multislice import RealSpaceMultislice
 
     names = {"twoway": "TwoWaySolver", "fourier": "FourierMultislice"}
-    fields = {f.name for f in dataclasses.fields(RealSpaceMultislice)}
-    switch = "backscatter_correction" in fields
     for order in (1, 2, 3):
-        if switch:
-            names[f"rs-full-o{order}"] = f"RealSpaceMultislice full, order {order}"
-            names[f"rs-full-o{order}-corr"] = (
-                f"RealSpaceMultislice full, order {order}, backscatter correction"
-            )
-        else:
-            names[f"rs-full-o{order}"] = (
-                f"RealSpaceMultislice full, order {order} (correction as shipped)"
-            )
+        names[f"rs-full-o{order}"] = f"RealSpaceMultislice full, order {order}"
+    fields = {f.name for f in dataclasses.fields(RealSpaceMultislice)}
     if "lanczos_tolerance" in fields:  # order="exact", abTEM#629
         names["rs-full-exact"] = "RealSpaceMultislice full, order 'exact'"
-        if switch:
-            names["rs-full-exact-corr"] = (
-                "RealSpaceMultislice full, order 'exact', backscatter correction"
-            )
-    try:
-        from abtem.krylov import KrylovMultislice  # noqa: F401
-
-        names["krylov"] = "KrylovMultislice"
-    except ImportError:
-        pass
     return names
 
 
@@ -169,17 +150,10 @@ def make_algorithm(name):
 
     if name == "fourier":
         return FourierMultislice()
-    if name == "krylov":
-        from abtem.krylov import KrylovMultislice
-
-        return KrylovMultislice()
-    fields = {f.name for f in dataclasses.fields(RealSpaceMultislice)}
-    corrected = name.endswith("-corr")
-    order = name.removesuffix("-corr").removeprefix("rs-full-")
-    kwargs = {"order": "exact" if order == "exact" else int(order[1:])}
-    if "backscatter_correction" in fields:
-        kwargs["backscatter_correction"] = corrected
-    return RealSpaceMultislice(expansion_scope="full", **kwargs)
+    order = name.removeprefix("rs-full-")
+    return RealSpaceMultislice(
+        expansion_scope="full", order="exact" if order == "exact" else int(order[1:])
+    )
 
 
 def band_edges(cutoff):
