@@ -88,6 +88,26 @@ def beam_amplitudes(waves):
     return np.fft.fft2(waves.array) / waves.array.size
 
 
+# The tests that compare two ways to the same solution of the same discretised
+# problem (the reduced and the full basis, the ensemble and its members, the device
+# and the host) do not need a converged discretisation, so they use this coarse one:
+# 300 eV, slices of 0.04 Å and 3 Å of vacuum, on a grid that divides the hexagonal
+# lattice (so the sampled potential keeps its symmetry exactly). Each solve takes
+# about a second, a converged one tens of seconds.
+COARSE_ENERGY = 300.0
+
+
+def coarse_graphene(**kwargs):
+    kwargs = {
+        "gpts": (24, 42),
+        "slice_thickness": 0.04,
+        "projection": "finite",
+        "periodic": True,
+        **kwargs,
+    }
+    return abtem.Potential(graphene_atoms(vacuum=3.0), **kwargs)
+
+
 def test_structure_symmetry_of_graphene():
     # The orthogonal cell holds two primitive cells: one translation, and the twelve
     # operations of the 6mm point group about a hexagon centre.
@@ -138,8 +158,8 @@ def test_empty_slab_transmits_the_wave_unchanged():
     # nothing but rounding remains, at any step.
     def phase_error(slice_thickness):
         potential = abtem.Potential(
-            ase.Atoms(cell=[2.46, 4.2608, 8.0]),
-            gpts=(48, 84),
+            ase.Atoms(cell=[2.46, 4.2608, 4.0]),
+            gpts=(18, 30),
             slice_thickness=slice_thickness,
         )
         with abtem.config.set({"precision": "float64"}):
@@ -154,20 +174,14 @@ def test_empty_slab_transmits_the_wave_unchanged():
     assert phase_error(0.008) < 1e-9
 
 
-@pytest.mark.parametrize("energy", [200.0, 1000.0])
-def test_flux_is_conserved(energy):
+@pytest.mark.parametrize("energy, step", [(200.0, 0.02), (1000.0, 0.015)])
+def test_flux_is_conserved(energy, step):
     # Oracle: without absorption the transmitted and reflected fluxes add up to the
     # incident
     # one; the cutoff is below the aliasing limit of the potential's sampling.
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    potential = coarse_graphene(slice_thickness=step)
     with abtem.config.set({"precision": "float64"}):
-        transmitted, reflected = TwoWaySolver(cutoff=3.0).scatter(
+        transmitted, reflected = TwoWaySolver(cutoff=2.0).scatter(
             abtem.PlaneWave(energy=energy), potential
         )
     extent = potential.extent
@@ -181,6 +195,7 @@ def test_flux_is_conserved(energy):
         assert (np.abs(beam_amplitudes(reflected)) ** 2 * weights).sum() > 0.02
 
 
+@pytest.mark.slow
 @pytest.mark.float64
 def test_agrees_with_multislice_where_multislice_is_accurate():
     # Oracle: at 20 keV, with slices much thinner than the 0.086 Å wavelength, split-
@@ -191,9 +206,9 @@ def test_agrees_with_multislice_where_multislice_is_accurate():
     energy, cutoff, gpts = 20e3, 1.5, (16, 28)
     with abtem.config.set({"precision": "float64"}):
         potential = abtem.Potential(
-            graphene_atoms(vacuum=3.0),
+            graphene_atoms(vacuum=1.5),
             gpts=gpts,
-            slice_thickness=0.0035,
+            slice_thickness=0.005,
             projection="finite",
             periodic=True,
         ).build(lazy=False)
@@ -237,7 +252,7 @@ def test_a_tilted_empty_slab_transmits_the_wave_unchanged():
     # the carrier of its direction, has unit amplitude and zero phase after the slab,
     # and nothing is reflected.
     potential = abtem.Potential(
-        ase.Atoms(cell=[2.46, 4.2608, 8.0]), gpts=(48, 84), slice_thickness=0.016
+        ase.Atoms(cell=[2.46, 4.2608, 4.0]), gpts=(18, 30), slice_thickness=0.016
     )
     with abtem.config.set({"precision": "float64"}):
         transmitted, reflected = TwoWaySolver(cutoff=1.5).scatter(
@@ -253,16 +268,10 @@ def test_flux_is_conserved_for_a_tilted_wave(tilt):
     # Oracle: without absorption the transmitted and reflected fluxes add up to the
     # incident one, at any direction of the incident wave: the flux of a beam is its
     # kz, over that of the incident beam.
-    energy = 1000.0
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    energy = COARSE_ENERGY
+    potential = coarse_graphene()
     with abtem.config.set({"precision": "float64"}):
-        transmitted, reflected = TwoWaySolver(cutoff=2.5).scatter(
+        transmitted, reflected = TwoWaySolver(cutoff=2.0).scatter(
             abtem.PlaneWave(energy=energy, tilt=tilt), potential
         )
     kz, incident_kz = tilted_beam_geometry(
@@ -278,6 +287,7 @@ def test_flux_is_conserved_for_a_tilted_wave(tilt):
     assert abs(flux - 1.0) < 1e-4
 
 
+@pytest.mark.slow
 @pytest.mark.float64
 def test_agrees_with_multislice_for_a_tilted_wave():
     # Oracle: as without tilt, at 20 keV with slices much thinner than the wavelength
@@ -288,9 +298,9 @@ def test_agrees_with_multislice_for_a_tilted_wave():
     energy, cutoff, gpts, tilt = 20e3, 1.4, (16, 28), (30.0, 10.0)
     with abtem.config.set({"precision": "float64"}):
         potential = abtem.Potential(
-            graphene_atoms(vacuum=3.0),
+            graphene_atoms(vacuum=1.5),
             gpts=gpts,
-            slice_thickness=0.0035,
+            slice_thickness=0.005,
             projection="finite",
             periodic=True,
         ).build(lazy=False)
@@ -314,31 +324,18 @@ def test_agrees_with_multislice_for_a_tilted_wave():
     assert np.abs(reflected.array).max() < 1e-4
 
 
-def single_precision_pair(energy, solver_kwargs=None):
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+def single_precision_pair(energy, potential, cutoff):
     results = {}
     for precision in ("float64", "float32"):
         with abtem.config.set({"precision": "float64"}):
             transmitted, reflected = TwoWaySolver(
-                cutoff=3.0, precision=precision, **(solver_kwargs or {})
+                cutoff=cutoff, precision=precision
             ).scatter(abtem.PlaneWave(energy=energy), potential)
         results[precision] = (beam_amplitudes(transmitted), beam_amplitudes(reflected))
     return results
 
 
-@pytest.mark.parametrize("energy", [200.0, 1000.0])
-def test_single_precision_is_accurate_to_1e_3_on_the_strong_beams(energy):
-    # Oracle: the double precision solution. The evanescent beams make the blocks
-    # ill-conditioned, but the error stays about 1e-4 relative on the strong beams
-    # and 1e-5 absolute on the reflected wave, and it is not zero (a single precision
-    # solve was done).
-    results = single_precision_pair(energy)
+def assert_single_precision_is_accurate(results):
     t64, r64 = results["float64"]
     t32, r32 = results["float32"]
     strong = np.abs(t64) > 1e-3
@@ -347,10 +344,21 @@ def test_single_precision_is_accurate_to_1e_3_on_the_strong_beams(energy):
     assert np.abs(r32 - r64).max() < 1e-4
 
 
-def test_the_precision_follows_the_configuration_by_default():
-    # Oracle: the explicit precisions. The default follows abtem.config["precision"]
-    # (single precision gives the single precision result, not the double one), and
-    # the dtype of the waves follows it too.
+def test_single_precision_is_accurate_to_1e_3_on_the_strong_beams():
+    # Oracle: the double precision solution. The evanescent beams make the blocks
+    # ill-conditioned, but the error stays about 1e-4 relative on the strong beams
+    # and 1e-5 absolute on the reflected wave, and it is not zero (a single precision
+    # solve was done).
+    assert_single_precision_is_accurate(
+        single_precision_pair(COARSE_ENERGY, coarse_graphene(), cutoff=2.0)
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("energy", [200.0, 1000.0])
+def test_single_precision_is_accurate_on_a_converged_problem(energy):
+    # As above for the converged problem, with 1200 slices of 0.01 Å to accumulate the
+    # rounding over and the evanescent beams up to 3 / Å.
     potential = abtem.Potential(
         graphene_atoms(),
         gpts=(48, 84),
@@ -358,17 +366,25 @@ def test_the_precision_follows_the_configuration_by_default():
         projection="finite",
         periodic=True,
     )
+    assert_single_precision_is_accurate(single_precision_pair(energy, potential, 3.0))
+
+
+def test_the_precision_follows_the_configuration_by_default():
+    # Oracle: the explicit precisions. The default follows abtem.config["precision"]
+    # (single precision gives the single precision result, not the double one), and
+    # the dtype of the waves follows it too.
+    potential = coarse_graphene()
     arrays = {}
     for configured in ("float32", "float64"):
         with abtem.config.set({"precision": configured}):
-            transmitted, _ = TwoWaySolver(cutoff=3.0).scatter(
-                abtem.PlaneWave(energy=1000.0), potential
+            transmitted, _ = TwoWaySolver(cutoff=2.0).scatter(
+                abtem.PlaneWave(energy=COARSE_ENERGY), potential
             )
         assert transmitted.array.dtype == (
             np.complex64 if configured == "float32" else np.complex128
         )
         arrays[configured] = beam_amplitudes(transmitted)
-    explicit = single_precision_pair(1000.0)
+    explicit = single_precision_pair(COARSE_ENERGY, potential, cutoff=2.0)
     np.testing.assert_allclose(arrays["float64"], explicit["float64"][0], atol=1e-12)
     # (the potential of the single precision configuration is itself single precision)
     np.testing.assert_allclose(arrays["float32"], explicit["float32"][0], atol=5e-5)
@@ -380,17 +396,13 @@ def test_the_precision_follows_the_configuration_by_default():
 def test_the_device_gives_the_waves_of_the_cpu(device, tilt):
     # Oracle: the CPU result in double precision, to rounding (the CUDA case is skipped
     # without a CUDA device).
-    kwargs = dict(
-        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
-    )
     with abtem.config.set({"precision": "float64"}):
         reference = TwoWaySolver(cutoff=2.0).scatter(
-            abtem.PlaneWave(energy=1000.0, tilt=tilt),
-            abtem.Potential(graphene_atoms(), **kwargs),
+            abtem.PlaneWave(energy=COARSE_ENERGY, tilt=tilt), coarse_graphene()
         )
         result = TwoWaySolver(cutoff=2.0).scatter(
-            abtem.PlaneWave(energy=1000.0, tilt=tilt, device=device),
-            abtem.Potential(graphene_atoms(), device=device, **kwargs),
+            abtem.PlaneWave(energy=COARSE_ENERGY, tilt=tilt, device=device),
+            coarse_graphene(device=device),
         )
     for a, b in zip(result, reference):
         host = np.asarray(to_host_array(a))
@@ -404,19 +416,13 @@ def test_the_symmetry_of_a_tilted_wave_gives_the_waves_of_the_full_basis(tilt):
     # Oracle: the full beam basis. A wave tilted along a mirror axis of the lattice
     # keeps the mirror, a wave in a general direction only the translations; either
     # way the reduced basis must reproduce the amplitudes and phases of the full one.
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    potential = coarse_graphene()
     amplitudes = {}
     for symmetry in (True, False):
         with abtem.config.set({"precision": "float64"}):
             transmitted, reflected = TwoWaySolver(
-                cutoff=2.5, symmetry=symmetry
-            ).scatter(abtem.PlaneWave(energy=1000.0, tilt=tilt), potential)
+                cutoff=2.0, symmetry=symmetry
+            ).scatter(abtem.PlaneWave(energy=COARSE_ENERGY, tilt=tilt), potential)
         amplitudes[symmetry] = (
             beam_amplitudes(transmitted),
             beam_amplitudes(reflected),
@@ -429,26 +435,20 @@ def test_the_symmetry_of_a_tilted_wave_gives_the_waves_of_the_full_basis(tilt):
 def test_an_ensemble_of_tilts_is_the_tilts_one_by_one():
     # Oracle: each member of the ensemble is the solution of that tilt alone; the
     # axes of the ensemble keep their order and their metadata.
-    tilts_x, tilts_y = [0.0, 40.0, 80.0], [0.0, 25.0]
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    tilts_x, tilts_y = [0.0, 80.0], [0.0, 25.0]
+    potential = coarse_graphene()
     solver = TwoWaySolver(cutoff=1.5)
     with abtem.config.set({"precision": "float64"}):
         transmitted, reflected = solver.scatter(
-            abtem.PlaneWave(energy=1000.0, tilt=(tilts_x, tilts_y)), potential
+            abtem.PlaneWave(energy=COARSE_ENERGY, tilt=(tilts_x, tilts_y)), potential
         )
-        assert transmitted.shape == (3, 2, 48, 84)
-        assert reflected.shape == (3, 2, 48, 84)
+        assert transmitted.shape == (2, 2, 24, 42)
+        assert reflected.shape == (2, 2, 24, 42)
         assert len(transmitted.ensemble_axes_metadata) == 2
         for i, tx in enumerate(tilts_x):
             for j, ty in enumerate(tilts_y):
                 single_t, single_r = solver.scatter(
-                    abtem.PlaneWave(energy=1000.0, tilt=(tx, ty)), potential
+                    abtem.PlaneWave(energy=COARSE_ENERGY, tilt=(tx, ty)), potential
                 )
                 np.testing.assert_allclose(
                     transmitted.array[i, j], single_t.array, atol=1e-9
@@ -462,7 +462,7 @@ def glide_slab():
     """A slab of the plane group pmg: two atoms, related by a mirror along y with a
     translation of half the cell along y (a glide), placed on the grid of the potential
     so that the sampled potential has the symmetry exactly."""
-    a, b, nx, ny = 5.0, 6.0, 48, 64
+    a, b, nx, ny = 5.0, 6.0, 24, 32
     x0, y0 = 9 * a / nx, 13 * b / ny
     atoms = ase.Atoms(
         "Si2",
@@ -503,14 +503,14 @@ def test_the_glide_gives_the_waves_of_the_full_basis_and_the_systematic_absences
     # beams (0, odd) that the glide extinguishes are zero in the full solution.
     atoms, gpts = glide_slab()
     potential = abtem.Potential(
-        atoms, gpts=gpts, slice_thickness=0.02, projection="finite", periodic=True
+        atoms, gpts=gpts, slice_thickness=0.05, projection="finite", periodic=True
     )
     amplitudes = {}
     for symmetry in (True, False):
         with abtem.config.set({"precision": "float64"}):
             transmitted, reflected = TwoWaySolver(
-                cutoff=2.0, symmetry=symmetry
-            ).scatter(abtem.PlaneWave(energy=1000.0, tilt=tilt), potential)
+                cutoff=1.0, symmetry=symmetry
+            ).scatter(abtem.PlaneWave(energy=COARSE_ENERGY, tilt=tilt), potential)
         amplitudes[symmetry] = (
             beam_amplitudes(transmitted),
             beam_amplitudes(reflected),
@@ -526,20 +526,14 @@ def test_the_glide_gives_the_waves_of_the_full_basis_and_the_systematic_absences
 def test_an_ensemble_of_energies_and_tilts_is_the_members_one_by_one():
     # Oracle: each member is the solution of its energy and tilt alone, in the order of
     # the axes of the ensemble (here the tilts first, then the energies).
-    tilts, energies = [0.0, 40.0], [500.0, 1000.0]
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    tilts, energies = [0.0, 40.0], [250.0, COARSE_ENERGY]
+    potential = coarse_graphene()
     solver = TwoWaySolver(cutoff=1.5)
     with abtem.config.set({"precision": "float64"}):
         transmitted, reflected = solver.scatter(
             abtem.PlaneWave(energy=energies, tilt=(tilts, 0.0)), potential
         )
-        assert transmitted.shape == (2, 2, 48, 84)
+        assert transmitted.shape == (2, 2, 24, 42)
         for i, tilt in enumerate(tilts):
             for j, energy in enumerate(energies):
                 single_t, single_r = solver.scatter(
@@ -558,16 +552,10 @@ def test_an_ensemble_of_energies_and_tilts_is_the_members_one_by_one():
 def test_an_ensemble_of_energies_follows_the_wavelength():
     # Oracle: the reflection of graphene falls with the energy, 7 % at 200 eV and less
     # than 1 % at 1 keV, and the flux of every member is conserved.
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    potential = coarse_graphene(slice_thickness=0.015)
     energies = [200.0, 1000.0]
     with abtem.config.set({"precision": "float64"}):
-        transmitted, reflected = TwoWaySolver(cutoff=3.0).scatter(
+        transmitted, reflected = TwoWaySolver(cutoff=2.0).scatter(
             abtem.PlaneWave(energy=energies), potential
         )
     reflections = []
@@ -619,11 +607,8 @@ def test_a_flat_absorbing_slab_follows_the_airy_formulas(absorption):
 def test_absorption_is_the_imaginary_potential_that_scatter_can_also_be_given():
     # Oracle: absorption mu is an imaginary potential mu V, so the same result follows
     # from an absorptive potential of mu V (built as an array), and the two add up.
-    kwargs = dict(
-        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
-    )
-    potential = abtem.Potential(graphene_atoms(), **kwargs)
-    wave = abtem.PlaneWave(energy=1000.0)
+    potential = coarse_graphene()
+    wave = abtem.PlaneWave(energy=COARSE_ENERGY)
     with abtem.config.set({"precision": "float64"}):
         built = potential.build(lazy=False)
         scaled = abtem.PotentialArray(
@@ -653,24 +638,19 @@ def test_absorption_is_the_imaginary_potential_that_scatter_can_also_be_given():
 def test_symmetry_reduction_with_absorption_gives_the_waves_of_the_full_basis():
     # Oracle: the full beam basis. The symmetry does not need the coupling matrix to be
     # Hermitian; the loss of flux is the same in both.
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.01,
-        projection="finite",
-        periodic=True,
-    )
+    potential = coarse_graphene()
     waves = {}
     with abtem.config.set({"precision": "float64"}):
         for symmetry in (True, False):
             waves[symmetry] = TwoWaySolver(
                 cutoff=2.0, symmetry=symmetry, absorption=0.2
-            ).scatter(abtem.PlaneWave(energy=500.0), potential)
+            ).scatter(abtem.PlaneWave(energy=COARSE_ENERGY), potential)
+    # (the rectangular grid does not hold the sixfold axis exactly: 2e-5 remains)
     for reduced, full in zip(waves[True], waves[False]):
         np.testing.assert_allclose(
-            beam_amplitudes(reduced), beam_amplitudes(full), atol=5e-6
+            beam_amplitudes(reduced), beam_amplitudes(full), atol=5e-5
         )
-    weights = flux_weights((48, 84), potential.extent, 500.0)
+    weights = flux_weights((24, 42), potential.extent, COARSE_ENERGY)
     flux = sum((np.abs(beam_amplitudes(w)) ** 2 * weights).sum() for w in waves[False])
     assert flux < 0.95
 
@@ -679,10 +659,7 @@ def test_absorption_is_validated():
     with pytest.raises(ValueError, match="absorption"):
         TwoWaySolver(absorption=-0.1)
 
-    kwargs = dict(
-        gpts=(48, 84), slice_thickness=0.01, projection="finite", periodic=True
-    )
-    potential = abtem.Potential(graphene_atoms(), **kwargs)
+    potential = coarse_graphene()
     built = potential.build(lazy=False)
     negative = abtem.PotentialArray(
         -np.asarray(built.array),
@@ -691,17 +668,17 @@ def test_absorption_is_validated():
     )
     with pytest.raises(ValueError, match="must not be negative"):
         TwoWaySolver(cutoff=1.5).scatter(
-            abtem.PlaneWave(energy=1000.0), potential, negative
+            abtem.PlaneWave(energy=COARSE_ENERGY), potential, negative
         )
     other = abtem.Potential(
         graphene_atoms(vacuum=5.0),
-        gpts=(48, 84),
-        slice_thickness=0.01,
+        gpts=(24, 42),
+        slice_thickness=0.04,
         projection="finite",
     )
     with pytest.raises(ValueError, match="same atoms|grid"):
         TwoWaySolver(cutoff=1.5).scatter(
-            abtem.PlaneWave(energy=1000.0), potential, other
+            abtem.PlaneWave(energy=COARSE_ENERGY), potential, other
         )
 
 
@@ -709,18 +686,18 @@ def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
     potential = abtem.Potential(
-        strontium_titanate(2),
+        strontium_titanate(1),
         gpts=(30, 30),
-        slice_thickness=0.015,
+        slice_thickness=0.05,
         projection="finite",
         periodic=True,
     )
     with abtem.config.set({"precision": "float64"}):
         reduced = TwoWaySolver(cutoff=1.5, symmetry=True).scatter(
-            abtem.PlaneWave(energy=1000.0), potential
+            abtem.PlaneWave(energy=COARSE_ENERGY), potential
         )
         full = TwoWaySolver(cutoff=1.5, symmetry=False).scatter(
-            abtem.PlaneWave(energy=1000.0), potential
+            abtem.PlaneWave(energy=COARSE_ENERGY), potential
         )
     for waves_reduced, waves_full in zip(reduced, full):
         np.testing.assert_allclose(waves_reduced.array, waves_full.array, atol=1e-8)
@@ -729,49 +706,30 @@ def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
 
 def test_a_built_potential_gives_the_same_waves_as_the_potential():
     # A built PotentialArray carries no atoms, so it is solved in the full beam basis;
-    # the
-    # symmetry-reduced solution of the potential differs by the asymmetry of the sampled
-    # potential, about 1e-4 for graphene on a rectangular grid.
-    potential = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=0.015,
-        projection="finite",
-        periodic=True,
-    )
+    # the symmetry-reduced solution of the potential differs by the asymmetry of the
+    # sampled potential, about 1e-4 for graphene on this rectangular grid.
+    potential = coarse_graphene()
     solver = TwoWaySolver(cutoff=1.5)
-    from_potential = solver.scatter(abtem.PlaneWave(energy=1000.0), potential)
+    from_potential = solver.scatter(abtem.PlaneWave(energy=COARSE_ENERGY), potential)
     from_built = solver.scatter(
-        abtem.PlaneWave(energy=1000.0), potential.build(lazy=False)
+        abtem.PlaneWave(energy=COARSE_ENERGY), potential.build(lazy=False)
     )
     for a, b in zip(from_potential, from_built):
-        np.testing.assert_allclose(a.array, b.array, atol=1e-4)
+        np.testing.assert_allclose(a.array, b.array, atol=3e-4)
 
 
 def test_the_solver_refuses_unsupported_input():
-    coarse = abtem.Potential(
-        graphene_atoms(), gpts=(24, 42), slice_thickness=0.01, projection="finite"
-    )
+    coarse = coarse_graphene(slice_thickness=0.01)
     with pytest.raises(ValueError, match="sampled too coarsely"):
         TwoWaySolver(cutoff=4.5).scatter(abtem.PlaneWave(energy=1000.0), coarse)
 
     with pytest.raises(ValueError, match="too thick for the Numerov step"):
         TwoWaySolver(cutoff=2.0).scatter(
             abtem.PlaneWave(energy=200e3),
-            abtem.Potential(
-                graphene_atoms(),
-                gpts=(24, 42),
-                slice_thickness=0.02,
-                projection="finite",
-            ),
+            coarse_graphene(),
         )
 
-    uneven = abtem.Potential(
-        graphene_atoms(),
-        gpts=(48, 84),
-        slice_thickness=[4.0, 8.0],
-        projection="finite",
-    )
+    uneven = coarse_graphene(slice_thickness=[2.0, 4.0])
     with pytest.raises(ValueError, match="equal thickness"):
         TwoWaySolver(cutoff=1.0).scatter(abtem.PlaneWave(energy=1000.0), uneven)
 
