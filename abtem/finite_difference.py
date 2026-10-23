@@ -7,9 +7,17 @@ import numpy as np
 import scipy.ndimage  # type: ignore
 from numba import njit, prange  # type: ignore
 
+from abtem._lanczos import (
+    exponential_of_root,
+    inverse_wave_number,
+    lanczos_function,
+    wave_number,
+)
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
+from abtem.core import config
 from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.fft import fft2, ifft2
 from abtem.core.utils import get_dtype
 
 if TYPE_CHECKING:
@@ -140,7 +148,7 @@ def _build_matrix(offsets: list[int]):
     import sympy  # type: ignore
 
     """Constructs the equation system matrix for the finite difference coefficients"""
-    A = [([1 for _ in offsets])]
+    A = [[1 for _ in offsets]]
     for i in range(1, len(offsets)):
         A.append([j**i for j in offsets])
     return sympy.Matrix(A)
@@ -472,8 +480,11 @@ class LaplaceOperator:
         wavelength, sampling = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap",
-            dtype=get_dtype(complex=True), device=device
+            self._accuracy,
+            prefactor,
+            mode="wrap",
+            dtype=get_dtype(complex=True),
+            device=device,
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
@@ -676,6 +687,95 @@ def full_series(
     return series * 1.0j * thickness
 
 
+def _propagating_band(waves: Waves, propagating_cutoff: float, xp):
+    """Mask of the Fourier components that the exact root keeps: the propagating band
+    ``|k| < propagating_cutoff / wavelength``, within the antialiasing aperture."""
+    nx, ny = waves._valid_gpts
+    dx, dy = waves._valid_sampling
+    kx = xp.asarray(np.fft.fftfreq(nx, dx))[:, None]
+    ky = xp.asarray(np.fft.fftfreq(ny, dy))[None, :]
+    radius = min(
+        propagating_cutoff / energy2wavelength(waves._valid_energy),
+        config.get("antialias.cutoff") / (2 * max(dx, dy)),
+    )
+    return (kx**2 + ky**2) < radius**2
+
+
+def _exact_root_step(
+    waves: Waves,
+    potential_slice: PotentialArray,
+    next_slice: PotentialArray | None,
+    laplace: LaplaceOperator,
+    propagating_cutoff: float,
+    tolerance: float,
+    max_iterations: int,
+    correct_forward: bool,
+) -> Sequence[Waves]:
+    """A multislice step with the exact one-way root of the full operator, and the
+    backscattered wave of the next slice, by Lanczos iterations (no Taylor series)."""
+    xp = get_array_module(waves.array)
+
+    if waves.device != potential_slice.device:
+        potential_slice = potential_slice.copy_to_device(device=waves.device)
+        if next_slice is not None:
+            next_slice = next_slice.copy_to_device(device=waves.device)
+
+    thickness = potential_slice.thickness
+    sigma = energy2sigma(waves._valid_energy)
+    wavelength = energy2wavelength(waves._valid_energy)
+    k = 2 * np.pi / wavelength
+    laplace_stencil = laplace.get_stencil(waves, device=waves.device)
+    band = _propagating_band(waves, propagating_cutoff, xp)
+
+    def project(array):
+        return ifft2(fft2(array) * band)
+
+    def operator(potential):
+        # laplacian / (4 pi K) + sigma V on the band, a Hermitian operator
+        def apply(a):
+            return project(laplace_stencil(a) / (2 * k) + potential * a)
+
+        return apply
+
+    current = operator(potential_slice.array[0] * sigma / thickness)
+
+    shape = waves._array.shape
+    batch = project(waves._array).reshape((-1,) + shape[-2:])
+    batch = lanczos_function(
+        batch,
+        current,
+        exponential_of_root(k, thickness),
+        tolerance,
+        max_iterations,
+        xp,
+    )
+
+    backscatter = xp.zeros_like(batch)
+    if next_slice is not None:
+        following = operator(next_slice.array[0] * sigma / thickness)
+        # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
+        # (2025) 103778 with the operators of both slices
+        difference = lanczos_function(
+            batch, following, wave_number(k), tolerance, max_iterations, xp
+        ) - lanczos_function(
+            batch, current, wave_number(k), tolerance, max_iterations, xp
+        )
+        backscatter = 0.5 * lanczos_function(
+            difference,
+            following,
+            inverse_wave_number(k),
+            tolerance,
+            max_iterations,
+            xp,
+        )
+        if correct_forward:
+            batch = batch - backscatter
+
+    waves._array = batch.reshape(shape)
+    kwargs = waves._copy_kwargs(exclude=("array",))
+    return waves, waves.__class__(backscatter.reshape(shape), **kwargs)
+
+
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
@@ -683,8 +783,12 @@ def multislice_step(
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
-    order: int = 1,
+    order: int | str = 1,
     fully_corrected: bool = False,
+    correct_forward: bool = True,
+    propagating_cutoff: float = 0.95,
+    lanczos_tolerance: float = 1e-8,
+    max_iterations: int = 60,
 ) -> Waves | Sequence[Waves]:
     """
     Performs a single multislice step.
@@ -708,8 +812,30 @@ def multislice_step(
     fully_corrected: bool
         If True, transmission and propagator operators are expanded to specified order.
         If next_slice is not None, the backscattered wave component is also computed.
+    propagating_cutoff, lanczos_tolerance, max_iterations
+        For ``order="exact"``, which evaluates the root of the full operator by a
+        Lanczos iteration instead of a series (it requires ``fully_corrected``): the
+        propagating band, the convergence of the iteration and its maximum length.
+    correct_forward: bool
+        If True (default), the backscattered component is subtracted from the forward
+        wave (Eq. 10 in Micron 190 (2025) 103778). If False, the forward wave is the
+        plain expansion and the backscattered component is only returned.
 
     """
+    if order == "exact":
+        if not fully_corrected:
+            raise ValueError('order="exact" requires the full expansion scope')
+        return _exact_root_step(
+            waves,
+            potential_slice,
+            next_slice,
+            laplace,
+            propagating_cutoff,
+            lanczos_tolerance,
+            max_iterations,
+            correct_forward,
+        )
+
     xp = get_array_module(waves.array)
     if max_terms < 1:
         raise ValueError()
@@ -813,7 +939,8 @@ def multislice_step(
             )
 
         # Eq.10 in Micron 190 (2025) 103778.
-        waves._array = waves._array - backscatter
+        if correct_forward:
+            waves._array = waves._array - backscatter
 
     if fully_corrected:
         kwargs = waves._copy_kwargs(exclude=("array",))
