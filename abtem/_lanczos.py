@@ -174,7 +174,8 @@ def _lanczos_host(
     return result
 
 
-_DEVICE_EIGH_MEMBERS = 32  # batch from which CuPy diagonalises the tridiagonal matrices
+# the batch from which CuPy diagonalises the tridiagonal matrices on the device
+_DEVICE_EIGH_MEMBERS = 32
 
 
 def _lanczos_device(
