@@ -9,7 +9,12 @@ from utils import _ACCELERATOR, to_host_array
 import abtem
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.multislice import FourierMultislice
-from abtem.twoway import TwoWaySolver, structure_glides, structure_symmetry
+from abtem.twoway import (
+    MeanFreePathAbsorber,
+    TwoWaySolver,
+    structure_glides,
+    structure_symmetry,
+)
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
@@ -802,3 +807,127 @@ def test_structure_symmetry_finds_what_spglib_finds_in_a_hexagonal_supercell(lay
     order, number_of_translations = spglib_inplane_symmetry(atoms)
     assert len(operations) % order == 0 and len(operations) > order
     assert len(translations) == number_of_translations
+
+
+# --- the absorber from an inelastic mean free path ---
+
+
+def flat_slab(volts, thickness=2.0, step=0.01):
+    count = int(round(thickness / step))
+    return abtem.PotentialArray(
+        np.full((count, 24, 24), volts * step), slice_thickness=step, extent=(3.0, 3.0)
+    )
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("volts", [0.0, 15.0])
+def test_a_mean_free_path_absorber_follows_the_airy_formulas(volts):
+    # Oracle: a laterally uniform slab of a medium of complex wave number
+    # k2 = sqrt(k^2 + 2 k sigma V + i k / mean_free_path), Fresnel coefficients with the
+    # multiple reflection of the two faces, as for the proportional absorption. For a
+    # clean slab the intensity decays as exp(-thickness / mean_free_path) (to the
+    # reflection at the faces).
+    energy, thickness, mean_free_path = COARSE_ENERGY, 2.0, 2.0
+    k, sigma = 2 * np.pi / energy2wavelength(energy), energy2sigma(energy)
+    potential = flat_slab(volts, thickness)
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = TwoWaySolver(
+            cutoff=1.0, symmetry=False, absorber=MeanFreePathAbsorber(mean_free_path)
+        ).scatter(abtem.PlaneWave(energy=energy), potential)
+    k2 = np.sqrt(k**2 + 2 * k * sigma * volts + 1j * k / mean_free_path)
+    r12, t12, t21 = (k - k2) / (k + k2), 2 * k / (k + k2), 2 * k2 / (k + k2)
+    round_trip = np.exp(2j * k2 * thickness)
+    expected_t = (
+        t12 * t21 * np.exp(1j * (k2 - k) * thickness) / (1 - r12**2 * round_trip)
+    )
+    expected_r = r12 + t12 * t21 * (-r12) * round_trip / (1 - r12**2 * round_trip)
+    t, r = transmitted.array[0, 0], reflected.array[0, 0]
+    assert abs(t - expected_t) < 5e-4
+    assert abs(r - expected_r) < 5e-4
+    if volts == 0.0:
+        assert abs(t) ** 2 == pytest.approx(
+            np.exp(-thickness / mean_free_path), rel=5e-3
+        )
+
+
+@pytest.mark.float64
+def test_the_absorber_acts_only_in_its_range():
+    # Oracle: the intensity that crosses the slab falls by exp(-length / mean free
+    # path) over the length of the slices whose centres are in the range; a long mean
+    # free path keeps the reflection of the interfaces negligible.
+    energy, mean_free_path = COARSE_ENERGY, 10.0
+    absorber = MeanFreePathAbsorber(mean_free_path, z_range=(0.5, 1.5))
+    potential = flat_slab(0.0)
+    length = absorber.slices(potential.num_slices, 0.01).sum() * 0.01
+    assert length == pytest.approx(1.0, abs=0.02)
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, _ = TwoWaySolver(
+            cutoff=1.0, symmetry=False, absorber=absorber
+        ).scatter(abtem.PlaneWave(energy=energy), potential)
+    assert abs(transmitted.array[0, 0]) ** 2 == pytest.approx(
+        np.exp(-length / mean_free_path), rel=1e-3
+    )
+
+
+@pytest.mark.float64
+def test_the_absorber_is_the_imaginary_potential_of_one_over_two_sigma_lambda():
+    # Oracle: the absorptive potential of the absorber, V_i = 1 / (2 sigma lambda) built
+    # as an array with the potential's grid, and given to scatter, in the symmetry
+    # reduced basis; the interaction constant cancels in the wave equation, so this is
+    # an independent route to the same operator.
+    potential = coarse_graphene()
+    absorber = MeanFreePathAbsorber(3.0, z_range=(0.5, 5.0))
+    wave = abtem.PlaneWave(energy=COARSE_ENERGY)
+    assert absorber.imaginary_potential(COARSE_ENERGY) == pytest.approx(
+        1.0 / (2.0 * energy2sigma(COARSE_ENERGY) * 3.0)
+    )
+    with abtem.config.set({"precision": "float64"}):
+        by_array = TwoWaySolver(cutoff=1.5).scatter(
+            wave, potential, absorber.absorptive_potential(potential, COARSE_ENERGY)
+        )
+        by_absorber = TwoWaySolver(cutoff=1.5, absorber=absorber).scatter(
+            wave, potential
+        )
+        lossless = TwoWaySolver(cutoff=1.5).scatter(wave, potential)
+    for a, b, c in zip(by_array, by_absorber, lossless):
+        np.testing.assert_allclose(a.array, b.array, atol=1e-9)
+        assert np.abs(a.array - c.array).max() > 1e-3
+
+
+@pytest.mark.float64
+def test_the_absorber_follows_the_energy_of_every_member():
+    # Oracle: each member of an ensemble of energies is the solution of its energy
+    # alone, with the mean free path of that energy (here a function of it), in the
+    # symmetry-reduced and the full basis.
+    def mean_free_path(energy):
+        return 1.0 + energy / 100.0
+
+    potential = coarse_graphene(slice_thickness=0.05)
+    energies = [250.0, COARSE_ENERGY]
+    absorber = MeanFreePathAbsorber(mean_free_path)
+    with abtem.config.set({"precision": "float64"}):
+        solver = TwoWaySolver(cutoff=1.0, absorber=absorber)
+        transmitted, reflected = solver.scatter(
+            abtem.PlaneWave(energy=energies), potential
+        )
+        for i, energy in enumerate(energies):
+            single_t, single_r = solver.scatter(
+                abtem.PlaneWave(energy=energy), potential
+            )
+            np.testing.assert_allclose(transmitted.array[i], single_t.array, atol=1e-9)
+            np.testing.assert_allclose(reflected.array[i], single_r.array, atol=1e-9)
+        full = TwoWaySolver(cutoff=1.0, absorber=absorber, symmetry=False).scatter(
+            abtem.PlaneWave(energy=COARSE_ENERGY), potential
+        )
+    np.testing.assert_allclose(transmitted.array[1], full[0].array, atol=5e-5)
+
+
+def test_the_absorber_is_validated():
+    with pytest.raises(ValueError, match="mean_free_path"):
+        MeanFreePathAbsorber(-1.0)
+    with pytest.raises(ValueError, match="z_range"):
+        MeanFreePathAbsorber(1.0, z_range=(2.0, 1.0))
+    with pytest.raises(TypeError, match="absorber"):
+        TwoWaySolver(absorber=3.0)
+    with pytest.raises(ValueError, match="not positive"):
+        MeanFreePathAbsorber(lambda energy: -1.0).imaginary_potential(100.0)

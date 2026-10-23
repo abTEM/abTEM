@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import scipy.linalg as sla
@@ -514,6 +514,91 @@ def _check_step(h, wave_number, cutoff):
 
 
 @dataclass(frozen=True)
+class MeanFreePathAbsorber:
+    """An absorbing layer given by an inelastic mean free path: a constant imaginary
+    potential ``V_i = 1 / (2 sigma mean_free_path)`` [V] in a range of z, so that the
+    intensity of the elastic wave decays as ``exp(-z / mean_free_path)`` there. Pass it
+    to :class:`TwoWaySolver` as ``absorber``.
+
+    The imaginary potential depends on the energy through the interaction constant
+    sigma, and a mean free path that depends on the energy is a function: in an ensemble
+    of energies each member has its own. In the wave equation the absorber adds ``i k /
+    mean_free_path`` to the squared longitudinal wave number of every beam in the range,
+    to which the interaction constant does not contribute.
+
+    Attributes
+    ----------
+    mean_free_path : float or callable
+        The inelastic mean free path [Å], or a function of the energy [eV] that returns
+        it.
+    z_range : tuple of float, optional
+        The range (z_min, z_max) [Å], measured from the entrance plane of the slab, of
+        the slices that absorb: those with their centre in it. By default the whole
+        slab.
+    """
+
+    mean_free_path: float | Callable[[float], float]
+    z_range: tuple[float, float] | None = None
+
+    def __post_init__(self):
+        if not callable(self.mean_free_path) and not self.mean_free_path > 0.0:
+            raise ValueError("mean_free_path must be positive")
+        if self.z_range is not None and not self.z_range[0] < self.z_range[1]:
+            raise ValueError("z_range must be (z_min, z_max) with z_min < z_max")
+
+    def _mean_free_path(self, energy: float) -> float:
+        value = (
+            self.mean_free_path(energy)
+            if callable(self.mean_free_path)
+            else self.mean_free_path
+        )
+        if not value > 0.0:
+            raise ValueError(f"mean free path {value} Å at {energy} eV is not positive")
+        return float(value)
+
+    def slices(self, nz: int, thickness: float) -> np.ndarray:
+        """Whether each of the ``nz`` slices of this thickness [Å] absorbs, (nz,)."""
+        if self.z_range is None:
+            return np.ones(nz, dtype=bool)
+        centres = (np.arange(nz) + 0.5) * thickness
+        return (centres >= self.z_range[0]) & (centres <= self.z_range[1])
+
+    def imaginary_potential(self, energy: float) -> float:
+        """The imaginary potential ``V_i = 1 / (2 sigma mean_free_path)`` [V] at this
+        energy [eV]."""
+        return 1.0 / (2.0 * energy2sigma(energy) * self._mean_free_path(energy))
+
+    def absorptive_potential(self, potential: BasePotential, energy: float):
+        """The absorber of one energy as the ``absorptive_potential`` of
+        :meth:`TwoWaySolver.scatter`: a :class:`.PotentialArray` of ``V_i`` times the
+        slice thickness in the slices that absorb, on the grid of the potential."""
+        thicknesses = np.asarray(potential.slice_thickness, dtype=float)
+        gpts = tuple(int(n) for n in potential.gpts)
+        mask = self.slices(len(thicknesses), float(thicknesses.mean()))
+        array = (
+            np.zeros((len(thicknesses),) + gpts)
+            + (self.imaginary_potential(energy) * thicknesses * mask)[:, None, None]
+        )
+        return PotentialArray(
+            array, slice_thickness=thicknesses, extent=tuple(potential.extent)
+        )
+
+
+def _with_absorber(coupling, absorber, energy, h, nz, size, xp, dtype):
+    """The coupling of the slices with the absorber's ``i k / mean_free_path`` on the
+    diagonal in the slices that absorb."""
+    if absorber is None:
+        return coupling
+    wave_number = 2 * np.pi / energy2wavelength(energy)
+    damping = np.where(
+        absorber.slices(nz, h), 1j * wave_number / absorber._mean_free_path(energy), 0.0
+    ).astype(dtype)
+    damping = xp.asarray(damping)
+    identity = xp.eye(size, dtype=dtype)
+    return lambda n: coupling(n) + damping[n] * identity
+
+
+@dataclass(frozen=True)
 class TwoWaySolver:
     """
     Exact two-way solution of the elastic scattering of a plane wave by a periodic slab.
@@ -552,6 +637,10 @@ class TwoWaySolver:
     symmetry_tolerance : float, optional
         Largest displacement [Å] by which a symmetry operation may miss an atom (default
         1e-4).
+    absorber : MeanFreePathAbsorber, optional
+        An absorbing layer from an inelastic mean free path, which adds to the
+        absorption of the other two options (default none). Its imaginary potential
+        follows the energy of each member of an ensemble of energies.
     absorption : float, optional
         The imaginary part of the potential as a fraction of the real part (default 0,
         no absorption): the solver uses ``V (1 + i absorption)``, so that the
@@ -572,12 +661,17 @@ class TwoWaySolver:
     symmetry_tolerance: float = 1e-4
     precision: str | None = None
     absorption: float = 0.0
+    absorber: MeanFreePathAbsorber | None = None
 
     def __post_init__(self):
         if self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
         if self.absorption < 0.0:
             raise ValueError("absorption must not be negative")
+        if self.absorber is not None and not isinstance(
+            self.absorber, MeanFreePathAbsorber
+        ):
+            raise TypeError("absorber must be a MeanFreePathAbsorber")
         if self.precision not in (None, "float32", "float64"):
             raise ValueError(
                 "precision must be 'float32', 'float64' or None, "
@@ -801,6 +895,9 @@ class TwoWaySolver:
             kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
             exact = np.sqrt(kz2.astype(np.complex128))
             kappa = _numerov_wave_numbers(kz2, h)
+            coupling = _with_absorber(
+                coupling, self.absorber, energy, h, nz, len(kz2), xp, complex_dtype
+            )
             incident = np.zeros(len(kz2), np.complex128)
             incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
 
