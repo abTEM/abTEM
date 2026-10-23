@@ -472,6 +472,23 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex
     return phi
 
 
+def _check_member(h, sampling, cutoff, tilt, energy):
+    """Raise for a member of the ensemble (tilt [mrad], energy [eV]) that the slices or
+    the sampling of the potential cannot resolve; it is cheap, so the solver runs it
+    for every member before it builds the potential."""
+    wavelength = energy2wavelength(energy)
+    _check_step(h, 2 * np.pi / wavelength, cutoff)
+    tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+    in_plane = tangent / (wavelength * np.sqrt(1.0 + np.sum(tangent**2)))
+    if 1 / (2 * max(sampling)) < 2 * cutoff + np.hypot(*in_plane):
+        raise ValueError(
+            f"The potential is sampled too coarsely for cutoff={cutoff}: "
+            f"use a sampling of at most "
+            f"{1 / (4 * cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
+            "lower cutoff."
+        )
+
+
 def _check_step(h, wave_number, cutoff):
     """The Numerov step must resolve the oscillation of the fastest beam and the
     decay of the most evanescent one: the phase error per step grows like
@@ -618,6 +635,38 @@ class TwoWaySolver:
                 "TwoWaySolver does not support ensemble potentials."
             )
 
+        # the total tilt of every member of the ensemble: the base tilt plus the value
+        # of each tilt axis, and its energy: that of the energy axis (or the energy of
+        # the wave), broadcast over the ensemble axes in their order
+        axes = waves.ensemble_axes_metadata
+        ensemble_shape = waves.shape[:-2]
+        tilts = np.broadcast_to(
+            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
+        ).copy()
+        energies = np.full(ensemble_shape, np.nan)
+        if waves.energy is not None:
+            energies[...] = waves.energy
+        for i, axis in enumerate(axes):
+            if isinstance(axis, EnergyAxis):
+                shape = [1] * len(axes)
+                shape[i] = len(axis.values)
+                energies = np.broadcast_to(
+                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
+                ).copy()
+            else:
+                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+                shape = [1] * len(axes) + [2]
+                shape[i] = len(values)
+                tilts += values.reshape(shape)
+
+        thicknesses = np.asarray(potential.slice_thickness, dtype=float)
+        h = float(thicknesses.mean())
+        if not np.allclose(thicknesses, h, rtol=1e-6):
+            raise ValueError("TwoWaySolver needs slices of equal thickness.")
+        sampling = tuple(waves._valid_sampling)
+        for tilt, energy in zip(tilts.reshape(-1, 2), energies.ravel()):
+            _check_member(h, sampling, self.cutoff, tilt, energy)
+
         built = (
             potential
             if isinstance(potential, PotentialArray)
@@ -633,10 +682,6 @@ class TwoWaySolver:
         precision = self.precision or config.get("precision")
         real_dtype = np.float32 if precision == "float32" else np.float64
         complex_dtype = np.complex64 if precision == "float32" else np.complex128
-        thicknesses = np.asarray(built.slice_thickness, dtype=float)
-        h = float(thicknesses.mean())
-        if not np.allclose(thicknesses, h, rtol=1e-6):
-            raise ValueError("TwoWaySolver needs slices of equal thickness.")
         projected = xp.asarray(built.array, dtype=real_dtype)
         nz, nx, ny = projected.shape
         imaginary = self.absorption * projected
@@ -659,7 +704,6 @@ class TwoWaySolver:
             imaginary = imaginary + absorbing_array
         if self.absorption or absorptive_potential is not None:
             projected = projected + 1j * imaginary
-        sampling = tuple(waves._valid_sampling)
 
         origin, all_operations, translations = (
             (0.0, 0.0),
@@ -717,7 +761,6 @@ class TwoWaySolver:
             wavelength = energy2wavelength(energy)
             wave_number = 2 * np.pi / wavelength
             sigma = energy2sigma(energy)
-            _check_step(h, wave_number, self.cutoff)
 
             # The incident wave travels along (tan x, tan y, 1), and is stored without
             # its carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored
@@ -726,14 +769,6 @@ class TwoWaySolver:
             norm = np.sqrt(1.0 + np.sum(tangent**2))
             in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
             incident_kz = 2 * np.pi / (wavelength * norm)
-
-            if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
-                raise ValueError(
-                    f"The potential is sampled too coarsely for cutoff={self.cutoff}: "
-                    f"use a sampling of at most "
-                    f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
-                    "lower cutoff."
-                )
 
             # a tilted wave is invariant under the translations and under the point
             # operations that leave its in-plane wave vector unchanged, the mirror along
@@ -806,30 +841,6 @@ class TwoWaySolver:
                 return np.fft.ifft2(spectrum) * (nx * ny)
 
             return to_array(transmitted), to_array(reflected)
-
-        # the total tilt of every member of the ensemble: the base tilt plus the value
-        # of each tilt axis, and its energy: that of the energy axis (or the energy of
-        # the wave), broadcast over the ensemble axes in their order
-        axes = waves.ensemble_axes_metadata
-        ensemble_shape = waves.shape[:-2]
-        tilts = np.broadcast_to(
-            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
-        ).copy()
-        energies = np.full(ensemble_shape, np.nan)
-        if waves.energy is not None:
-            energies[...] = waves.energy
-        for i, axis in enumerate(axes):
-            if isinstance(axis, EnergyAxis):
-                shape = [1] * len(axes)
-                shape[i] = len(axis.values)
-                energies = np.broadcast_to(
-                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
-                ).copy()
-            else:
-                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
-                shape = [1] * len(axes) + [2]
-                shape[i] = len(values)
-                tilts += values.reshape(shape)
 
         results = [
             solve(tilt, energy)

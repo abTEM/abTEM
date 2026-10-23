@@ -373,7 +373,7 @@ def test_the_precision_follows_the_configuration_by_default():
     # Oracle: the explicit precisions. The default follows abtem.config["precision"]
     # (single precision gives the single precision result, not the double one), and
     # the dtype of the waves follows it too.
-    potential = coarse_graphene()
+    potential = coarse_graphene(slice_thickness=0.05)
     arrays = {}
     for configured in ("float32", "float64"):
         with abtem.config.set({"precision": configured}):
@@ -436,8 +436,8 @@ def test_an_ensemble_of_tilts_is_the_tilts_one_by_one():
     # Oracle: each member of the ensemble is the solution of that tilt alone; the
     # axes of the ensemble keep their order and their metadata.
     tilts_x, tilts_y = [0.0, 80.0], [0.0, 25.0]
-    potential = coarse_graphene()
-    solver = TwoWaySolver(cutoff=1.5)
+    potential = coarse_graphene(slice_thickness=0.05)
+    solver = TwoWaySolver(cutoff=1.0)
     with abtem.config.set({"precision": "float64"}):
         transmitted, reflected = solver.scatter(
             abtem.PlaneWave(energy=COARSE_ENERGY, tilt=(tilts_x, tilts_y)), potential
@@ -527,8 +527,8 @@ def test_an_ensemble_of_energies_and_tilts_is_the_members_one_by_one():
     # Oracle: each member is the solution of its energy and tilt alone, in the order of
     # the axes of the ensemble (here the tilts first, then the energies).
     tilts, energies = [0.0, 40.0], [250.0, COARSE_ENERGY]
-    potential = coarse_graphene()
-    solver = TwoWaySolver(cutoff=1.5)
+    potential = coarse_graphene(slice_thickness=0.05)
+    solver = TwoWaySolver(cutoff=1.0)
     with abtem.config.set({"precision": "float64"}):
         transmitted, reflected = solver.scatter(
             abtem.PlaneWave(energy=energies, tilt=(tilts, 0.0)), potential
@@ -687,7 +687,7 @@ def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # including phase, on every beam.
     potential = abtem.Potential(
         strontium_titanate(1),
-        gpts=(30, 30),
+        gpts=(24, 24),
         slice_thickness=0.05,
         projection="finite",
         periodic=True,
@@ -718,8 +718,14 @@ def test_a_built_potential_gives_the_same_waves_as_the_potential():
         np.testing.assert_allclose(a.array, b.array, atol=3e-4)
 
 
-def test_the_solver_refuses_unsupported_input():
-    coarse = coarse_graphene(slice_thickness=0.01)
+def test_the_solver_refuses_unsupported_input(monkeypatch):
+    # The step and the sampling are checked before the potential is built, which for
+    # slices this thin would take minutes.
+    def refuse_to_build(*args, **kwargs):
+        raise AssertionError("the potential was built before the input was refused")
+
+    monkeypatch.setattr(abtem.Potential, "build", refuse_to_build)
+    coarse = coarse_graphene(slice_thickness=0.0002)
     with pytest.raises(ValueError, match="sampled too coarsely"):
         TwoWaySolver(cutoff=4.5).scatter(abtem.PlaneWave(energy=1000.0), coarse)
 
