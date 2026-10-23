@@ -18,8 +18,10 @@ method the table lists
 * the sum of |psi_g|^2 and the flux of the exit wave.
 
 ``RealSpaceMultislice(expansion_scope="full")`` always applies the backscatter
-correction; its ``order="exact"`` (abTEM#629) is left out of the methods of a checkout
-that does not have it (see ``--list``).
+correction. The solver and ``order="exact"`` (abTEM#629) are left out of the methods of
+a checkout that does not have them (see ``--list``); without the solver there is no
+reference, and the table has only the times and the memory. The same holds if
+``--methods`` leaves ``twoway`` out.
 
 Examples
 --------
@@ -136,7 +138,14 @@ def available_methods():
     """name -> description of the methods this checkout has."""
     from abtem.multislice import RealSpaceMultislice
 
-    names = {"twoway": "TwoWaySolver", "fourier": "FourierMultislice"}
+    names = {}
+    try:
+        import abtem.twoway  # noqa: F401
+
+        names["twoway"] = "TwoWaySolver"
+    except ImportError:  # a checkout without the solver: times and memory only
+        pass
+    names["fourier"] = "FourierMultislice"
     for order in (1, 2, 3):
         names[f"rs-full-o{order}"] = f"RealSpaceMultislice full, order {order}"
     fields = {f.name for f in dataclasses.fields(RealSpaceMultislice)}
@@ -364,7 +373,10 @@ def main():
         help="slices of the multislice methods [Å]",
     )
     parser.add_argument(
-        "--methods", nargs="+", default=None, help="default: all available"
+        "--methods",
+        nargs="+",
+        default=None,
+        help="default: all available; the error columns need twoway among them",
     )
     parser.add_argument(
         "--precision",
@@ -425,9 +437,13 @@ def main():
     unknown = [m for m in selected if m not in methods]
     if unknown:
         raise SystemExit(f"unavailable methods {unknown}; available: {list(methods)}")
+    # the errors are against the two-way solution, which therefore runs first, if it is
+    # among the methods (it is the slowest: leave it out for times and memory only)
     if "twoway" in selected:
         selected.remove("twoway")
-    selected.insert(0, "twoway")  # the reference runs first
+        selected.insert(0, "twoway")
+    else:
+        print("no two-way solution among the methods: only times and memory")
 
     everything = []
     for lateral in args.lateral:
