@@ -175,27 +175,33 @@ def _lanczos_host(
 
 
 def _lanczos_device(
-    a0, apply: Callable, function: Callable, tolerance: float, max_iterations: int, xp
+    a0,
+    apply: Callable,
+    function: Callable,
+    tolerance: float,
+    max_iterations: int,
+    xp,
+    diagonalise_on_device: bool | None = None,
 ):
     """
-    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny).
+    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), as
+    :func:`_lanczos_host`, with the cost of a device in mind: the number of kernels and
+    of transfers, and the host work that the device waits for, not the arithmetic.
 
-    One application of the Hermitian operator ``apply`` per iteration, with full
-    reorthogonalisation (the number of iterations is small). The small tridiagonal
-    matrices are diagonalised on the host, in double precision, and ``function`` maps
-    their eigenvalues (B, m) to complex values of the same shape.
-
-    The iteration stops when the coefficients on the Krylov basis change by less than
-    ``tolerance``.
-
-    On a GPU the cost of this routine is the number of kernels and of transfers, not
-    arithmetic: the basis is one array, the orthogonalisation takes four kernels
-    whatever its size, everything that the next iteration needs stays on the device,
-    and one transfer (the diagonal element and the norm of the residual, together)
-    goes to the host per iteration.
+    The basis is one array, the orthogonalisation takes a few kernels whatever its
+    size, and everything that the next iteration needs stays on the device. The small
+    tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy (or
+    ``diagonalise_on_device`` is true): a batch of hundreds of them costs more on the
+    host than an iteration on the device, and then the only transfer of an iteration is
+    one pair of numbers, for the convergence. Otherwise they are diagonalised on the
+    host in double precision, with a transfer of the diagonal element and the norm of
+    the residual per iteration. ``function`` maps the eigenvalues (B, m) to complex
+    values of the same shape (and of the same array module).
     """
     from abtem.finite_difference import NotConvergedError
 
+    if diagonalise_on_device is None:
+        diagonalise_on_device = cp is not None and xp is cp
     dtype = a0.dtype
     real_dtype = np.empty(0, dtype=dtype).real.dtype
     members, shape = a0.shape[0], a0.shape[1:]
@@ -207,7 +213,6 @@ def _lanczos_device(
     basis[:, 0] = (
         a0 / xp.where(norm0 > 0, norm0, 1.0).astype(real_dtype)[:, None, None]
     ).reshape(members, size_xy)
-    alphas, betas = [], []
     coefficients_previous = None
 
     if cp is not None and xp is cp:
@@ -226,6 +231,12 @@ def _lanczos_device(
             overlaps = xp.sum(xp.conj(vectors) * w[:, None, :], axis=-1)
             return w - xp.sum(overlaps[:, :, None] * vectors, axis=1), overlaps
 
+    if diagonalise_on_device:
+        tridiagonal = xp.zeros((members, max_iterations, max_iterations), np.float64)
+    else:
+        alphas, betas = [], []
+    beta_previous = None
+
     for step in range(max_iterations):
         vectors = basis[:, : step + 1]
         w = apply(basis[:, step].reshape((members,) + shape)).reshape(members, size_xy)
@@ -234,38 +245,70 @@ def _lanczos_device(
         w, overlaps = project_out(vectors, w)
         w, _ = project_out(vectors, w)
         beta_device = xp.sqrt(xp.sum(xp.abs(w) ** 2, axis=-1))
-        host = asnumpy(xp.stack([overlaps[:, step].real, beta_device])).astype(
-            np.float64
-        )
-        alphas.append(host[0])
-        beta = host[1]
+        size = step + 1
 
-        size = len(alphas)
-        tridiagonal = np.zeros((members, size, size))
-        index = np.arange(size)
-        tridiagonal[:, index, index] = np.stack(alphas, axis=1)
-        if betas:
-            off = np.stack(betas, axis=1)
-            tridiagonal[:, index[:-1], index[1:]] = off
-            tridiagonal[:, index[1:], index[:-1]] = off
-        values, vectors_host = np.linalg.eigh(tridiagonal)
+        if diagonalise_on_device:
+            tridiagonal[:, step, step] = overlaps[:, step].real
+            if step > 0:
+                tridiagonal[:, step - 1, step] = beta_previous
+                tridiagonal[:, step, step - 1] = beta_previous
+            beta_previous = beta_device.astype(np.float64)
+            if step < 2:
+                # too early to have converged: no diagonalisation and no transfer (a
+                # member that has closed its Krylov space goes on with zero vectors,
+                # which add nothing)
+                basis[:, step + 1] = (
+                    w / xp.where(beta_device > 1e-14, beta_device, 1.0)[:, None]
+                )
+                continue
+            values, eigenvectors = xp.linalg.eigh(
+                xp.ascontiguousarray(tridiagonal[:, :size, :size])
+            )
+            coefficients = xp.matmul(
+                eigenvectors * function(values)[:, None, :],
+                eigenvectors[:, 0, :].conj()[:, :, None],
+            )[:, :, 0]
+            if coefficients_previous is None:
+                change = xp.full((), np.inf)
+            else:
+                difference = coefficients.copy()
+                difference[:, :-1] -= coefficients_previous
+                change = xp.linalg.norm(difference, axis=1).max()
+            stats = asnumpy(
+                xp.stack([change.astype(np.float64), beta_previous.max()])
+            )
+            converged, closed = stats[0] < tolerance, stats[1] < 1e-14
+        else:
+            host = asnumpy(xp.stack([overlaps[:, step].real, beta_device])).astype(
+                np.float64
+            )
+            alphas.append(host[0])
+            beta = host[1]
+            matrix = np.zeros((members, size, size))
+            index = np.arange(size)
+            matrix[:, index, index] = np.stack(alphas, axis=1)
+            if betas:
+                off = np.stack(betas, axis=1)
+                matrix[:, index[:-1], index[1:]] = off
+                matrix[:, index[1:], index[:-1]] = off
+            values, eigenvectors = np.linalg.eigh(matrix)
+            coefficients = np.einsum(
+                "bij,bj,bj->bi",
+                eigenvectors,
+                function(values),
+                eigenvectors[:, 0, :].conj(),
+            )
+            converged = False
+            if coefficients_previous is not None:
+                difference = coefficients.copy()
+                difference[:, :-1] -= coefficients_previous
+                converged = np.linalg.norm(difference, axis=1).max() < tolerance
+            closed = (beta < 1e-14).all()
+            if not (converged or closed):
+                betas.append(beta)
 
-        coefficients = np.einsum(
-            "bij,bj,bj->bi",
-            vectors_host,
-            function(values),
-            vectors_host[:, 0, :].conj(),
-        )
-
-        if coefficients_previous is not None:
-            difference = coefficients.copy()
-            difference[:, :-1] -= coefficients_previous
-            if np.linalg.norm(difference, axis=1).max() < tolerance:
-                break
-
-        if (beta < 1e-14).all():
+        if converged or closed:
             break
-        betas.append(beta)
         basis[:, step + 1] = (
             w / xp.where(beta_device > 1e-14, beta_device, 1.0)[:, None]
         )
@@ -276,9 +319,8 @@ def _lanczos_device(
             f"{max_iterations} iterations"
         )
 
-    # the result, in one transfer to the device and one contraction
-    weights = xp.asarray(coefficients.astype(dtype)) * norm0.astype(dtype)[:, None]
-    result = xp.sum(
-        weights[:, :, None] * basis[:, : coefficients.shape[1]], axis=1
-    )
+    # the result: one contraction (and, if the coefficients are on the host, one
+    # transfer to the device)
+    weights = xp.asarray(coefficients).astype(dtype) * norm0.astype(dtype)[:, None]
+    result = xp.sum(weights[:, :, None] * basis[:, : coefficients.shape[1]], axis=1)
     return result.reshape((members,) + shape)

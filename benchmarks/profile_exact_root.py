@@ -154,6 +154,15 @@ def main():
             "bij,bj,bj->bi", vectors, function(values), vectors[:, 0, :].conj()
         )
 
+    matrices = xp.asarray(tridiagonal / np.sqrt(m) + 40.0 * np.eye(m))
+
+    def device_work():
+        values, vectors = xp.linalg.eigh(matrices)
+        return xp.matmul(
+            vectors * function(values)[:, None, :],
+            vectors[:, 0, :].conj()[:, :, None],
+        )[:, :, 0]
+
     megabytes = lambda x: x.nbytes / 1e6  # noqa: E731
     parts = [
         ("stencil", lambda: stencil(a), megabytes(a)),
@@ -168,6 +177,7 @@ def main():
         ("norm and one transfer to the host", norm_and_transfer, megabytes(w)),
         ("normalise and store", normalise, megabytes(w)),
         ("host: eigh and the function", host_work, 0),
+        ("device: eigh and the function", device_work, 0),
     ]
 
     print(
@@ -183,12 +193,17 @@ def main():
 
     # the whole iteration, from the pieces (two passes of the orthogonalisation), and
     # a whole Lanczos run, counted in iterations
+    diagonalisation = results[
+        "device: eigh and the function"
+        if xp is not np
+        else "host: eigh and the function"
+    ][1]
     estimate = (
         results["operator (the whole apply)"][1]
         + 2 * results[f"orthogonalise against {m} vectors"][1]
         + results["norm and one transfer to the host"][1]
         + results["normalise and store"][1]
-        + results["host: eigh and the function"][1]
+        + diagonalisation
     )
     iterations = []
 
@@ -205,8 +220,8 @@ def main():
     # (measure() runs the function once before the timed loop)
     count = len(iterations) / (max(3, args.repeats // 5) + 1)
     print(
-        f"\nsum of the parts for one iteration: {estimate:.3f} ms "
-        "(the orthogonalisation counted twice)"
+        f"\nsum of the parts for one iteration: {estimate:.3f} ms (orthogonalisation "
+        "twice; the device eigh on a device, else the host one)"
     )
     print(
         f"one Lanczos run: {total:.2f} ms total, {dispatch:.2f} ms dispatch, "
