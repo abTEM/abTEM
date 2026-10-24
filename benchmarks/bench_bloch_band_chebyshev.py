@@ -1,5 +1,6 @@
-"""Benchmark (experiment): Bloch-wave propagation by band reduction and a Chebyshev
-expansion, against the eigendecomposition.
+"""Benchmark: Bloch-wave propagation by band reduction and a Chebyshev expansion
+(`abtem.bloch.band_chebyshev`, the solver 'band'), against the eigendecomposition
+('eigh'), stage by stage.
 
 The amplitudes psi(z) = M D^H exp(i c_z A) e_0, c_z = pi lambda z, are computed from the
 structure matrix A without its eigenvectors:
@@ -43,18 +44,25 @@ import sys
 import time
 
 import numpy as np
-import scipy.special
 from ase.io import read
 from ase.spacegroup import crystal
 
 import abtem
 from abtem.bloch import BlochWaves, StructureFactor
+from abtem.bloch.band_chebyshev import (
+    apply_q,
+    band_reduce,
+    chebyshev_degree,
+    chebyshev_propagate,
+    gershgorin_bounds,
+    lower_band,
+)
 from abtem.bloch.dynamical import (
     _metric,
     calculate_dynamical_scattering,
     calculate_structure_matrix,
 )
-from abtem.core.backend import asnumpy, get_array_module
+from abtem.core.backend import asnumpy
 from abtem.core.energy import energy2wavelength
 
 device = sys.argv[1] if len(sys.argv) > 1 else "cpu"
@@ -83,269 +91,6 @@ def free_device_pool():
         import cupy as cp
 
         cp.get_default_memory_pool().free_all_blocks()
-
-
-def gershgorin_bounds(A, block=1024):
-    """Bounds on the spectrum of the Hermitian A, from column sums in blocks (no
-    temporary of the size of A)."""
-    xp = get_array_module(A)
-    n = len(A)
-    low, high = np.inf, -np.inf
-    for start in range(0, n, block):
-        columns = A[:, start : start + block]
-        diagonal = xp.diagonal(A[start : start + block, start : start + block]).real
-        radius = xp.abs(columns).sum(axis=0) - xp.abs(diagonal)
-        low = min(low, float((diagonal - radius).min()))
-        high = max(high, float((diagonal + radius).max()))
-    return low, high
-
-
-def _gemm(transa, transb, alpha, a, b, beta, c):
-    """c = alpha op(a) op(b) + beta c for Fortran-ordered 2D arrays or column views of
-    them, in place (cupy.cublas.gemm copies an output view)."""
-    from cupy.cuda import device as cuda_device
-    from cupy_backends.cuda.libs import cublas
-
-    function = {
-        "f": cublas.sgemm,
-        "d": cublas.dgemm,
-        "F": cublas.cgemm,
-        "D": cublas.zgemm,
-    }[c.dtype.char]
-    operations = {
-        "N": cublas.CUBLAS_OP_N,
-        "T": cublas.CUBLAS_OP_T,
-        "C": cublas.CUBLAS_OP_C,
-    }
-    for array in (a, b, c):
-        assert array.strides[0] == array.itemsize, "column-major arrays only"
-    m = c.shape[0]
-    n = c.shape[1]
-    k = a.shape[1] if transa == "N" else a.shape[0]
-    alpha = np.array(alpha, dtype=c.dtype)
-    beta = np.array(beta, dtype=c.dtype)
-    handle = cuda_device.get_cublas_handle()
-    cublas.setPointerMode(handle, cublas.CUBLAS_POINTER_MODE_HOST)
-    function(
-        handle,
-        operations[transa],
-        operations[transb],
-        m,
-        n,
-        k,
-        alpha.ctypes.data,
-        a.data.ptr,
-        max(1, a.strides[1] // a.itemsize),
-        b.data.ptr,
-        max(1, b.strides[1] // b.itemsize),
-        beta.ctypes.data,
-        c.data.ptr,
-        max(1, c.strides[1] // c.itemsize),
-    )
-
-
-def _block_reflector(h, tau, k):
-    """V (unit lower trapezoidal) and T of Q = H_1 ... H_k = I - V T V^H, from the
-    `mode="raw"` QR of a panel, with T^-1 = diag(1/tau) + strict_upper(V^H V)
-    (a reflector with tau = 0 is the identity: its column of V is zeroed)."""
-    xp = get_array_module(h)
-    V = xp.tril(h.T[:, :k], -1)
-    index = xp.arange(k)
-    V[index, index] = 1
-    tau = tau[:k]
-    identity = tau == 0
-    tau = xp.where(identity, 1, tau)
-    V[:, identity] = 0
-    inverse = xp.triu(V.conj().T @ V, 1)
-    inverse[index, index] = 1 / tau
-    T = xp.linalg.inv(inverse)
-    return xp.asfortranarray(V), xp.asfortranarray(xp.triu(T)), identity
-
-
-def band_reduce(A, b):
-    """Reduce the Fortran-ordered Hermitian A in place to band form B = Q^H A Q.
-
-    Returns the T factors of the block reflectors; the reflectors V are left in A below
-    the band (the strictly lower triangle of each panel's R), as LAPACK's geqrf leaves
-    them. Only the lower band of A holds B afterwards."""
-    xp = get_array_module(A)
-    assert A.flags.f_contiguous
-    n = len(A)
-    factors = []
-    for j in range(0, n, b):
-        r0 = j + b
-        m = n - r0
-        if m <= 1:
-            break
-        panel = A[r0:, j : j + b]
-        h, tau = xp.linalg.qr(panel, mode="raw")  # h is the transposed geqrf output
-        k = min(m, b)
-        V, T, identity = _block_reflector(h, tau, k)
-        panel[...] = h.T
-        trailing = A[r0:, r0:]
-        # trailing <- Q^H trailing Q with Q = I - V T V^H:
-        # W = trailing V T - 1/2 V (T^H V^H trailing V T); trailing -= V W^H + W V^H
-        VT = xp.asfortranarray(V @ T)
-        if xp is np:
-            W = trailing @ VT
-            W -= 0.5 * V @ (T.conj().T @ (V.conj().T @ W))
-            trailing -= V @ W.conj().T + W @ V.conj().T
-        else:
-            W = xp.empty((m, k), dtype=A.dtype, order="F")
-            _gemm("N", "N", 1, trailing, VT, 0, W)
-            W -= 0.5 * V @ (T.conj().T @ (V.conj().T @ W))
-            W = xp.asfortranarray(W)
-            _gemm("N", "C", -1, V, W, 1, trailing)
-            _gemm("N", "C", -1, W, V, 1, trailing)
-        factors.append((j, k, T, identity))
-    return factors
-
-
-def lower_band(A, b):
-    """The lower band of A as a (b + 1, n) array: band[o, i] = A[i + o, i]."""
-    xp = get_array_module(A)
-    n = len(A)
-    band = xp.zeros((b + 1, n), dtype=A.dtype)
-    for o in range(b + 1):
-        band[o, : n - o] = xp.diagonal(A, -o)
-    return band
-
-
-def apply_q(A, factors, b, y):
-    """Q y, with the reflectors stored in A below the band."""
-    xp = get_array_module(A)
-    for j, k, T, identity in reversed(factors):
-        r0 = j + b
-        V = xp.tril(A[r0:, j : j + k], -1)
-        index = xp.arange(k)
-        V[index, index] = 1
-        V[:, identity] = 0  # as in _block_reflector
-        y[r0:] -= V @ (T @ (V.conj().T @ y[r0:]))
-    return y
-
-
-_KERNEL = r"""
-#include <cupy/complex.cuh>
-extern "C" __global__ void chebyshev_step(
-    const SCALAR* band, const SCALAR* t_current, const SCALAR* t_previous,
-    SCALAR* t_next, const complex<REAL>* coefficients, complex<REAL>* result,
-    const int n, const int b, const int nz, const REAL scale, const REAL shift)
-{
-    const int i = blockDim.x * blockIdx.x + threadIdx.x;
-    if (i >= n) return;
-    SCALAR product = band[i] * t_current[i];
-    for (int o = 1; o <= b; ++o) {
-        if (i + o < n) product += CONJ(band[o * n + i]) * t_current[i + o];
-        if (i >= o) product += band[o * n + i - o] * t_current[i - o];
-    }
-    const SCALAR next = scale * product - shift * t_current[i] - t_previous[i];
-    t_next[i] = next;
-    for (int z = 0; z < nz; ++z) result[i * nz + z] += coefficients[z] * next;
-}
-"""
-
-
-def _fused_step_kernel(dtype):
-    import cupy as cp
-
-    real = "double" if np.dtype(dtype) in (np.float64, np.complex128) else "float"
-    complex_band = np.issubdtype(dtype, np.complexfloating)
-    source = (
-        _KERNEL.replace("SCALAR", f"complex<{real}>" if complex_band else real)
-        .replace("REAL", real)
-        .replace("CONJ", "conj" if complex_band else "")
-    )
-    return cp.RawKernel(source, "chebyshev_step")
-
-
-def chebyshev_coefficients(scales, bounds, tolerance):
-    """The coefficients of exp(i s x), x in `bounds`, truncated where they all fall
-    below `tolerance`."""
-    center, half = (bounds[1] + bounds[0]) / 2, (bounds[1] - bounds[0]) / 2
-    arguments = np.asarray(scales) * half
-    degree = int(arguments.max())
-    while np.abs(scipy.special.jv(degree, arguments)).max() > tolerance:
-        degree += 10
-    k = np.arange(degree + 1)
-    coefficients = (
-        np.where(k == 0, 1.0, 2.0)[:, None]
-        * (1j**k)[:, None]
-        * scipy.special.jv(k[:, None], arguments[None])
-        * np.exp(1j * np.asarray(scales) * center)[None]
-    )
-    return coefficients, center, half
-
-
-def chebyshev_propagate(band, scales, bounds, fused=True):
-    """exp(i s B) e_0 for each s, from the lower band of B."""
-    xp = get_array_module(band)
-    b, n = band.shape[0] - 1, band.shape[1]
-    complex_dtype = np.result_type(band.dtype, np.complex64)
-    real_dtype = np.finfo(band.dtype).dtype
-    # truncation well below the rounding of the working precision
-    tolerance = np.finfo(real_dtype).eps / 100
-    coefficients, center, half = chebyshev_coefficients(scales, bounds, tolerance)
-    coefficients = xp.asarray(coefficients, dtype=complex_dtype)
-    degree = len(coefficients) - 1
-
-    if xp is np:
-        import scipy.sparse as sparse
-    else:
-        import cupyx.scipy.sparse as sparse
-    # B from its lower band: the upper diagonals are the conjugated lower ones
-    matrix = sparse.diags(
-        [band[o, : n - o] for o in range(b, 0, -1)]
-        + [band[0]]
-        + [band[o, : n - o].conj() for o in range(1, b + 1)],
-        offsets=[-o for o in range(b, 0, -1)] + [0] + list(range(1, b + 1)),
-        format="csr",
-        dtype=band.dtype,
-    )
-
-    t_previous = xp.zeros(n, dtype=band.dtype)
-    t_previous[0] = 1
-    t_current = (matrix @ t_previous - center * t_previous) / half
-    result = xp.outer(t_previous, coefficients[0]) + xp.outer(
-        t_current, coefficients[1]
-    )
-    result = xp.ascontiguousarray(result)
-
-    if fused and xp is not np:
-        kernel = _fused_step_kernel(band.dtype)
-        band = xp.ascontiguousarray(band)
-        t_next = xp.empty_like(t_current)
-        threads = 256
-        blocks = (n + threads - 1) // threads
-        scale, shift = real_dtype.type(2 / half), real_dtype.type(2 * center / half)
-        for k in range(2, degree + 1):
-            kernel(
-                (blocks,),
-                (threads,),
-                (
-                    band,
-                    t_current,
-                    t_previous,
-                    t_next,
-                    coefficients[k],
-                    result,
-                    np.int32(n),
-                    np.int32(b),
-                    np.int32(len(scales)),
-                    scale,
-                    shift,
-                ),
-            )
-            t_previous, t_current, t_next = t_current, t_next, t_previous
-    else:
-        for k in range(2, degree + 1):
-            t_previous, t_current = (
-                t_current,
-                (2 / half) * (matrix @ t_current)
-                - (2 * center / half) * t_current
-                - t_previous,
-            )
-            result += xp.outer(t_current, coefficients[k])
-    return result, degree
 
 
 def peak_memory_hook():
@@ -436,7 +181,8 @@ with abtem.config.set({"precision": precision}):
         times["band"] = time.perf_counter() - start
         start = time.perf_counter()
         band = lower_band(A, bandwidth)
-        y, degree = chebyshev_propagate(band, scales, bounds, fused=fused)
+        y = chebyshev_propagate(band, scales, bounds, fused=fused)
+        degree = chebyshev_degree(scales, bounds, band.real.dtype)
         synchronize()
         times["Chebyshev"] = time.perf_counter() - start
         start = time.perf_counter()
@@ -524,6 +270,27 @@ with abtem.config.set({"precision": precision}):
                 print(f"  {kind}: float64 reference out of memory on {device} and CPU")
             else:
                 print(f"  {kind}: float64 reference on {where} ({seconds:.0f} s)")
+
+        # the production path, calculate_dynamical_scattering(solver="band"),
+        # without the stage synchronisations
+        synchronize()
+        start = time.perf_counter()
+        calculate_dynamical_scattering(
+            build(center),
+            hkl,
+            cell,
+            energy,
+            thicknesses,
+            use_wave_eq=use_wave_eq,
+            inversion_center=center,
+            overwrite_structure_matrix=True,
+            solver="band",
+        )
+        synchronize()
+        print(
+            f"  {kind:<7} solver='band': {time.perf_counter() - start:.3f} s "
+            f"({eigh_label})"
+        )
 
         for fused in variants:
             A = build(center)
