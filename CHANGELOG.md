@@ -107,13 +107,17 @@ Features:
 Performance:
 
 - Multislice of an ensemble of atoms (such as a 3DED rotation series) no longer repeats host work for
-  every chunk or exit plane; the results are bit-identical
+  every chunk or exit plane, and its potential needs fewer FFTs
     - The atoms of an ensemble are sliced once per call of `generate_chunked_slices` instead of once per
       chunk
     - `Waves.window` keeps its taper, and the power gain of a window is computed once, instead of both
       building an `n x n` array on the host at every exit plane
     - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
       and element
+    - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
+      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"` and on a GPU;
+      this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
+      and not bit for bit
     - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
       multislice run into stages
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied

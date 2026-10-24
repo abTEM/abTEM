@@ -50,6 +50,10 @@ Usage
     --to-cpu                 the detector copies each exit plane to the host (py3DED: off)
     --index                  also time `index_diffraction_spots` on the result
     --no-reference           skip the uninstrumented run (halves the run time)
+    --reference-only         skip the instrumented run: the time of the whole compute only
+    --output PATH            write the results (JSON) here, not to benchmarks/results/
+    --save-result PATH       save the diffraction patterns (.npy), to compare two runs;
+                             the results always hold their SHA-256
     --energy, --thermal-sigma, --projection, --precision, --margin, --window-func,
     --g-max-store, --fft     as the config keys (defaults: 200e3 eV, 0.078 A, infinite,
                              float32, 0.0 A, hann, 4.0 1/A, fftw)
@@ -60,6 +64,7 @@ slices; the results are also written to benchmarks/results/, which is git-ignore
 """
 
 import argparse
+import hashlib
 import inspect
 import json
 import threading
@@ -90,6 +95,9 @@ parser.add_argument("--chunk-size", default="auto")
 parser.add_argument("--to-cpu", action="store_true")
 parser.add_argument("--index", action="store_true")
 parser.add_argument("--no-reference", action="store_true")
+parser.add_argument("--reference-only", action="store_true")
+parser.add_argument("--output")
+parser.add_argument("--save-result")
 parser.add_argument("--energy", type=float)
 parser.add_argument("--thermal-sigma", type=float)
 parser.add_argument("--projection")
@@ -397,6 +405,8 @@ def instrument(profiler):
     wrap(integrals, "sinc", "potential: sinc (recomputed per call)")
     wrap(integrals, "fft2", "potential: fft2 of the atoms")
     wrap(integrals, "ifft2", "potential: ifft2 of the slice")
+    wrap(integrals, "rfft2", "potential: rfft2 of the atoms (real)")
+    wrap(integrals, "irfft2", "potential: irfft2 of the slice (real)")
     wrap(
         integrals,
         "interpolate_radial_functions_cuda",
@@ -624,18 +634,24 @@ def run_case(unit_cell, sampling, slice_thickness):
 
     slice_count = n_slices * len(angles)
 
-    if not args.no_reference:
+    reference_output = None
+    if not args.no_reference or args.reference_only:
         record = result["reference"] = {}
         try:
             with gpu_memory(record):
                 start = time.perf_counter()
-                lazy.compute()
+                reference_output = lazy.compute()
                 synchronize()
                 record["seconds"] = round(time.perf_counter() - start, 3)
             record["slices_per_second"] = round(slice_count / record["seconds"], 2)
         except Exception as error:  # out of memory has a different class per backend
             record.update(failure(error))
         print(f"  reference compute: {record}", flush=True)
+
+    if args.reference_only:
+        if reference_output is not None:
+            post_process(result, reference_output, unit_cell)
+        return result
 
     profiler = Profiler()
     scheduler_calls = []
@@ -803,6 +819,10 @@ def post_process(result, output, unit_cell):
         synchronize()
         post["to_cpu_seconds"] = round(time.perf_counter() - start, 3)
         post["result_mb"] = round(host.array.nbytes / 1e6, 1)
+        array = np.ascontiguousarray(host.array)
+        post["result_sha256"] = hashlib.sha256(array.view(np.uint8).ravel()).hexdigest()
+        if args.save_result:
+            np.save(args.save_result, array)
         if args.index:
             from abtem.rotation_series import rotation_series_orientation_matrices
 
@@ -853,18 +873,22 @@ def main():
         "margin": margin,
         "to_cpu": args.to_cpu,
         "abtem": abtem.__version__,
+        "abtem_file": abtem.__file__,
         "cases": [],
     }
     for sampling, slice_thickness in cases:
         results["cases"].append(run_case(unit_cell, sampling, slice_thickness))
 
-    output = Path(__file__).parent / "results"
-    output.mkdir(exist_ok=True)
     first = cases[0]
-    path = output / (
-        f"ms3ded_{Path(structure).stem}_{device}_{box[0]:g}x{box[1]:g}x{thickness:g}"
-        f"_s{first[0]:g}_t{first[1]:g}_{precision}.json"
-    )
+    if args.output:
+        path = Path(args.output)
+    else:
+        output = Path(__file__).parent / "results"
+        output.mkdir(exist_ok=True)
+        path = output / (
+            f"ms3ded_{Path(structure).stem}_{device}_{box[0]:g}x{box[1]:g}x"
+            f"{thickness:g}_s{first[0]:g}_t{first[1]:g}_{precision}.json"
+        )
     path.write_text(json.dumps(results, indent=2, default=str))
     print(f"\nwritten to {path}")
 
