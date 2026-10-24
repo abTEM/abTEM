@@ -723,6 +723,52 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
 
 
+def real_fft2_available(x) -> bool:
+    """Whether `rfft2` and `irfft2` can transform `x`, an array of real data.
+
+    The transforms of real data take half the work and memory of the complex ones, but
+    only the libraries that have them are used: NumPy (`fft="numpy"`) and CuPy. The
+    plans of pyFFTW and the calls of MKL here are those of the complex transforms, and
+    a dask array has no known shape of its half spectrum; they keep the complex ones.
+    """
+    if isinstance(x, np.ndarray):
+        return config.get("fft") == "numpy"
+    return cp is not None and isinstance(x, cp.ndarray)
+
+
+def rfft2(x, **kwargs):
+    """
+    Compute the 2-dimensional discrete Fourier transform of real data, as the half
+    spectrum: the last axis holds the frequencies up to the Nyquist frequency only.
+    Use only where `real_fft2_available(x)`.
+    """
+    if isinstance(x, np.ndarray) and config.get("fft") == "numpy":
+        return np.fft.rfft2(x, **kwargs)
+
+    if cp is not None and isinstance(x, cp.ndarray):
+        _configure_cufft_cache()
+        _warn_slow_fft_size(x.shape, "rfft2", kwargs)
+        return _cupy_fft_with_cache_fallback(cp.fft.rfft2, x, **kwargs)
+
+    raise NotImplementedError("rfft2 needs fft='numpy' or a CuPy array")
+
+
+def irfft2(x, s, **kwargs):
+    """
+    Compute the inverse of `rfft2`: real data of the shape `s` from its half spectrum.
+    Use only where `real_fft2_available(x)`.
+    """
+    if isinstance(x, np.ndarray) and config.get("fft") == "numpy":
+        return np.fft.irfft2(x, s=s, **kwargs)
+
+    if cp is not None and isinstance(x, cp.ndarray):
+        _configure_cufft_cache()
+        _warn_slow_fft_size(x.shape, "irfft2", dict(kwargs, s=s))
+        return _cupy_fft_with_cache_fallback(cp.fft.irfft2, x, s=s, **kwargs)
+
+    raise NotImplementedError("irfft2 needs fft='numpy' or a CuPy array")
+
+
 # --- Shared diffraction-pattern FFT ----------------------------------------
 #
 # Several radial detectors (AnnularDetector, FlexibleAnnularDetector,

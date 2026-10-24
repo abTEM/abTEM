@@ -529,6 +529,70 @@ class TestSincIsBuiltOncePerGrid:
         assert len(pickle.loads(pickle.dumps(integrator))._sinc_cache) == 0
 
 
+class TestInfiniteProjectionUsesRealFFTs:
+    """The deltas are real and the factor real and even, so the spectrum is Hermitian
+    and the half spectrum of `rfft2` holds all of it."""
+
+    @staticmethod
+    def _potential(device, gpts, integrator=None):
+        return abtem.Potential(
+            ase.Atoms(
+                "ZrOZr",
+                positions=[(3.0, 3.1, 0.5), (9.0, 8.7, 2.5), (6.2, 1.3, 1.5)],
+                cell=(12.8, 12.1, 4.0),
+            ),
+            gpts=gpts,
+            slice_thickness=1.0,
+            integrator=integrator or ScatteringFactorProjectionIntegrals(),
+            device=device,
+        )
+
+    @devices
+    @pytest.mark.parametrize("precision", ["float32", "float64"])
+    @pytest.mark.parametrize("gpts", [(64, 64), (64, 48), (63, 64), (64, 63), (45, 45)])
+    def test_matches_the_complex_transforms(self, device, precision, gpts, monkeypatch):
+        import abtem.integrals as integrals
+
+        real_calls = []
+        rfft2 = integrals.rfft2
+        monkeypatch.setattr(
+            integrals, "rfft2", lambda *a, **k: real_calls.append(1) or rfft2(*a, **k)
+        )
+        with abtem.config.set({"fft": "numpy", "precision": precision}):
+            real = asnumpy(self._potential(device, gpts).build(lazy=False).array)
+            # one per element in each slice that has atoms: Zr, Zr and O
+            assert len(real_calls) == 3
+
+            monkeypatch.setattr(integrals, "real_fft2_available", lambda x: False)
+            complex_ = asnumpy(self._potential(device, gpts).build(lazy=False).array)
+
+        assert real.dtype == complex_.dtype == np.dtype(precision)
+        # rounding only: the transforms differ in how they round
+        epsilon = np.finfo(precision).eps
+        assert np.abs(real - complex_).max() <= 20 * epsilon * np.abs(complex_).max()
+
+    def test_other_libraries_keep_the_complex_transforms(self):
+        from abtem.core.fft import real_fft2_available
+
+        for library in ("fftw", "mkl"):
+            with abtem.config.set({"fft": library}):
+                assert not real_fft2_available(np.zeros((4, 4)))
+        with abtem.config.set({"fft": "numpy"}):
+            assert real_fft2_available(np.zeros((4, 4)))
+            assert not real_fft2_available(__import__("dask.array").array.zeros((4, 4)))
+
+    @pytest.mark.parametrize("shape", [(8, 8), (8, 7), (7, 8), (5, 6)])
+    def test_the_transforms_invert_each_other(self, shape):
+        from abtem.core.fft import irfft2, rfft2
+
+        array = np.random.default_rng(0).random(shape)
+        with abtem.config.set({"fft": "numpy"}):
+            half = rfft2(array)
+            assert half.shape == (shape[0], shape[1] // 2 + 1)
+            np.testing.assert_allclose(irfft2(half, s=shape), array, atol=1e-12)
+            np.testing.assert_allclose(half, np.fft.fft2(array)[:, : half.shape[1]])
+
+
 class TestIntegratorCaches:
     """Caches in integrals.py, keyed on less than their value depends on.
 

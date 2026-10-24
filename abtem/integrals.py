@@ -26,7 +26,7 @@ from abtem.core.backend import (
     get_array_module,
     get_ndimage_module,
 )
-from abtem.core.fft import fft2, ifft2
+from abtem.core.fft import fft2, ifft2, irfft2, real_fft2_available, rfft2
 from abtem.core.grid import (
     disk_meshgrid,
     polar_spatial_frequencies,
@@ -931,18 +931,26 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
             temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-            temp_array = superpose_deltas(positions, temp_array).astype(
-                get_dtype(complex=True)
-            )
+            temp_array = superpose_deltas(positions, temp_array)
+            sinc_array = self._get_sinc(gpts, sampling, device, like=array)
 
-            temp_array = fft2(temp_array, overwrite_x=True)
+            if real_fft2_available(temp_array):
+                # The deltas are real and the factor is real and even, so the
+                # spectrum is Hermitian and its half holds all of it: the same
+                # transform for half the work and memory.
+                temp_array = rfft2(temp_array)
+                half = temp_array.shape[-1]
+                temp_array *= scattering_factor[:, :half] / sinc_array[:, :half]
+                temp_array = irfft2(temp_array, s=tuple(gpts))
+            else:
+                temp_array = temp_array.astype(get_dtype(complex=True))
 
-            temp_array *= scattering_factor / self._get_sinc(
-                gpts, sampling, device, like=array
-            )
+                temp_array = fft2(temp_array, overwrite_x=True)
 
-            # if not fourier_space:
-            temp_array = ifft2(temp_array, overwrite_x=True).real
+                temp_array *= scattering_factor / sinc_array
+
+                # if not fourier_space:
+                temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
 
