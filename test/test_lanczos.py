@@ -47,12 +47,6 @@ IMPLEMENTATIONS = [
         functools.partial(_lanczos_device, diagonalise_on_device=True),
         id="device-device-eigh",
     ),
-    pytest.param(
-        functools.partial(
-            _lanczos_device, diagonalise_on_device=True, reorthogonalise=True
-        ),
-        id="device-device-eigh-reorthogonalised",
-    ),
 ]
 
 
@@ -106,12 +100,11 @@ def test_a_zero_batch_gives_zero():
     assert np.abs(result).max() == 0.0
 
 
-@pytest.mark.parametrize("reorthogonalise", [False, True])
-def test_the_basis_grows_beyond_its_first_allocation(reorthogonalise):
+def test_the_basis_grows_beyond_its_first_allocation():
     # Oracle: the dense evaluation of an oscillatory function of an operator with 30
     # well separated eigenvalues, which takes more than the 16 vectors that the basis
     # starts with (counted by the applications of the operator); the three-term
-    # recurrence is as good as the reorthogonalised one to 1e-8.
+    # recurrence, with no reorthogonalisation, gives it to 1e-8.
     n = SHAPE[0] * SHAPE[1]
     rng = np.random.default_rng(5)
     unitary, _ = np.linalg.qr(rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n)))
@@ -140,7 +133,6 @@ def test_the_basis_grows_beyond_its_first_allocation(reorthogonalise):
         60,
         np,
         diagonalise_on_device=True,
-        reorthogonalise=reorthogonalise,
     )
     values, vectors = np.linalg.eigh(matrix)
     expected = ((a0.reshape(1, -1) @ vectors.conj()) * oscillatory(values)) @ vectors.T

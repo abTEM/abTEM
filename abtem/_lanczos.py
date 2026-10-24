@@ -186,7 +186,6 @@ def _lanczos_device(
     max_iterations: int,
     xp,
     diagonalise_on_device: bool | None = None,
-    reorthogonalise: bool = False,
 ):
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), as
@@ -194,13 +193,11 @@ def _lanczos_device(
     of transfers, and the host work that the device waits for, not the arithmetic.
 
     The basis is one array, and everything that the next iteration needs stays on the
-    device. It is not reorthogonalised by default (``reorthogonalise``): a function of
-    the operator needs only the three-term recurrence, which gives the result of the
-    reorthogonalised iteration to rounding (also for oscillatory functions, as is known
-    of Lanczos approximations of matrix functions; see the tests), and it spares four
-    reads of the whole basis per iteration, the biggest cost on a GPU after the host
-    work. With it the orthogonalisation takes a few kernels whatever the size of the
-    basis. The small
+    device. It is not reorthogonalised: a function of the operator needs only the
+    three-term recurrence, which gives the result of a reorthogonalised iteration to
+    rounding (also for oscillatory functions, as is known of Lanczos approximations of
+    matrix functions; see the tests), and it spares the reads of the whole basis, four
+    per iteration, the biggest cost on a GPU after the host work. The small
     tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy and the
     batch has at least 32 members (or ``diagonalise_on_device`` is true): a batch of
     hundreds of them costs more on the host than an iteration on the device, and then
@@ -223,71 +220,42 @@ def _lanczos_device(
     real_dtype = np.empty(0, dtype=dtype).real.dtype
     members, shape = a0.shape[0], a0.shape[1:]
     norm0 = xp.sqrt(inner(a0, a0, xp).real)
-    # the Krylov basis of every member, (members, iterations + 1, nx * ny); a member
-    # with nothing in it stays zero
+    # the Krylov basis of every member, (members, iterations + 1, nx * ny), grown on
+    # demand (ten iterations are typical); a member with nothing in it stays zero
     size_xy = shape[0] * shape[1]
-    # (grown on demand: an iteration or two more than ten is typical)
     basis = xp.zeros((members, min(16, max_iterations + 1), size_xy), dtype)
     basis[:, 0] = (
         a0 / xp.where(norm0 > 0, norm0, 1.0).astype(real_dtype)[:, None, None]
     ).reshape(members, size_xy)
     coefficients_previous = None
-
-    if cp is not None and xp is cp:
-
-        def project_out(vectors, w):
-            """w without its components along the vectors (members, m, nx * ny), and
-            the overlaps <vectors, w> (members, m): two batched matrix products."""
-            overlaps = xp.conj(xp.matmul(vectors, xp.conj(w)[:, :, None]))[:, :, 0]
-            return w - xp.matmul(overlaps[:, None, :], vectors)[:, 0], overlaps
-
-    else:
-
-        def project_out(vectors, w):
-            """The same with a product and a sum each, whatever m (a batched matrix
-            product is wrong for complex numbers on Metal)."""
-            overlaps = xp.sum(xp.conj(vectors) * w[:, None, :], axis=-1)
-            return w - xp.sum(overlaps[:, :, None] * vectors, axis=1), overlaps
-
     if diagonalise_on_device:
         tridiagonal = xp.zeros((members, max_iterations, max_iterations), np.float64)
     else:
         alphas, betas = [], []
-    beta_previous = None
     beta_last = None  # the norm of the residual of the iteration before
 
     for step in range(max_iterations):
-        if step + 1 >= basis.shape[1] and step < max_iterations:
+        if step + 1 >= basis.shape[1]:
             bigger = xp.zeros(
                 (members, min(2 * basis.shape[1], max_iterations + 1), size_xy), dtype
             )
             bigger[:, : basis.shape[1]] = basis
             basis = bigger
-        vectors = basis[:, : step + 1]
-        w = apply(basis[:, step].reshape((members,) + shape)).reshape(members, size_xy)
-        # Gram-Schmidt against the whole basis, twice (the three-term recurrence is
-        # contained in it): alpha is the overlap with the current vector
-        if reorthogonalise:
-            w, overlaps = project_out(vectors, w)
-            w, _ = project_out(vectors, w)
-        else:
-            # the three-term recurrence: w = O v_j - alpha v_j - beta_(j-1) v_(j-1)
-            alpha = xp.sum(xp.conj(vectors[:, step]) * w, axis=-1)
-            w = w - alpha[:, None] * vectors[:, step]
-            if step > 0:
-                previous = beta_last.astype(real_dtype)[:, None]
-                w = w - previous * vectors[:, step - 1]
-            overlaps = xp.zeros((members, step + 1), dtype)
-            overlaps[:, step] = alpha
+        vector = basis[:, step]
+        w = apply(vector.reshape((members,) + shape)).reshape(members, size_xy)
+        # the three-term recurrence: w = O v_j - alpha v_j - beta_(j-1) v_(j-1)
+        alpha = xp.sum(xp.conj(vector) * w, axis=-1).real
+        w = w - alpha.astype(real_dtype)[:, None] * vector
+        if step > 0:
+            w = w - beta_last.astype(real_dtype)[:, None] * basis[:, step - 1]
         beta_device = xp.sqrt(xp.sum(xp.abs(w) ** 2, axis=-1))
         size = step + 1
 
         if diagonalise_on_device:
-            tridiagonal[:, step, step] = overlaps[:, step].real
+            tridiagonal[:, step, step] = alpha
             if step > 0:
-                tridiagonal[:, step - 1, step] = beta_previous
-                tridiagonal[:, step, step - 1] = beta_previous
-            beta_previous = beta_device.astype(np.float64)
+                tridiagonal[:, step - 1, step] = beta_last
+                tridiagonal[:, step, step - 1] = beta_last
             if step < 2:
                 # too early to have converged: no diagonalisation and no transfer (a
                 # member that has closed its Krylov space goes on with zero vectors,
@@ -310,14 +278,13 @@ def _lanczos_device(
                 difference = coefficients.copy()
                 difference[:, :-1] -= coefficients_previous
                 change = xp.linalg.norm(difference, axis=1).max()
+            largest_beta = beta_device.max()
             stats = asnumpy(
-                xp.stack([change.astype(np.float64), beta_previous.max()])
+                xp.stack([change.astype(np.float64), largest_beta.astype(np.float64)])
             )
             converged, closed = stats[0] < tolerance, stats[1] < 1e-14
         else:
-            host = asnumpy(xp.stack([overlaps[:, step].real, beta_device])).astype(
-                np.float64
-            )
+            host = asnumpy(xp.stack([alpha, beta_device])).astype(np.float64)
             alphas.append(host[0])
             beta = host[1]
             matrix = np.zeros((members, size, size))
