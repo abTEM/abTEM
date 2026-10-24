@@ -145,7 +145,7 @@ Performance:
   Chebyshev polynomials of the band matrix, instead of diagonalizing it (`"eigh"`). The default `"auto"`
   uses it on a GPU when it is estimated to be faster, which is for thousands of beams; on the CPU, and
   for small or very thick crystals, the eigendecomposition is faster
-  ([issue #632](https://github.com/abTEM/abTEM/issues/632))
+  ([PR #642](https://github.com/abTEM/abTEM/pull/642))
     - Measured for one orientation on a 24 GB RTX 4090 in single precision, with thicknesses to 1000 Å:
       monoclinic ZrO2 (13,903 beams) takes 0.71 s instead of 2.90 s (real symmetric form) and 1.13 s
       instead of 5.77 s (complex), and kyanite (28,898 beams) 2.56 s instead of 24.3 s. The peak memory
