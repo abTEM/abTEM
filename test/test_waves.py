@@ -670,6 +670,58 @@ def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
     )
 
 
+@devices
+def test_window_taper_is_kept_but_not_served_across_grids_or_precisions(
+    device, monkeypatch
+):
+    """Every exit plane of a thickness series is windowed with the same taper."""
+    from scipy.signal import windows
+
+    import abtem.waves as waves_module
+    from abtem.core.backend import get_array_module
+
+    monkeypatch.setattr(waves_module, "_window_tapers", None)
+    requested = []
+    get_window = windows.get_window
+
+    def counting(window, n, *args, **kwargs):
+        requested.append((window, n))
+        return get_window(window, n, *args, **kwargs)
+
+    monkeypatch.setattr(windows, "get_window", counting)
+    xp = get_array_module(device)
+
+    def waves(shape, dtype):
+        rng = np.random.default_rng(1)
+        array = (rng.random(shape) + 1j * rng.random(shape)).astype(dtype)
+        return abtem.Waves(xp.asarray(array), energy=200e3, sampling=(0.1, 0.1))
+
+    def reference(waves, window="hann"):
+        taper = np.outer(
+            get_window(window, waves.shape[0]), get_window(window, waves.shape[1])
+        )
+        return asnumpy(waves.array) * taper.astype(waves.array.real.dtype)
+
+    single = waves((24, 20), np.complex64)
+    first = single.window("hann")
+    count = len(requested)
+    again = single.window("hann")
+    assert len(requested) == count  # the second call took the kept taper
+    assert np.array_equal(asnumpy(first.array), asnumpy(again.array))
+    assert np.array_equal(asnumpy(first.array), reference(single))
+
+    # another grid, precision and window each get a taper of their own
+    for other in (waves((24, 22), np.complex64), waves((24, 20), np.complex128)):
+        windowed = other.window("hann")
+        assert windowed.array.dtype == other.array.dtype
+        assert np.array_equal(asnumpy(windowed.array), reference(other))
+    windowed = single.window("hamming")
+    assert np.array_equal(asnumpy(windowed.array), reference(single, "hamming"))
+
+    # the kept taper is not changed by the products
+    assert np.array_equal(asnumpy(single.window("hann").array), reference(single))
+
+
 def test_window_raises_in_reciprocal_space():
     """A real-space taper multiplied into reciprocal-space waves would be wrong
     without notice, so window refuses them, as crop does; a no-op window does not."""
