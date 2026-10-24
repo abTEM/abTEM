@@ -787,12 +787,15 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     doi:10.1016/j.ultramic.2015.07.005.
     """
 
-    _cache_attributes = ("_scattering_factors",)
+    _cache_attributes = ("_scattering_factors", "_sinc_cache")
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
         # See _DeviceArrayCache for why this is not a functools.lru_cache.
         self._scattering_factors = _DeviceArrayCache()
+        # One array per grid, not per element: rebuilding it for every slice and
+        # element cost about as much as an FFT of the slice.
+        self._sinc_cache = _DeviceArrayCache()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -882,6 +885,18 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         with cp.cuda.Device(device_key[1]):
             return self._calculate_scattering_factor(symbol, gpts, sampling, "gpu")
 
+    def _get_sinc(self, gpts, sampling, device, like):
+        """The `sinc` of the grid, built once on the device of `like` (the key names
+        the device as `get_scattering_factor`'s does)."""
+        device_key = _device_cache_key(device, like)
+        key = (tuple(gpts), tuple(sampling), device_key, _precision_key())
+        sinc_array = self._sinc_cache.get(key)
+        if sinc_array is None:
+            sinc_array = self._sinc_cache.put(
+                key, _sinc_on_device(gpts, sampling, device, device_key)
+            )
+        return sinc_array
+
     @property
     def scattering_factors(self) -> Mapping[tuple, np.ndarray]:
         """Cached projected scattering factors, keyed by element, grid and
@@ -922,7 +937,9 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
             temp_array = fft2(temp_array, overwrite_x=True)
 
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+            temp_array *= scattering_factor / self._get_sinc(
+                gpts, sampling, device, like=array
+            )
 
             # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real

@@ -1,9 +1,11 @@
+import ase
 import hypothesis.strategies as st
 import numpy as np
 import pytest
 from hypothesis import given
 
 import abtem
+from abtem.core.backend import asnumpy
 from abtem.integrals import (
     _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
@@ -452,6 +454,79 @@ def _assert_no_key_component_may_be_dropped(make, call, variations):
             f"{component}={other!r} does not change the value, so dropping it "
             "from the key would go unseen"
         )
+
+
+class TestSincIsBuiltOncePerGrid:
+    """The scattering-factor integrator divided by a freshly built `sinc` at every
+    slice and element: about as much time as an FFT of the slice."""
+
+    @staticmethod
+    def _potential(device, integrator):
+        return abtem.Potential(
+            ase.Atoms(
+                "ZrO", positions=[(3.0, 3.0, 0.5), (9.0, 9.0, 2.5)], cell=(12.8, 12.8, 4.0)
+            ),
+            gpts=(64, 64),
+            slice_thickness=1.0,
+            integrator=integrator,
+            device=device,
+        )
+
+    @devices
+    def test_sinc_is_built_once_and_the_potential_is_unchanged(
+        self, device, monkeypatch
+    ):
+        import abtem.integrals as integrals
+
+        built = []
+        sinc = integrals.sinc
+
+        def counting_sinc(*args, **kwargs):
+            built.append(args)
+            return sinc(*args, **kwargs)
+
+        monkeypatch.setattr(integrals, "sinc", counting_sinc)
+        integrator = ScatteringFactorProjectionIntegrals()
+        got = self._potential(device, integrator).build(lazy=False)
+        # four slices, two elements, one grid
+        assert len(built) == 1
+        assert len(integrator._sinc_cache) == 1
+
+        # the oracle builds it for every call
+        monkeypatch.setattr(
+            ScatteringFactorProjectionIntegrals,
+            "_get_sinc",
+            lambda self, gpts, sampling, device, like: counting_sinc(
+                gpts, sampling, device
+            ),
+        )
+        reference = self._potential(device, ScatteringFactorProjectionIntegrals()).build(
+            lazy=False
+        )
+        assert len(built) > 2
+        assert np.array_equal(asnumpy(got.array), asnumpy(reference.array))
+
+    def test_sinc_is_not_served_across_grids_or_precisions(self):
+        integrator = ScatteringFactorProjectionIntegrals()
+        device = "cpu"
+        small = integrator._get_sinc((32, 32), (0.1, 0.1), device, like=np.zeros(1))
+        large = integrator._get_sinc((48, 48), (0.1, 0.1), device, like=np.zeros(1))
+        assert small.shape == (32, 32) and large.shape == (48, 48)
+
+        with abtem.config.set({"precision": "float64"}):
+            double = integrator._get_sinc((32, 32), (0.1, 0.1), device, like=np.zeros(1))
+        assert double.dtype == np.float64
+        assert integrator._get_sinc(
+            (32, 32), (0.1, 0.1), device, like=np.zeros(1)
+        ).dtype == np.float32
+
+    def test_the_cache_is_dropped_when_the_integrator_is_pickled(self):
+        import pickle
+
+        integrator = ScatteringFactorProjectionIntegrals()
+        self._potential("cpu", integrator).build(lazy=False)
+        assert len(integrator._sinc_cache) == 1
+        assert len(pickle.loads(pickle.dumps(integrator))._sinc_cache) == 0
 
 
 class TestIntegratorCaches:
