@@ -23,6 +23,10 @@ Usage
     --repeats N          runs of each step, interleaved (default 1); the median counts
     --stages             also run the instrumented benchmark, for the gain of each stage
                          (about twice the time per run; the default is the compute alone)
+    --float64-reference  also run the base in double precision, and report how far the
+                         pattern of every step is from it (the error of each commit's
+                         arithmetic, to tell a change that is rounding from one that is
+                         not); the run takes several times as long as the others
     --no-check-output    do not compare the diffraction patterns against the base's
                          (each is saved as a .npy file for the comparison, a few GB at
                          production size, and removed once compared)
@@ -58,6 +62,7 @@ parser.add_argument("--tip", default="HEAD")
 parser.add_argument("--commits", nargs="+")
 parser.add_argument("--repeats", type=int, default=1)
 parser.add_argument("--stages", action="store_true")
+parser.add_argument("--float64-reference", action="store_true")
 parser.add_argument("--no-check-output", action="store_true")
 parser.add_argument("--out", default=str(Path(__file__).resolve().parent / "results"))
 parser.add_argument("--list", action="store_true")
@@ -94,12 +99,21 @@ def find_steps():
     ]
 
 
-def run_step(step, repeat, work):
-    """Run the benchmark on the code of `step`; its results, or why it failed."""
-    stem = f"{step['index']}_{step['commit'][:8]}_{repeat}"
+def run_step(step, repeat, work, extra=(), label=""):
+    """Run the benchmark on the code of `step`; its results, or why it failed. `extra`
+    are further benchmark options, which make it the compute alone (as the first
+    given, later options win)."""
+    stem = f"{step['index']}_{step['commit'][:8]}_{repeat}{label}"
     output = work / f"{stem}.json"
-    command = [sys.executable, str(BENCHMARK), *benchmark_args, "--output", str(output)]
-    if not args.stages:
+    command = [
+        sys.executable,
+        str(BENCHMARK),
+        *benchmark_args,
+        *extra,
+        "--output",
+        str(output),
+    ]
+    if extra or not args.stages:
         command.append("--reference-only")
     saved = work / f"{stem}.npy"
     if not args.no_check_output:
@@ -110,7 +124,10 @@ def run_step(step, repeat, work):
         [step["worktree"], *environment.get("PYTHONPATH", "").split(os.pathsep)]
     ).rstrip(os.pathsep)
     log = work / f"{stem}.log"
-    print(f"  {step['commit'][:8]} run {repeat + 1}: {step['subject']}", flush=True)
+    print(
+        f"  {step['commit'][:8]} run {repeat + 1}{label}: {step['subject']}",
+        flush=True,
+    )
     start = time.perf_counter()
     with open(log, "w") as stream:
         completed = subprocess.run(
@@ -150,20 +167,40 @@ def run_step(step, repeat, work):
     return record
 
 
-def compare_patterns(base_file, other_file):
-    """The largest difference between two saved diffraction patterns relative to the
-    largest value of the first (read a block of exit planes at a time)."""
-    first = np.load(base_file, mmap_mode="r")
+def compare_patterns(reference_file, other_file):
+    """How far the saved diffraction patterns `other_file` are from `reference_file`
+    (read a few planes at a time): the largest difference and the relative L2 distance,
+    both against the reference, and the largest relative difference over the pixels
+    above a thousandth of the largest value."""
+    first = np.load(reference_file, mmap_mode="r")
     second = np.load(other_file, mmap_mode="r")
     if first.shape != second.shape:
         return {"shapes_differ": [list(first.shape), list(second.shape)]}
-    difference, scale = 0.0, 0.0
-    for start in range(0, first.shape[0], 4):
-        a = np.asarray(first[start : start + 4], dtype=np.float64)
-        b = np.asarray(second[start : start + 4], dtype=np.float64)
-        difference = max(difference, float(np.abs(a - b).max()))
-        scale = max(scale, float(np.abs(a).max()))
-    return {"max_relative_difference": difference / scale if scale else None}
+    first = first.reshape(-1, *first.shape[-2:])
+    second = second.reshape(-1, *second.shape[-2:])
+
+    def blocks():
+        for start in range(0, first.shape[0], 4):
+            yield (
+                np.asarray(first[start : start + 4], dtype=np.float64),
+                np.asarray(second[start : start + 4], dtype=np.float64),
+            )
+
+    scale = max(float(np.abs(a).max()) for a, _ in blocks())
+    largest, squared, norm, strong = 0.0, 0.0, 0.0, 0.0
+    for a, b in blocks():
+        difference = np.abs(a - b)
+        largest = max(largest, float(difference.max()))
+        squared += float((difference**2).sum())
+        norm += float((a**2).sum())
+        mask = np.abs(a) > 1e-3 * scale
+        if mask.any():
+            strong = max(strong, float((difference[mask] / np.abs(a[mask])).max()))
+    return {
+        "max_relative_difference": largest / scale if scale else None,
+        "relative_l2": (squared / norm) ** 0.5 if norm else None,
+        "max_relative_difference_of_strong_pixels": strong,
+    }
 
 
 def median(values):
@@ -203,6 +240,7 @@ def summarise(steps):
         row["functions"] = {k: median(v) for k, v in row["functions"].items()}
         row["sha"] = {run["after_compute"].get("result_sha256") for run in runs}
         row["output"] = step.get("output")
+        row["error_against_float64"] = step.get("error_against_float64")
         rows.append(row)
     return rows
 
@@ -213,11 +251,23 @@ def render(rows, steps):
     lines.append(f"Benchmark options: `{' '.join(benchmark_args)}`  ")
     lines.append(f"Runs per step: {args.repeats}; the median is used.")
     lines.append("")
+    with_truth = any(row.get("error_against_float64") for row in rows)
+    if with_truth:
+        reference = steps[0].get("float64_reference", {}).get("reference", {})
+        lines += [
+            "The float32 patterns are compared with the base in double precision "
+            f"(compute {reference.get('seconds')} s): the largest difference and the "
+            "relative L2 distance, against the largest value and the norm of the "
+            "double-precision pattern, and the largest relative difference of the "
+            "pixels above a thousandth of its largest value.",
+            "",
+        ]
     lines.append(
         "| step | commit | change | compute [s] | against the step before | "
         "against the base | patterns against the base |"
+        + (" error against float64 |" if with_truth else "")
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|" + ("---|" if with_truth else ""))
     previous = None
     for index, row in enumerate(rows):
         compute = row["compute"]
@@ -244,9 +294,14 @@ def render(rows, steps):
         output = "base"
         if index:
             output = describe_output(row, base)
+        truth = (
+            f" {describe_difference(row.get('error_against_float64'))} |"
+            if with_truth
+            else ""
+        )
         lines.append(
             f"| {index} | {row['commit']} | {row['subject']} | {compute:.1f}{spread} | "
-            f"{before} | {against_base} | {output} |"
+            f"{before} | {against_base} | {output} |{truth}"
         )
         previous = compute
     lines.append("")
@@ -292,14 +347,23 @@ def render(rows, steps):
     return "\n".join(lines)
 
 
+def describe_difference(difference):
+    if not difference:
+        return "not compared"
+    if "max_relative_difference" not in difference:
+        return str(difference)
+    if difference["max_relative_difference"] == 0:
+        return "identical"
+    return (
+        f"largest {difference['max_relative_difference']:.1e}, "
+        f"L2 {difference['relative_l2']:.1e}, strong pixels "
+        f"{difference['max_relative_difference_of_strong_pixels']:.1e}"
+    )
+
+
 def describe_output(row, base):
-    if row.get("output") and "max_relative_difference" in row["output"]:
-        difference = row["output"]["max_relative_difference"]
-        if difference == 0:
-            return "identical"
-        return f"largest difference {difference:.2e} of the largest value"
     if row.get("output"):
-        return str(row["output"])
+        return describe_difference(row["output"])
     if row["sha"] and row["sha"] == base["sha"] and None not in row["sha"]:
         return "identical (SHA-256)"
     return "not compared"
@@ -326,6 +390,16 @@ def main():
             step["runs"] = []
 
         print(f"\nrunning in {work}")
+        truth = None  # the patterns of the base in double precision
+        if args.float64_reference:
+            run = run_step(steps[0], 0, work, ["--precision", "float64"], "_float64")
+            truth_run = {k: v for k, v in run.items() if k != "saved"}
+            truth = run.get("saved")
+            if "failed" in run:
+                print("the float64 reference failed; going on without it", flush=True)
+            else:
+                steps[0]["float64_reference"] = truth_run
+
         reference = None  # the patterns of the base's first run
         for repeat in range(args.repeats):
             for step in steps:
@@ -335,14 +409,17 @@ def main():
                 saved = run.pop("saved", None)
                 if not saved:
                     continue
+                if truth and "error_against_float64" not in step:
+                    step["error_against_float64"] = compare_patterns(truth, saved)
                 if reference is None and step is steps[0]:
                     reference = saved
                     continue
                 if reference and "output" not in step:
                     step["output"] = compare_patterns(reference, saved)
                 Path(saved).unlink(missing_ok=True)
-        if reference:
-            Path(reference).unlink(missing_ok=True)
+        for leftover in (reference, truth):
+            if leftover:
+                Path(leftover).unlink(missing_ok=True)
 
         rows = summarise(steps)
         report = render(rows, steps)

@@ -117,7 +117,8 @@ Performance:
     - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
       `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"` and on a GPU;
       this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
-      and not bit for bit
+      and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
+    - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
     - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
       multislice run into stages
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
