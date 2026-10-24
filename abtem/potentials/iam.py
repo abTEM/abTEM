@@ -1483,8 +1483,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         sliced_atoms = self.get_sliced_atoms()
 
-        numbers = np.unique(sliced_atoms.atoms.numbers)
-
         exit_plane_after = self._exit_plane_after
 
         cumulative_thickness = np.cumsum(self.slice_thickness)
@@ -1492,7 +1490,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         for start, stop in generate_chunks(
             last_slice - first_slice, chunks=1, start=first_slice
         ):
-            if len(numbers) > 1 or stop - start > 1:
+            if stop - start > 1:
                 array = xp.zeros(
                     (stop - start,) + self.base_shape[1:],
                     dtype=get_dtype(complex=False),
