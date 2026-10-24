@@ -234,6 +234,51 @@ __device__ __forceinline__ void laplace_stencil_impl(
     }
 }
 
+// The same stencil with periodic boundaries, on all of H x W: the offsets wrap around
+// (needs n < H and n < W), so that no padded copy and no crop is needed.
+template<typename T>
+__device__ __forceinline__ void laplace_stencil_wrap_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c,
+    const int n,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= H || j >= W) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n; k <= n; k++) {
+            int ii = i + k;
+            ii += (ii < 0) ? H : 0;
+            ii -= (ii >= H) ? H : 0;
+            int jj = j + k;
+            jj += (jj < 0) ? W : 0;
+            jj -= (jj >= W) ? W : 0;
+            cumul += c[k + n] * (am[(long long)ii * W + j]
+                                 + am[(long long)i * W + jj]);
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul;
+    }
+}
+
+extern "C" __global__ void laplace_stencil_wrap_c64(
+    complex<float>* out, const complex<float>* a, const complex<float>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_wrap_impl<complex<float> >(out, a, c, n, M, H, W);
+}
+
+extern "C" __global__ void laplace_stencil_wrap_c128(
+    complex<double>* out, const complex<double>* a, const complex<double>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_wrap_impl<complex<double> >(out, a, c, n, M, H, W);
+}
+
 extern "C" __global__ void laplace_stencil_c64(
     complex<float>* out, const complex<float>* a, const complex<float>* c,
     int n, int M, int H, int W
@@ -251,10 +296,13 @@ extern "C" __global__ void laplace_stencil_c128(
 
 _laplace_stencil_c64 = None
 _laplace_stencil_c128 = None
+_laplace_stencil_wrap_c64 = None
+_laplace_stencil_wrap_c128 = None
 
 
 def _init_laplace_stencil_kernels():
     global _laplace_stencil_c64, _laplace_stencil_c128
+    global _laplace_stencil_wrap_c64, _laplace_stencil_wrap_c128
     if _laplace_stencil_c64 is None:
         # no --std option: the dialect requirement comes from CuPy's bundled
         # headers, and each backend's default tracks them (CuPy itself pins no
@@ -265,6 +313,8 @@ def _init_laplace_stencil_kernels():
         # assigned last: a concurrent thread that observes it non-None is then
         # guaranteed to also observe _laplace_stencil_c128 (redundant module
         # compilation from two racing threads is harmless — CuPy caches it)
+        _laplace_stencil_wrap_c128 = mod.get_function("laplace_stencil_wrap_c128")
+        _laplace_stencil_wrap_c64 = mod.get_function("laplace_stencil_wrap_c64")
         _laplace_stencil_c128 = mod.get_function("laplace_stencil_c128")
         _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
 
@@ -314,18 +364,19 @@ def _laplace_operator_stencil(
         # offset k), so undo the roll applied for the CPU stencil above
         c_gpu = cp.asarray(np.roll(c, n))
 
-    def _laplace_stencil_gpu(a):
+    def _laplace_stencil_gpu(a, periodic=False):
         xp = get_array_module(a)
         a = xp.ascontiguousarray(a)
-        out = xp.zeros_like(a)
+        # the periodic kernel writes every element, the other leaves the border zero
+        out = xp.empty_like(a) if periodic else xp.zeros_like(a)
 
         M, H, W = a.shape
 
         _init_laplace_stencil_kernels()
         if a.dtype == xp.complex128:
-            kernel = _laplace_stencil_c128
+            kernel = _laplace_stencil_wrap_c128 if periodic else _laplace_stencil_c128
         elif a.dtype == xp.complex64:
-            kernel = _laplace_stencil_c64
+            kernel = _laplace_stencil_wrap_c64 if periodic else _laplace_stencil_c64
         else:
             raise TypeError(
                 "the GPU Laplacian stencil requires a complex64 or complex128 "
@@ -396,7 +447,7 @@ def _laplace_operator_stencil(
         out[:, rows, columns] = total
         return out
 
-    def _laplace_stencil(a):
+    def _laplace_stencil(a, periodic=False):
         # Store original shape and reshape to 3D
         original_shape = a.shape
         if a.ndim == 2:
@@ -410,7 +461,7 @@ def _laplace_operator_stencil(
         if device == "cpu":
             result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
-            result = _laplace_stencil_gpu(a)
+            result = _laplace_stencil_gpu(a, periodic)
         elif device == "mps":
             result = _laplace_stencil_mps(a)
         else:
@@ -443,7 +494,18 @@ def _laplace_operator_stencil(
         return stencil_with_boundary
 
     if mode != "none":
-        return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
+        padded = _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
+        if device != "gpu":
+            return padded
+
+        def _laplace_stencil_gpu_periodic(a):
+            # the kernel wraps the offsets itself, which needs an array larger than the
+            # stencil; the padding of a copy, and the crop, are for the smaller ones
+            if min(a.shape[-2:]) <= n:
+                return padded(a)
+            return _laplace_stencil(a, periodic=True)
+
+        return _laplace_stencil_gpu_periodic
     else:
         return _laplace_stencil
 
