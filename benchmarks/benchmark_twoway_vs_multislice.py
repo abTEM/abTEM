@@ -262,8 +262,10 @@ def worker(args):
 
         def run():
             potential = make_potential(atoms, gpts, args.slice_thickness, device)
+            # (a plane wave takes no scan)
+            options = {} if scan is None else {"scan": scan}
             exit_wave = wave.multislice(
-                potential, scan=scan, algorithm=algorithm, lazy=False
+                potential, algorithm=algorithm, lazy=False, **options
             )
             return exit_wave, potential, None
 
