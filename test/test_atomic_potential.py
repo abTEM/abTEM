@@ -529,6 +529,40 @@ class TestSincIsBuiltOncePerGrid:
         assert len(pickle.loads(pickle.dumps(integrator))._sinc_cache) == 0
 
 
+class TestSlicesOfSeveralElements:
+    """`generate_slices` allocated a slice of zeros and added the integral to it
+    whenever the atoms had more than one element."""
+
+    @devices
+    def test_a_slice_is_the_integral_of_its_atoms(self, device):
+        integrator = ScatteringFactorProjectionIntegrals()
+        potential = abtem.Potential(
+            ase.Atoms(
+                "ZrOZrO",
+                positions=[(3, 3.1, 0.5), (9, 8.7, 2.5), (6.2, 1.3, 1.5), (4, 7.7, 0.4)],
+                cell=(12.8, 12.1, 4.0),
+            ),
+            gpts=(64, 64),
+            slice_thickness=1.0,
+            integrator=integrator,
+            device=device,
+        )
+        sliced = potential.get_sliced_atoms()
+        slices = list(potential.generate_slices())
+        assert len(slices) == len(potential) == 4
+        for index, slice_ in enumerate(slices):
+            expected = integrator.integrate_on_grid(
+                sliced.get_atoms_in_slices(index),
+                a=sliced.slice_limits[index][0],
+                b=sliced.slice_limits[index][1],
+                gpts=potential.gpts,
+                sampling=potential.sampling,
+                device=device,
+            )
+            assert slice_.array.shape == (1, 64, 64)
+            assert np.array_equal(asnumpy(slice_.array[0]), asnumpy(expected))
+
+
 class TestInfiniteProjectionUsesRealFFTs:
     """The deltas are real and the factor real and even, so the spectrum is Hermitian
     and the half spectrum of `rfft2` holds all of it."""
@@ -537,8 +571,13 @@ class TestInfiniteProjectionUsesRealFFTs:
     def _potential(device, gpts, integrator=None):
         return abtem.Potential(
             ase.Atoms(
-                "ZrOZr",
-                positions=[(3.0, 3.1, 0.5), (9.0, 8.7, 2.5), (6.2, 1.3, 1.5)],
+                "ZrOZrO",
+                positions=[
+                    (3.0, 3.1, 0.5),
+                    (9.0, 8.7, 2.5),
+                    (6.2, 1.3, 1.5),
+                    (4.0, 7.7, 0.4),
+                ],
                 cell=(12.8, 12.1, 4.0),
             ),
             gpts=gpts,
@@ -553,15 +592,22 @@ class TestInfiniteProjectionUsesRealFFTs:
     def test_matches_the_complex_transforms(self, device, precision, gpts, monkeypatch):
         import abtem.integrals as integrals
 
-        real_calls = []
-        rfft2 = integrals.rfft2
+        real_calls, inverse_calls = [], []
+        rfft2, irfft2 = integrals.rfft2, integrals.irfft2
         monkeypatch.setattr(
             integrals, "rfft2", lambda *a, **k: real_calls.append(1) or rfft2(*a, **k)
         )
+        monkeypatch.setattr(
+            integrals,
+            "irfft2",
+            lambda *a, **k: inverse_calls.append(1) or irfft2(*a, **k),
+        )
         with abtem.config.set({"fft": "numpy", "precision": precision}):
             real = asnumpy(self._potential(device, gpts).build(lazy=False).array)
-            # one per element in each slice that has atoms: Zr, Zr and O
-            assert len(real_calls) == 3
+            # one per element in each slice that has atoms: Zr and O, Zr, O ...
+            assert len(real_calls) == 4
+            # ... and one inverse transform per slice, whatever its elements
+            assert len(inverse_calls) == 3
 
             monkeypatch.setattr(integrals, "real_fft2_available", lambda x: False)
             complex_ = asnumpy(self._potential(device, gpts).build(lazy=False).array)

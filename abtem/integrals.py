@@ -916,43 +916,55 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-        array = xp.zeros(gpts, dtype=get_dtype(complex=False))
+        fp_dtype = get_dtype(complex=False)
+        # The real transforms sum the elements as half spectra and transform the sum
+        # once; the complex ones transform each element and add the real slices.
+        real = real_fft2_available(xp.zeros(1, dtype=fp_dtype))
+        array = None if real else xp.zeros(gpts, dtype=fp_dtype)
+        spectrum = None
         for number in np.unique(atoms.numbers):
+            positions = atoms.positions[atoms.numbers == number]
+
+            positions = (positions[:, :2] / sampling).astype(fp_dtype)
+
+            temp_array = xp.zeros(gpts, dtype=fp_dtype)
+
+            temp_array = superpose_deltas(positions, temp_array)
+
             # Anchor the cache's device key on an array the scattering factor
             # will actually be combined with, rather than on the ambient CUDA
             # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device, like=array
+                chemical_symbols[number], gpts, sampling, device, like=temp_array
             )
+            sinc_array = self._get_sinc(gpts, sampling, device, like=temp_array)
 
-            positions = atoms.positions[atoms.numbers == number]
-
-            positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
-
-            temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
-
-            temp_array = superpose_deltas(positions, temp_array)
-            sinc_array = self._get_sinc(gpts, sampling, device, like=array)
-
-            if real_fft2_available(temp_array):
+            if real:
                 # The deltas are real and the factor is real and even, so the
                 # spectrum is Hermitian and its half holds all of it: the same
                 # transform for half the work and memory.
                 temp_array = rfft2(temp_array)
                 half = temp_array.shape[-1]
                 temp_array *= scattering_factor[:, :half] / sinc_array[:, :half]
-                temp_array = irfft2(temp_array, s=tuple(gpts))
-            else:
-                temp_array = temp_array.astype(get_dtype(complex=True))
+                if spectrum is None:
+                    spectrum = temp_array
+                else:
+                    spectrum += temp_array
+                continue
 
-                temp_array = fft2(temp_array, overwrite_x=True)
+            temp_array = temp_array.astype(get_dtype(complex=True))
 
-                temp_array *= scattering_factor / sinc_array
+            temp_array = fft2(temp_array, overwrite_x=True)
 
-                # if not fourier_space:
-                temp_array = ifft2(temp_array, overwrite_x=True).real
+            temp_array *= scattering_factor / sinc_array
+
+            # if not fourier_space:
+            temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
+
+        if real:
+            return irfft2(spectrum, s=tuple(gpts))
 
         return array
 
