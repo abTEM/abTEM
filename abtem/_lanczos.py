@@ -186,14 +186,21 @@ def _lanczos_device(
     max_iterations: int,
     xp,
     diagonalise_on_device: bool | None = None,
+    reorthogonalise: bool = False,
 ):
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), as
     :func:`_lanczos_host`, with the cost of a device in mind: the number of kernels and
     of transfers, and the host work that the device waits for, not the arithmetic.
 
-    The basis is one array, the orthogonalisation takes a few kernels whatever its
-    size, and everything that the next iteration needs stays on the device. The small
+    The basis is one array, and everything that the next iteration needs stays on the
+    device. It is not reorthogonalised by default (``reorthogonalise``): a function of
+    the operator needs only the three-term recurrence, which gives the result of the
+    reorthogonalised iteration to rounding (also for oscillatory functions, as is known
+    of Lanczos approximations of matrix functions; see the tests), and it spares four
+    reads of the whole basis per iteration, the biggest cost on a GPU after the host
+    work. With it the orthogonalisation takes a few kernels whatever the size of the
+    basis. The small
     tridiagonal matrices are diagonalised on the device too, when ``xp`` is CuPy and the
     batch has at least 32 members (or ``diagonalise_on_device`` is true): a batch of
     hundreds of them costs more on the host than an iteration on the device, and then
@@ -219,7 +226,8 @@ def _lanczos_device(
     # the Krylov basis of every member, (members, iterations + 1, nx * ny); a member
     # with nothing in it stays zero
     size_xy = shape[0] * shape[1]
-    basis = xp.zeros((members, max_iterations + 1, size_xy), dtype)
+    # (grown on demand: an iteration or two more than ten is typical)
+    basis = xp.zeros((members, min(16, max_iterations + 1), size_xy), dtype)
     basis[:, 0] = (
         a0 / xp.where(norm0 > 0, norm0, 1.0).astype(real_dtype)[:, None, None]
     ).reshape(members, size_xy)
@@ -246,14 +254,31 @@ def _lanczos_device(
     else:
         alphas, betas = [], []
     beta_previous = None
+    beta_last = None  # the norm of the residual of the iteration before
 
     for step in range(max_iterations):
+        if step + 1 >= basis.shape[1] and step < max_iterations:
+            bigger = xp.zeros(
+                (members, min(2 * basis.shape[1], max_iterations + 1), size_xy), dtype
+            )
+            bigger[:, : basis.shape[1]] = basis
+            basis = bigger
         vectors = basis[:, : step + 1]
         w = apply(basis[:, step].reshape((members,) + shape)).reshape(members, size_xy)
         # Gram-Schmidt against the whole basis, twice (the three-term recurrence is
         # contained in it): alpha is the overlap with the current vector
-        w, overlaps = project_out(vectors, w)
-        w, _ = project_out(vectors, w)
+        if reorthogonalise:
+            w, overlaps = project_out(vectors, w)
+            w, _ = project_out(vectors, w)
+        else:
+            # the three-term recurrence: w = O v_j - alpha v_j - beta_(j-1) v_(j-1)
+            alpha = xp.sum(xp.conj(vectors[:, step]) * w, axis=-1)
+            w = w - alpha[:, None] * vectors[:, step]
+            if step > 0:
+                previous = beta_last.astype(real_dtype)[:, None]
+                w = w - previous * vectors[:, step - 1]
+            overlaps = xp.zeros((members, step + 1), dtype)
+            overlaps[:, step] = alpha
         beta_device = xp.sqrt(xp.sum(xp.abs(w) ** 2, axis=-1))
         size = step + 1
 
@@ -270,6 +295,7 @@ def _lanczos_device(
                 basis[:, step + 1] = (
                     w / xp.where(beta_device > 1e-14, beta_device, 1.0)[:, None]
                 )
+                beta_last = beta_device
                 continue
             values, eigenvectors = xp.linalg.eigh(
                 xp.ascontiguousarray(tridiagonal[:, :size, :size])
@@ -323,6 +349,7 @@ def _lanczos_device(
             w / xp.where(beta_device > 1e-14, beta_device, 1.0)[:, None]
         )
         coefficients_previous = coefficients
+        beta_last = beta_device
     else:
         raise NotConvergedError(
             f"the Lanczos iteration did not converge to {tolerance} in "
