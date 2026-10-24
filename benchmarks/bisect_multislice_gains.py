@@ -326,24 +326,23 @@ def main():
             step["runs"] = []
 
         print(f"\nrunning in {work}")
+        reference = None  # the patterns of the base's first run
         for repeat in range(args.repeats):
             for step in steps:
-                step["runs"].append(run_step(step, repeat, work))
-
-        # the patterns of each step against those of the base's first run
-        if not args.no_check_output:
-            base_runs = [r for r in steps[0]["runs"] if r.get("saved")]
-            for step in steps[1:]:
-                done = [r for r in step["runs"] if r.get("saved")]
-                if base_runs and done:
-                    step["output"] = compare_patterns(
-                        base_runs[0]["saved"], done[0]["saved"]
-                    )
-            for step in steps:
-                for run in step["runs"]:
-                    if run.get("saved"):
-                        Path(run["saved"]).unlink(missing_ok=True)
-                        run["saved"] = None
+                run = run_step(step, repeat, work)
+                step["runs"].append(run)
+                # compare and remove at once: a run's patterns are a few GB
+                saved = run.pop("saved", None)
+                if not saved:
+                    continue
+                if reference is None and step is steps[0]:
+                    reference = saved
+                    continue
+                if reference and "output" not in step:
+                    step["output"] = compare_patterns(reference, saved)
+                Path(saved).unlink(missing_ok=True)
+        if reference:
+            Path(reference).unlink(missing_ok=True)
 
         rows = summarise(steps)
         report = render(rows, steps)
