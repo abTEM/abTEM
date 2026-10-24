@@ -636,11 +636,13 @@ def run_case(unit_cell, sampling, slice_thickness):
         except Exception as error:  # out of memory has a different class per backend
             record.update(failure(error))
         print(f"  reference compute: {record}", flush=True)
-        lazy, potential = make_pipeline(supercell, sampling, slice_thickness, planes)
 
     profiler = Profiler()
     scheduler_calls = []
     instrument(profiler)
+    # built after the instrumentation: the rotation of the atoms is a delayed call of
+    # the function as it was when the ensemble was made
+    lazy, potential = make_pipeline(supercell, sampling, slice_thickness, planes)
     if device == "gpu":
         import abtem.array as array_module
 
