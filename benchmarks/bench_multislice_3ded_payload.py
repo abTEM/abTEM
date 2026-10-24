@@ -643,6 +643,10 @@ def run_case(unit_cell, sampling, slice_thickness):
     # built after the instrumentation: the rotation of the atoms is a delayed call of
     # the function as it was when the ensemble was made
     lazy, potential = make_pipeline(supercell, sampling, slice_thickness, planes)
+    # the counts are of the compute: making the potential copies its integrator
+    profiler.counts.clear()
+    profiler.sets.clear()
+    profiler.keyed.clear()
     if device == "gpu":
         import abtem.array as array_module
 

@@ -106,6 +106,16 @@ Features:
 
 Performance:
 
+- Multislice of an ensemble of atoms (such as a 3DED rotation series) no longer repeats host work for
+  every chunk or exit plane; the results are bit-identical
+    - The atoms of an ensemble are sliced once per call of `generate_chunked_slices` instead of once per
+      chunk
+    - `Waves.window` keeps its taper, and the power gain of a window is computed once, instead of both
+      building an `n x n` array on the host at every exit plane
+    - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
+      and element
+    - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
+      multislice run into stages
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
   (and re-uploaded to the GPU) for each ([PR #350](https://github.com/abTEM/abTEM/pull/350))
 - Removed a redundant potential rebuild on every scan chunk ([PR #340](https://github.com/abTEM/abTEM/pull/340))
