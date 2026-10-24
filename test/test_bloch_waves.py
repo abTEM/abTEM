@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.linalg
 import strategies as abtem_st
 from ase import Atoms
 from ase.build import bulk, graphene
@@ -13,6 +14,11 @@ from utils import gpu, requires_gpu
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
+from abtem.bloch.band_chebyshev import (
+    band_is_faster,
+    gershgorin_bounds,
+    propagate_incident_beam,
+)
 from abtem.bloch.dynamical import (
     BlochwaveEnsemble,
     _eigh,
@@ -2248,3 +2254,169 @@ def test_rotation_series_builds_the_structure_factors_once(
         result.compute(scheduler="synchronous")
 
     assert builds == [False]
+
+
+def _hermitian(n, dtype, seed=0, spread=20.0):
+    # a Bloch-like matrix: a spread diagonal and weaker couplings
+    rng = np.random.default_rng(seed)
+    a = rng.normal(size=(n, n))
+    if np.issubdtype(dtype, np.complexfloating):
+        a = a + 1j * rng.normal(size=(n, n))
+    a = (a + a.conj().T) / 4 + np.diag(rng.uniform(-spread, spread, n))
+    return a.astype(dtype)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize(
+    "n, bandwidth, direct",
+    [(1, 8, 0), (5, 8, 3), (60, 8, 0), (60, 8, 17), (97, 16, 96)],
+)
+def test_band_propagation_matches_the_matrix_exponential(n, bandwidth, direct, dtype):
+    A = _hermitian(n, dtype)
+    scales = np.array([0.0, 0.1, 0.7])
+
+    result = propagate_incident_beam(A, scales, direct=direct, bandwidth=bandwidth)
+
+    expected = np.stack(
+        [scipy.linalg.expm(1j * s * A.astype(complex))[:, direct] for s in scales], 1
+    )
+    np.testing.assert_allclose(result, expected, atol=1e-11)
+
+
+def test_band_propagation_with_identity_reflectors():
+    # decoupled blocks leave panels that are already zero below the band: the QR
+    # gives tau = 0, reflectors that are the identity
+    blocks = (_hermitian(20, np.float64), _hermitian(20, np.float64, seed=1))
+    A = scipy.linalg.block_diag(*blocks)
+    scales = np.array([0.3, 1.0])
+
+    result = propagate_incident_beam(A, scales, direct=25, bandwidth=8)
+
+    expected = np.stack([scipy.linalg.expm(1j * s * A)[:, 25] for s in scales], 1)
+    np.testing.assert_allclose(result, expected, atol=1e-11)
+
+
+def test_band_propagation_keeps_the_matrix_unless_overwritten():
+    A = _hermitian(40, np.float64)
+    copy = A.copy()
+    kept = propagate_incident_beam(A, [0.5], bandwidth=8)
+    np.testing.assert_array_equal(A, copy)
+    overwritten = propagate_incident_beam(
+        np.asfortranarray(A), [0.5], bandwidth=8, overwrite_a=True
+    )
+    np.testing.assert_allclose(overwritten, kept, atol=1e-13)
+
+
+def test_gershgorin_bounds_contain_the_spectrum():
+    A = _hermitian(70, np.complex128)
+    low, high = gershgorin_bounds(A, block=16)
+    eigenvalues = np.linalg.eigvalsh(A)
+    assert low <= eigenvalues[0] and eigenvalues[-1] <= high
+
+
+def test_band_solver_is_chosen_for_large_problems_on_a_gpu_only():
+    # the eigendecomposition grows as N**3, the expansion as the thickness
+    assert band_is_faster(20000, 8000)
+    assert not band_is_faster(2000, 8000)
+    assert not band_is_faster(14000, 10**6)
+
+
+@pytest.mark.parametrize("use_wave_eq", ["exact", True, False])
+@pytest.mark.parametrize("centrosymmetric", [True, False], ids=["real", "complex"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_band_solver_matches_eigh(device, centrosymmetric, use_wave_eq):
+    # Metal is single precision only, and has no eigh
+    if device == "mps":
+        pytest.skip("Metal has no eigh to compare with")
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    thicknesses = [50.0, 500.0]
+
+    results = {}
+    with abtem.config.set({"precision": "float64"}):
+        structure_factor = StructureFactor(
+            atoms,
+            g_max=3.0,
+            inversion_center="auto" if centrosymmetric else None,
+            device=device,
+        )
+        bloch_waves = BlochWaves(
+            structure_factor,
+            energy=200e3,
+            sg_max=0.2,
+            use_wave_eq=use_wave_eq,
+            device=device,
+        )
+        for solver in ("eigh", "band"):
+            with abtem.config.set({"bloch.solver": solver}):
+                patterns = bloch_waves.calculate_diffraction_patterns(
+                    thicknesses, return_complex=True, lazy=False
+                )
+            results[solver] = asnumpy(patterns.array)
+
+    assert len(bloch_waves) > 128  # several panels
+    reference = results["eigh"]
+    np.testing.assert_allclose(
+        results["band"], reference, atol=1e-10 * np.abs(reference).max()
+    )
+
+
+def test_band_solver_in_single_precision_is_as_accurate_as_eigh():
+    atoms = _baddeleyite()
+    kwargs = dict(energy=200e3, sg_max=0.5, use_wave_eq=True)
+    thicknesses = [100.0, 1000.0]
+
+    def amplitudes(precision, solver):
+        with abtem.config.set({"precision": precision, "bloch.solver": solver}):
+            bloch_waves = BlochWaves(StructureFactor(atoms, g_max=3.0), **kwargs)
+            return bloch_waves.calculate_diffraction_patterns(
+                thicknesses, return_complex=True, lazy=False
+            ).array
+
+    reference = amplitudes("float64", "eigh")
+    single = amplitudes("float32", "band")
+    # numpy solves a single-precision eigh in double precision, so the error of the
+    # GPU's single-precision eigh (~3e-5 at these sizes) is the yardstick
+    assert np.abs(single - reference).max() < 3e-5 * np.abs(reference).max()
+
+
+def test_band_solver_through_lazy_rotation_series():
+    ensemble = _silicon_bloch_waves("cpu", g_max=6.0, sg_max=0.3).rotate(
+        "x", np.array([0.0, 0.02])
+    )
+    with abtem.config.set({"precision": "float64", "bloch.solver": "eigh"}):
+        expected = ensemble.calculate_diffraction_patterns([50.0]).compute().array
+    with abtem.config.set({"precision": "float64", "bloch.solver": "band"}):
+        result = ensemble.calculate_diffraction_patterns([50.0]).compute().array
+    np.testing.assert_allclose(result, expected, atol=1e-10 * expected.max())
+
+
+def test_invalid_bloch_solver_is_rejected():
+    bloch_waves = _silicon_bloch_waves("cpu")
+    with abtem.config.set({"bloch.solver": "lanczos"}):
+        with pytest.raises(ValueError, match="solver must be one of"):
+            bloch_waves.calculate_diffraction_patterns(50.0, lazy=False)
+
+
+@requires_gpu
+def test_fused_band_propagation_matches_plain():
+    import cupy as cp
+
+    for dtype in (np.float32, np.complex64, np.float64, np.complex128):
+        A = cp.asarray(_hermitian(300, dtype))
+        scales = np.array([0.2, 0.9])
+        fused = propagate_incident_beam(A, scales, direct=7, bandwidth=32, fused=True)
+        plain = propagate_incident_beam(A, scales, direct=7, bandwidth=32, fused=False)
+        tolerance = 1e-4 if dtype in (np.float32, np.complex64) else 1e-11
+        np.testing.assert_allclose(asnumpy(fused), asnumpy(plain), atol=tolerance)
+
+
+@requires_gpu
+def test_auto_solver_chooses_eigh_for_small_problems_on_a_gpu():
+    import cupy as cp
+
+    from abtem.bloch.dynamical import _select_solver
+
+    A = cp.asarray(_hermitian(100, np.float32))
+    assert _select_solver("auto", A, np.array([50.0]))[0] == "eigh"
+    assert _select_solver("auto", np.asarray(A.get()), np.array([50.0]))[0] == "eigh"
