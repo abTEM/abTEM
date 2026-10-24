@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import scipy.linalg as sla
@@ -472,6 +472,23 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex
     return phi
 
 
+def _check_member(h, sampling, cutoff, tilt, energy):
+    """Raise for a member of the ensemble (tilt [mrad], energy [eV]) that the slices or
+    the sampling of the potential cannot resolve; it is cheap, so the solver runs it
+    for every member before it builds the potential."""
+    wavelength = energy2wavelength(energy)
+    _check_step(h, 2 * np.pi / wavelength, cutoff)
+    tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+    in_plane = tangent / (wavelength * np.sqrt(1.0 + np.sum(tangent**2)))
+    if 1 / (2 * max(sampling)) < 2 * cutoff + np.hypot(*in_plane):
+        raise ValueError(
+            f"The potential is sampled too coarsely for cutoff={cutoff}: "
+            f"use a sampling of at most "
+            f"{1 / (4 * cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
+            "lower cutoff."
+        )
+
+
 def _check_step(h, wave_number, cutoff):
     """The Numerov step must resolve the oscillation of the fastest beam and the
     decay of the most evanescent one: the phase error per step grows like
@@ -497,6 +514,91 @@ def _check_step(h, wave_number, cutoff):
 
 
 @dataclass(frozen=True)
+class MeanFreePathAbsorber:
+    """An absorbing layer given by an inelastic mean free path: a constant imaginary
+    potential ``V_i = 1 / (2 sigma mean_free_path)`` [V] in a range of z, so that the
+    intensity of the elastic wave decays as ``exp(-z / mean_free_path)`` there. Pass it
+    to :class:`TwoWaySolver` as ``absorber``.
+
+    The imaginary potential depends on the energy through the interaction constant
+    sigma, and a mean free path that depends on the energy is a function: in an ensemble
+    of energies each member has its own. In the wave equation the absorber adds ``i k /
+    mean_free_path`` to the squared longitudinal wave number of every beam in the range,
+    to which the interaction constant does not contribute.
+
+    Attributes
+    ----------
+    mean_free_path : float or callable
+        The inelastic mean free path [Å], or a function of the energy [eV] that returns
+        it.
+    z_range : tuple of float, optional
+        The range (z_min, z_max) [Å], measured from the entrance plane of the slab, of
+        the slices that absorb: those with their centre in it. By default the whole
+        slab.
+    """
+
+    mean_free_path: float | Callable[[float], float]
+    z_range: tuple[float, float] | None = None
+
+    def __post_init__(self):
+        if not callable(self.mean_free_path) and not self.mean_free_path > 0.0:
+            raise ValueError("mean_free_path must be positive")
+        if self.z_range is not None and not self.z_range[0] < self.z_range[1]:
+            raise ValueError("z_range must be (z_min, z_max) with z_min < z_max")
+
+    def _mean_free_path(self, energy: float) -> float:
+        value = (
+            self.mean_free_path(energy)
+            if callable(self.mean_free_path)
+            else self.mean_free_path
+        )
+        if not value > 0.0:
+            raise ValueError(f"mean free path {value} Å at {energy} eV is not positive")
+        return float(value)
+
+    def slices(self, nz: int, thickness: float) -> np.ndarray:
+        """Whether each of the ``nz`` slices of this thickness [Å] absorbs, (nz,)."""
+        if self.z_range is None:
+            return np.ones(nz, dtype=bool)
+        centres = (np.arange(nz) + 0.5) * thickness
+        return (centres >= self.z_range[0]) & (centres <= self.z_range[1])
+
+    def imaginary_potential(self, energy: float) -> float:
+        """The imaginary potential ``V_i = 1 / (2 sigma mean_free_path)`` [V] at this
+        energy [eV]."""
+        return 1.0 / (2.0 * energy2sigma(energy) * self._mean_free_path(energy))
+
+    def absorptive_potential(self, potential: BasePotential, energy: float):
+        """The absorber of one energy as the ``absorptive_potential`` of
+        :meth:`TwoWaySolver.scatter`: a :class:`.PotentialArray` of ``V_i`` times the
+        slice thickness in the slices that absorb, on the grid of the potential."""
+        thicknesses = np.asarray(potential.slice_thickness, dtype=float)
+        gpts = tuple(int(n) for n in potential.gpts)
+        mask = self.slices(len(thicknesses), float(thicknesses.mean()))
+        array = (
+            np.zeros((len(thicknesses),) + gpts)
+            + (self.imaginary_potential(energy) * thicknesses * mask)[:, None, None]
+        )
+        return PotentialArray(
+            array, slice_thickness=thicknesses, extent=tuple(potential.extent)
+        )
+
+
+def _with_absorber(coupling, absorber, energy, h, nz, size, xp, dtype):
+    """The coupling of the slices with the absorber's ``i k / mean_free_path`` on the
+    diagonal in the slices that absorb."""
+    if absorber is None:
+        return coupling
+    wave_number = 2 * np.pi / energy2wavelength(energy)
+    damping = np.where(
+        absorber.slices(nz, h), 1j * wave_number / absorber._mean_free_path(energy), 0.0
+    ).astype(dtype)
+    damping = xp.asarray(damping)
+    identity = xp.eye(size, dtype=dtype)
+    return lambda n: coupling(n) + damping[n] * identity
+
+
+@dataclass(frozen=True)
 class TwoWaySolver:
     """
     Exact two-way solution of the elastic scattering of a plane wave by a periodic slab.
@@ -507,8 +609,8 @@ class TwoWaySolver:
     of percent. The cost grows with the cube of the number of beams: use it for the
     small cells of crystals and 2D materials. A plane wave of any direction is
     supported, with ensembles of tilts and energies (the members are solved one after
-    the other), on the CPU and on CUDA devices, in single or double precision, without
-    absorption.
+    the other), on the CPU and on CUDA devices, in single or double precision, with or
+    without absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -535,6 +637,16 @@ class TwoWaySolver:
     symmetry_tolerance : float, optional
         Largest displacement [Å] by which a symmetry operation may miss an atom (default
         1e-4).
+    absorber : MeanFreePathAbsorber, optional
+        An absorbing layer from an inelastic mean free path, which adds to the
+        absorption of the other two options (default none). Its imaginary potential
+        follows the energy of each member of an ensemble of energies.
+    absorption : float, optional
+        The imaginary part of the potential as a fraction of the real part (default 0,
+        no absorption): the solver uses ``V (1 + i absorption)``, so that the
+        transmitted and the reflected flux add up to less than 1 by what is absorbed.
+        For a different shape of the absorption give ``absorptive_potential`` to
+        :meth:`scatter`, which adds to it.
     precision : {"float32", "float64"}, optional
         Precision of the solve (complex64 or complex128). By default it is the
         ``precision`` of the configuration, as for the rest of abTEM. The evanescent
@@ -548,10 +660,18 @@ class TwoWaySolver:
     symmetry: bool = True
     symmetry_tolerance: float = 1e-4
     precision: str | None = None
+    absorption: float = 0.0
+    absorber: MeanFreePathAbsorber | None = None
 
     def __post_init__(self):
         if self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
+        if self.absorption < 0.0:
+            raise ValueError("absorption must not be negative")
+        if self.absorber is not None and not isinstance(
+            self.absorber, MeanFreePathAbsorber
+        ):
+            raise TypeError("absorber must be a MeanFreePathAbsorber")
         if self.precision not in (None, "float32", "float64"):
             raise ValueError(
                 "precision must be 'float32', 'float64' or None, "
@@ -559,7 +679,10 @@ class TwoWaySolver:
             )
 
     def scatter(
-        self, plane_wave: PlaneWave, potential: BasePotential
+        self,
+        plane_wave: PlaneWave,
+        potential: BasePotential,
+        absorptive_potential: BasePotential | None = None,
     ) -> tuple[Waves, Waves]:
         """
         Scatter a plane wave from the slab.
@@ -576,6 +699,10 @@ class TwoWaySolver:
         potential : BasePotential
             The slab. A :class:`.Potential` or a built :class:`.PotentialArray`, without
             an ensemble axis.
+        absorptive_potential : BasePotential, optional
+            The imaginary part of the potential, of the same atoms, grid and slices as
+            ``potential`` and nowhere negative: the potential of the solver is
+            ``V (1 + i absorption) + i V_absorptive``. See also ``absorption``.
 
         Returns
         -------
@@ -602,6 +729,38 @@ class TwoWaySolver:
                 "TwoWaySolver does not support ensemble potentials."
             )
 
+        # the total tilt of every member of the ensemble: the base tilt plus the value
+        # of each tilt axis, and its energy: that of the energy axis (or the energy of
+        # the wave), broadcast over the ensemble axes in their order
+        axes = waves.ensemble_axes_metadata
+        ensemble_shape = waves.shape[:-2]
+        tilts = np.broadcast_to(
+            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
+        ).copy()
+        energies = np.full(ensemble_shape, np.nan)
+        if waves.energy is not None:
+            energies[...] = waves.energy
+        for i, axis in enumerate(axes):
+            if isinstance(axis, EnergyAxis):
+                shape = [1] * len(axes)
+                shape[i] = len(axis.values)
+                energies = np.broadcast_to(
+                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
+                ).copy()
+            else:
+                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+                shape = [1] * len(axes) + [2]
+                shape[i] = len(values)
+                tilts += values.reshape(shape)
+
+        thicknesses = np.asarray(potential.slice_thickness, dtype=float)
+        h = float(thicknesses.mean())
+        if not np.allclose(thicknesses, h, rtol=1e-6):
+            raise ValueError("TwoWaySolver needs slices of equal thickness.")
+        sampling = tuple(waves._valid_sampling)
+        for tilt, energy in zip(tilts.reshape(-1, 2), energies.ravel()):
+            _check_member(h, sampling, self.cutoff, tilt, energy)
+
         built = (
             potential
             if isinstance(potential, PotentialArray)
@@ -617,13 +776,28 @@ class TwoWaySolver:
         precision = self.precision or config.get("precision")
         real_dtype = np.float32 if precision == "float32" else np.float64
         complex_dtype = np.complex64 if precision == "float32" else np.complex128
-        thicknesses = np.asarray(built.slice_thickness, dtype=float)
-        h = float(thicknesses.mean())
-        if not np.allclose(thicknesses, h, rtol=1e-6):
-            raise ValueError("TwoWaySolver needs slices of equal thickness.")
         projected = xp.asarray(built.array, dtype=real_dtype)
         nz, nx, ny = projected.shape
-        sampling = tuple(waves._valid_sampling)
+        imaginary = self.absorption * projected
+        if absorptive_potential is not None:
+            absorbing = (
+                absorptive_potential
+                if isinstance(absorptive_potential, PotentialArray)
+                else absorptive_potential.build(lazy=False)
+            )
+            if absorbing.array.shape != projected.shape or not np.allclose(
+                absorbing.slice_thickness, thicknesses
+            ):
+                raise ValueError(
+                    "the absorptive potential must have the grid and the slices of the "
+                    "potential"
+                )
+            absorbing_array = xp.asarray(absorbing.array, dtype=real_dtype)
+            if absorbing_array.min() < -1e-6 * max(float(absorbing_array.max()), 1e-30):
+                raise ValueError("the absorptive potential must not be negative")
+            imaginary = imaginary + absorbing_array
+        if self.absorption or absorptive_potential is not None:
+            projected = projected + 1j * imaginary
 
         origin, all_operations, translations = (
             (0.0, 0.0),
@@ -635,6 +809,22 @@ class TwoWaySolver:
                 atoms = potential.frozen_phonons.atoms  # type: ignore[attr-defined]
             except AttributeError:
                 atoms = None
+            other = getattr(
+                getattr(absorptive_potential, "frozen_phonons", None), "atoms", None
+            )
+            if (
+                atoms is not None
+                and other is not None
+                and (
+                    len(atoms) != len(other)
+                    or not np.array_equal(atoms.numbers, other.numbers)
+                    or not np.allclose(atoms.positions, other.positions, atol=1e-6)
+                )
+            ):
+                raise ValueError(
+                    "the absorptive potential must be of the same atoms as the "
+                    "potential"
+                )
             if atoms is not None and len(atoms) > 0:
                 origin, point_operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
@@ -665,7 +855,6 @@ class TwoWaySolver:
             wavelength = energy2wavelength(energy)
             wave_number = 2 * np.pi / wavelength
             sigma = energy2sigma(energy)
-            _check_step(h, wave_number, self.cutoff)
 
             # The incident wave travels along (tan x, tan y, 1), and is stored without
             # its carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored
@@ -674,14 +863,6 @@ class TwoWaySolver:
             norm = np.sqrt(1.0 + np.sum(tangent**2))
             in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
             incident_kz = 2 * np.pi / (wavelength * norm)
-
-            if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
-                raise ValueError(
-                    f"The potential is sampled too coarsely for cutoff={self.cutoff}: "
-                    f"use a sampling of at most "
-                    f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
-                    "lower cutoff."
-                )
 
             # a tilted wave is invariant under the translations and under the point
             # operations that leave its in-plane wave vector unchanged, the mirror along
@@ -714,6 +895,9 @@ class TwoWaySolver:
             kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
             exact = np.sqrt(kz2.astype(np.complex128))
             kappa = _numerov_wave_numbers(kz2, h)
+            coupling = _with_absorber(
+                coupling, self.absorber, energy, h, nz, len(kz2), xp, complex_dtype
+            )
             incident = np.zeros(len(kz2), np.complex128)
             incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
 
@@ -754,30 +938,6 @@ class TwoWaySolver:
                 return np.fft.ifft2(spectrum) * (nx * ny)
 
             return to_array(transmitted), to_array(reflected)
-
-        # the total tilt of every member of the ensemble: the base tilt plus the value
-        # of each tilt axis, and its energy: that of the energy axis (or the energy of
-        # the wave), broadcast over the ensemble axes in their order
-        axes = waves.ensemble_axes_metadata
-        ensemble_shape = waves.shape[:-2]
-        tilts = np.broadcast_to(
-            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
-        ).copy()
-        energies = np.full(ensemble_shape, np.nan)
-        if waves.energy is not None:
-            energies[...] = waves.energy
-        for i, axis in enumerate(axes):
-            if isinstance(axis, EnergyAxis):
-                shape = [1] * len(axes)
-                shape[i] = len(axis.values)
-                energies = np.broadcast_to(
-                    np.asarray(axis.values, dtype=float).reshape(shape), ensemble_shape
-                ).copy()
-            else:
-                values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
-                shape = [1] * len(axes) + [2]
-                shape[i] = len(values)
-                tilts += values.reshape(shape)
 
         results = [
             solve(tilt, energy)
