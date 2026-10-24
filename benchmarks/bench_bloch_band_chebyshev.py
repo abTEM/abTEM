@@ -19,7 +19,13 @@ structure matrix A without its eigenvectors:
 Each stage is timed (device synchronised around it), with the peak memory of the whole
 and the difference from the eigendecomposition (`eigh`, as in
 `calculate_dynamical_scattering`), relative to the largest amplitude. With `reference` =
-1 both are also compared with the eigendecomposition in double precision.
+1 both are also compared with the eigendecomposition in double precision, computed once
+per case, on the CPU when it does not fit on the device (minutes, and tens of GB of host
+memory, at tens of thousands of beams). Both methods are first run on a small problem,
+so that the timings leave out compiling kernels and initialising the libraries. An
+eigendecomposition that runs out of memory is reported and the band route still runs.
+`kinds` selects the solves: "real" (the centrosymmetric form, when the crystal has an
+inversion center), "complex" or both (default).
 
 The settings follow the py3DED configurations of #632 (see
 bench_bloch_structure_matrix.py): `g_max` is that of the structure factors, the
@@ -28,8 +34,9 @@ paraxial wave equation, 0.1 Å thermal displacements, 200 keV, thicknesses to 10
 Usage
 -----
     python benchmarks/bench_bloch_band_chebyshev.py [device] [g_max] [sg_max]
-        [precision] [crystal] [bandwidth] [reference]
+        [precision] [crystal] [bandwidth] [reference] [kinds]
     python benchmarks/bench_bloch_band_chebyshev.py gpu 8.0 1.0 float32 ZrO2.cif 128 1
+    python benchmarks/bench_bloch_band_chebyshev.py gpu 8 1 float32 A.cif 128 1 real
 """
 
 import sys
@@ -57,6 +64,7 @@ precision = sys.argv[4] if len(sys.argv) > 4 else "float32"
 structure = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "-" else "baddeleyite"
 bandwidth = int(sys.argv[6]) if len(sys.argv) > 6 else 128
 with_reference = bool(int(sys.argv[7])) if len(sys.argv) > 7 else False
+kinds = sys.argv[8].split(",") if len(sys.argv) > 8 else ["real", "complex"]
 energy = 200e3
 use_wave_eq = True
 thermal_sigma = 0.1
@@ -68,6 +76,13 @@ def synchronize():
         import cupy as cp
 
         cp.cuda.Stream.null.synchronize()
+
+
+def free_device_pool():
+    if device == "gpu":
+        import cupy as cp
+
+        cp.get_default_memory_pool().free_all_blocks()
 
 
 def gershgorin_bounds(A, block=1024):
@@ -383,11 +398,11 @@ with abtem.config.set({"precision": precision}):
         f"{sf.inversion_center}"
     )
 
-    def build(center):
+    def build(center, beams=None):
         return calculate_structure_matrix(
             sf.array,
             sf.hkl,
-            hkl,
+            hkl if beams is None else hkl[:beams],
             cell,
             energy,
             sf.gpts,
@@ -395,21 +410,11 @@ with abtem.config.set({"precision": precision}):
             inversion_center=center,
         )
 
-    centers = [("complex", None)]
-    if sf.inversion_center is not None:
-        centers.insert(0, ("real", sf.inversion_center))
-
-    for kind, center in centers:
-        metric = _metric(hkl, cell, energy, use_wave_eq)[:, None]
-        phase = (
-            np.exp(-2j * np.pi * (hkl @ center))[:, None] if center is not None else 1.0
-        )
-
-        synchronize()
-        start = time.perf_counter()
-        eigh_result = calculate_dynamical_scattering(
-            build(center),
-            hkl,
+    def eigh_amplitudes(A, center, beams=None):
+        selected = hkl if beams is None else hkl[:beams]
+        return calculate_dynamical_scattering(
+            A,
+            selected,
             cell,
             energy,
             thicknesses,
@@ -417,46 +422,123 @@ with abtem.config.set({"precision": precision}):
             inversion_center=center,
             overwrite_structure_matrix=True,
         )
-        synchronize()
-        t_eigh = time.perf_counter() - start
-        eigh_result = asnumpy(eigh_result).T
 
-        for fused in (True, False) if device == "gpu" else (False,):
+    def band_chebyshev(A, fused):
+        times = {}
+        synchronize()
+        start = time.perf_counter()
+        bounds = gershgorin_bounds(A)
+        synchronize()
+        times["bounds"] = time.perf_counter() - start
+        start = time.perf_counter()
+        factors = band_reduce(A, bandwidth)
+        synchronize()
+        times["band"] = time.perf_counter() - start
+        start = time.perf_counter()
+        band = lower_band(A, bandwidth)
+        y, degree = chebyshev_propagate(band, scales, bounds, fused=fused)
+        synchronize()
+        times["Chebyshev"] = time.perf_counter() - start
+        start = time.perf_counter()
+        y = apply_q(A, factors, len(band) - 1, y)
+        synchronize()
+        times["apply Q"] = time.perf_counter() - start
+        return y, degree, times
+
+    def float64_reference(center):
+        """The eigendecomposition in double precision, on the device or else on the
+        CPU; returns (amplitudes, where, seconds) or Nones."""
+        for where in dict.fromkeys((device, "cpu")):
+            try:
+                with abtem.config.set({"precision": "float64"}):
+                    sf64 = StructureFactor(
+                        atoms, g_max=g_max, thermal_sigma=thermal_sigma, device=where
+                    ).build(lazy=False)
+                    start = time.perf_counter()
+                    amplitudes = calculate_dynamical_scattering(
+                        calculate_structure_matrix(
+                            sf64.array,
+                            sf64.hkl,
+                            hkl,
+                            cell,
+                            energy,
+                            sf64.gpts,
+                            use_wave_eq=use_wave_eq,
+                            inversion_center=center,
+                        ),
+                        hkl,
+                        cell,
+                        energy,
+                        thicknesses,
+                        use_wave_eq=use_wave_eq,
+                        inversion_center=center,
+                        overwrite_structure_matrix=True,
+                    )
+                    amplitudes = asnumpy(amplitudes).T
+                return amplitudes, where, time.perf_counter() - start
+            except MemoryError:
+                free_device_pool()
+        return None, None, None
+
+    centers = []
+    if sf.inversion_center is not None and "real" in kinds:
+        centers.append(("real", sf.inversion_center))
+    if "complex" in kinds:
+        centers.append(("complex", None))
+
+    for kind, center in centers:
+        metric = _metric(hkl, cell, energy, use_wave_eq)[:, None]
+        phase = (
+            np.exp(-2j * np.pi * (hkl @ center))[:, None] if center is not None else 1.0
+        )
+        variants = [True, False] if device == "gpu" else [False]
+
+        # warm-up on a small problem: kernels compiled, libraries initialised
+        small = min(n, 1024)
+        eigh_amplitudes(build(center, small), center, small)
+        for fused in list(variants):
+            try:
+                band_chebyshev(build(center, small), fused)
+            except Exception as error:  # a fused kernel that does not compile
+                print(f"  {kind} fused: failed, {error!r}")
+                variants.remove(fused)
+        synchronize()
+
+        try:
+            synchronize()
+            start = time.perf_counter()
+            eigh_result = eigh_amplitudes(build(center), center)
+            synchronize()
+            t_eigh = time.perf_counter() - start
+            eigh_result = asnumpy(eigh_result).T
+            eigh_label = f"eigh {t_eigh:.3f} s"
+        except MemoryError as error:
+            free_device_pool()
+            eigh_result = None
+            eigh_label = f"eigh out of memory: {str(error).splitlines()[0]}"
+
+        reference = None
+        if with_reference:
+            reference, where, seconds = float64_reference(center)
+            if reference is None:
+                print(f"  {kind}: float64 reference out of memory on {device} and CPU")
+            else:
+                print(f"  {kind}: float64 reference on {where} ({seconds:.0f} s)")
+
+        for fused in variants:
             A = build(center)
+            matrix_bytes = A.nbytes
             hook = peak_memory_hook()
             if hook is not None:
                 hook.__enter__()
-            times = {}
             try:
-                synchronize()
-                start = time.perf_counter()
-                bounds = gershgorin_bounds(A)
-                synchronize()
-                times["bounds"] = time.perf_counter() - start
-                start = time.perf_counter()
-                factors = band_reduce(A, bandwidth)
-                synchronize()
-                times["band"] = time.perf_counter() - start
-                start = time.perf_counter()
-                band = lower_band(A, bandwidth)
-                y, degree = chebyshev_propagate(band, scales, bounds, fused=fused)
-                synchronize()
-                times["Chebyshev"] = time.perf_counter() - start
-                start = time.perf_counter()
-                y = apply_q(A, factors, bandwidth, y)
-                synchronize()
-                times["apply Q"] = time.perf_counter() - start
-            except Exception as error:  # a fused kernel that does not compile
-                print(f"  {kind} {'fused' if fused else 'plain'}: failed, {error!r}")
-                continue
+                y, degree, times = band_chebyshev(A, fused)
             finally:
                 if hook is not None:
                     hook.__exit__(None, None, None)
-            matrix_bytes = A.nbytes
-            del A, band
+            del A
             y = asnumpy(y) * metric * phase
             total = sum(times.values())
-            difference = np.abs(y - eigh_result).max() / np.abs(eigh_result).max()
             stages = "  ".join(f"{name} {value:.3f} s" for name, value in times.items())
             # in units of the complex matrix, as bench_bloch_structure_matrix.py
             complex_matrix = matrix_bytes * (2 if kind == "real" else 1)
@@ -466,40 +548,19 @@ with abtem.config.set({"precision": precision}):
                 if hook is not None
                 else ""
             )
+            comparison = ""
+            if eigh_result is not None:
+                difference = np.abs(y - eigh_result).max() / np.abs(eigh_result).max()
+                comparison = f"  difference from eigh {difference:.1e}"
             print(
                 f"  {kind:<7} {'fused' if fused else 'plain'}: total {total:.3f} s "
-                f"(eigh {t_eigh:.3f} s)  [{stages}]  degree {degree}{peak}  "
-                f"difference from eigh {difference:.1e}"
+                f"({eigh_label})  [{stages}]  degree {degree}{peak}{comparison}"
             )
-            if with_reference:
-                with abtem.config.set({"precision": "float64"}):
-                    sf64 = StructureFactor(
-                        atoms, g_max=g_max, thermal_sigma=thermal_sigma, device=device
-                    ).build(lazy=False)
-                    reference = asnumpy(
-                        calculate_dynamical_scattering(
-                            calculate_structure_matrix(
-                                sf64.array,
-                                sf64.hkl,
-                                hkl,
-                                cell,
-                                energy,
-                                sf64.gpts,
-                                use_wave_eq=use_wave_eq,
-                                inversion_center=center,
-                            ),
-                            hkl,
-                            cell,
-                            energy,
-                            thicknesses,
-                            use_wave_eq=use_wave_eq,
-                            inversion_center=center,
-                            overwrite_structure_matrix=True,
-                        )
-                    ).T
+            if reference is not None:
                 scale = np.abs(reference).max()
-                print(
-                    f"           error against float64: band+Chebyshev "
-                    f"{np.abs(y - reference).max() / scale:.1e}, eigh "
-                    f"{np.abs(eigh_result - reference).max() / scale:.1e}"
-                )
+                errors = f"band+Chebyshev {np.abs(y - reference).max() / scale:.1e}"
+                if eigh_result is not None:
+                    errors += (
+                        f", eigh {np.abs(eigh_result - reference).max() / scale:.1e}"
+                    )
+                print(f"           error against float64: {errors}")
