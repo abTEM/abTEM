@@ -801,10 +801,10 @@ def _emulated_fft_applies(x, kwargs) -> bool:
 
     That is for float64 and complex128 arrays of at least
     ``_EMULATED_FFT_MIN_IMAGE`` elements per image and ``_EMULATED_FFT_MIN_TOTAL``
-    in all, transformed over their
-    last two axes, whose lengths the emulation handles, when
-    ``torch.emulate-float64`` is on. Everything else, and so every caller that
-    names axes, a shape or a normalisation, keeps the host library.
+    in all, transformed over their last two axes, whose lengths the emulation
+    handles, when double precision runs on Metal (``backend.emulates_float64``).
+    Everything else, and so every caller that names axes, a shape or a
+    normalisation, keeps the host library.
     """
     if kwargs or x.ndim < 2 or x.dtype not in (np.complex128, np.float64):
         return False
