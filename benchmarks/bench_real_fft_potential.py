@@ -177,8 +177,11 @@ unit = crystal(
     cellpar=[5.151, 5.212, 5.317, 90, 99.23, 90],
 )
 # a box of about 0.1 A per pixel, as many unit cells as the grid and slices need
-repeats = (int(np.ceil(0.1 * n / 5.2)), int(np.ceil(0.1 * n / 5.2)), 2)
-atoms = unit * repeats
+side = int(np.ceil(0.1 * n / 5.1))
+atoms = unit * (side, side, int(np.ceil(args.slices / 5.3)) + 1)
+# the monoclinic cell leans in x as it is stacked in z; shear that out, so the atoms
+# fill the box at every depth
+atoms.positions[:, 0] -= atoms.positions[:, 2] * unit.cell[2, 0] / unit.cell[2, 2]
 atoms.set_cell([0.1 * n, 0.1 * n, args.slices * 1.0])
 atoms.set_pbc(False)
 atoms = atoms[
