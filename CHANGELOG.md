@@ -115,9 +115,15 @@ Performance:
     - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
       and element
     - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
-      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"` and on a GPU;
+      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"`, on a GPU and
+      with torch (CPU and Metal; the wrapper allocates the output, which avoids a PyTorch warning of
+      the Metal kernels about resizing it);
       this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
       and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
+    - Measured with `benchmarks/bench_real_fft_potential.py` on an Apple silicon laptop (Metal,
+      single precision), the potential of the default projection builds 1.22x (1024 x 1024, 8 slices),
+      1.31x (2048 x 2048, 8 slices), 1.62x (4096 x 4096, 16 slices) and 1.67x (2048 x 2048, 80 slices)
+      faster with the real transforms
     - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
     - Measured for one orientation of a py3DED run (160 x 160 x 1000 Å, sampling 0.02 Å, slices of
       0.4 Å, an 8000 x 8000 grid, 251 exit planes) on a 24 GB RTX 4090 in single precision: monoclinic
