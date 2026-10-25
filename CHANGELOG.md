@@ -119,8 +119,16 @@ Performance:
       this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
       and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
     - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
+    - Measured for one orientation of a py3DED run (160 x 160 x 1000 Å, sampling 0.02 Å, slices of
+      0.4 Å, an 8000 x 8000 grid, 251 exit planes) on a 24 GB RTX 4090 in single precision: monoclinic
+      ZrO2 takes 91.1 s instead of 199.6 s (2.19x) and kyanite 104.5 s instead of 253.0 s (2.42x). The
+      patterns of the first three changes are bit-identical; with the real transforms they differ
+      from the old ones by 4e-6 of the largest value, about a tenth of the error of the single
+      precision run itself against a double precision one (4.6e-5 and 8.9e-5), which they leave
+      unchanged
     - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
-      multislice run into stages
+      multislice run into stages, and measured commit by commit with
+      `benchmarks/bisect_multislice_gains.py`
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
   (and re-uploaded to the GPU) for each ([PR #350](https://github.com/abTEM/abTEM/pull/350))
 - Removed a redundant potential rebuild on every scan chunk ([PR #340](https://github.com/abTEM/abTEM/pull/340))
