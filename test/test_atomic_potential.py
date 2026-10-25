@@ -5,7 +5,8 @@ import pytest
 from hypothesis import given
 
 import abtem
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, get_array_module
+from abtem.core.fft import real_fft2_available
 from abtem.integrals import (
     _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
@@ -604,10 +605,13 @@ class TestInfiniteProjectionUsesRealFFTs:
         )
         with abtem.config.set({"fft": "numpy", "precision": precision}):
             real = asnumpy(self._potential(device, gpts).build(lazy=False).array)
+            # torch keeps the complex transforms, so there is nothing to compare there
+            xp = get_array_module(device)
+            real_transforms = real_fft2_available(xp.zeros(1, dtype=precision))
             # one per element in each slice that has atoms: Zr and O, Zr, O ...
-            assert len(real_calls) == 4
+            assert len(real_calls) == (4 if real_transforms else 0)
             # ... and one inverse transform per slice, whatever its elements
-            assert len(inverse_calls) == 3
+            assert len(inverse_calls) == (3 if real_transforms else 0)
 
             monkeypatch.setattr(integrals, "real_fft2_available", lambda x: False)
             complex_ = asnumpy(self._potential(device, gpts).build(lazy=False).array)
