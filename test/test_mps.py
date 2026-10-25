@@ -28,7 +28,7 @@ import textwrap
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import requires_mps
+from utils import requires_metal_kernels, requires_mps
 
 import abtem
 from abtem.core import backend
@@ -125,6 +125,7 @@ def test_inferred_double_precision_is_narrowed():
         xp.asarray(np.zeros(4), dtype=np.float64)
 
 
+@requires_metal_kernels
 def test_double_precision_on_mps_is_the_emulation_on_the_host():
     # Metal holds no float64, so the 'mps' device with precision float64 is the
     # emulation (abtem.core._double_float): NumPy arrays on the host, the loops on

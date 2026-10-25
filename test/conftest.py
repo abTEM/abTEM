@@ -12,7 +12,7 @@ import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
-from utils import _ACCELERATOR
+from utils import _ACCELERATOR, _METAL_KERNELS, _NO_KERNELS_REASON
 from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
 from utils import requires_multigpu as _requires_multigpu
@@ -175,12 +175,37 @@ def pytest_configure(config):
         "markers",
         "float64: the test runs in double precision, set in its body or by a "
         "fixture rather than by a parameter; on Metal that is the emulated double "
-        "precision (select with -m float64).",
+        "precision, so its 'mps' case is skipped where the Metal kernels cannot "
+        "run (torch's CPU device).",
     )
     config.addinivalue_line(
         "markers",
         "quantem: runs against the real quantem package (which needs torch) and "
         "is skipped without it; the CI job `quantem` installs it.",
+    )
+
+
+# Double precision on 'mps' is the emulation, which runs abTEM's Metal kernels. On
+# torch's CPU device (ABTEM_TORCH__DEVICE=cpu, the CI job of the torch backend)
+# those cannot run, so a test parametrized on both the 'mps' device and double
+# precision has nothing to run there; skipping is the honest outcome. Double
+# precision is seen in the test's parameters, or declared with the `float64`
+# marker by a test that sets it in its body or a fixture, which no parameter shows.
+_DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+
+
+def _is_double_precision_without_metal_kernels(item) -> bool:
+    callspec = getattr(item, "callspec", None)
+    if callspec is None or _METAL_KERNELS:
+        return False
+
+    # Only string parameters are of interest, and restricting to them also
+    # keeps unhashable ones (arrays, Atoms) away from the set membership test.
+    values = [value for value in callspec.params.values() if isinstance(value, str)]
+    if "mps" not in values:
+        return False
+    return item.get_closest_marker("float64") is not None or any(
+        value in _DOUBLE_PRECISION_PARAMS for value in values
     )
 
 
@@ -214,11 +239,15 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+    skip_no_kernels = pytest.mark.skip(reason=_NO_KERNELS_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:
         if not runslow and "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+        if _is_double_precision_without_metal_kernels(item):
+            item.add_marker(skip_no_kernels)
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(
