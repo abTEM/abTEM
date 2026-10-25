@@ -152,6 +152,34 @@ def check_mps_is_available():
     return tp
 
 
+_METAL_DEVICE_NAMES = frozenset({"mps", "metal", "torch"})
+_kernels_checked = False
+
+
+def _check_kernels_once() -> None:
+    global _kernels_checked
+    if not _kernels_checked:
+        check_metal_kernels_are_available()
+        _kernels_checked = True
+
+
+def emulates_float64() -> bool:
+    """
+    Whether float64 work runs on the Metal GPU in emulated double precision.
+
+    That is the case on the device 'mps' with precision 'float64', which Metal
+    cannot hold in arrays and so gets from :mod:`abtem.core._double_float`: the
+    data stay float64 on the host and the heavy loops run in double-float on the
+    GPU. The configuration key ``torch.emulate-float64`` asks for the same with
+    the device 'cpu'. Neither does anything in single precision.
+    """
+    if config.get("precision") != "float64":
+        return False
+    return bool(_config_get("torch.emulate-float64")) or (
+        str(config.get("device", "")).lower() in _METAL_DEVICE_NAMES
+    )
+
+
 def check_metal_kernels_are_available():
     """
     Load PyTorch for abTEM's own Metal kernels, raising if they cannot run.
@@ -175,13 +203,14 @@ def check_metal_kernels_are_available():
 
     if _torch.DEVICE != "mps":
         raise RuntimeError(
-            "torch.emulate-float64 runs Metal kernels, so it needs the 'mps' torch "
+            "Emulated float64 (device 'mps' with precision 'float64', or "
+            "torch.emulate-float64) runs Metal kernels, so it needs the 'mps' torch "
             f"device, but the configuration key 'torch.device' is "
             f"'{_torch.DEVICE}'."
         )
     if not hasattr(_torch.torch.mps, "compile_shader"):
         raise RuntimeError(
-            "torch.emulate-float64 compiles Metal kernels with "
+            "Emulated float64 on Metal compiles Metal kernels with "
             "torch.mps.compile_shader, which PyTorch "
             f"{_torch.torch.__version__} does not have. Upgrade PyTorch."
         )
@@ -513,6 +542,12 @@ def get_array_module(
             return cp
 
         if x.lower() in ("torch", "mps", "metal"):
+            if config.get("precision") == "float64":
+                # Metal has no float64 arrays: double precision on 'mps' is the
+                # emulation, whose data are float64 NumPy arrays on the host (see
+                # emulates_float64), so this device is NumPy's with Metal kernels.
+                _check_kernels_once()
+                return np
             return check_mps_is_available()
 
     if isinstance(x, np.ndarray):

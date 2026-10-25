@@ -11,13 +11,15 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
-- Emulated float64 on Apple Metal: with `device: cpu`, `precision: float64` and `torch.emulate-float64: true`
-  the Fourier multislice and the infinite-projection potential run their FFTs on the GPU in double-float
-  arithmetic (pairs of float32, ~1e-14 relative accuracy), up to ~12x faster than float64 on the CPU.
-  The core-loss multislice runs on the GPU too, and the host FFTs of large float64 arrays (detectors,
-  convolutions, PRISM reductions) are routed there. Grid sides must have no prime factor above 7. A `SlowFFTSizeWarning` now says when a grid is markedly
-  slow on Metal, whose FFT runs powers of two 2-4x faster per pixel, or in the emulation, and which grid
-  would be faster; the automatic grids stay the same on every device
+- Double precision on Apple Metal: the device `mps` with `precision: float64` (it was refused before) keeps
+  the data as float64 on the host and runs the Fourier multislice (also the core-loss one), the
+  infinite-projection potential and the large host FFTs on the GPU in double-float arithmetic (pairs of
+  float32, ~1e-14 relative accuracy), up to ~14x faster than float64 on the CPU. What the GPU cannot do
+  (real-space multislice, a grid side with a prime factor above 7) runs on the host in the same float64,
+  with a `SlowFFTSizeWarning`; `torch.emulate-float64` asks for the same with the device `cpu`. A
+  `SlowFFTSizeWarning` also says when a grid is markedly slow on Metal, whose FFT runs powers of two 2-4x
+  faster per pixel, and which grid would be faster; the automatic grids stay the same on every device.
+  The test suite now runs its double-precision tests on Metal at the same tolerances as elsewhere
   ([PR #620](https://github.com/abTEM/abTEM/pull/620))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,

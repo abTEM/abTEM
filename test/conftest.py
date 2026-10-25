@@ -100,9 +100,9 @@ def _close_figures():
 
 @pytest.fixture
 def float64_config(device):
-    # Its 'mps' case never gets here: `float64_devices` in test/utils.py also
-    # applies the `float64` marker, which pytest_collection_modifyitems below
-    # skips on Metal.
+    # On 'mps' double precision is the emulation of abtem.core._double_float:
+    # float64 on the host with the heavy loops on the Metal GPU, at the same
+    # tolerances as on every other device.
     with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
         yield
 
@@ -173,41 +173,14 @@ def pytest_configure(config):
         )
     config.addinivalue_line(
         "markers",
-        "quantem: runs against the real quantem package (which needs torch) and "
-        "is skipped without it; the CI job `quantem` installs it.",
+        "float64: the test runs in double precision, set in its body or by a "
+        "fixture rather than by a parameter; on Metal that is the emulated double "
+        "precision (select with -m float64).",
     )
     config.addinivalue_line(
         "markers",
-        "float64: the test runs in double precision, set in its body or by a "
-        "fixture rather than by a parameter; its 'mps' case is skipped.",
-    )
-
-
-# Metal is a single-precision backend -- torch refuses a float64 tensor on the
-# MPS device outright -- so a test parametrized on both the 'mps' device and
-# double precision is asking for something the hardware cannot do. Skipping is
-# the honest outcome; letting it fail would bury real Metal regressions under
-# noise that no amount of backend work can clear. Double precision is seen in
-# the test's parameters, or declared with the `float64` marker by a test that
-# sets it in its body or a fixture, which no parameter shows.
-_DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
-_METAL_DOUBLE_SKIP_REASON = (
-    "Metal (MPS) is single precision; float64 cannot run on this device"
-)
-
-
-def _is_double_precision_on_metal(item) -> bool:
-    callspec = getattr(item, "callspec", None)
-    if callspec is None:
-        return False
-
-    # Only string parameters are of interest, and restricting to them also
-    # keeps unhashable ones (arrays, Atoms) away from the set membership test.
-    values = [value for value in callspec.params.values() if isinstance(value, str)]
-    if "mps" not in values:
-        return False
-    return item.get_closest_marker("float64") is not None or any(
-        value in _DOUBLE_PRECISION_PARAMS for value in values
+        "quantem: runs against the real quantem package (which needs torch) and "
+        "is skipped without it; the CI job `quantem` installs it.",
     )
 
 
@@ -241,15 +214,11 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-    skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:
         if not runslow and "slow" in item.keywords:
             item.add_marker(skip_slow)
-
-        if _is_double_precision_on_metal(item):
-            item.add_marker(skip_metal_double)
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(

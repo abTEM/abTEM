@@ -17,7 +17,7 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
-from abtem.core.backend import get_array_module
+from abtem.core.backend import emulates_float64, get_array_module
 from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -423,6 +423,18 @@ def allocate_multislice_measurements(
     return measurements
 
 
+def _warn_multislice_stays_on_the_host(reason: str) -> None:
+    """Say, once per reason, that double precision on Metal runs a multislice on
+    the host: the result is the same float64, only not computed on the GPU."""
+    from abtem.core.fft import _warn_once
+
+    _warn_once(
+        ("host multislice", reason),
+        "Double precision on Metal runs this multislice on the host, not the GPU: "
+        f"{reason}.",
+    )
+
+
 class _EmulatedDoubleMultislice:
     """The Fourier multislice of float64 waves on the Metal GPU, by double-float.
 
@@ -471,21 +483,32 @@ class _EmulatedDoubleMultislice:
         return other
 
     @staticmethod
-    def check_supported(waves: Waves, algorithm) -> None:
-        """Raise unless this class can run ``waves`` through ``algorithm``."""
-        problems = []
+    def unsupported_reason(
+        waves: Waves, algorithm, return_backscattered: bool = False
+    ) -> str | None:
+        """Why this class cannot run ``waves`` through ``algorithm``, or None if it
+        can. Then the multislice runs on the host, in the same float64."""
+        from abtem.core import _double_float as double_float
+
         if not isinstance(algorithm, FourierMultislice):
-            problems.append("only the Fourier multislice is supported")
-        elif algorithm.conjugate or algorithm.transpose:
-            problems.append("conjugate and transpose multislice are not supported")
+            return "only the Fourier multislice runs on the GPU"
+        if algorithm.conjugate or algorithm.transpose:
+            return "the conjugate and transpose multislice do not run on the GPU"
+        if return_backscattered:
+            return "backscattered waves are not calculated on the GPU"
         if not (
             isinstance(waves._array, np.ndarray) and waves._array.dtype == np.complex128
         ):
-            problems.append("the waves must be a complex128 NumPy array on the host")
-        if problems:
-            raise NotImplementedError(
-                "torch.emulate-float64 is set, but " + "; ".join(problems) + "."
+            return "the waves are not a complex128 NumPy array on the host"
+        try:
+            double_float.check_transform(waves._array.shape)
+        except ValueError:
+            gpts = tuple(waves._array.shape[-2:])
+            return (
+                f"the grid {gpts[0]} x {gpts[1]} has a side the GPU's FFT cannot do "
+                "(a prime factor above 7)"
             )
+        return None
 
     def _propagator_array(self, waves: Waves, thickness: float):
         if thickness not in self._propagators:
@@ -923,13 +946,14 @@ def multislice_and_detect(
     # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
     waves_input = waves
 
-    emulate_float64 = bool(config.get("torch.emulate-float64"))
+    emulate_float64 = emulates_float64()
     if emulate_float64:
-        if return_backscattered:
-            raise NotImplementedError(
-                "torch.emulate-float64 does not support return_backscattered."
-            )
-        _EmulatedDoubleMultislice.check_supported(waves, algorithm)
+        reason = _EmulatedDoubleMultislice.unsupported_reason(
+            waves, algorithm, return_backscattered
+        )
+        if reason is not None:
+            _warn_multislice_stays_on_the_host(reason)
+            emulate_float64 = False
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -1275,9 +1299,12 @@ def transition_potential_multislice_and_detect(
 
     waves_input = waves.copy()
 
-    emulate_float64 = bool(config.get("torch.emulate-float64"))
+    emulate_float64 = emulates_float64()
     if emulate_float64:
-        _EmulatedDoubleMultislice.check_supported(waves, algorithm)
+        reason = _EmulatedDoubleMultislice.unsupported_reason(waves, algorithm)
+        if reason is not None:
+            _warn_multislice_stays_on_the_host(reason)
+            emulate_float64 = False
 
     for (
         potential_index,

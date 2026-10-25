@@ -808,7 +808,7 @@ def _emulated_fft_applies(x, kwargs) -> bool:
     """
     if kwargs or x.ndim < 2 or x.dtype not in (np.complex128, np.float64):
         return False
-    if not config.get("torch.emulate-float64", False):
+    if not backend.emulates_float64():
         return False
     if x.shape[-1] * x.shape[-2] < _EMULATED_FFT_MIN_IMAGE:
         return False

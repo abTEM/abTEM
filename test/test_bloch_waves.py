@@ -1595,10 +1595,7 @@ def test_bloch_waves_warn_in_single_precision(device, precision, monkeypatch):
                 abtem.bloch.dynamical, "_issued_precision_warnings", set()
             )
             if precision == "float32":
-                # Metal has no double precision to switch to, so the advice
-                # there is to check on another device.
-                check = "'cpu' or 'gpu' device" if device == "mps" else "precision"
-                with pytest.warns(BlochWavePrecisionWarning, match=check):
+                with pytest.warns(BlochWavePrecisionWarning, match="precision"):
                     calculate()
             else:
                 with warnings.catch_warnings():

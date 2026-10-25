@@ -8,8 +8,12 @@
 # ABTEM_DASK__CHUNK_SIZE="256 MB".
 
 # The device can be 'cpu', 'gpu' (CUDA, via CuPy) or 'mps' -- the experimental
-# Metal backend on Apple silicon, which needs PyTorch (https://pytorch.org)
-# and single precision. PyTorch is only imported once 'mps' is first used.
+# Metal backend on Apple silicon, which needs PyTorch (https://pytorch.org).
+# PyTorch is only imported once 'mps' is first used. Metal holds no float64, so
+# with precision 'float32' the arrays live on the GPU, and with precision
+# 'float64' the data are float64 arrays on the host while the heavy loops (the
+# multislice, the potential, large FFTs) run on the GPU in emulated double
+# precision, ~1e-14 relative accuracy (see emulate-float64 under torch below).
 device: cpu
 # The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw
@@ -64,16 +68,18 @@ torch:
   # backend's tests on any machine). Metal's single-precision rules apply on either. The
   # key is read once, when the backend loads; changing it afterwards has no effect.
   device: mps
-  # Run the multislice of float64 waves on the Metal GPU in emulated double precision
-  # (pairs of float32, ~1e-14 relative accuracy), while the data stay on the host as
-  # float64. Needs device 'cpu', precision 'float64' and grids whose sides have no
-  # prime factor above 7 (slower above 2048). Besides the multislice (also the
-  # core-loss one) and the potential, host float64 FFTs of large arrays (at least
-  # 128 x 128 per image, 256 x 256 in all) run on the GPU too. Experimental; only
-  # the Fourier multislice is supported (tilt axes and frozen-phonon ensembles
-  # included), anything else raises. Like every configuration key, it is read when
-  # the computation runs, so set it around compute(), not only around building the
-  # graph.
+  # Emulated double precision on the Metal GPU (pairs of float32, ~1e-14 relative
+  # accuracy) for the float64 work on the host: this is what the device 'mps'
+  # means with precision 'float64', and this key asks for it with the device
+  # 'cpu'. It does nothing in single precision. The data stay float64 on the
+  # host, and the multislice (also the core-loss one), the potential and the host
+  # float64 FFTs of large arrays (at least 128 x 128 per image, 256 x 256 in all)
+  # run on the GPU, where they can: the Fourier multislice (tilt axes and
+  # frozen-phonon ensembles included) on grids whose sides have no prime factor
+  # above 7 (slower above 2048). Anything else runs on the host, in the same
+  # float64, with a SlowFFTSizeWarning. Like every configuration key, it is read
+  # when the computation runs, so set it around compute(), not only around
+  # building the graph.
   emulate-float64: false
 mkl:
   # The number of threads to use for mkl

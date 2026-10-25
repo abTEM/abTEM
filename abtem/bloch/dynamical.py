@@ -45,7 +45,6 @@ from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAx
 from abtem.core.backend import (
     asnumpy,
     cp,
-    device_name_from_array_module,
     get_array_module,
     validate_device,
 )
@@ -95,7 +94,7 @@ class BlochWavePrecisionWarning(UserWarning):
 _issued_precision_warnings: set[str] = set()
 
 
-def _warn_if_single_precision(device: str) -> None:
+def _warn_if_single_precision() -> None:
     # The eigendecomposition and the propagation phases carry an absolute error
     # of roughly 1e-7 to 3e-5 of the strongest beam in float32, growing with
     # thickness and beam count (Si and Au, 490-850 beams, 1000-20000 Å). Beams
@@ -105,20 +104,14 @@ def _warn_if_single_precision(device: str) -> None:
     if np.dtype(get_dtype()) != np.float32:
         return
 
-    if device_name_from_array_module(get_array_module(device)) == "mps":
-        reason = "the Metal (MPS) device supports single precision only"
-        check = "the 'cpu' or 'gpu' device with precision 'float64'"
-    else:
-        reason = "the 'precision' setting is 'float32'"
-        check = "precision 'float64'"
-
     message = (
-        f"Bloch waves are computed in single precision because {reason}. Beams "
+        "Bloch waves are computed in single precision because the 'precision' "
+        "setting is 'float32'. Beams "
         "down to 1e-3 of the strongest typically agree with double precision to "
         "within about 2e-4 relative, but weaker diffraction intensities may be "
         "inaccurate, increasingly so for thick samples and many beams "
         "(scattering matrices are exponentiated in double precision "
-        f"regardless). Check the result against {check}, e.g. with "
+        "regardless). Check the result against precision 'float64', e.g. with "
         "abtem.config.set({'precision': 'float64'})."
     )
     if message in _issued_precision_warnings:
@@ -1833,7 +1826,7 @@ class BlochWaves:
             The scattering matrix.
         """
         self._require_single_energy("calculate_scattering_matrix")
-        _warn_if_single_precision(self._device)
+        _warn_if_single_precision()
         A = self.calculate_structure_matrix(lazy=lazy)
 
         kwargs = dict(
@@ -1861,7 +1854,7 @@ class BlochWaves:
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
         assert isinstance(thicknesses, np.ndarray)
-        _warn_if_single_precision(self._device)
+        _warn_if_single_precision()
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -2742,7 +2735,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
 
-        _warn_if_single_precision(self.device)
+        _warn_if_single_precision()
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -2987,7 +2980,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 )
             ]
 
-        _warn_if_single_precision(self.device)
+        _warn_if_single_precision()
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:

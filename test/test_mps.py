@@ -31,6 +31,7 @@ from ase.build import bulk
 from utils import requires_mps
 
 import abtem
+from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
     copy_to_device,
@@ -124,29 +125,30 @@ def test_inferred_double_precision_is_narrowed():
         xp.asarray(np.zeros(4), dtype=np.float64)
 
 
-def test_double_precision_configuration_is_rejected():
-    with abtem.config.set({"precision": "float64"}):
-        with pytest.raises(RuntimeError, match="single-precision"):
-            get_array_module("mps")
+def test_double_precision_on_mps_is_the_emulation_on_the_host():
+    # Metal holds no float64, so the 'mps' device with precision float64 is the
+    # emulation (abtem.core._double_float): NumPy arrays on the host, the loops on
+    # the GPU, and the single-precision backend only where precision is float32.
+    with abtem.config.set({"device": "mps", "precision": "float64"}):
+        assert get_array_module("mps") is np
+        assert backend.emulates_float64()
+
+        potential = abtem.Potential(
+            bulk("Si", cubic=True) * (1, 1, 2), gpts=64, device="mps"
+        )
+        waves = abtem.PlaneWave(energy=100e3, device="mps").multislice(potential)
+        assert isinstance(waves.array, np.ndarray)
+        assert waves.array.dtype == np.complex128
+
+    assert not backend.emulates_float64()
+    assert get_array_module("mps") is not np
 
 
-def test_metal_device_rejects_double_precision_when_configured():
-    # The combination is refused where it is set, not later inside a
-    # computation, and a refused set leaves the configuration untouched.
-    before = (abtem.config.get("device"), abtem.config.get("precision"))
-
-    with pytest.raises(ValueError, match="single-precision"):
-        abtem.config.set({"device": "mps", "precision": "float64"})
-
-    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
-
-    with abtem.config.set({"device": "mps"}):
-        with pytest.raises(ValueError, match="single-precision"):
-            abtem.config.set({"precision": "float64"})
-
-        assert abtem.config.get("precision") == "float32"
-
-    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
+def test_double_precision_is_refused_on_single_precision_arrays():
+    # An explicit float64 on the single-precision backend's arrays is refused.
+    xp = get_array_module("mps")
+    with pytest.raises(RuntimeError, match="single-precision"):
+        xp.asarray(np.zeros(4), dtype=np.float64)
 
 
 def test_unsupported_operation_names_itself():

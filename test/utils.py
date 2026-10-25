@@ -254,13 +254,21 @@ devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
 
+def skip_float64_on_single_precision_arrays(device, reason="float64 arrays"):
+    """Skip a test that needs ``reason`` on the arrays of ``device`` when those are
+    the single-precision arrays of the Metal backend: it holds no float64, which
+    only the emulation of `float64_devices` (float64 on the host) gets around."""
+    if device == gpu.values[0] and _ACCELERATOR == "mps":
+        pytest.skip(f"the float32 arrays of the Metal backend cannot be {reason}")
+
+
 def float64_devices(function):
     """Parametrize a test over `device` and run it in double precision with the
     numpy FFT, which the comparisons at 1e-10 of the maximum need (the
-    `float64_config` fixture of conftest.py). The `float64` marker makes the
-    collection hook of conftest.py skip the Metal case."""
+    `float64_config` fixture of conftest.py). On Metal that is the emulated double
+    precision of abtem.core._double_float, at the same tolerances as elsewhere."""
     function = pytest.mark.usefixtures("float64_config")(function)
-    return devices(pytest.mark.float64(function))
+    return devices(function)
 
 
 # A box that strains the atoms is reported by a warning, which only the tests of

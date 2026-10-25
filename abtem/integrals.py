@@ -17,7 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
-from abtem.core import backend, config
+from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
     cp,
@@ -671,14 +671,24 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         return ifft2(array / sinc_array).real
 
 
-def _emulates_float64_on_metal(xp) -> bool:
+def _emulates_float64_on_metal(xp, gpts) -> bool:
     """Whether float64 work on the host is to run on the Metal GPU, in emulated
-    double precision (the ``torch.emulate-float64`` option)."""
-    return (
+    double precision (the device 'mps' with precision float64): on a grid the
+    GPU's FFT can do, and the host does the others."""
+    if not (
         xp is np
-        and bool(config.get("torch.emulate-float64", False))
+        and backend.emulates_float64()
         and get_dtype(complex=False) == np.float64
-    )
+    ):
+        return False
+
+    from abtem.core import _double_float
+
+    try:
+        _double_float.check_transform(tuple(gpts))
+    except ValueError:
+        return False
+    return True
 
 
 def sinc(
@@ -954,7 +964,7 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-        if _emulates_float64_on_metal(xp):
+        if _emulates_float64_on_metal(xp, gpts):
             return self._integrate_on_grid_emulated(atoms, gpts, sampling)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))

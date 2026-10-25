@@ -12,7 +12,7 @@ from ase.build import bulk
 from utils import requires_mps
 
 import abtem
-from abtem.core import config
+from abtem.core import backend, config
 
 pytestmark = [
     *requires_mps,
@@ -220,15 +220,59 @@ def test_emulated_multislice_matches_float64_with_a_detector():
     assert np.abs(emulated - reference).max() < 1e-10 * np.abs(reference).max()
 
 
-def test_emulation_without_float64_waves_raises():
+def test_the_emulation_does_nothing_in_single_precision():
     atoms = bulk("Si", "diamond", a=5.431, cubic=True)
     with config.set({"precision": "float32", "torch.emulate-float64": True}):
+        assert not backend.emulates_float64()
         potential = abtem.Potential(atoms, gpts=32, slice_thickness=1.0)
         wave = abtem.PlaneWave(energy=200e3)
         wave.grid.match(potential)
 
-        with pytest.raises(NotImplementedError, match="complex128"):
-            wave.multislice(potential).compute()
+        result = wave.multislice(potential).compute()
+
+    assert result.array.dtype == np.complex64
+
+
+def _multislice(gpts, algorithm=None, device="cpu"):
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0, device=device)
+    wave = abtem.PlaneWave(energy=200e3, device=device)
+    wave.grid.match(potential)
+    kwargs = {} if algorithm is None else {"algorithm": algorithm}
+    return np.asarray(wave.multislice(potential, **kwargs).compute().array)
+
+
+@pytest.mark.parametrize(
+    "gpts, algorithm, reason",
+    [
+        ((74, 74), None, "prime factor above 7"),  # 74 = 2 * 37
+        (
+            (64, 64),
+            abtem.multislice.RealSpaceMultislice(),
+            "only the Fourier multislice",
+        ),
+        (
+            (64, 64),
+            abtem.multislice.FourierMultislice(transpose=True),
+            "transpose",
+        ),
+    ],
+)
+def test_double_precision_on_mps_runs_on_the_host_where_the_gpu_cannot(
+    gpts, algorithm, reason
+):
+    from abtem.core.fft import SlowFFTSizeWarning, _warned_slow_fft_shapes
+
+    with config.set({"precision": "float64", "device": "cpu"}):
+        reference = _multislice(gpts, algorithm)
+
+    _warned_slow_fft_shapes.clear()
+    with config.set({"precision": "float64", "device": "mps"}):
+        with pytest.warns(SlowFFTSizeWarning, match=reason):
+            emulated = _multislice(gpts, algorithm, device="mps")
+
+    # The host's float64, so the same result.
+    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-12)
 
 
 def test_emulated_potential_matches_float64_on_the_host():
