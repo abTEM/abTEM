@@ -980,6 +980,27 @@ def _fft_func(name: str):
     return _serialized(func)
 
 
+# The real transforms of the last two axes, with the output allocated here and given as
+# `out`. Called without it, MPS makes a 0-d output and resizes it, which PyTorch warns
+# about (a UserWarning, from Resize.cpp: "outputs will not be resized unless they have
+# zero elements"); an output of the right shape is not resized.
+@_serialized
+def _rfft2(x, norm=None):
+    array = _unwrap(x)
+    shape = array.shape[:-1] + (array.shape[-1] // 2 + 1,)
+    dtype = torch.complex128 if array.dtype == torch.float64 else torch.complex64
+    out = torch.empty(shape, dtype=dtype, device=array.device)
+    return _wrap(torch.fft.rfft2(array, norm=norm, out=out))
+
+
+@_serialized
+def _irfft2(x, s, norm=None):
+    array = _unwrap(x)
+    dtype = torch.float64 if array.dtype == torch.complex128 else torch.float32
+    out = torch.empty(array.shape[:-2] + tuple(s), dtype=dtype, device=array.device)
+    return _wrap(torch.fft.irfft2(array, s=tuple(s), norm=norm, out=out))
+
+
 def _fft_shift_func(name: str):
     """``fftshift``/``ifftshift``, whose ``axes`` torch spells ``dim``."""
 
@@ -995,6 +1016,8 @@ _fft = SimpleNamespace(
     ifft2=_fft_func("ifft2"),
     fftn=_fft_func("fftn"),
     ifftn=_fft_func("ifftn"),
+    rfft2=_rfft2,
+    irfft2=_irfft2,
     rfftn=_fft_func("rfftn"),
     irfftn=_fft_func("irfftn"),
     fft=_fft_func("fft"),

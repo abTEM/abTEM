@@ -621,6 +621,28 @@ class TestInfiniteProjectionUsesRealFFTs:
         epsilon = np.finfo(precision).eps
         assert np.abs(real - complex_).max() <= 20 * epsilon * np.abs(complex_).max()
 
+    @devices
+    @pytest.mark.parametrize("shape", [(32, 32), (31, 32), (32, 31), (3, 17, 18)])
+    def test_the_transforms_work_on_every_device_without_a_warning(self, device, shape):
+        """Metal warned that it resized its output of the transforms of real data."""
+        import warnings
+
+        from abtem.core.fft import irfft2, rfft2
+
+        xp = get_array_module(device)
+        array = np.random.default_rng(0).random(shape).astype(np.float32)
+        with abtem.config.set({"fft": "numpy"}), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            half = rfft2(xp.asarray(array))
+            assert half.dtype == np.complex64
+            assert tuple(half.shape) == shape[:-1] + (shape[-1] // 2 + 1,)
+            back = irfft2(half, s=shape[-2:])
+            assert back.dtype == np.float32
+            assert tuple(back.shape) == shape
+        np.testing.assert_allclose(asnumpy(back), array, atol=1e-5)
+        reference = np.fft.rfft2(array.astype(np.float64))
+        np.testing.assert_allclose(asnumpy(half), reference, rtol=1e-4, atol=1e-3)
+
     def test_other_libraries_keep_the_complex_transforms(self):
         from abtem.core.fft import real_fft2_available
 
