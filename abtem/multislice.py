@@ -423,6 +423,15 @@ def allocate_multislice_measurements(
     return measurements
 
 
+def _device_of(potential) -> str | None:
+    """The device a potential was made for, None when it does not say."""
+    try:
+        device = potential.device
+    except Exception:  # noqa: BLE001 -- a potential without a device is no error
+        return None
+    return device if isinstance(device, str) else None
+
+
 def _warn_multislice_stays_on_the_host(reason: str) -> None:
     """Say, once per reason, that double precision on Metal runs a multislice on
     the host: the result is the same float64, only not computed on the GPU."""
@@ -946,7 +955,7 @@ def multislice_and_detect(
     # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
     waves_input = waves
 
-    emulate_float64 = emulates_float64()
+    emulate_float64 = emulates_float64(_device_of(potential))
     if emulate_float64:
         reason = _EmulatedDoubleMultislice.unsupported_reason(
             waves, algorithm, return_backscattered
@@ -1299,7 +1308,7 @@ def transition_potential_multislice_and_detect(
 
     waves_input = waves.copy()
 
-    emulate_float64 = emulates_float64()
+    emulate_float64 = emulates_float64(_device_of(potential))
     if emulate_float64:
         reason = _EmulatedDoubleMultislice.unsupported_reason(waves, algorithm)
         if reason is not None:

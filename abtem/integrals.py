@@ -671,13 +671,13 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         return ifft2(array / sinc_array).real
 
 
-def _emulates_float64_on_metal(xp, gpts) -> bool:
+def _emulates_float64_on_metal(xp, gpts, device=None) -> bool:
     """Whether float64 work on the host is to run on the Metal GPU, in emulated
     double precision (the device 'mps' with precision float64): on a grid the
     GPU's FFT can do, and the host does the others."""
     if not (
         xp is np
-        and backend.emulates_float64()
+        and backend.emulates_float64(device if isinstance(device, str) else None)
         and get_dtype(complex=False) == np.float64
     ):
         return False
@@ -964,7 +964,7 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-        if _emulates_float64_on_metal(xp, gpts):
+        if _emulates_float64_on_metal(xp, gpts, device):
             return self._integrate_on_grid_emulated(atoms, gpts, sampling)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))

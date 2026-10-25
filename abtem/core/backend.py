@@ -163,7 +163,7 @@ def _check_kernels_once() -> None:
         _kernels_checked = True
 
 
-def emulates_float64() -> bool:
+def emulates_float64(device: str | None = None) -> bool:
     """
     Whether float64 work runs on the Metal GPU in emulated double precision.
 
@@ -172,11 +172,24 @@ def emulates_float64() -> bool:
     data stay float64 on the host and the heavy loops run in double-float on the
     GPU. The configuration key ``torch.emulate-float64`` asks for the same with
     the device 'cpu'. Neither does anything in single precision.
+
+    The device is the configured one, or ``device``, the one an object of the
+    computation was made for: float64 arrays of an object made with
+    ``device='mps'`` are NumPy arrays, which nothing but its device name says
+    were meant for the GPU, so the GPU is used when either is 'mps'.
+
+    Parameters
+    ----------
+    device : str, optional
+        The device of an object of the computation.
     """
     if config.get("precision") != "float64":
         return False
-    return bool(_config_get("torch.emulate-float64")) or (
-        str(config.get("device", "")).lower() in _METAL_DEVICE_NAMES
+    if _config_get("torch.emulate-float64"):
+        return True
+    return any(
+        isinstance(name, str) and name.lower() in _METAL_DEVICE_NAMES
+        for name in (device, config.get("device"))
     )
 
 

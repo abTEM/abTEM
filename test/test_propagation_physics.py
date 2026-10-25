@@ -30,6 +30,10 @@ devices = pytest.mark.parametrize("device", ["cpu", gpu])
 # below are expressed in units of the corresponding machine epsilon.
 _EPS = {"float32": np.finfo(np.float32).eps, "float64": np.finfo(np.float64).eps}
 
+# The double precision of the device 'mps' is emulated (abtem.core._double_float)
+# with a mantissa of about 44 bits, so its round-off is 2**-44, not float64's.
+_EMULATED_EPS = 2.0**-44
+
 
 def _general_position_cell(symbols="GaNO"):
     """Three atoms at general positions of an orthorhombic, non-square cell.
@@ -55,14 +59,18 @@ def _vacuum(extent=(20.0, 26.0), thickness=60.0, gpts=(100, 130), slice_thicknes
     )
 
 
-def _roundoff_bound(num_slices, gpts, precision):
+def _roundoff_bound(num_slices, gpts, precision, device="cpu"):
     """Accumulated round-off of ``num_slices`` multislice steps.
 
     Each step is one pointwise product and one FFT pair; an FFT of N points has
     a relative round-off of order eps * log2(N), and the steps accumulate
-    linearly in the worst case.
+    linearly in the worst case. On the device 'mps' the double precision is the
+    emulation, with its own eps.
     """
-    return num_slices * _EPS[precision] * np.log2(np.prod(gpts))
+    eps = _EPS[precision]
+    if precision == "float64" and device == "mps":
+        eps = _EMULATED_EPS
+    return num_slices * eps * np.log2(np.prod(gpts))
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +98,7 @@ def test_plane_wave_unchanged_by_vacuum(order, device):
             )
         )
 
-    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64")
+    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64", device)
     np.testing.assert_allclose(exit_wave, 1.0, rtol=0, atol=bound)
 
 
@@ -136,7 +144,7 @@ def test_vacuum_propagation_is_a_defocus_change(order, device):
     # (soft-edged, hence one angular pixel wider) aperture edge. Since
     # |exp(i d) - 1| <= |d|, Parseval bounds the relative L2 error by it.
     wavelength = energy2wavelength(energy)
-    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64")
+    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64", device)
     if order != 1:
         alpha = semiangle_cutoff * 1e-3 + wavelength / min(vacuum.extent)
         x = alpha**2
@@ -318,7 +326,7 @@ def test_multislice_conserves_intensity(wave, order, device):
         )
 
     ratio = (np.abs(exit_wave) ** 2).sum() / (np.abs(incident) ** 2).sum()
-    bound = _roundoff_bound(potential.num_slices, potential.gpts, "float64")
+    bound = _roundoff_bound(potential.num_slices, potential.gpts, "float64", device)
     assert abs(ratio - 1) < bound, (ratio - 1, bound)
 
 
@@ -344,7 +352,7 @@ def test_prism_conserves_intensity(precision, device):
         )
 
     ratio = (np.abs(exit_wave) ** 2).sum() / (np.abs(incident) ** 2).sum()
-    bound = _roundoff_bound(potential.num_slices, potential.gpts, precision)
+    bound = _roundoff_bound(potential.num_slices, potential.gpts, precision, device)
     assert abs(ratio - 1) < bound, (ratio - 1, bound)
 
 
@@ -480,7 +488,7 @@ def test_realspace_plane_wave_unchanged_by_vacuum(order, device):
             )
         )
 
-    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64")
+    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64", device)
     np.testing.assert_allclose(exit_wave, 1.0, rtol=0, atol=bound)
 
 

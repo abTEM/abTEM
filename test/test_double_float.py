@@ -597,3 +597,31 @@ def test_bloch_waves_run_on_the_host_with_the_option_on():
     assert waves_gpu.dtype == np.complex128
     np.testing.assert_allclose(waves_gpu, waves_host, rtol=0, atol=1e-12)
     np.testing.assert_allclose(patterns_gpu, patterns_host, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("config_device", ["cpu", "mps"])
+def test_objects_made_for_mps_use_the_gpu_whatever_device_is_configured(
+    config_device, monkeypatch, double_float
+):
+    # Float64 arrays of an object made with device='mps' are NumPy arrays, so only
+    # its device name says it was meant for the GPU: the multislice and the
+    # potential must follow it, not only the configured device.
+    calls = _count_fft2(monkeypatch, double_float)
+
+    with config.set({"precision": "float64", "device": "cpu"}):
+        reference = _multislice((64, 64))
+
+    with config.set({"precision": "float64", "device": config_device}):
+        emulated = _multislice((64, 64), device="mps")
+
+    assert calls, "nothing ran on the GPU"
+    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-12)
+
+
+def test_host_objects_under_a_cpu_config_stay_on_the_host(monkeypatch, double_float):
+    calls = _count_fft2(monkeypatch, double_float)
+
+    with config.set({"precision": "float64", "device": "cpu"}):
+        _multislice((64, 64), device="cpu")
+
+    assert not calls
