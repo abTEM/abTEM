@@ -1552,8 +1552,11 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     Parameters
     ----------
     angular_spread: float or 1D array or BaseDistribution
-        The standard deviation of the angular deviations due to source size [mrad].
-        Alternatively, a distribution of standard deviations may be provided.
+        The 1/e width of the angular spread distribution due to source size [mrad].
+        Note: this uses the 1/e width convention (as in Kirkland), not the standard
+        deviation; to convert, use angular_spread = sqrt(2)*sigma, where sigma is the
+        per-axis standard deviation of the beam tilts. Alternatively, a distribution
+        of values may be provided.
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
@@ -1614,7 +1617,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the angular deviations due to source size
+        """The 1/e width of the angular spread distribution due to source size
         [mrad]."""
         return self._angular_spread
 
@@ -1926,8 +1929,10 @@ class CTF(_HasAberrations, BaseAperture):
         convention (as in Kirkland), not the standard deviation; to convert, use
         focal_spread = sqrt(2)*sigma.
     angular_spread: float, optional
-        The standard deviation of the angular deviations due to source size [Å]
-        (default is 0).
+        The 1/e width of the angular spread distribution due to source size [mrad]
+        (default is 0). Note: this uses the 1/e width convention (as in Kirkland),
+        not the standard deviation; to convert, use angular_spread = sqrt(2)*sigma,
+        where sigma is the per-axis standard deviation of the beam tilts.
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
@@ -2102,7 +2107,7 @@ class CTF(_HasAberrations, BaseAperture):
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the angular deviations due to source size
+        """The 1/e width of the angular spread distribution due to source size
         [mrad]."""
         return self._angular_spread
 
