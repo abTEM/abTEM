@@ -117,7 +117,7 @@ Features:
   turn and strain with the atoms when a potential rotates them to a `plane` or orthogonalizes their cell,
   and in `rotate_atoms` and the EBSD slabs, as anisotropic frozen-phonon displacements do. Giving standard
   deviations as well (`thermal_sigma`, `Parametrization(sigmas=...)` or `FrozenPhonons(sigmas=...)`) raises an
-  error ([issue #594](https://github.com/abTEM/abTEM/issues/594))
+  error ([PR #646](https://github.com/abTEM/abTEM/pull/646))
     - The finite projection smears with the same Fourier-space Debye-Waller factor as the infinite one
       instead of a real-space `gaussian_filter` along the grid axes. For a width of a pixel or more the
       potential changes by ~5e-5 of its maximum; for a sub-pixel width, which neither resolves, by a few
@@ -148,7 +148,7 @@ Performance:
   once per atom, and the structure factors sum the phases of each kind before multiplying by its scattering
   factor. For 216 to 512 Si atoms and 0.8 to 1.2 x 10^5 reflections the scattering factors take 4 to 5
   times less time and the structure factors 2 to 2.5 times less, with the same values to float32 rounding
-  ([issue #594](https://github.com/abTEM/abTEM/issues/594))
+  ([PR #646](https://github.com/abTEM/abTEM/pull/646))
 
 Dependencies:
 
@@ -160,7 +160,7 @@ Bugfixes:
 - `GaussianProjectionIntegrals` ignored the `sigmas` of its parametrization; it now smears like the other
   integrators. `rotate_atoms` and the EBSD slabs now turn magnetic moments with the atoms, and
   `StructureFactor.calculate_scattering_factors` applies the occupancy, as `build` does
-  ([issue #594](https://github.com/abTEM/abTEM/issues/594))
+  ([PR #646](https://github.com/abTEM/abTEM/pull/646))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
