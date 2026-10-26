@@ -1600,7 +1600,7 @@ def _check_adp_and_parametrization_sigmas(frozen_phonons, integrator) -> None:
     if parametrization is None:
         parametrization = getattr(integrator, "correction_parametrization", None)
 
-    if parametrization is not None and parametrization.sigmas:
+    if parametrization is not None and any(parametrization.sigmas.values()):
         raise ValueError(
             f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
             "parametrization has `sigmas`. Give one of them: remove the tensors "

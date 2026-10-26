@@ -565,6 +565,26 @@ class BaseStructureFactor(metaclass=ABCMeta):
         """Calculate the projected potential from the structure factors."""
 
 
+def _atoms_by_kind(
+    atoms: Atoms, adp: Optional[np.ndarray], occupancy: AtomProperties
+) -> Atoms:
+    """A copy of the atoms whose atomic numbers name their kind: element, ADP tensor
+    and occupancy. Symmetry found from positions and atomic numbers alone, such as
+    a lattice centering, holds for the structure factors only if it maps atoms onto
+    atoms of the same kind; per-atom tensors or occupancies can break it."""
+    occupancies = validate_per_atom_property(atoms, occupancy, return_array=True)
+    kinds, inverse = adp_kinds(atoms.numbers, adp, occupancies)
+    if len(kinds) == len(np.unique(atoms.numbers)):
+        return atoms
+    labelled = Atoms(
+        numbers=inverse + 1,
+        positions=atoms.positions,
+        cell=atoms.cell,
+        pbc=atoms.pbc,
+    )
+    return labelled
+
+
 class StructureFactor(BaseStructureFactor, CopyMixin):
     """The StructureFactors class calculates the structure factors for a given set of
     atoms and parametrization.
@@ -622,7 +642,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         self._occupancy = validate_per_atom_property(atoms, occupancy)
 
         if centering == "auto":
-            centering = auto_detect_centering(atoms)
+            centering = auto_detect_centering(_atoms_by_kind(atoms, self.adp, occupancy))
 
         self._centering = centering
 

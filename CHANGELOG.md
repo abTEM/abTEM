@@ -159,8 +159,10 @@ Bugfixes:
 
 - `GaussianProjectionIntegrals` ignored the `sigmas` of its parametrization; it now smears like the other
   integrators. `rotate_atoms` and the EBSD slabs now turn magnetic moments with the atoms, and
-  `StructureFactor.calculate_scattering_factors` applies the occupancy, as `build` does
-  ([PR #646](https://github.com/abTEM/abTEM/pull/646))
+  `StructureFactor.calculate_scattering_factors` applies the occupancy, as `build` does. The automatic
+  lattice centering of `StructureFactor` requires the atoms a centering translation relates to share their
+  occupancy and thermal displacements: per-atom occupancies that break the centering dropped reflections
+  that are not extinct ([PR #646](https://github.com/abTEM/abTEM/pull/646))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice

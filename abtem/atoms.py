@@ -864,6 +864,9 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
     """
     atoms = atoms.copy()
     atoms.positions[:, axis] = atoms.cell[axis, axis] - atoms.positions[:, axis]
+    mirror = np.eye(3)
+    mirror[axis, axis] = -1.0
+    _transform_per_atom_arrays(atoms, mirror)
     return atoms
 
 

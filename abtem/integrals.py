@@ -371,7 +371,7 @@ def _sinc_on_device(gpts, sampling, device, device_key):
 def _refuse_adp_and_sigmas(atoms: Atoms, sigmas: Mapping[str, float]) -> None:
     """Raise if the atoms carry ADP tensors and the parametrization has standard
     deviations: both would smear the atoms."""
-    if sigmas and get_adp(atoms) is not None:
+    if any(sigmas.values()) and get_adp(atoms) is not None:
         raise ValueError(
             f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
             "parametrization has `sigmas`. Give one of them: remove the tensors "
@@ -454,15 +454,16 @@ def debye_waller_filter(
     dwf : array
         The factor with shape `gpts`, in the configured precision.
     """
-    kx, ky = spatial_frequencies(gpts, sampling, xp=np)
-    kx = kx[:, None].astype(np.float64)
-    ky = ky[None].astype(np.float64)
-    u_xx, u_xy, u_yy = sigma2d
-    exponent = u_xx * kx**2 + 2 * u_xy * kx * ky + u_yy * ky**2
+    # Only the frequency vectors are moved to the device, as a column and a row;
+    # the grid is formed there by broadcasting, in the configured precision.
     xp = get_array_module(device)
-    return xp.asarray(
-        np.exp(-2 * np.pi**2 * exponent), dtype=get_dtype(complex=False)
-    )
+    dtype = get_dtype(complex=False)
+    kx, ky = spatial_frequencies(gpts, sampling, xp=np)
+    kx = xp.asarray(np.asarray(kx, dtype=np.float64)[:, None], dtype=dtype)
+    ky = xp.asarray(np.asarray(ky, dtype=np.float64)[None], dtype=dtype)
+    # Python floats keep the arrays' precision.
+    a, b, c = (float(-2 * np.pi**2 * u) for u in sigma2d)
+    return xp.exp(a * kx**2 + (2 * b) * kx * ky + c * ky**2)
 
 
 def _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key):
@@ -475,6 +476,14 @@ def _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key):
 
     with cp.cuda.Device(device_key[1]):
         return debye_waller_filter(sigma2d, gpts, sampling, "gpu")
+
+
+# Each filter is a full grid, and rebuilding one costs a few elementwise
+# operations on the device, so the cache is bounded by memory as well as by
+# count: all 32 on small grids, 4 on a 4096^2 float32 grid. A crystal has few
+# in-plane ADPs; atoms with many more (per-atom tensors) are dominated by the FFT
+# each ADP costs per slice anyway.
+_DEBYE_WALLER_FILTER_BUDGET = 256 * 1024**2
 
 
 class _DebyeWallerFilterMixin:
@@ -499,11 +508,15 @@ class _DebyeWallerFilterMixin:
             device_key,
             _precision_key(),
         )
-        dwf = self._debye_waller_filters.get(key)
+        cache = self._debye_waller_filters
+        dwf = cache.get(key)
         if dwf is None:
-            dwf = self._debye_waller_filters.put(
-                key, _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key)
+            dwf = _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key)
+            nbytes = int(np.prod(gpts)) * np.dtype(get_dtype(complex=False)).itemsize
+            cache._maxsize = int(
+                np.clip(_DEBYE_WALLER_FILTER_BUDGET // nbytes, 2, _MAX_CACHE_ENTRIES)
             )
+            cache.put(key, dwf)
         return dwf
 
 
@@ -1063,6 +1076,8 @@ class ScatteringFactorProjectionIntegrals(
         # The standard deviations of the parametrization are in its scattering
         # factors already; only the ADP tensors the atoms carry are applied here.
         _refuse_adp_and_sigmas(atoms, self.parametrization.sigmas)
+        # Once per slice rather than once per group.
+        sinc_array = sinc(gpts, sampling, device)
         for number, sigma2d, mask in _adp_groups(atoms, {}):
             # Anchor the cache's device key on an array the scattering factor
             # will actually be combined with, rather than on the ambient CUDA
@@ -1087,7 +1102,7 @@ class ScatteringFactorProjectionIntegrals(
 
             temp_array = fft2(temp_array, overwrite_x=True)
 
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+            temp_array *= scattering_factor / sinc_array
 
             # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real
@@ -1541,11 +1556,31 @@ class QuadratureProjectionIntegrals(
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
-        # One buffer per in-plane ADP, shared by the elements that have it, so
-        # each is transformed once; the smeared spectra are summed and
-        # transformed back once.
-        smeared_buffers: dict[tuple[float, float, float], np.ndarray] = {}
-        for number, sigma2d, mask in _adp_groups(atoms, self._parametrization.sigmas):
+        # The groups of one in-plane ADP are accumulated in one buffer, which is
+        # transformed, filtered and added to the spectrum of all smeared groups
+        # when the next ADP starts; the spectrum is transformed back once. The
+        # groups are ordered by ADP, so one buffer serves any number of them.
+        groups = sorted(
+            _adp_groups(atoms, self._parametrization.sigmas),
+            key=lambda group: (group[1] is not None, group[1] or (), group[0]),
+        )
+        buffer = None
+        buffer_sigma2d = None
+        smeared_spectrum = None
+
+        def flush():
+            nonlocal smeared_spectrum
+            spectrum = fft2(
+                buffer.astype(get_dtype(complex=True)), overwrite_x=True
+            ) * self.get_debye_waller_filter(
+                buffer_sigma2d, gpts, sampling, device, like=array
+            )
+            if smeared_spectrum is None:
+                smeared_spectrum = spectrum
+            else:
+                smeared_spectrum += spectrum
+
+        for number, sigma2d, mask in groups:
             table = self.get_integral_table(chemical_symbols[number], sampling)
 
             positions = atoms.positions[mask]
@@ -1646,12 +1681,18 @@ class QuadratureProjectionIntegrals(
             # straight into the slice. For a width of a pixel or more this agrees
             # with the real-space gaussian_filter used before to ~5e-5 of the
             # maximum; a narrower width is not resolved by either.
-            if sigma2d is not None:
-                if sigma2d not in smeared_buffers:
-                    smeared_buffers[sigma2d] = xp.zeros(gpts, dtype=fp_dtype)
-                temp = smeared_buffers[sigma2d]
-            else:
+            if sigma2d is None:
                 temp = array
+            elif sigma2d == buffer_sigma2d:
+                temp = buffer
+            else:
+                if buffer is not None:
+                    flush()
+                    buffer[:] = 0.0
+                else:
+                    buffer = xp.zeros(gpts, dtype=fp_dtype)
+                buffer_sigma2d = sigma2d
+                temp = buffer
 
             if xp is cp:
                 # radial_gpts_device already has the correct dtype (computed
@@ -1740,14 +1781,8 @@ class QuadratureProjectionIntegrals(
                     radial_derivative=radial_potential_derivative,
                 )
 
-        if smeared_buffers:
-            spectrum = xp.zeros(gpts, dtype=get_dtype(complex=True))
-            for sigma2d, buffer in smeared_buffers.items():
-                spectrum += fft2(
-                    buffer.astype(get_dtype(complex=True)), overwrite_x=True
-                ) * self.get_debye_waller_filter(
-                    sigma2d, gpts, sampling, device, like=array
-                )
-            array += ifft2(spectrum, overwrite_x=True).real
+        if buffer is not None:
+            flush()
+            array += ifft2(smeared_spectrum, overwrite_x=True).real
 
         return array

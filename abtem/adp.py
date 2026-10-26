@@ -135,7 +135,7 @@ def validate_adp(atoms: Atoms, adp: Any) -> np.ndarray:
         Cartesian ADPs [Å²], as one of
 
         - a float, ``U_iso`` for every atom (``U = U_iso I``);
-        - three diagonal elements ``(U_xx, U_yy, U_zz)`` for every atom;
+        - an (N,) array, ``U_iso`` for each atom;
         - a (3, 3) tensor for every atom;
         - an (N, 3, 3) array, one tensor per atom;
         - a dict keyed by chemical symbol or atomic number, of a ``U_iso``, three
@@ -156,14 +156,18 @@ def validate_adp(atoms: Atoms, adp: Any) -> np.ndarray:
             raise ValueError(f"ADPs are missing for the elements {sorted(missing)}.")
         validated = np.array([tensors[symbol] for symbol in symbols], dtype=float)
         validated = validated.reshape((n, 3, 3))
-    elif isinstance(adp, Number) or np.shape(adp) in ((), (3,), (3, 3)):
+    elif isinstance(adp, Number) or np.shape(adp) in ((), (3, 3)):
         validated = np.tile(_as_tensor(adp), (n, 1, 1))
+    elif np.shape(adp) == (n,):
+        validated = np.asarray(adp, dtype=float)[:, None, None] * np.eye(3)
     else:
         validated = np.asarray(adp, dtype=float)
         if validated.shape != (n, 3, 3):
             raise ValueError(
-                f"ADPs must be given as a (3, 3) tensor or an ({n}, 3, 3) array "
-                f"for {n} atoms, got shape {validated.shape}."
+                f"ADPs must be given as a float, an ({n},) array of U_iso, a (3, 3) "
+                f"tensor or an ({n}, 3, 3) array for {n} atoms, got shape "
+                f"{validated.shape}; give three diagonal elements per element as "
+                "a dict."
             )
 
     transposed = np.swapaxes(validated, -1, -2)
@@ -250,7 +254,8 @@ def resolve_adp(
     atoms: Atoms, sigmas: Optional[np.ndarray], name: str = "thermal_sigma"
 ) -> Optional[np.ndarray]:
     """The ADP tensors of the atoms, from either standard deviations or the tensors
-    they carry, but not both.
+    they carry, but not both. Standard deviations that are all zero count as not
+    given.
 
     Parameters
     ----------
@@ -268,6 +273,12 @@ def resolve_adp(
         Tensors with shape (N, 3, 3) [Å²], or None if neither is given.
     """
     adp = get_adp(atoms)
+    if sigmas is not None and not np.any(sigmas):
+        # Standard deviations that are all zero ask for no smearing, as the old
+        # default of 0.0 did; for atoms that carry tensors they count as not
+        # given.
+        if adp is not None:
+            return adp
     if sigmas is None:
         return adp
     if adp is not None:

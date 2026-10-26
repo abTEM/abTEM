@@ -432,6 +432,11 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms, atomic_numbers, cell=None
         )
 
+        if sigmas is not None and get_adp(atoms) is not None:
+            # all-zero standard deviations count as not given (see resolve_adp)
+            if not np.any(validate_sigmas(atoms, sigmas, return_array=True)[0]):
+                sigmas = None
+
         if sigmas is None:
             if get_adp(atoms) is None:
                 raise ValueError(

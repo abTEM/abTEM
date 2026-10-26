@@ -428,6 +428,17 @@ def test_validate_adp_forms():
     np.testing.assert_allclose(adp[na], np.broadcast_to(tensor, adp[na].shape))
     np.testing.assert_allclose(adp[~na], 0.0)
 
+    # one U_iso per atom, also for exactly three atoms (no diagonal shorthand)
+    u_iso = np.linspace(0.01, 0.02, len(atoms))
+    np.testing.assert_allclose(
+        get_adp(set_adp(atoms, u_iso)), u_iso[:, None, None] * np.eye(3)
+    )
+    three = atoms[:3]
+    np.testing.assert_allclose(
+        get_adp(set_adp(three, [0.01, 0.02, 0.03])),
+        np.array([0.01, 0.02, 0.03])[:, None, None] * np.eye(3),
+    )
+
     with pytest.raises(ValueError, match="missing"):
         set_adp(atoms, {"Na": 0.01})
     with pytest.raises(ValueError, match="symmetric"):
@@ -465,7 +476,7 @@ def test_bloch_debye_waller_factor_is_the_quadratic_form():
     sigmas = np.array([0.05, 0.08, 0.11])
     np.testing.assert_allclose(
         structure_factor(atoms=atoms, thermal_sigma=tuple(sigmas)),
-        structure_factor(atoms=set_adp(atoms, sigmas**2)),
+        structure_factor(atoms=set_adp(atoms, np.diag(sigmas**2))),
         rtol=1e-6,
     )
     np.testing.assert_allclose(
@@ -502,6 +513,54 @@ def test_bloch_structure_factors_are_invariant_under_rotating_the_crystal(rutile
     assert np.abs(structure_factors(stale) - expected).max() > 1e-3
 
 
+def test_centering_is_detected_by_kind():
+    # Body-centred Fe with different tensors on the two sites is primitive: the
+    # reflections with h + k + l odd are not extinct, and must not be dropped.
+    atoms = Atoms(
+        "Fe2", scaled_positions=[(0, 0, 0), (0.5, 0.5, 0.5)], cell=[2.87] * 3, pbc=True
+    )
+    tensors = np.array([0.01 * np.eye(3), np.diag([0.03, 0.005, 0.005])])
+    odd = np.array([[1, 0, 0]])
+    assert (
+        abs(calculate_structure_factors(odd, set_adp(atoms, tensors), "lobato", 100)[0])
+        > 1e-3
+    )
+
+    assert abtem.StructureFactor(set_adp(atoms, tensors), g_max=3).centering == "P"
+    assert abtem.StructureFactor(atoms, g_max=3, occupancy=[1.0, 0.5]).centering == "P"
+    assert abtem.StructureFactor(set_adp(atoms, 0.01), g_max=3).centering == "I"
+
+
+def test_finite_projection_shares_a_buffer_between_elements():
+    # Na and Cl with the same tensor share one buffer; the potential is linear
+    # in the atoms, so the oracle is the sum of the two elements built apart.
+    atoms = set_adp(bulk("NaCl", "rocksalt", a=5.64, cubic=True), random_tensors(1)[0])
+    symbols = np.array(atoms.get_chemical_symbols())
+
+    def build(atoms):
+        return (
+            abtem.Potential(
+                atoms, sampling=0.1, slice_thickness=1.41, projection="finite"
+            )
+            .build(lazy=False)
+            .array
+        )
+
+    both = build(atoms)
+    separate = build(atoms[symbols == "Na"]) + build(atoms[symbols == "Cl"])
+    np.testing.assert_allclose(both, separate, rtol=0, atol=1e-5 * np.abs(both).max())
+
+
+def test_flip_atoms_mirrors_the_tensors():
+    from abtem.atoms import flip_atoms
+
+    tensor = random_tensors(1)[0]
+    flipped = get_adp(flip_atoms(set_adp(bulk("Si", cubic=True), tensor), axis=0))
+    mirror = np.diag([-1.0, 1.0, 1.0])
+    np.testing.assert_allclose(flipped[0], mirror @ tensor @ mirror, atol=1e-15)
+    assert np.sign(flipped[0, 0, 1]) == -np.sign(tensor[0, 1])
+
+
 def test_thermal_sigma_and_tensors_are_not_combined(rutile):
     with pytest.raises(ValueError, match="carry ADP tensors"):
         abtem.StructureFactor(rutile, g_max=2.0, thermal_sigma=0.1)
@@ -516,6 +575,20 @@ def test_thermal_sigma_and_tensors_are_not_combined(rutile):
 
     with pytest.raises(ValueError, match="sigmas"):
         abtem.FrozenPhonons(set_adp(rutile, None), num_configs=2)
+
+    with pytest.raises(ValueError, match="electron density"):
+        from abtem.potentials.charge_density import ChargeDensityPotential
+
+        ChargeDensityPotential(rutile, charge_density=np.zeros((8, 8, 8)), gpts=16)
+
+    # standard deviations that are all zero, the old default, count as not given
+    hkl = np.array([[1, 1, 0], [2, 0, 0]])
+    np.testing.assert_array_equal(
+        calculate_structure_factors(hkl, rutile, "lobato", 100, thermal_sigma=0.0),
+        calculate_structure_factors(hkl, rutile, "lobato", 100),
+    )
+    abtem.Potential(rutile, gpts=32, parametrization=LobatoParametrization(sigmas=0.0))
+    assert abtem.FrozenPhonons(rutile, num_configs=2, sigmas=0.0).sigmas is None
 
 
 def _projected_potentials(atoms, structure_factor_atoms, device, integrator):
@@ -687,7 +760,7 @@ def test_frozen_phonons_from_diagonal_tensors_equal_standard_deviations(case):
             abtem.FrozenPhonons(atoms, 2, sigmas=tuple(sigmas), seed=3), **kwargs
         ).to_atoms_ensemble()
         by_tensors = abtem.Potential(
-            abtem.FrozenPhonons(set_adp(atoms, sigmas**2), 2, seed=3), **kwargs
+            abtem.FrozenPhonons(set_adp(atoms, np.diag(sigmas**2)), 2, seed=3), **kwargs
         ).to_atoms_ensemble()
 
     for a, b in zip(by_sigmas.trajectory, by_tensors.trajectory):
