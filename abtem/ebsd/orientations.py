@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 from ase import Atoms
 
+from abtem.atoms import _transform_per_atom_arrays
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons
 
 __all__ = [
@@ -298,6 +299,9 @@ def rotated_slab(
     block.rotate(
         zone_axis / np.linalg.norm(zone_axis), "z", center=anchor, rotate_cell=True
     )
+    # ASE rotates the positions only; per-atom ADP tensors and magnetic moments
+    # turn with them (row vectors map by R^T).
+    _transform_per_atom_arrays(block, rotation.T)
 
     positions = block.positions - anchor
     half = cell_array / 2.0
@@ -423,8 +427,9 @@ def _displaced(
         return slab
 
     sigmas = frozen_phonons.sigmas
-    if not isinstance(sigmas, dict):
-        # given per atom of the crystal
+    if sigmas is not None and not isinstance(sigmas, dict):
+        # given per atom of the crystal; ADP tensors (sigmas None) are carried
+        # and rotated by the slab itself
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
     return _SlabFrozenPhonons(

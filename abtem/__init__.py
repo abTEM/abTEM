@@ -8,7 +8,7 @@
 # this ordering requirement.
 from abtem.core import _numba_threads  # noqa: F401, I001
 
-from abtem import distributions, transfer
+from abtem import adp, distributions, transfer
 from abtem._version import __version__
 from abtem.array import concatenate, from_zarr, stack
 from abtem.atoms import orthogonalize_cell, standardize_cell
@@ -73,6 +73,7 @@ from abtem.core import dask_sizeof  # noqa: F401
 
 __all__ = [
     "__version__",
+    "adp",
     "distributions",
     "orthogonalize_cell",
     "standardize_cell",

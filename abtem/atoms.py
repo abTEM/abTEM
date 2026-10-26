@@ -19,6 +19,7 @@ from ase.data import chemical_symbols
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
+from abtem.adp import _transform_adp_array
 from abtem.core.utils import get_dtype, is_scalar, label_to_index
 
 axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
@@ -207,6 +208,17 @@ def _rotate_pseudovector_arrays(atoms: Atoms, linear_map: np.ndarray) -> None:
         atoms.set_array(name, (vectors @ rotation).astype(vectors.dtype))
 
 
+def _transform_per_atom_arrays(atoms: Atoms, linear_map: np.ndarray) -> None:
+    """
+    Transform the per-atom arrays of `atoms` that depend on the frame in place with
+    the linear map applied to their positions (a 3x3 matrix acting on row vectors):
+    the pseudovectors, such as magnetic moments (see `_rotate_pseudovector_arrays`),
+    and the ADP tensors (see `abtem.adp.transform_adp`).
+    """
+    _rotate_pseudovector_arrays(atoms, linear_map)
+    _transform_adp_array(atoms, linear_map)
+
+
 def is_cell_hexagonal(atoms: Atoms | Cell) -> bool:
     """
     Check whether the cell of given atoms is hexagonal.
@@ -356,7 +368,7 @@ def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarr
         unit_vectors = Atoms(positions=np.eye(3))
         unit_vectors.rotate(-r, "z")
         rotation = unit_vectors.positions
-        _rotate_pseudovector_arrays(atoms, rotation)
+        _transform_per_atom_arrays(atoms, rotation)
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
@@ -769,6 +781,7 @@ def rotate_atoms(
 
     atoms.positions[:] = np.dot(atoms.positions, R.T)
     atoms.cell[:] = np.dot(atoms.cell, R.T)
+    _transform_per_atom_arrays(atoms, R.T)
     return atoms
 
 
@@ -825,7 +838,7 @@ def _rotate_atoms_to_plane(
     # and wraps the atoms back into the cell, which translates them by it.
     atoms.positions[:] = atoms.positions @ rotation
     atoms.cell[:] = np.array(atoms.cell) @ rotation
-    _rotate_pseudovector_arrays(atoms, rotation)
+    _transform_per_atom_arrays(atoms, rotation)
 
     atoms, standard_rotation = _standardize_cell(atoms)
 
@@ -1352,7 +1365,7 @@ def orthogonalize_cell(
     if allow_transform:
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = np.diag(box)
-        _rotate_pseudovector_arrays(atoms, A)
+        _transform_per_atom_arrays(atoms, A)
 
     # elif not np.allclose(A, np.eye(3)):
     #    raise RuntimeError()

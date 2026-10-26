@@ -17,6 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
+from abtem.adp import ADP_ARRAY, adp_kinds, get_adp
 from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
@@ -24,7 +25,6 @@ from abtem.core.backend import (
     cupyx,
     device_name_from_array_module,
     get_array_module,
-    get_ndimage_module,
 )
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import (
@@ -368,6 +368,145 @@ def _sinc_on_device(gpts, sampling, device, device_key):
         return sinc(gpts, sampling, "gpu")
 
 
+def _refuse_adp_and_sigmas(atoms: Atoms, sigmas: Mapping[str, float]) -> None:
+    """Raise if the atoms carry ADP tensors and the parametrization has standard
+    deviations: both would smear the atoms."""
+    if sigmas and get_adp(atoms) is not None:
+        raise ValueError(
+            f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
+            "parametrization has `sigmas`. Give one of them: remove the tensors "
+            "with abtem.adp.set_adp(atoms, None), or the sigmas from the "
+            "parametrization."
+        )
+
+
+def _adp_groups(
+    atoms: Atoms, sigmas: Mapping[str, float]
+) -> list[tuple[int, Optional[tuple[float, float, float]], np.ndarray]]:
+    """Group atoms by atomic number and in-plane ADP.
+
+    The in-plane block of an atom's ADP tensor, ``(U_xx, U_xy, U_yy)`` [Å²], is
+    taken from the tensors the atoms carry or, if they carry none, from the
+    standard deviations of the parametrization, as ``sigma^2 I``. Smearing a
+    potential projected along z only involves this block: the marginal of a
+    Gaussian of covariance U in the xy plane has covariance U[:2, :2].
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atoms.
+    sigmas : mapping
+        Standard deviations of the parametrization [Å], keyed by chemical symbol.
+
+    Returns
+    -------
+    groups : list of tuple
+        The atomic number, the in-plane ADP (None for an atom that is not smeared)
+        and the mask of the atoms of each group.
+    """
+    adp = get_adp(atoms)
+
+    if adp is None:
+        groups = []
+        for number in np.unique(atoms.numbers):
+            sigma = float(sigmas.get(chemical_symbols[number], 0.0))
+            sigma2d = (sigma**2, 0.0, sigma**2) if sigma else None
+            groups.append((int(number), sigma2d, atoms.numbers == number))
+        return groups
+
+    _refuse_adp_and_sigmas(atoms, sigmas)
+
+    kinds, inverse = adp_kinds(atoms.numbers, adp, in_plane=True)
+    groups = []
+    for k, kind in enumerate(kinds):
+        sigma2d = (float(kind[1]), float(kind[2]), float(kind[3]))
+        groups.append(
+            (int(kind[0]), sigma2d if any(sigma2d) else None, inverse == k)
+        )
+    return groups
+
+
+def debye_waller_filter(
+    sigma2d: tuple[float, float, float],
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    device: str = "cpu",
+) -> np.ndarray:
+    """The in-plane Debye-Waller factor ``exp(-2 pi^2 k^T Sigma k)`` on a grid.
+
+    Multiplying the Fourier transform of a projected potential by this smears it
+    with a Gaussian of covariance Sigma: the projection of the averaged potential
+    of atoms with ADP tensors U, whose in-plane block is Sigma.
+
+    Parameters
+    ----------
+    sigma2d : three float
+        The in-plane ADP ``(U_xx, U_xy, U_yy)`` [Å²].
+    gpts : two int
+        Number of grid points.
+    sampling : two float
+        Sampling of the grid [Å].
+    device : str
+        The array is created on this device.
+
+    Returns
+    -------
+    dwf : array
+        The factor with shape `gpts`, in the configured precision.
+    """
+    kx, ky = spatial_frequencies(gpts, sampling, xp=np)
+    kx = kx[:, None].astype(np.float64)
+    ky = ky[None].astype(np.float64)
+    u_xx, u_xy, u_yy = sigma2d
+    exponent = u_xx * kx**2 + 2 * u_xy * kx * ky + u_yy * ky**2
+    xp = get_array_module(device)
+    return xp.asarray(
+        np.exp(-2 * np.pi**2 * exponent), dtype=get_dtype(complex=False)
+    )
+
+
+def _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key):
+    """``debye_waller_filter`` built inside the context of the device its key
+    names."""
+    if device_key in ("cpu", "mps"):
+        return debye_waller_filter(sigma2d, gpts, sampling, device_key)
+
+    import cupy as cp  # noqa: PLC0415 -- optional dependency
+
+    with cp.cuda.Device(device_key[1]):
+        return debye_waller_filter(sigma2d, gpts, sampling, "gpu")
+
+
+class _DebyeWallerFilterMixin:
+    """A cache of in-plane Debye-Waller factors, one per ADP, grid and device."""
+
+    _debye_waller_filters: _DeviceArrayCache
+
+    def get_debye_waller_filter(
+        self,
+        sigma2d: tuple[float, float, float],
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
+        device: str = "cpu",
+        like=None,
+    ):
+        """The cached `debye_waller_filter` of an in-plane ADP on a grid."""
+        device_key = _device_cache_key(device, like)
+        key = (
+            tuple(sigma2d),
+            tuple(gpts),
+            tuple(sampling),
+            device_key,
+            _precision_key(),
+        )
+        dwf = self._debye_waller_filters.get(key)
+        if dwf is None:
+            dwf = self._debye_waller_filters.put(
+                key, _debye_waller_filter_on_device(sigma2d, gpts, sampling, device_key)
+            )
+        return dwf
+
+
 # Largest scale-relative deviation between a Gaussian-form parametrization and
 # the Gaussian sum rebuilt from its own parameters. Peng reaches 1.8e-07 at
 # float32; Kirkland and Lobato are 0.275 and 2.3-3.8.
@@ -408,7 +547,9 @@ def _check_gaussian_form(parametrization, symbol: str, gpts, sampling):
         )
 
 
-class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
+class GaussianProjectionIntegrals(
+    _CacheStateMixin, _DebyeWallerFilterMixin, FieldIntegrator
+):
     """
     Parameters
     ----------
@@ -465,7 +606,12 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     a slice matters, and this class where periodicity does.
     """
 
-    _cache_attributes = ("_gaussians", "_corrections", "_sinc_cache")
+    _cache_attributes = (
+        "_gaussians",
+        "_corrections",
+        "_sinc_cache",
+        "_debye_waller_filters",
+    )
 
     def __init__(
         self,
@@ -502,6 +648,7 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         self._gaussians = _DeviceArrayCache()
         self._corrections = _DeviceArrayCache()
         self._sinc_cache = _DeviceArrayCache()
+        self._debye_waller_filters = _DeviceArrayCache()
 
     @property
     def cutoff_tolerance(self):
@@ -645,16 +792,24 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=True))
-        for number in np.unique(atoms.numbers):
-            positions = atoms.positions[atoms.numbers == number]
+        groups = _adp_groups(atoms, self._correction_parametrization.sigmas)
+        for number, sigma2d, mask in groups:
+            positions = atoms.positions[mask]
             symbol = chemical_symbols[number]
 
-            array += self._integrate_gaussians(
+            contribution = self._integrate_gaussians(
                 positions, symbol, a, b, gpts, sampling, device
             )
-            array += self._integrate_corrections(
+            contribution += self._integrate_corrections(
                 positions, symbol, a, b, gpts, sampling, device
             )
+
+            if sigma2d is not None:
+                contribution *= self.get_debye_waller_filter(
+                    sigma2d, gpts, sampling, device, like=array
+                )
+
+            array += contribution
 
         # `array` is already on the device this result must live on, so use it
         # as the anchor rather than the ambient CUDA context, and build the
@@ -769,7 +924,9 @@ def superpose_deltas(
     return array
 
 
-class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
+class ScatteringFactorProjectionIntegrals(
+    _CacheStateMixin, _DebyeWallerFilterMixin, FieldIntegrator
+):
     """
     A FieldIntegrator calculating infinite projections of radial potential
     parametrizations. The hybrid real and reciprocal space method by
@@ -787,12 +944,13 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     doi:10.1016/j.ultramic.2015.07.005.
     """
 
-    _cache_attributes = ("_scattering_factors",)
+    _cache_attributes = ("_scattering_factors", "_debye_waller_filters")
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
         # See _DeviceArrayCache for why this is not a functools.lru_cache.
         self._scattering_factors = _DeviceArrayCache()
+        self._debye_waller_filters = _DeviceArrayCache()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -902,15 +1060,22 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
-        for number in np.unique(atoms.numbers):
+        # The standard deviations of the parametrization are in its scattering
+        # factors already; only the ADP tensors the atoms carry are applied here.
+        _refuse_adp_and_sigmas(atoms, self.parametrization.sigmas)
+        for number, sigma2d, mask in _adp_groups(atoms, {}):
             # Anchor the cache's device key on an array the scattering factor
             # will actually be combined with, rather than on the ambient CUDA
             # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
                 chemical_symbols[number], gpts, sampling, device, like=array
             )
+            if sigma2d is not None:
+                scattering_factor = scattering_factor * self.get_debye_waller_filter(
+                    sigma2d, gpts, sampling, device, like=array
+                )
 
-            positions = atoms.positions[atoms.numbers == number]
+            positions = atoms.positions[mask]
 
             positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
 
@@ -1163,7 +1328,9 @@ def cutoff_taper(radial_gpts, cutoff, taper):
     return taper_values
 
 
-class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
+class QuadratureProjectionIntegrals(
+    _CacheStateMixin, _DebyeWallerFilterMixin, FieldIntegrator
+):
     """
     Projection integration plan for calculating finite projection integrals based on
     Gaussian quadrature rule.
@@ -1188,7 +1355,12 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         Default is 8.
     """
 
-    _cache_attributes = ("_tables", "_sorted_disks", "_device_arrays")
+    _cache_attributes = (
+        "_tables",
+        "_sorted_disks",
+        "_device_arrays",
+        "_debye_waller_filters",
+    )
 
     def __init__(
         self,
@@ -1224,6 +1396,7 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         # the chunked-transfer bound are cached; larger disks are streamed
         # in memory-bounded chunks instead (see integrate_on_grid).
         self._device_arrays = _DeviceArrayCache()
+        self._debye_waller_filters = _DeviceArrayCache()
 
         super().__init__(periodic=False, finite=True)
 
@@ -1368,10 +1541,14 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
-        for number in np.unique(atoms.numbers):
+        # One buffer per in-plane ADP, shared by the elements that have it, so
+        # each is transformed once; the smeared spectra are summed and
+        # transformed back once.
+        smeared_buffers: dict[tuple[float, float, float], np.ndarray] = {}
+        for number, sigma2d, mask in _adp_groups(atoms, self._parametrization.sigmas):
             table = self.get_integral_table(chemical_symbols[number], sampling)
 
-            positions = atoms.positions[atoms.numbers == number]
+            positions = atoms.positions[mask]
 
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
@@ -1463,13 +1640,16 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_device)[None]
             )
 
-            # An element with a smoothing width is accumulated into its own
-            # buffer, smoothed, and then added; every other element goes
-            # straight into the slice.
-            symbol = chemical_symbols[number]
-            smoothed = symbol in self._parametrization.sigmas
-            if smoothed:
-                temp = xp.zeros(gpts, dtype=fp_dtype)
+            # A group with an ADP is accumulated into its own buffer and smeared
+            # in Fourier space by the factor the infinite projection applies,
+            # which smears along any in-plane direction; every other group goes
+            # straight into the slice. For a width of a pixel or more this agrees
+            # with the real-space gaussian_filter used before to ~5e-5 of the
+            # maximum; a narrower width is not resolved by either.
+            if sigma2d is not None:
+                if sigma2d not in smeared_buffers:
+                    smeared_buffers[sigma2d] = xp.zeros(gpts, dtype=fp_dtype)
+                temp = smeared_buffers[sigma2d]
             else:
                 temp = array
 
@@ -1560,11 +1740,14 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            if smoothed:
-                sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
-                temp = get_ndimage_module(temp).gaussian_filter(
-                    temp, sigma=sigma, mode="wrap"
+        if smeared_buffers:
+            spectrum = xp.zeros(gpts, dtype=get_dtype(complex=True))
+            for sigma2d, buffer in smeared_buffers.items():
+                spectrum += fft2(
+                    buffer.astype(get_dtype(complex=True)), overwrite_x=True
+                ) * self.get_debye_waller_filter(
+                    sigma2d, gpts, sampling, device, like=array
                 )
-                array += temp
+            array += ifft2(spectrum, overwrite_x=True).real
 
         return array

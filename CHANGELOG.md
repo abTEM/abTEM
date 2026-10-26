@@ -104,6 +104,25 @@ Features:
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
+- Anisotropic displacement parameters (ADPs): full Cartesian tensors U [Å²] carried by the atoms as
+  `atoms.arrays["adp"]`. They are set with `abtem.adp.set_adp`, read from a CIF file through ASE
+  (`abtem.adp.read_cif_adp(path)`, or `abtem.adp.adp_from_cif_tags` for atoms from
+  `ase.io.read(path, store_tags=True)`: anisotropic `U`, `B` or `beta`, falling back to isotropic values per
+  site, converted to Cartesian tensors and expanded with the space group), computed from phonons
+  (`abtem.adp.adp_from_phonopy`, for a phonopy calculation or a file such as phonondb's
+  `phonopy_params.yaml.xz`) or estimated with the Debye model (`abtem.adp.debye_adp`). The same tensors
+  are used by every simulation mode: the Bloch-wave Debye-Waller factor `exp(-2 pi^2 g^T U g)`, the averaged
+  multislice potential of all three projection integrators (the in-plane block of U, applied in Fourier
+  space), and `FrozenPhonons(atoms)` without `sigmas`, which draws the displacements from U. The tensors
+  turn and strain with the atoms when a potential rotates them to a `plane` or orthogonalizes their cell,
+  and in `rotate_atoms` and the EBSD slabs, as anisotropic frozen-phonon displacements do. Giving standard
+  deviations as well (`thermal_sigma`, `Parametrization(sigmas=...)` or `FrozenPhonons(sigmas=...)`) raises an
+  error ([issue #594](https://github.com/abTEM/abTEM/issues/594))
+    - The finite projection smears with the same Fourier-space Debye-Waller factor as the infinite one
+      instead of a real-space `gaussian_filter` along the grid axes. For a width of a pixel or more the
+      potential changes by ~5e-5 of its maximum; for a sub-pixel width, which neither resolves, by a few
+      percent
+
 Performance:
 
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
@@ -125,6 +144,12 @@ Performance:
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
 
+- Bloch-wave scattering factors are computed once per kind of atom (element, ADP and occupancy) instead of
+  once per atom, and the structure factors sum the phases of each kind before multiplying by its scattering
+  factor. For 216 to 512 Si atoms and 0.8 to 1.2 x 10^5 reflections the scattering factors take 4 to 5
+  times less time and the structure factors 2 to 2.5 times less, with the same values to float32 rounding
+  ([issue #594](https://github.com/abTEM/abTEM/issues/594))
+
 Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
@@ -132,6 +157,10 @@ Dependencies:
 
 Bugfixes:
 
+- `GaussianProjectionIntegrals` ignored the `sigmas` of its parametrization; it now smears like the other
+  integrators. `rotate_atoms` and the EBSD slabs now turn magnetic moments with the atoms, and
+  `StructureFactor.calculate_scattering_factors` applies the occupancy, as `build` does
+  ([issue #594](https://github.com/abTEM/abTEM/issues/594))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice

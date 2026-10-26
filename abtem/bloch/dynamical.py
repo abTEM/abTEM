@@ -59,6 +59,13 @@ from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
+from abtem.adp import (
+    adp_kinds,
+    debye_waller_factors,
+    is_isotropic,
+    kind_tensor,
+    resolve_adp,
+)
 from abtem.atoms import (
     AtomProperties,
     validate_per_atom_property,
@@ -128,89 +135,70 @@ def _warn_if_single_precision(device: str) -> None:
     warnings.warn(message, BlochWavePrecisionWarning, stacklevel=3)
 
 
-def calculate_scattering_factors(
+def _scattering_factor_kinds(
     g_vec: np.ndarray,
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: AtomProperties = 0.0,
+    thermal_sigma: Optional[AtomProperties] = None,
     occupancy: AtomProperties = 1.0,
     cutoff: str = "taper",
-) -> np.ndarray:
-    """Calculate the scattering factors for a given set of atoms and parametrization.
+) -> tuple[np.ndarray, np.ndarray]:
+    """The scattering factors of each kind of atom, and the kind of each atom.
 
-    Parameters
-    ----------
-    g_vec : numpy.ndarray
-        Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
-        plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
-        shape (N_g, 3); passing magnitudes with anisotropic sigmas raises an error.
-    atoms : Atoms
-        Atoms object.
-    g_max : float
-        Maximum scattering vector length [1/Å]. The scattering factors are set to zero
-        for g > g_max.
-    parametrization : {'lobato', 'kirkland', 'peng'}
-        Parametrization for the scattering factors.
-    thermal_sigma : dict
-        Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
-        For anisotropic displacements, provide three values per atom or element (σx, σy, σz).
-    cutoff : {'taper', 'hard'}
-        Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
-        is a hard cutoff.
+    Atoms of one kind share their atomic number, ADP tensor and occupancy, so their
+    scattering factors are calculated once. See `calculate_scattering_factors`.
+
+    Returns
+    -------
+    scattering_factors : np.ndarray
+        One row of scattering factors per kind, with shape (N_kinds, N_g).
+    inverse : np.ndarray
+        The kind of each atom, with shape (N_atoms,).
     """
+    sigmas = None
+    if thermal_sigma is not None:
+        sigmas = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+        assert isinstance(sigmas, np.ndarray)  # Type narrowing for mypy
 
-    validated_thermal_sigma, anisotropic = validate_sigmas(
-        atoms, thermal_sigma, return_array=True
-    )
+    adp = resolve_adp(atoms, sigmas)
+
     validated_occupancy = validate_per_atom_property(
         atoms, occupancy, return_array=True
     )
-
-    assert isinstance(validated_thermal_sigma, np.ndarray)  # Type narrowing for mypy
     assert isinstance(validated_occupancy, np.ndarray)  # Type narrowing for mypy
 
     parametrization = validate_parametrization(parametrization)
 
+    kinds, inverse = adp_kinds(atoms.numbers, adp, validated_occupancy)
+
     if g_vec.ndim == 1:
-        if anisotropic:
+        if adp is not None and not np.all(is_isotropic(adp)):
             raise ValueError(
                 "Anisotropic Debye-Waller factors require Cartesian g-vectors "
                 "with shape (N_g, 3), not plain magnitudes."
             )
         g = g_vec
-        g_vec_3d = None
+        g_vec_3d = np.zeros((len(g), 3))
+        g_vec_3d[:, 0] = g
     else:
         g = np.linalg.norm(g_vec, axis=1)
         g_vec_3d = g_vec
 
-    Z_unique = np.unique(atoms.numbers)
+    scattering_factors = {
+        Z: parametrization.scattering_factor(Z)(g**2) for Z in np.unique(atoms.numbers)
+    }
 
-    scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
+    if adp is not None:
+        dwf = debye_waller_factors(
+            np.array([kind_tensor(kind[1:7]) for kind in kinds]), g_vec_3d
+        )
+    else:
+        dwf = np.ones((len(kinds), 1))
 
-    f_e = np.zeros((len(atoms), len(g)), dtype=get_dtype(complex=True))
-
-    two_pi_sq = (2 * np.pi) ** 2
-
-    for i in range(len(atoms)):
-        Z = atoms.numbers[i]
-        s = validated_thermal_sigma[i]
-        o = validated_occupancy[i]
-
-        if anisotropic:
-            # s has shape (3,); g_vec_3d has shape (N_g, 3)
-            # DWF = exp(-0.5 * (2π)² * Σ_α σ_α² gα²)
-            if np.any(s != 0.0):
-                DWF = np.exp(-0.5 * two_pi_sq * (g_vec_3d**2 @ s**2))
-            else:
-                DWF = 1.0
-        else:
-            if s != 0.0:
-                DWF = np.exp(-0.5 * s**2 * g**2 * two_pi_sq)
-            else:
-                DWF = 1.0
-
-        f_e[i] = scattering_factors[Z](g**2) * DWF * o
+    f_e = np.zeros((len(kinds), len(g)), dtype=get_dtype(complex=True))
+    for k, kind in enumerate(kinds):
+        f_e[k] = scattering_factors[int(kind[0])] * dwf[k] * kind[-1]
 
     if cutoff == "taper":
         T = 0.005
@@ -223,7 +211,66 @@ def calculate_scattering_factors(
 
     f_e *= cutoff_array
 
-    return f_e
+    return f_e, inverse
+
+
+def calculate_scattering_factors(
+    g_vec: np.ndarray,
+    atoms: Atoms,
+    parametrization: str | Parametrization,
+    g_max: float,
+    thermal_sigma: Optional[AtomProperties] = None,
+    occupancy: AtomProperties = 1.0,
+    cutoff: str = "taper",
+) -> np.ndarray:
+    """Calculate the scattering factors for a given set of atoms and parametrization.
+
+    The scattering factor of an atom is damped by the Debye-Waller factor
+    ``exp(-2 pi^2 g^T U g)``, where U is its Cartesian ADP tensor [Å²] in the frame
+    of `atoms`: ``sigma^2 I`` for an isotropic standard deviation sigma,
+    ``diag(sigma_x^2, sigma_y^2, sigma_z^2)`` for standard deviations along the
+    Cartesian axes, or the full tensor the atoms carry (see `abtem.adp`).
+
+    Parameters
+    ----------
+    g_vec : numpy.ndarray
+        Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
+        plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
+        shape (N_g, 3); passing magnitudes with anisotropic ADPs raises an error.
+    atoms : Atoms
+        Atoms object. ADP tensors in its ``'adp'`` array are used when
+        `thermal_sigma` is None.
+    g_max : float
+        Maximum scattering vector length [1/Å]. The scattering factors are set to zero
+        for g > g_max.
+    parametrization : {'lobato', 'kirkland', 'peng'}
+        Parametrization for the scattering factors.
+    thermal_sigma : float, dict or sequence, optional
+        Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+        For anisotropic displacements, provide three values per atom or element
+        (σx, σy, σz). If None (default), the ADP tensors the atoms carry are used,
+        if any. Giving both raises an error.
+    occupancy : float, dict or sequence
+        The occupancy of the atoms.
+    cutoff : {'taper', 'hard'}
+        Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
+        is a hard cutoff.
+
+    Returns
+    -------
+    scattering_factors : numpy.ndarray
+        The scattering factor of each atom, with shape (N_atoms, N_g).
+    """
+    f_e, inverse = _scattering_factor_kinds(
+        g_vec,
+        atoms,
+        parametrization,
+        g_max,
+        thermal_sigma=thermal_sigma,
+        occupancy=occupancy,
+        cutoff=cutoff,
+    )
+    return f_e[inverse]
 
 
 def calculate_structure_factors(
@@ -231,7 +278,7 @@ def calculate_structure_factors(
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: AtomProperties = 0.0,
+    thermal_sigma: Optional[AtomProperties] = None,
     occupancy: AtomProperties = 1.0,
     cutoff: str = "taper",
     device: str = "cpu",
@@ -249,8 +296,12 @@ def calculate_structure_factors(
     g_max : float
         Maximum scattering vector length [1/Å]. The scattering factors are set to zero
         for g > g_max.
-    thermal_sigma : float
-        Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+    thermal_sigma : float, dict or sequence, optional
+        Standard deviation of the atomic displacements for the Debye-Waller factor
+        [Å], as for `calculate_scattering_factors`. If None (default), the ADP
+        tensors the atoms carry are used, if any.
+    occupancy : float, dict or sequence
+        The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
         is a hard cutoff.
@@ -266,7 +317,7 @@ def calculate_structure_factors(
     new_cell = atoms.cell.copy().complete()
     positions = np.linalg.solve(new_cell.T, atoms.positions.T).T
 
-    f_e = calculate_scattering_factors(
+    f_kinds, inverse = _scattering_factor_kinds(
         g_vec=calculate_g_vec(hkl, atoms.cell),
         atoms=atoms,
         g_max=g_max,
@@ -278,21 +329,26 @@ def calculate_structure_factors(
 
     xp = get_array_module(device)
 
-    f_e = xp.asarray(f_e, dtype=get_dtype(complex=True))
-    positions = xp.asarray(positions, dtype=get_dtype(complex=False))
+    # The atoms are sorted by kind, so the phases of each kind are a contiguous
+    # block of rows: they are summed first and multiplied by the scattering
+    # factors of the kind once, rather than expanding the scattering factors to
+    # every atom.
+    order = np.argsort(inverse, kind="stable")
+    bounds = np.searchsorted(inverse[order], np.arange(len(f_kinds) + 1))
+
+    f_kinds = xp.asarray(f_kinds, dtype=get_dtype(complex=True))
+    positions = xp.asarray(positions[order], dtype=get_dtype(complex=False))
     hkl = xp.asarray(hkl.T, get_dtype(complex=False))
 
-    struct_factors = (
-        xp.sum(
-            f_e * xp.exp(2.0j * np.pi * positions @ hkl),
-            axis=0,
-        )
-        # A Python float, not ASE's np.float64: under NEP 50 a NumPy scalar
-        # widens a single-precision array to double.
-        / float(atoms.cell.volume)
-    )
+    phases = xp.exp(2.0j * np.pi * positions @ hkl)
 
-    return struct_factors
+    struct_factors = xp.zeros(hkl.shape[1], dtype=get_dtype(complex=True))
+    for k, (start, stop) in enumerate(zip(bounds[:-1], bounds[1:])):
+        struct_factors += f_kinds[k] * xp.sum(phases[start:stop], axis=0)
+
+    # A Python float, not ASE's np.float64: under NEP 50 a NumPy scalar widens a
+    # single-precision array to double.
+    return struct_factors / float(atoms.cell.volume)
 
 
 def structure_factor_1d_to_3d(
@@ -521,8 +577,13 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         Maximum scattering vector length [1/Å].
     parametrization : str
         Parametrization for the scattering factors.
-    thermal_sigma : float or dict
-        Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+    thermal_sigma : float, dict or sequence, optional
+        Standard deviation of the atomic displacements for the Debye-Waller factor [Å]:
+        one value for all atoms, one per element (as a dict) or one per atom. For
+        anisotropic displacements along the Cartesian axes of `atoms`, provide three
+        values (σx, σy, σz) instead of one. If None (default), the full ADP tensors
+        the atoms carry are used, if any (see `abtem.adp`); giving both raises an
+        error.
     occupancy : float
         The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
@@ -540,7 +601,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         atoms: Atoms,
         g_max: float,
         parametrization: str = "lobato",
-        thermal_sigma: float | dict[str, float] | Sequence[float] = 0.0,
+        thermal_sigma: Optional[float | dict[str, float] | Sequence[float]] = None,
         occupancy: float | dict[str, float] | Sequence[float] = 1.0,
         cutoff: str = "taper",
         device: Optional[str] = None,
@@ -548,7 +609,15 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     ):
         self._atoms = atoms
 
-        self._thermal_sigma = validate_sigmas(atoms, thermal_sigma)[0]
+        if thermal_sigma is None:
+            self._thermal_sigma = None
+        else:
+            self._thermal_sigma = validate_sigmas(atoms, thermal_sigma)[0]
+            # Refuse standard deviations given for atoms that carry tensors now,
+            # rather than when the structure factors are built.
+            resolve_adp(
+                atoms, validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+            )
 
         self._occupancy = validate_per_atom_property(atoms, occupancy)
 
@@ -591,8 +660,21 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         return self._parametrization
 
     @property
-    def thermal_sigma(self) -> np.ndarray | dict[str, np.ndarray]:
+    def thermal_sigma(self) -> Optional[np.ndarray | dict[str, np.ndarray]]:
+        """Standard deviation of the atomic displacements [Å], or None if the ADP
+        tensors the atoms carry are used."""
         return self._thermal_sigma
+
+    @property
+    def adp(self) -> Optional[np.ndarray]:
+        """The Cartesian ADP tensor of each atom used for the Debye-Waller factors
+        [Å²], with shape (N, 3, 3), or None if the atoms are not smeared."""
+        sigmas = None
+        if self._thermal_sigma is not None:
+            sigmas = validate_sigmas(
+                self.atoms, self._thermal_sigma, return_array=True
+            )[0]
+        return resolve_adp(self.atoms, sigmas)
 
     @property
     def occupancy(self) -> np.ndarray | dict[str, np.ndarray]:
@@ -606,6 +688,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             parametrization=self._parametrization,
             g_max=self.g_max,
             thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
 
