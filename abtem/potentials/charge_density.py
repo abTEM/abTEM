@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.adp import ADP_ARRAY, get_adp
+from abtem.adp import ADP_ARRAY, _cartesian_adp
 from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
@@ -427,7 +427,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         if (
             not draws_from_tensors
             and isinstance(first, Atoms)
-            and get_adp(first) is not None
+            and _cartesian_adp(first) is not None
         ):
             raise ValueError(
                 "ChargeDensityPotential cannot smear its atoms by ADP tensors (the "

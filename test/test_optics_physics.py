@@ -587,6 +587,9 @@ def test_frozen_phonons_directions(directions, moved):
         assert abs(corr) < 5 / np.sqrt(num_configs * len(atoms))
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
+)
 def test_frozen_phonons_anisotropic_per_element_sigmas():
     atoms = ase.build.bulk("NaCl", "rocksalt", a=5.64, cubic=True)  # 4 Na + 4 Cl
     sigmas = {"Na": (0.05, 0.10, 0.15), "Cl": (0.12, 0.03, 0.08)}

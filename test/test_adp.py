@@ -13,6 +13,7 @@ from abtem.adp import (
     adp_from_cif_tags,
     adp_from_phonopy,
     cartesian_adp,
+    crystallographic_adp,
     debye_adp,
     get_adp,
     read_cif_adp,
@@ -68,7 +69,7 @@ def rutile(tmp_path):
 
 def exaggerated(atoms, factor=6.0):
     """The tensors scaled up, so that an error in their frame is large."""
-    return set_adp(atoms, get_adp(atoms) * factor)
+    return set_adp(atoms, get_adp(atoms, cartesian=True) * factor)
 
 
 def random_tensors(n, seed=0):
@@ -78,7 +79,7 @@ def random_tensors(n, seed=0):
 
 
 def test_read_cif_expands_tensors_with_the_space_group(rutile):
-    adp = get_adp(rutile)
+    adp = get_adp(rutile, cartesian=True)
     scaled = rutile.get_scaled_positions()
 
     # U_eq = tr(U) / 3 is invariant, and the CIF gives it per site
@@ -106,7 +107,10 @@ def test_cif_is_read_through_ase(tmp_path, rutile):
 
     path = write_cif(tmp_path, RUTILE_CIF)
     atoms = ase.io.read(path, store_tags=True)
-    np.testing.assert_array_equal(get_adp(adp_from_cif_tags(atoms)), get_adp(rutile))
+    np.testing.assert_array_equal(
+        get_adp(adp_from_cif_tags(atoms), cartesian=True),
+        get_adp(rutile, cartesian=True),
+    )
 
     with pytest.raises(ValueError, match="store_tags=True"):
         adp_from_cif_tags(ase.io.read(path))
@@ -142,12 +146,14 @@ def test_cif_is_read_through_ase(tmp_path, rutile):
         for position in rutile.positions
     ]
     np.testing.assert_allclose(
-        get_adp(listed_atoms)[order], get_adp(rutile), atol=1e-15
+        get_adp(listed_atoms, cartesian=True)[order],
+        get_adp(rutile, cartesian=True),
+        atol=1e-15,
     )
 
 
 def test_cif_conventions_and_missing_values(tmp_path, rutile):
-    expected = get_adp(rutile)
+    expected = get_adp(rutile, cartesian=True)
     titanium = rutile.numbers == 22
 
     # B_ij = 8 pi^2 U_ij
@@ -162,7 +168,9 @@ def test_cif_conventions_and_missing_values(tmp_path, rutile):
         aniso.strip(), b_values
     )
     np.testing.assert_allclose(
-        get_adp(read_cif_adp(write_cif(tmp_path, b_cif, "b.cif"))), expected, atol=1e-15
+        get_adp(read_cif_adp(write_cif(tmp_path, b_cif, "b.cif")), cartesian=True),
+        expected,
+        atol=1e-15,
     )
 
     # standard uncertainties are dropped; an unknown component falls back to U_iso
@@ -170,7 +178,9 @@ def test_cif_conventions_and_missing_values(tmp_path, rutile):
         "Ti1 0.00578 0.00578 0.00503 -0.00028",
         "Ti1 0.00578(12) 0.00578(12) ? -0.00028(3)",
     ).replace("O1 0.00620 0.00620", "O1 0.00620(9) 0.00620(9)")
-    adp = get_adp(read_cif_adp(write_cif(tmp_path, uncertain, "uncertain.cif")))
+    with pytest.warns(UserWarning, match="unknown components"):
+        uncertain_atoms = read_cif_adp(write_cif(tmp_path, uncertain, "uncertain.cif"))
+    adp = get_adp(uncertain_atoms, cartesian=True)
     np.testing.assert_allclose(adp[~titanium], expected[~titanium], atol=1e-15)
     np.testing.assert_allclose(
         adp[titanium], np.broadcast_to(0.00553 * np.eye(3), adp[titanium].shape)
@@ -178,7 +188,9 @@ def test_cif_conventions_and_missing_values(tmp_path, rutile):
 
     # isotropic only
     isotropic = RUTILE_CIF[: RUTILE_CIF.index("loop_\n_atom_site_aniso_label")]
-    adp = get_adp(read_cif_adp(write_cif(tmp_path, isotropic, "iso.cif")))
+    adp = get_adp(
+        read_cif_adp(write_cif(tmp_path, isotropic, "iso.cif")), cartesian=True
+    )
     np.testing.assert_allclose(
         np.trace(adp, axis1=1, axis2=2) / 3, np.where(titanium, 0.00553, 0.00637)
     )
@@ -193,14 +205,16 @@ def test_cif_conventions_and_missing_values(tmp_path, rutile):
         "O1 O 0.30479 0.30479 0.0 0.00637", "O1 O 0.30479 0.30479 0.0 ?"
     )
     with pytest.warns(UserWarning, match="O1"):
-        adp = get_adp(read_cif_adp(write_cif(tmp_path, partial, "partial.cif")))
+        adp = get_adp(
+            read_cif_adp(write_cif(tmp_path, partial, "partial.cif")), cartesian=True
+        )
     np.testing.assert_allclose(adp[~titanium], 0.0)
 
     # no ADPs at all: no tensors, so standard deviations may still be given
     bare = partial.replace("0.0 0.00553", "0.0 ?")
     with pytest.warns(UserWarning, match="no ADPs"):
         atoms = read_cif_adp(write_cif(tmp_path, bare, "bare.cif"))
-    assert get_adp(atoms) is None
+    assert get_adp(atoms, cartesian=True) is None
 
 
 WURTZITE_CIF = """data_ZnO
@@ -233,13 +247,78 @@ O1 0.0090 0.0090 0.0150 0.0045 0.0 0.0
 """
 
 
+def test_cif_adp_types_and_npd_sites(tmp_path):
+    # Uani without an aniso row falls back with a warning, Uiso does not warn;
+    # an NPD site is refused by its label.
+    typed = (
+        RUTILE_CIF.replace(
+            "_atom_site_U_iso_or_equiv\n",
+            "_atom_site_U_iso_or_equiv\n_atom_site_adp_type\n",
+        )
+        .replace("0.0 0.00553", "0.0 0.00553 Uani")
+        .replace("0.0 0.00637", "0.0 0.00637 Uiso")
+    )
+    typed = typed.replace("Ti1 0.00578 0.00578 0.00503 -0.00028 0.0 0.0\n", "")
+    with pytest.warns(UserWarning, match=r"\['Ti1'\] are anisotropic"):
+        atoms = read_cif_adp(write_cif(tmp_path, typed, "typed.cif"))
+    titanium = atoms.numbers == 22
+    np.testing.assert_allclose(
+        get_adp(atoms, cartesian=True)[titanium],
+        np.broadcast_to(0.00553 * np.eye(3), (titanium.sum(), 3, 3)),
+    )
+
+    npd = RUTILE_CIF.replace("O1 0.00620 0.00620", "O1 -0.00620 0.00620")
+    with pytest.raises(ValueError, match="O1"):
+        read_cif_adp(write_cif(tmp_path, npd, "npd.cif"))
+
+
+def test_cif_tensors_are_symmetrized_over_their_sites(tmp_path):
+    # Ti in rutile sits on a site with mmm symmetry along [110], which requires
+    # U11 = U22 and U13 = U23 = 0. A CIF that breaks it is reported and averaged
+    # over the site's operations: U11 and U22 become their mean, U13 vanishes.
+    broken = RUTILE_CIF.replace(
+        "Ti1 0.00578 0.00578 0.00503 -0.00028 0.0 0.0",
+        "Ti1 0.00600 0.00556 0.00503 -0.00028 0.0010 0.0",
+    )
+    with pytest.warns(UserWarning, match="symmetry of their sites"):
+        atoms = read_cif_adp(write_cif(tmp_path, broken, "broken.cif"))
+    titanium = get_adp(atoms)[atoms.numbers == 22]
+    np.testing.assert_allclose(titanium[:, 0, 0], 0.00578, atol=1e-12)
+    np.testing.assert_allclose(titanium[:, 1, 1], 0.00578, atol=1e-12)
+    np.testing.assert_allclose(titanium[:, 0, 2], 0.0, atol=1e-12)
+
+
+def test_deprecated_names_and_per_axis_sigmas():
+    atoms = bulk("Si", cubic=True)
+    hkl = np.array([[2, 2, 0], [4, 0, 0]])
+    expected = calculate_structure_factors(hkl, atoms, "lobato", 100, sigmas=0.07)
+    with pytest.warns(FutureWarning, match="thermal_sigma"):
+        got = calculate_structure_factors(hkl, atoms, "lobato", 100, thermal_sigma=0.07)
+    np.testing.assert_array_equal(got, expected)
+    with pytest.warns(FutureWarning, match="thermal_sigma"):
+        structure_factor = abtem.StructureFactor(atoms, g_max=2.0, thermal_sigma=0.07)
+    assert structure_factor.sigmas["Si"] == pytest.approx(0.07)
+    with pytest.warns(FutureWarning, match="thermal_sigma"):
+        structure_factor.thermal_sigma
+
+    with pytest.warns(FutureWarning, match="Cartesian axes"):
+        abtem.StructureFactor(atoms, g_max=2.0, sigmas=(0.05, 0.06, 0.07))
+
+    # warned once where the frozen phonons are made, not again when a lazy
+    # potential rebuilds them for each block
+    with pytest.warns(FutureWarning, match="Cartesian axes") as record:
+        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=(0.05, 0.06, 0.07))
+    assert len(record) == 1
+    abtem.Potential(frozen_phonons, gpts=16, slice_thickness=2.0).build().compute()
+
+
 def test_cif_tensors_have_the_symmetry_of_their_sites(tmp_path):
     # On the 3m sites of wurtzite U11 = U22 = 2 U12 and U13 = U23 = 0, which in
     # Cartesian coordinates is U_xx = U_yy = U11 (with a* = 2 / (sqrt(3) a)), U_xy
     # = 0 and U_zz = U33. Every operation of the space group that maps an atom
     # onto itself must leave its tensor unchanged.
     atoms = read_cif_adp(write_cif(tmp_path, WURTZITE_CIF))
-    adp = get_adp(atoms)
+    adp = get_adp(atoms, cartesian=True)
     zinc = atoms.numbers == 30
     for selected, u11, u33 in ((zinc, 0.0100, 0.0120), (~zinc, 0.0090, 0.0150)):
         expected = np.diag([u11, u11, u33])
@@ -269,7 +348,7 @@ def test_debye_adp_integrates_the_debye_density_of_states():
     atoms = Atoms("CuO", positions=[(0, 0, 0), (1, 1, 1)], cell=[3, 3, 3], pbc=True)
     debye_temperatures = {"Cu": 315.0, "O": 500.0}
     for temperature in (0.0, 50.0, 300.0, 1000.0):
-        adp = debye_adp(atoms, temperature, debye_temperatures)
+        u_iso = debye_adp(atoms, temperature, debye_temperatures)
         for i, symbol in enumerate(atoms.get_chemical_symbols()):
             w_d = k * debye_temperatures[symbol] / hbar
             mass = atoms.get_masses()[i] * atomic_mass
@@ -281,7 +360,7 @@ def test_debye_adp_integrates_the_debye_density_of_states():
                 return 9 * w / w_d**3 * occupation
 
             expected = hbar / (6 * mass) * integrate.quad(integrand, 0, w_d)[0] * 1e20
-            np.testing.assert_allclose(adp[i], expected * np.eye(3), rtol=1e-8)
+            np.testing.assert_allclose(u_iso[i], expected, rtol=1e-8)
 
 
 def _emt_phonopy(atoms, supercell):
@@ -324,7 +403,7 @@ def test_adp_from_phonopy_is_the_thermal_displacement_sum(tmp_path):
     phonon = _emt_phonopy(bulk("Cu", cubic=True), (2, 2, 2))
     temperature, mesh = 300.0, (8, 8, 8)
     atoms = adp_from_phonopy(phonon, temperature, mesh=mesh)
-    adp = get_adp(atoms)
+    adp = get_adp(atoms, cartesian=True)
     assert len(atoms) == 4 and len(phonon.primitive) == 1
 
     phonon.run_mesh(
@@ -356,7 +435,7 @@ def test_adp_from_phonopy_is_the_thermal_displacement_sum(tmp_path):
     path = str(tmp_path / "phonopy_params.yaml")
     phonon.save(path)
     np.testing.assert_allclose(
-        get_adp(adp_from_phonopy(path, temperature, mesh=mesh)),
+        get_adp(adp_from_phonopy(path, temperature, mesh=mesh), cartesian=True),
         adp,
         rtol=1e-5,
         atol=1e-15,
@@ -370,9 +449,13 @@ def test_adp_from_phonopy_turns_with_the_crystal():
     rotation = euler_to_rotation(0.3, 0.5, 0.0, axes="zxz", convention="intrinsic")
     rotated = rotate_atoms(hcp, angles=(0.3, 0.5, 0.0))
 
-    adp = get_adp(adp_from_phonopy(_emt_phonopy(hcp, (3, 3, 2)), 300.0, mesh=(6, 6, 4)))
+    adp = get_adp(
+        adp_from_phonopy(_emt_phonopy(hcp, (3, 3, 2)), 300.0, mesh=(6, 6, 4)),
+        cartesian=True,
+    )
     adp_rotated = get_adp(
-        adp_from_phonopy(_emt_phonopy(rotated, (3, 3, 2)), 300.0, mesh=(6, 6, 4))
+        adp_from_phonopy(_emt_phonopy(rotated, (3, 3, 2)), 300.0, mesh=(6, 6, 4)),
+        cartesian=True,
     )
     assert abs(adp[0, 2, 2] - adp[0, 0, 0]) > 0.02 * adp[0, 0, 0]
     np.testing.assert_allclose(
@@ -411,12 +494,207 @@ def test_cartesian_adp_of_a_skewed_cell():
     np.testing.assert_allclose(cartesian_adp(cell, beta, "beta"), cartesian, rtol=1e-12)
 
 
+MONOCLINIC = Atoms(
+    "SiO2",
+    scaled_positions=[(0.1, 0.2, 0.3), (0.6, 0.5, 0.8), (0.3, 0.7, 0.1)],
+    cell=[[4.9, 0.0, 0.0], [0.0, 5.3, 0.0], [-1.6, 0.0, 6.1]],
+    pbc=True,
+)
+
+
+def test_set_adp_takes_crystallographic_u_ij():
+    # U^ij in the CIF order, as copied from a paper, on a monoclinic cell, where
+    # they are not Cartesian. The oracle is cartesian_adp, which
+    # test_cartesian_adp_of_a_skewed_cell checks independently.
+    u_ij = np.array([0.011, 0.017, 0.009, 0.0, 0.003, 0.0])
+    atoms = set_adp(MONOCLINIC, u_ij)
+    expected = cartesian_adp(MONOCLINIC.cell, u_ij)
+    np.testing.assert_allclose(
+        get_adp(atoms, cartesian=True),
+        np.broadcast_to(expected, (3, 3, 3)),
+        atol=1e-15,
+    )
+    assert not np.allclose(expected, cartesian_adp(np.diag([1.0, 1, 1]), u_ij))
+
+    # and get_adp gives them back, as do the (3, 3) and per-atom forms
+    np.testing.assert_allclose(
+        get_adp(atoms)[0], cartesian_adp(np.eye(3), u_ij), atol=1e-15
+    )
+    np.testing.assert_allclose(
+        get_adp(set_adp(MONOCLINIC, np.tile(u_ij, (3, 1))), cartesian=True),
+        get_adp(atoms, cartesian=True),
+        atol=1e-15,
+    )
+
+    # U_iso is isotropic in any cell; a per-element dict mixes the forms
+    np.testing.assert_allclose(
+        get_adp(set_adp(MONOCLINIC, 0.01), cartesian=True),
+        np.broadcast_to(0.01 * np.eye(3), (3, 3, 3)),
+        atol=1e-15,
+    )
+    mixed = get_adp(set_adp(MONOCLINIC, {"Si": u_ij, "O": 0.02}), cartesian=True)
+    np.testing.assert_allclose(mixed[0], expected, atol=1e-15)
+    np.testing.assert_allclose(mixed[1], 0.02 * np.eye(3), atol=1e-15)
+
+    # the inverse conversion, also to B and beta
+    for convention in ("U", "B", "beta"):
+        converted = crystallographic_adp(MONOCLINIC.cell, expected, convention)
+        np.testing.assert_allclose(
+            cartesian_adp(MONOCLINIC.cell, converted, convention), expected, atol=1e-15
+        )
+
+    with pytest.raises(ValueError, match="cartesian=True"):
+        set_adp(Atoms("Si"), np.eye(3) * 0.01)
+
+
+def test_tensors_follow_a_cell_rotated_outside_abtem():
+    # ASE rotates the cell with the atoms but not the tensors; abTEM finds the
+    # rotation from the cell. Oracle: R U R^T with ASE's own rotation matrix.
+    tensor = random_tensors(1)[0]
+    atoms = set_adp(MONOCLINIC, tensor, cartesian=True)
+
+    rotated = atoms.copy()
+    rotated.rotate(35, (1, 2, 3), rotate_cell=True)
+    probe = Atoms(positions=np.eye(3))
+    probe.rotate(35, (1, 2, 3))
+    R = probe.positions.T  # columns are the images of the unit vectors
+    expected = R @ tensor @ R.T
+
+    np.testing.assert_allclose(
+        get_adp(rotated, cartesian=True)[0], expected, atol=1e-12
+    )
+    # with vacuum added as well, and in what the simulations use
+    rotated.cell[2] *= 1.5
+    np.testing.assert_allclose(
+        get_adp(rotated, cartesian=True)[0], expected, atol=1e-12
+    )
+    for resolved in (
+        abtem.FrozenPhonons(rotated, num_configs=1).atoms,
+        abtem.StructureFactor(rotated, g_max=1.0).atoms,
+    ):
+        np.testing.assert_allclose(
+            get_adp(resolved, cartesian=True)[0], expected, atol=1e-12
+        )
+
+    # a supercell, reordered axes or added vacuum is the same frame
+    for same_frame in (atoms * (2, 1, 3), atoms[[2, 0, 1]]):
+        np.testing.assert_allclose(
+            get_adp(same_frame, cartesian=True)[0], tensor, atol=1e-15
+        )
+    padded = atoms.copy()
+    padded.center(vacuum=4.0, axis=2)
+    np.testing.assert_allclose(get_adp(padded, cartesian=True)[0], tensor, atol=1e-15)
+
+
+def test_conversions_match_cctbx():
+    # Reference values from cctbx.adptbx (cctbx-base 2026.9, computed once and
+    # hard-coded): u_cif_as_u_cart, u_star_as_beta(u_cif_as_u_star),
+    # u_cart_as_u_iso and u_star_as_u_cif(u_iso_as_u_star), for a triclinic cell
+    # in cctbx's Cartesian frame (the rows of its orthogonalization matrix
+    # transposed).
+    cell = [
+        [5.1, 0.0, 0.0],
+        [-1.6305599841458813, 6.085332705621131, 0.0],
+        [-0.9018331411980907, 0.8245657513037988, 7.298409984867499],
+    ]
+    u_cif = np.array([0.0112, 0.0175, 0.0091, 0.0021, -0.0033, 0.0014])
+    u_cart = [
+        0.013276798868149416,
+        0.018157881304740785,
+        0.009100000000000006,
+        -0.0032835156320729407,
+        -0.004932218223286159,
+        0.0024370138844963204,
+    ]
+    beta = [
+        0.00918400969702981,
+        0.009447295107445382,
+        0.003372210073260614,
+        0.0013972083317255572,
+        -0.0018191047583099376,
+        0.0006261802515264758,
+    ]
+    u_iso_cif = [
+        0.013,
+        0.012999999999999992,
+        0.012999999999999994,
+        0.003198898962056658,
+        0.001166757209366182,
+        -0.0014594398986865732,
+    ]
+
+    def as_matrix(components):
+        u11, u22, u33, u12, u13, u23 = components
+        return np.array([[u11, u12, u13], [u12, u22, u23], [u13, u23, u33]])
+
+    cartesian = cartesian_adp(cell, u_cif)
+    np.testing.assert_allclose(cartesian, as_matrix(u_cart), rtol=0, atol=1e-15)
+    np.testing.assert_allclose(
+        crystallographic_adp(cell, cartesian, "beta"), as_matrix(beta), atol=1e-15
+    )
+    assert np.trace(cartesian) / 3 == pytest.approx(0.013511560057630068, abs=1e-15)
+
+    # U_iso as crystal-axis components, and back to U_iso I in Cartesian
+    np.testing.assert_allclose(
+        crystallographic_adp(cell, 0.013 * np.eye(3)), as_matrix(u_iso_cif), atol=1e-15
+    )
+    atoms = Atoms("Si", cell=cell, pbc=True)
+    np.testing.assert_allclose(
+        get_adp(set_adp(atoms, u_cif), cartesian=True)[0],
+        as_matrix(u_cart),
+        atol=1e-15,
+    )
+
+
+def test_site_symmetrization_matches_cctbx(tmp_path):
+    # cctbx: site_symmetry((0, 0.31, 1/4)).average_u_star for C 1 2/c 1, a site
+    # on the 2-fold axis along b (U12 = U23 = 0), of a tensor that breaks it.
+    cif = """data_c2c
+_cell_length_a 9.2
+_cell_length_b 6.1
+_cell_length_c 7.7
+_cell_angle_alpha 90
+_cell_angle_beta 112
+_cell_angle_gamma 90
+_symmetry_space_group_name_H-M 'C 1 2/c 1'
+_space_group_IT_number 15
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Si1 Si 0.0 0.31 0.25
+loop_
+_atom_site_aniso_label
+_atom_site_aniso_U_11
+_atom_site_aniso_U_22
+_atom_site_aniso_U_33
+_atom_site_aniso_U_12
+_atom_site_aniso_U_13
+_atom_site_aniso_U_23
+Si1 0.0121 0.0098 0.0143 0.0017 0.0026 -0.0011
+"""
+    with pytest.warns(UserWarning, match="symmetry of their sites"):
+        atoms = read_cif_adp(write_cif(tmp_path, cif))
+    site = np.argmin(
+        np.linalg.norm(atoms.get_scaled_positions() - [0.0, 0.31, 0.25], axis=1)
+    )
+    expected = np.array(
+        [[0.0121, 0.0, 0.0026], [0.0, 0.0098, 0.0], [0.0026, 0.0, 0.0143]]
+    )
+    np.testing.assert_allclose(get_adp(atoms)[site], expected, atol=1e-12)
+
+
 def test_validate_adp_forms():
     atoms = bulk("NaCl", "rocksalt", a=5.64, cubic=True)
     na = atoms.numbers == 11
     tensor = random_tensors(1)[0]
 
-    adp = get_adp(set_adp(atoms, {"Na": 0.01, "Cl": (0.01, 0.02, 0.03)}))
+    adp = get_adp(
+        set_adp(atoms, {"Na": 0.01, "Cl": (0.01, 0.02, 0.03)}, cartesian=True),
+        cartesian=True,
+    )
     np.testing.assert_allclose(
         adp[na], np.broadcast_to(0.01 * np.eye(3), adp[na].shape)
     )
@@ -424,31 +702,35 @@ def test_validate_adp_forms():
         adp[~na], np.broadcast_to(np.diag([0.01, 0.02, 0.03]), adp[~na].shape)
     )
 
-    adp = get_adp(set_adp(atoms, {11: tensor, 17: 0.0}))
+    adp = get_adp(set_adp(atoms, {11: tensor, 17: 0.0}, cartesian=True), cartesian=True)
     np.testing.assert_allclose(adp[na], np.broadcast_to(tensor, adp[na].shape))
     np.testing.assert_allclose(adp[~na], 0.0)
 
     # one U_iso per atom, also for exactly three atoms (no diagonal shorthand)
     u_iso = np.linspace(0.01, 0.02, len(atoms))
     np.testing.assert_allclose(
-        get_adp(set_adp(atoms, u_iso)), u_iso[:, None, None] * np.eye(3)
+        get_adp(set_adp(atoms, u_iso, cartesian=True), cartesian=True),
+        u_iso[:, None, None] * np.eye(3),
     )
     three = atoms[:3]
     np.testing.assert_allclose(
-        get_adp(set_adp(three, [0.01, 0.02, 0.03])),
+        get_adp(set_adp(three, [0.01, 0.02, 0.03], cartesian=True), cartesian=True),
         np.array([0.01, 0.02, 0.03])[:, None, None] * np.eye(3),
     )
 
     with pytest.raises(ValueError, match="missing"):
-        set_adp(atoms, {"Na": 0.01})
+        set_adp(atoms, {"Na": 0.01}, cartesian=True)
     with pytest.raises(ValueError, match="symmetric"):
-        set_adp(atoms, np.triu(tensor))
+        set_adp(atoms, np.triu(tensor), cartesian=True)
     with pytest.raises(ValueError, match="positive semi-definite"):
-        set_adp(atoms, -tensor)
+        set_adp(atoms, -tensor, cartesian=True)
 
-    assert get_adp(set_adp(set_adp(atoms, 0.01), None)) is None
+    assert get_adp(set_adp(set_adp(atoms, 0.01), None), cartesian=True) is None
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
+)
 def test_bloch_debye_waller_factor_is_the_quadratic_form():
     # One atom at the origin, so the structure factor is its scattering factor
     # times exp(-2 pi^2 g^T U g); the isotropic and diagonal forms of the
@@ -468,20 +750,20 @@ def test_bloch_debye_waller_factor_is_the_quadratic_form():
     tensor = random_tensors(1)[0]
     dwf = np.exp(-2 * np.pi**2 * np.einsum("ga,ab,gb->g", g_vec, tensor, g_vec))
     np.testing.assert_allclose(
-        structure_factor(atoms=set_adp(atoms, tensor)),
+        structure_factor(atoms=set_adp(atoms, tensor, cartesian=True)),
         f * dwf / atoms.cell.volume,
         rtol=1e-5,
     )
 
     sigmas = np.array([0.05, 0.08, 0.11])
     np.testing.assert_allclose(
-        structure_factor(atoms=atoms, thermal_sigma=tuple(sigmas)),
-        structure_factor(atoms=set_adp(atoms, np.diag(sigmas**2))),
+        structure_factor(atoms=atoms, sigmas=tuple(sigmas)),
+        structure_factor(atoms=set_adp(atoms, np.diag(sigmas**2), cartesian=True)),
         rtol=1e-6,
     )
     np.testing.assert_allclose(
-        structure_factor(atoms=atoms, thermal_sigma=0.07),
-        structure_factor(atoms=set_adp(atoms, 0.07**2)),
+        structure_factor(atoms=atoms, sigmas=0.07),
+        structure_factor(atoms=set_adp(atoms, 0.07**2, cartesian=True)),
         rtol=1e-6,
     )
 
@@ -499,7 +781,9 @@ def test_bloch_structure_factors_are_invariant_under_rotating_the_crystal(rutile
     R = euler_to_rotation(*angles, axes="zxz", convention="intrinsic")
 
     np.testing.assert_allclose(
-        get_adp(rotated), np.einsum("ia,nab,jb->nij", R, get_adp(atoms), R), atol=1e-15
+        get_adp(rotated, cartesian=True),
+        np.einsum("ia,nab,jb->nij", R, get_adp(atoms, cartesian=True), R),
+        atol=1e-15,
     )
 
     def structure_factors(atoms):
@@ -508,8 +792,12 @@ def test_bloch_structure_factors_are_invariant_under_rotating_the_crystal(rutile
     expected = structure_factors(atoms)
     np.testing.assert_allclose(structure_factors(rotated), expected, atol=1e-6)
 
-    # tensors left in the old frame give clearly different structure factors
-    stale = set_adp(rotated, get_adp(atoms))
+    # U^ij refer to the cell, which turned with the atoms: the same U^ij on the
+    # rotated crystal are the rotated tensors. The same Cartesian tensors are
+    # left in the old frame and give clearly different structure factors.
+    same_u_ij = set_adp(rotated, get_adp(atoms))
+    np.testing.assert_allclose(structure_factors(same_u_ij), expected, atol=1e-6)
+    stale = set_adp(rotated, get_adp(atoms, cartesian=True), cartesian=True)
     assert np.abs(structure_factors(stale) - expected).max() > 1e-3
 
 
@@ -522,19 +810,35 @@ def test_centering_is_detected_by_kind():
     tensors = np.array([0.01 * np.eye(3), np.diag([0.03, 0.005, 0.005])])
     odd = np.array([[1, 0, 0]])
     assert (
-        abs(calculate_structure_factors(odd, set_adp(atoms, tensors), "lobato", 100)[0])
+        abs(
+            calculate_structure_factors(
+                odd, set_adp(atoms, tensors, cartesian=True), "lobato", 100
+            )[0]
+        )
         > 1e-3
     )
 
-    assert abtem.StructureFactor(set_adp(atoms, tensors), g_max=3).centering == "P"
+    assert (
+        abtem.StructureFactor(
+            set_adp(atoms, tensors, cartesian=True), g_max=3
+        ).centering
+        == "P"
+    )
     assert abtem.StructureFactor(atoms, g_max=3, occupancy=[1.0, 0.5]).centering == "P"
-    assert abtem.StructureFactor(set_adp(atoms, 0.01), g_max=3).centering == "I"
+    assert (
+        abtem.StructureFactor(set_adp(atoms, 0.01, cartesian=True), g_max=3).centering
+        == "I"
+    )
 
 
 def test_finite_projection_shares_a_buffer_between_elements():
     # Na and Cl with the same tensor share one buffer; the potential is linear
     # in the atoms, so the oracle is the sum of the two elements built apart.
-    atoms = set_adp(bulk("NaCl", "rocksalt", a=5.64, cubic=True), random_tensors(1)[0])
+    atoms = set_adp(
+        bulk("NaCl", "rocksalt", a=5.64, cubic=True),
+        random_tensors(1)[0],
+        cartesian=True,
+    )
     symbols = np.array(atoms.get_chemical_symbols())
 
     def build(atoms):
@@ -555,7 +859,10 @@ def test_flip_atoms_mirrors_the_tensors():
     from abtem.atoms import flip_atoms
 
     tensor = random_tensors(1)[0]
-    flipped = get_adp(flip_atoms(set_adp(bulk("Si", cubic=True), tensor), axis=0))
+    flipped = get_adp(
+        flip_atoms(set_adp(bulk("Si", cubic=True), tensor, cartesian=True), axis=0),
+        cartesian=True,
+    )
     mirror = np.diag([-1.0, 1.0, 1.0])
     np.testing.assert_allclose(flipped[0], mirror @ tensor @ mirror, atol=1e-15)
     assert np.sign(flipped[0, 0, 1]) == -np.sign(tensor[0, 1])
@@ -563,7 +870,7 @@ def test_flip_atoms_mirrors_the_tensors():
 
 def test_thermal_sigma_and_tensors_are_not_combined(rutile):
     with pytest.raises(ValueError, match="carry ADP tensors"):
-        abtem.StructureFactor(rutile, g_max=2.0, thermal_sigma=0.1)
+        abtem.StructureFactor(rutile, g_max=2.0, sigmas=0.1)
 
     with pytest.raises(ValueError, match="carry ADP tensors"):
         abtem.Potential(
@@ -581,14 +888,16 @@ def test_thermal_sigma_and_tensors_are_not_combined(rutile):
 
         ChargeDensityPotential(rutile, charge_density=np.zeros((8, 8, 8)), gpts=16)
 
-    # standard deviations that are all zero, the old default, count as not given
+    # an explicit zero asks for no smearing, which contradicts the tensors too
     hkl = np.array([[1, 1, 0], [2, 0, 0]])
-    np.testing.assert_array_equal(
-        calculate_structure_factors(hkl, rutile, "lobato", 100, thermal_sigma=0.0),
-        calculate_structure_factors(hkl, rutile, "lobato", 100),
-    )
-    abtem.Potential(rutile, gpts=32, parametrization=LobatoParametrization(sigmas=0.0))
-    assert abtem.FrozenPhonons(rutile, num_configs=2, sigmas=0.0).sigmas is None
+    with pytest.raises(ValueError, match="explicit zero"):
+        calculate_structure_factors(hkl, rutile, "lobato", 100, sigmas=0.0)
+    with pytest.raises(ValueError, match="carry ADP tensors"):
+        abtem.Potential(
+            rutile, gpts=32, parametrization=LobatoParametrization(sigmas=0.0)
+        )
+    with pytest.raises(ValueError, match="carry ADP tensors"):
+        abtem.FrozenPhonons(rutile, num_configs=2, sigmas=0.0)
 
 
 def _projected_potentials(atoms, structure_factor_atoms, device, integrator):
@@ -655,9 +964,11 @@ def test_multislice_potential_matches_bloch_wave_potential(
     atoms = exaggerated(rutile)
     assert _projected_potentials(atoms, atoms, device, integrator()) < tolerance
 
-    flipped = get_adp(atoms)
+    flipped = get_adp(atoms, cartesian=True)
     flipped[:, [0, 1], [1, 0]] *= -1
-    error = _projected_potentials(set_adp(atoms, flipped), atoms, device, integrator())
+    error = _projected_potentials(
+        set_adp(atoms, flipped, cartesian=True), atoms, device, integrator()
+    )
     assert error > 3e-2
 
 
@@ -682,7 +993,11 @@ def test_potential_rotates_tensors_to_its_plane(rutile, plane):
         pbc=True,
     )
     by_hand = set_adp(
-        by_hand, np.einsum("ai,nab,bj->nij", linear_map, get_adp(atoms), linear_map)
+        by_hand,
+        np.einsum(
+            "ai,nab,bj->nij", linear_map, get_adp(atoms, cartesian=True), linear_map
+        ),
+        cartesian=True,
     )
 
     transformed = abtem.Potential(
@@ -699,7 +1014,9 @@ def test_potential_rotates_tensors_to_its_plane(rutile, plane):
     match = distances.argmin(axis=1)
     assert np.all(distances[np.arange(len(match)), match] < 1e-8)
     np.testing.assert_allclose(
-        get_adp(transformed), get_adp(by_hand)[match], atol=1e-15
+        get_adp(transformed, cartesian=True),
+        get_adp(by_hand, cartesian=True)[match],
+        atol=1e-15,
     )
 
 
@@ -710,7 +1027,7 @@ def test_orthogonalized_cell_has_the_structure_factors_of_the_skewed_cell(plane)
     # structure factor -- if the tensors follow the atoms into it. The tensors
     # are random, so no symmetry hides an error.
     hexagonal = bulk("ZnO", "wurtzite", a=3.25, c=5.2)
-    hexagonal = set_adp(hexagonal, random_tensors(len(hexagonal)))
+    hexagonal = set_adp(hexagonal, random_tensors(len(hexagonal)), cartesian=True)
     source = hexagonal if plane == "xy" else abtem.orthogonalize_cell(hexagonal)
 
     potential = abtem.Potential(source, sampling=0.1, slice_thickness=1.0, plane=plane)
@@ -731,6 +1048,9 @@ def test_orthogonalized_cell_has_the_structure_factors_of_the_skewed_cell(plane)
     np.testing.assert_allclose(np.abs(got), np.abs(expected), atol=1e-6)
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
+)
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell")
 @pytest.mark.parametrize(
     "case", ["cubic", "cubic zx", "hexagonal", "monoclinic strained"]
@@ -760,7 +1080,10 @@ def test_frozen_phonons_from_diagonal_tensors_equal_standard_deviations(case):
             abtem.FrozenPhonons(atoms, 2, sigmas=tuple(sigmas), seed=3), **kwargs
         ).to_atoms_ensemble()
         by_tensors = abtem.Potential(
-            abtem.FrozenPhonons(set_adp(atoms, np.diag(sigmas**2)), 2, seed=3), **kwargs
+            abtem.FrozenPhonons(
+                set_adp(atoms, np.diag(sigmas**2), cartesian=True), 2, seed=3
+            ),
+            **kwargs,
         ).to_atoms_ensemble()
 
     for a, b in zip(by_sigmas.trajectory, by_tensors.trajectory):
@@ -774,7 +1097,7 @@ def test_frozen_phonon_covariance_is_the_transformed_tensor():
     # averaged potential uses in the same frame. Its statistical error is
     # ~sqrt(2 / N) ~ 1.2 % of U; using the untransformed tensor is off by ~100 %.
     tensor = random_tensors(1, seed=1)[0]
-    atoms = set_adp(bulk("Si", cubic=True) * (12, 12, 12), tensor)
+    atoms = set_adp(bulk("Si", cubic=True) * (12, 12, 12), tensor, cartesian=True)
     kwargs = dict(gpts=32, slice_thickness=2.0, plane="zx")
 
     reference = abtem.Potential(atoms, **kwargs).get_transformed_atoms()
@@ -789,7 +1112,7 @@ def test_frozen_phonon_covariance_is_the_transformed_tensor():
     displacements -= np.round(displacements / box) * box
     covariance = displacements.T @ displacements / len(displacements)
 
-    transformed = get_adp(reference)[0]
+    transformed = get_adp(reference, cartesian=True)[0]
     assert not np.allclose(transformed, tensor, atol=0.1 * np.abs(tensor).max())
     assert np.abs(covariance - transformed).max() < 0.05 * np.abs(transformed).max()
 
@@ -804,9 +1127,9 @@ def test_ebsd_slab_carries_rotated_tensors(rutile):
     )
 
     # directions turn as R @ d, so the tensors as R U R^T
-    source = get_adp(atoms)[slab.arrays["cell_index"]]
+    source = get_adp(atoms, cartesian=True)[slab.arrays["cell_index"]]
     np.testing.assert_allclose(
-        get_adp(slab),
+        get_adp(slab, cartesian=True),
         np.einsum("ia,nab,jb->nij", rotation, source, rotation),
         atol=1e-15,
     )
@@ -856,9 +1179,9 @@ def test_bloch_waves_pair_with_multislice_for_full_tensors(rutile):
         )
         return np.abs(a - b).sum() / b.sum()
 
-    adp = get_adp(atoms)
+    adp = get_adp(atoms, cartesian=True)
     isotropic = np.trace(adp, axis1=1, axis2=2)[:, None, None] / 3 * np.eye(3)
 
     matched = r_factor(atoms)
     assert matched < 0.025
-    assert r_factor(set_adp(atoms, isotropic)) > 2 * matched
+    assert r_factor(set_adp(atoms, isotropic, cartesian=True)) > 2 * matched

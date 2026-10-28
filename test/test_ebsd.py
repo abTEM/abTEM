@@ -459,6 +459,9 @@ class TestOrientations:
         with pytest.raises(ValueError, match=r"origin must have shape \(3,\)"):
             rotated_slab(SILICON, zone_axis, (10.0, 10.0, 10.0), origin=np.zeros(2))
 
+    @pytest.mark.filterwarnings(
+        "ignore:Standard deviations along the Cartesian axes:FutureWarning"
+    )
     def test_thermal_displacements_follow_each_atom_into_a_slab(self):
         # Displacements given per site follow each atom into the block and out
         # into a slab cut at an arbitrary orientation: only the atoms of the

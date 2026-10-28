@@ -25,8 +25,9 @@ from dask.delayed import Delayed
 
 from abtem.adp import (
     ADP_ARRAY,
+    _cartesian_adp,
+    _resolve_adp_frame,
     adp_square_roots,
-    get_adp,
     is_isotropic,
     resolve_adp,
 )
@@ -36,7 +37,12 @@ from abtem.core.axes import (
     FrozenPhononsAxis,
     UnknownAxis,
 )
-from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
+from abtem.core.chunks import (
+    Chunks,
+    chunk_ranges,
+    iterate_chunk_ranges,
+    validate_chunks,
+)
 from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
@@ -335,6 +341,8 @@ def validate_seeds(
 from abtem.atoms import (
     AtomProperties,
     B_to_sigma,
+    _quiet_per_axis_sigmas,
+    _warn_if_per_axis_sigmas,
     sigma_to_B,
     validate_per_atom_property,
     validate_sigmas,
@@ -367,10 +375,12 @@ class FrozenPhonons(BaseFrozenPhonons):
         `directions`.
 
         Anisotropic displacements may be given by providing a standard deviation for
-        each Cartesian direction (`x`, `y`, `z`). This may be a tuple of three numbers
-        for identical displacements for all atoms. A dict of tuples of three numbers to
-        specify displacements for each species. A list or array with three numbers for
-        each atom.
+        each Cartesian direction (`x`, `y`, `z`); this form is deprecated, as it has
+        no crystallographic meaning in a skewed cell: give ADP tensors instead (see
+        :mod:`abtem.adp`), which may also be Cartesian. This may be a tuple of three
+        numbers for identical displacements for all atoms. A dict of tuples of three
+        numbers to specify displacements for each species. A list or array with three
+        numbers for each atom.
 
         The directions of anisotropic standard deviations are the Cartesian axes of
         `atoms` as given. A potential that rotates the atoms to another `plane`, or
@@ -432,20 +442,19 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms, atomic_numbers, cell=None
         )
 
-        if sigmas is not None and get_adp(atoms) is not None:
-            # all-zero standard deviations count as not given (see resolve_adp)
-            if not np.any(validate_sigmas(atoms, sigmas, return_array=True)[0]):
-                sigmas = None
+        # ADP tensors follow a cell rotated since they were set
+        atoms = _resolve_adp_frame(atoms)
 
         if sigmas is None:
-            if get_adp(atoms) is None:
+            if _cartesian_adp(atoms) is None:
                 raise ValueError(
                     "Give the displacement standard deviations `sigmas`, or atoms "
                     f"that carry ADP tensors (the '{ADP_ARRAY}' array)."
                 )
             self._sigmas = None
         else:
-            self._sigmas = validate_sigmas(atoms, sigmas)[0]
+            self._sigmas, anisotropic = validate_sigmas(atoms, sigmas)
+            _warn_if_per_axis_sigmas(anisotropic)
             resolve_adp(
                 atoms, validate_sigmas(atoms, sigmas, return_array=True)[0], "sigmas"
             )
@@ -657,7 +666,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         same displacements as the standard deviations of its diagonal; isotropic
         atoms are displaced along the axes of `atoms`.
         """
-        adp = get_adp(atoms)
+        adp = _cartesian_adp(atoms)
         if adp is None:
             raise RuntimeError(
                 f"The atoms to displace carry no ADP tensors (the '{ADP_ARRAY}' "
@@ -690,7 +699,8 @@ class FrozenPhonons(BaseFrozenPhonons):
     def _from_partitioned_args_func(cls, *args, **kwargs):
         args = unpack_blockwise_args(args)
         atoms, seed = args[0]
-        new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
+        with _quiet_per_axis_sigmas():
+            new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
         new = _wrap_with_array(new, len(new.ensemble_shape))
         return new
 

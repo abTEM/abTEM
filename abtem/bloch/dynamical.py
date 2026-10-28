@@ -25,8 +25,22 @@ from ase.cell import Cell
 from scipy.linalg import expm as expm_scipy  # type: ignore
 from scipy.spatial.transform import Rotation  # type: ignore
 
+from abtem.adp import (
+    _resolve_adp_frame,
+    adp_kinds,
+    debye_waller_factors,
+    is_isotropic,
+    kind_tensor,
+    resolve_adp,
+)
 from abtem.array import ArrayObject
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import (
+    AtomProperties,
+    _warn_if_per_axis_sigmas,
+    is_cell_orthogonal,
+    validate_per_atom_property,
+    validate_sigmas,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
     calculate_g_vec,
@@ -59,18 +73,6 @@ from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
-from abtem.adp import (
-    adp_kinds,
-    debye_waller_factors,
-    is_isotropic,
-    kind_tensor,
-    resolve_adp,
-)
-from abtem.atoms import (
-    AtomProperties,
-    validate_per_atom_property,
-    validate_sigmas,
-)
 from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
@@ -135,12 +137,31 @@ def _warn_if_single_precision(device: str) -> None:
     warnings.warn(message, BlochWavePrecisionWarning, stacklevel=3)
 
 
+def _renamed_thermal_sigma(
+    sigmas: Optional[AtomProperties], thermal_sigma: Optional[AtomProperties]
+) -> Optional[AtomProperties]:
+    """`sigmas`, or the value given by its deprecated name `thermal_sigma`."""
+    if thermal_sigma is None:
+        return sigmas
+    warnings.warn(
+        "`thermal_sigma` is deprecated; use `sigmas`, the standard deviation of the "
+        "atomic displacements [Å], or ADP tensors (see abtem.adp).",
+        FutureWarning,
+        stacklevel=3,
+    )
+    if sigmas is not None:
+        raise TypeError(
+            "Give `sigmas` or its deprecated name `thermal_sigma`, not both."
+        )
+    return thermal_sigma
+
+
 def _scattering_factor_kinds(
     g_vec: np.ndarray,
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: Optional[AtomProperties] = None,
+    sigmas: Optional[AtomProperties] = None,
     occupancy: AtomProperties = 1.0,
     cutoff: str = "taper",
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -156,9 +177,8 @@ def _scattering_factor_kinds(
     inverse : np.ndarray
         The kind of each atom, with shape (N_atoms,).
     """
-    sigmas = None
-    if thermal_sigma is not None:
-        sigmas = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+    if sigmas is not None:
+        sigmas = validate_sigmas(atoms, sigmas, return_array=True)[0]
         assert isinstance(sigmas, np.ndarray)  # Type narrowing for mypy
 
     adp = resolve_adp(atoms, sigmas)
@@ -219,17 +239,18 @@ def calculate_scattering_factors(
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: Optional[AtomProperties] = None,
+    sigmas: Optional[AtomProperties] = None,
     occupancy: AtomProperties = 1.0,
     cutoff: str = "taper",
+    thermal_sigma: Optional[AtomProperties] = None,
 ) -> np.ndarray:
     """Calculate the scattering factors for a given set of atoms and parametrization.
 
     The scattering factor of an atom is damped by the Debye-Waller factor
     ``exp(-2 pi^2 g^T U g)``, where U is its Cartesian ADP tensor [Å²] in the frame
-    of `atoms`: ``sigma^2 I`` for an isotropic standard deviation sigma,
-    ``diag(sigma_x^2, sigma_y^2, sigma_z^2)`` for standard deviations along the
-    Cartesian axes, or the full tensor the atoms carry (see `abtem.adp`).
+    of `atoms`, equal to ``exp(-2 pi^2 sum_ij h_i h_j a*_i a*_j U^ij)`` for the
+    crystallographic ``U^ij``: the tensor the atoms carry (see `abtem.adp`), or
+    ``sigma^2 I`` for an isotropic standard deviation sigma.
 
     Parameters
     ----------
@@ -238,35 +259,39 @@ def calculate_scattering_factors(
         plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
         shape (N_g, 3); passing magnitudes with anisotropic ADPs raises an error.
     atoms : Atoms
-        Atoms object. ADP tensors in its ``'adp'`` array are used when
-        `thermal_sigma` is None.
+        Atoms object. The ADP tensors it carries are used when `sigmas` is None.
     g_max : float
         Maximum scattering vector length [1/Å]. The scattering factors are set to zero
         for g > g_max.
     parametrization : {'lobato', 'kirkland', 'peng'}
         Parametrization for the scattering factors.
-    thermal_sigma : float, dict or sequence, optional
-        Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
-        For anisotropic displacements, provide three values per atom or element
-        (σx, σy, σz). If None (default), the ADP tensors the atoms carry are used,
-        if any. Giving both raises an error.
+    sigmas : float, dict or sequence, optional
+        Standard deviation sigma of the atomic displacements along any direction
+        [Å], with ``U = sigma^2``: one value for all atoms, one per element (as a
+        dict) or one per atom. Three values per atom or element along the Cartesian
+        axes, (σx, σy, σz), are deprecated; give ADP tensors instead. If None
+        (default), the ADP tensors the atoms carry are used, if any. Giving both
+        raises an error, also for an explicit zero.
     occupancy : float, dict or sequence
         The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
         is a hard cutoff.
+    thermal_sigma : float, dict or sequence, optional
+        Deprecated name of `sigmas`.
 
     Returns
     -------
     scattering_factors : numpy.ndarray
         The scattering factor of each atom, with shape (N_atoms, N_g).
     """
+    sigmas = _renamed_thermal_sigma(sigmas, thermal_sigma)
     f_e, inverse = _scattering_factor_kinds(
         g_vec,
         atoms,
         parametrization,
         g_max,
-        thermal_sigma=thermal_sigma,
+        sigmas=sigmas,
         occupancy=occupancy,
         cutoff=cutoff,
     )
@@ -278,10 +303,11 @@ def calculate_structure_factors(
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: Optional[AtomProperties] = None,
+    sigmas: Optional[AtomProperties] = None,
     occupancy: AtomProperties = 1.0,
     cutoff: str = "taper",
     device: str = "cpu",
+    thermal_sigma: Optional[AtomProperties] = None,
 ) -> np.ndarray:
     """Calculate the structure factors for a given set of atoms and parametrization.
 
@@ -296,10 +322,10 @@ def calculate_structure_factors(
     g_max : float
         Maximum scattering vector length [1/Å]. The scattering factors are set to zero
         for g > g_max.
-    thermal_sigma : float, dict or sequence, optional
-        Standard deviation of the atomic displacements for the Debye-Waller factor
-        [Å], as for `calculate_scattering_factors`. If None (default), the ADP
-        tensors the atoms carry are used, if any.
+    sigmas : float, dict or sequence, optional
+        Standard deviation of the atomic displacements [Å], as for
+        `calculate_scattering_factors`. If None (default), the ADP tensors the atoms
+        carry are used, if any.
     occupancy : float, dict or sequence
         The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
@@ -307,12 +333,15 @@ def calculate_structure_factors(
         is a hard cutoff.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
+    thermal_sigma : float, dict or sequence, optional
+        Deprecated name of `sigmas`.
 
     Returns
     -------
     numpy.ndarray
         The structure factors.
     """
+    sigmas = _renamed_thermal_sigma(sigmas, thermal_sigma)
 
     new_cell = atoms.cell.copy().complete()
     positions = np.linalg.solve(new_cell.T, atoms.positions.T).T
@@ -323,7 +352,7 @@ def calculate_structure_factors(
         g_max=g_max,
         parametrization=parametrization,
         cutoff=cutoff,
-        thermal_sigma=thermal_sigma,
+        sigmas=sigmas,
         occupancy=occupancy,
     )
 
@@ -597,13 +626,13 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         Maximum scattering vector length [1/Å].
     parametrization : str
         Parametrization for the scattering factors.
-    thermal_sigma : float, dict or sequence, optional
-        Standard deviation of the atomic displacements for the Debye-Waller factor [Å]:
-        one value for all atoms, one per element (as a dict) or one per atom. For
-        anisotropic displacements along the Cartesian axes of `atoms`, provide three
-        values (σx, σy, σz) instead of one. If None (default), the full ADP tensors
-        the atoms carry are used, if any (see `abtem.adp`); giving both raises an
-        error.
+    sigmas : float, dict or sequence, optional
+        Standard deviation sigma of the atomic displacements along any direction [Å],
+        with ``U = sigma^2``: one value for all atoms, one per element (as a dict) or
+        one per atom. Three values along the Cartesian axes, (σx, σy, σz), are
+        deprecated; give ADP tensors instead. If None (default), the ADP tensors the
+        atoms carry are used, if any (see `abtem.adp`); giving both raises an error,
+        also for an explicit zero.
     occupancy : float
         The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
@@ -613,31 +642,41 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
         Lattice centering, or several combined, such as 'FI' (see
-        `get_reflection_condition`). 'auto' detects it from the atoms.
+        `get_reflection_condition`). 'auto' detects it from the atoms, counting
+        atoms as equivalent only if they share their element, ADP tensor and
+        occupancy.
+    thermal_sigma : float, dict or sequence, optional
+        Deprecated name of `sigmas`.
     """
+
+    _exclude_from_copy = ("thermal_sigma",)
 
     def __init__(
         self,
         atoms: Atoms,
         g_max: float,
         parametrization: str = "lobato",
-        thermal_sigma: Optional[float | dict[str, float] | Sequence[float]] = None,
+        sigmas: Optional[float | dict[str, float] | Sequence[float]] = None,
         occupancy: float | dict[str, float] | Sequence[float] = 1.0,
         cutoff: str = "taper",
         device: Optional[str] = None,
         centering: str = "auto",
+        thermal_sigma: Optional[float | dict[str, float] | Sequence[float]] = None,
     ):
+        sigmas = _renamed_thermal_sigma(sigmas, thermal_sigma)
+
+        # ADP tensors follow a cell rotated since they were set
+        atoms = _resolve_adp_frame(atoms)
         self._atoms = atoms
 
-        if thermal_sigma is None:
-            self._thermal_sigma = None
+        if sigmas is None:
+            self._sigmas = None
         else:
-            self._thermal_sigma = validate_sigmas(atoms, thermal_sigma)[0]
+            self._sigmas, anisotropic = validate_sigmas(atoms, sigmas)
+            _warn_if_per_axis_sigmas(anisotropic)
             # Refuse standard deviations given for atoms that carry tensors now,
             # rather than when the structure factors are built.
-            resolve_adp(
-                atoms, validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
-            )
+            resolve_adp(atoms, validate_sigmas(atoms, sigmas, return_array=True)[0])
 
         self._occupancy = validate_per_atom_property(atoms, occupancy)
 
@@ -680,20 +719,28 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         return self._parametrization
 
     @property
-    def thermal_sigma(self) -> Optional[np.ndarray | dict[str, np.ndarray]]:
+    def sigmas(self) -> Optional[np.ndarray | dict[str, np.ndarray]]:
         """Standard deviation of the atomic displacements [Å], or None if the ADP
         tensors the atoms carry are used."""
-        return self._thermal_sigma
+        return self._sigmas
+
+    @property
+    def thermal_sigma(self) -> Optional[np.ndarray | dict[str, np.ndarray]]:
+        """Deprecated name of `sigmas`."""
+        warnings.warn(
+            "`StructureFactor.thermal_sigma` is deprecated; use `sigmas`.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return self._sigmas
 
     @property
     def adp(self) -> Optional[np.ndarray]:
         """The Cartesian ADP tensor of each atom used for the Debye-Waller factors
         [Å²], with shape (N, 3, 3), or None if the atoms are not smeared."""
         sigmas = None
-        if self._thermal_sigma is not None:
-            sigmas = validate_sigmas(
-                self.atoms, self._thermal_sigma, return_array=True
-            )[0]
+        if self._sigmas is not None:
+            sigmas = validate_sigmas(self.atoms, self._sigmas, return_array=True)[0]
         return resolve_adp(self.atoms, sigmas)
 
     @property
@@ -707,7 +754,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             atoms=self.atoms,
             parametrization=self._parametrization,
             g_max=self.g_max,
-            thermal_sigma=self._thermal_sigma,
+            sigmas=self._sigmas,
             occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
@@ -733,7 +780,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
                 calculate_structure_factors,
                 atoms=self.atoms,
                 parametrization=self.parametrization,
-                thermal_sigma=self._thermal_sigma,
+                sigmas=self._sigmas,
                 occupancy=self._occupancy,
                 g_max=self.g_max,
                 cutoff=self._cutoff,
@@ -746,7 +793,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
                 hkl,
                 self.atoms,
                 parametrization=self._parametrization,
-                thermal_sigma=self._thermal_sigma,
+                sigmas=self._sigmas,
                 occupancy=self.occupancy,
                 g_max=self.g_max,
                 cutoff=self._cutoff,

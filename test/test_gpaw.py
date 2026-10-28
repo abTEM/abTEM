@@ -181,6 +181,9 @@ def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
     assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
+)
 def test_gpaw_frozen_phonon_directions_are_the_axes_of_the_potential(
     gpaw_calculator_bonding,
 ):

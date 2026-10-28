@@ -1,28 +1,46 @@
 """Anisotropic displacement parameters (ADPs).
 
-The thermal motion of an atom is described by the covariance of its displacement,
-the tensor ``U = <u u^T>`` in Cartesian coordinates [Å²]. It enters every
-simulation mode in the same way: the averaged potential of an atom is its static
-potential convolved with a Gaussian of covariance ``U``, so its scattering factor is
-damped by the Debye-Waller factor ``exp(-2 pi^2 g^T U g)``; frozen phonons draw the
-displacements from the same Gaussian.
+The displacement of an atom from its site, from thermal motion and static disorder,
+is described by its covariance, the ADP tensor. Its components along the crystal
+axes are the crystallographic ``U^ij`` [Å²] of the IUCr and CIF conventions, for
+which the Debye-Waller factor of a reflection hkl is
 
-The tensors are carried by the atoms, as the per-atom array named by `ADP_ARRAY` with
-shape ``(N, 3, 3)``, so that they follow the atoms through every transformation
-abTEM applies: rotating to a plane, orthogonalizing or standardizing the cell,
-repeating, cutting and padding it. Atoms rotated by other means, such as
-``ase.Atoms.rotate``, keep their tensors in the old frame; use
-:func:`abtem.atoms.rotate_atoms` or transform them with :func:`transform_adp`.
+``T(h) = exp(-2 pi^2 sum_ij h_i h_j a*_i a*_j U^ij)``.
 
-A linear map ``F`` acting on row vectors, ``r -> r @ F``, takes a tensor to
-``F^T U F``, as it takes the frozen-phonon displacements drawn from it. A tensor
+In Cartesian coordinates the same tensor is ``U_cart = A N U^ij N A^T`` (see
+`cartesian_adp`), and ``T = exp(-2 pi^2 g^T U_cart g)`` with ``g`` the Cartesian
+reciprocal vector (``|g| = 1/d``). It enters every simulation mode in the same way:
+the averaged potential of an atom is its static potential convolved with a Gaussian
+of covariance ``U_cart``, so its scattering factor is damped by ``T``; frozen
+phonons draw the displacements from the same Gaussian. An isotropic standard
+deviation sigma [Å] along each direction is ``U_cart = sigma^2 I``, and
+``U_eq = tr(U_cart) / 3``.
+
+`set_adp` and `get_adp` speak ``U^ij`` relative to the cell of the atoms by default,
+so that values from a CIF file or a paper mean what they say; ``cartesian=True``
+gives and returns ``U_cart``. `read_cif_adp` reads them from a CIF file.
+
+Inside, the atoms carry ``U_cart`` as the per-atom array named by `ADP_ARRAY`, with
+shape ``(N, 3, 3)``, which is unchanged when abTEM repeats, cuts or pads the cell
+and which every transformation abTEM applies to the positions also applies to the
+tensors: rotating to a plane, orthogonalizing or standardizing the cell,
+`abtem.atoms.rotate_atoms` and `abtem.atoms.flip_atoms`. A linear map ``F`` acting
+on row vectors, ``r -> r @ F``, takes a tensor to ``F^T U_cart F``. A tensor
 proportional to the identity is left as it is, as frozen phonons leave an isotropic
 displacement: an isotropic Gaussian is the same along any rotated axes, and the
 small strain an orthogonalization may need is not applied to it.
+
+The atoms also record the cell their tensors refer to. Atoms rotated by other means
+together with their cell, such as ``ase.Atoms.rotate(..., rotate_cell=True)``, have
+their tensors rotated with them when abTEM uses them. Atoms whose positions are
+rotated without their cell cannot be told from atoms that were not rotated; rotate
+those with `abtem.atoms.rotate_atoms`, or transform the tensors with
+`transform_adp`.
 """
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from numbers import Number
 from typing import Any, Optional
@@ -35,6 +53,9 @@ from ase.data import atomic_numbers, chemical_symbols
 #: The name of the per-atom array holding the Cartesian ADP tensors [Å²].
 ADP_ARRAY = "adp"
 
+#: The key of ``atoms.info`` holding the cell the tensors refer to.
+ADP_CELL_INFO = "adp_cell"
+
 _8PI2 = 8 * np.pi**2
 
 # Relative tolerance for treating a tensor as isotropic.
@@ -44,6 +65,9 @@ _ISOTROPIC_RTOL = 1e-10
 # when the scattering factors are calculated. Typical tensors are 1e-3 to 1e-1 Å²,
 # and rotating them leaves noise of order 1e-17.
 ADP_DECIMALS = 12
+
+# Tolerance of the frame check, on unit lattice directions and on integer matrices.
+_FRAME_TOLERANCE = 1e-6
 
 
 def is_isotropic(adp: np.ndarray) -> np.ndarray:
@@ -69,12 +93,12 @@ def is_isotropic(adp: np.ndarray) -> np.ndarray:
 
 
 def transform_adp(adp: np.ndarray, linear_map: np.ndarray) -> np.ndarray:
-    """Transform ADP tensors with the linear map applied to the positions.
+    """Transform Cartesian ADP tensors with the linear map applied to the positions.
 
     Parameters
     ----------
     adp : np.ndarray
-        Tensors with shape (N, 3, 3) [Å²].
+        Cartesian tensors with shape (N, 3, 3) [Å²].
     linear_map : np.ndarray
         A 3x3 matrix acting on row vectors, ``r -> r @ linear_map``, such as the
         rotation ``R.T`` of positions transformed as ``R @ r``.
@@ -93,12 +117,84 @@ def transform_adp(adp: np.ndarray, linear_map: np.ndarray) -> np.ndarray:
     return transformed
 
 
+def _record_adp_frame(atoms: Atoms) -> None:
+    """Record the current cell of the atoms as the one their tensors refer to."""
+    if atoms.has(ADP_ARRAY):
+        atoms.info[ADP_CELL_INFO] = np.array(atoms.cell, dtype=float)
+    else:
+        atoms.info.pop(ADP_CELL_INFO, None)
+
+
 def _transform_adp_array(atoms: Atoms, linear_map: np.ndarray) -> None:
     """Transform the ADP tensors of `atoms` in place with the linear map applied to
-    their positions (a 3x3 matrix acting on row vectors)."""
+    their positions (a 3x3 matrix acting on row vectors), and record the cell they
+    now refer to."""
     if not atoms.has(ADP_ARRAY):
         return
     atoms.set_array(ADP_ARRAY, transform_adp(atoms.get_array(ADP_ARRAY), linear_map))
+    _record_adp_frame(atoms)
+
+
+def _frame_rotation(reference: np.ndarray, cell: np.ndarray) -> Optional[np.ndarray]:
+    """The rotation of the frame from a reference cell to a cell, if the cell is the
+    reference cell rigidly rotated, with each lattice vector possibly scaled or
+    reversed; otherwise None.
+
+    A cell spanning the same lattice (a supercell, or reordered or reversed
+    lattice vectors) or with lattice vectors along the same directions (vacuum
+    added) has the same frame. A rotation is a proper orthogonal matrix acting on
+    row vectors.
+    """
+    reference = np.asarray(reference, dtype=float)
+    cell = np.asarray(cell, dtype=float)
+    if (
+        reference.shape != (3, 3)
+        or np.linalg.matrix_rank(reference) < 3
+        or np.linalg.matrix_rank(cell) < 3
+    ):
+        return None
+
+    lattice = cell @ np.linalg.inv(reference)
+    if np.allclose(lattice, np.round(lattice), atol=_FRAME_TOLERANCE):
+        return None
+
+    old = reference / np.linalg.norm(reference, axis=1, keepdims=True)
+    new = cell / np.linalg.norm(cell, axis=1, keepdims=True)
+
+    best, best_residual = None, np.inf
+    for signs in itertools.product((1.0, -1.0), repeat=3):
+        target = new * np.array(signs)[:, None]
+        # orthogonal Procrustes: the rotation R minimizing |old @ R - target|
+        u, _, vt = np.linalg.svd(old.T @ target)
+        rotation = u @ vt
+        if np.linalg.det(rotation) < 0:
+            continue
+        residual = np.abs(old @ rotation - target).max()
+        if residual < best_residual:
+            best, best_residual = rotation, residual
+
+    if best is None or best_residual > _FRAME_TOLERANCE:
+        return None
+    if np.allclose(best, np.eye(3), atol=_FRAME_TOLERANCE):
+        return None
+    return best
+
+
+def _resolve_adp_frame(atoms: Atoms) -> Atoms:
+    """The atoms with their tensors in the frame of their current cell.
+
+    If the cell has been rotated since the tensors were set (by ASE, for example),
+    a copy with the tensors rotated with it is returned; otherwise the atoms."""
+    if not atoms.has(ADP_ARRAY) or ADP_CELL_INFO not in atoms.info:
+        return atoms
+
+    rotation = _frame_rotation(atoms.info[ADP_CELL_INFO], atoms.cell)
+    if rotation is None:
+        return atoms
+
+    atoms = atoms.copy()
+    _transform_adp_array(atoms, rotation)
+    return atoms
 
 
 def _symbol_of(key: Any) -> str:
@@ -109,22 +205,63 @@ def _symbol_of(key: Any) -> str:
     raise ValueError(f"Not a chemical symbol or atomic number: {key!r}")
 
 
-def _as_tensor(value: Any) -> np.ndarray:
-    """A U_iso [Å²], three diagonal elements, or a 3x3 tensor, as a 3x3 tensor."""
+def _as_tensor(value: Any) -> tuple[np.ndarray, bool]:
+    """A U_iso, three diagonal elements, six components in the CIF order (11, 22,
+    33, 12, 13, 23) or a 3x3 tensor [Å²], as a 3x3 tensor, and whether it was given
+    as a U_iso."""
     value = np.asarray(value, dtype=float)
     if value.shape == ():
-        return value * np.eye(3)
+        return value * np.eye(3), True
     if value.shape == (3,):
-        return np.diag(value)
+        return np.diag(value), False
+    if value.shape == (6,):
+        return _tensor_from_cif_order(value), False
     if value.shape == (3, 3):
-        return value
+        return value, False
     raise ValueError(
-        "An ADP must be a U_iso, three diagonal elements or a 3x3 tensor, "
-        f"got shape {value.shape}."
+        "An ADP must be a U_iso, three diagonal elements, six components "
+        f"(11, 22, 33, 12, 13, 23) or a 3x3 tensor, got shape {value.shape}."
     )
 
 
-def validate_adp(atoms: Atoms, adp: Any) -> np.ndarray:
+def _tensor_from_cif_order(components: np.ndarray) -> np.ndarray:
+    """Tensors from components in the CIF order (11, 22, 33, 12, 13, 23), shape
+    (..., 6) to (..., 3, 3). The cross terms are the matrix elements, not doubled."""
+    u11, u22, u33, u12, u13, u23 = np.moveaxis(np.asarray(components, float), -1, 0)
+    return np.stack(
+        [
+            np.stack([u11, u12, u13], axis=-1),
+            np.stack([u12, u22, u23], axis=-1),
+            np.stack([u13, u23, u33], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
+def _check_tensors(adp: np.ndarray, labels: Optional[list] = None) -> np.ndarray:
+    """Symmetric and positive semi-definite tensors, or an error naming the atoms
+    or sites that are not."""
+    transposed = np.swapaxes(adp, -1, -2)
+    if not np.allclose(adp, transposed, rtol=1e-8, atol=1e-14):
+        raise ValueError("ADP tensors must be symmetric.")
+    adp = (adp + transposed) / 2
+
+    if len(adp):
+        scale = np.max(np.abs(adp), axis=(-2, -1))
+        npd = np.any(np.linalg.eigvalsh(adp) < -1e-8 * scale[:, None], axis=1)
+        if np.any(npd):
+            which = np.flatnonzero(npd)
+            names = [labels[i] for i in which] if labels else list(which)
+            raise ValueError(
+                "ADP tensors must be positive semi-definite (an NPD tensor makes the "
+                "Debye-Waller factor grow with the scattering vector); not so for "
+                f"{'sites' if labels else 'atoms'} {names[:10]}"
+                f"{' and more' if len(names) > 10 else ''}."
+            )
+    return adp
+
+
+def validate_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> np.ndarray:
     """Validate ADPs and return one Cartesian tensor per atom.
 
     Parameters
@@ -132,58 +269,79 @@ def validate_adp(atoms: Atoms, adp: Any) -> np.ndarray:
     atoms : ase.Atoms
         The atoms the ADPs belong to.
     adp : float, np.ndarray or dict
-        Cartesian ADPs [Å²], as one of
+        ADPs [Å²], as one of
 
-        - a float, ``U_iso`` for every atom (``U = U_iso I``);
+        - a float, ``U_iso`` for every atom;
         - an (N,) array, ``U_iso`` for each atom;
-        - a (3, 3) tensor for every atom;
-        - an (N, 3, 3) array, one tensor per atom;
+        - a (3, 3) tensor, or six components in the CIF order
+          (11, 22, 33, 12, 13, 23), for every atom;
+        - an (N, 3, 3) or (N, 6) array, one tensor per atom;
         - a dict keyed by chemical symbol or atomic number, of a ``U_iso``, three
-          diagonal elements or a (3, 3) tensor for each element.
+          diagonal elements, six components or a (3, 3) tensor for each element.
+
+        An isotropic ``U_iso`` is ``U_iso I`` in Cartesian coordinates, whatever the
+        cell. Tensors are crystallographic ``U^ij`` relative to the cell of `atoms`
+        (IUCr/CIF convention), unless `cartesian` is True.
+    cartesian : bool
+        If True, tensors are Cartesian ``U_cart`` in the frame of `atoms`.
 
     Returns
     -------
     adp : np.ndarray
-        Tensors with shape (N, 3, 3) [Å²].
+        Cartesian tensors with shape (N, 3, 3) [Å²].
     """
     n = len(atoms)
 
+    def to_cartesian(tensors: np.ndarray, isotropic: np.ndarray) -> np.ndarray:
+        tensors = np.array(tensors, dtype=float)
+        _check_symmetric(tensors)
+        if cartesian or np.all(isotropic):
+            return tensors
+        if atoms.cell.rank < 3:
+            raise ValueError(
+                "Crystallographic U^ij need a cell with three lattice vectors; give "
+                "Cartesian tensors with cartesian=True."
+            )
+        tensors[~isotropic] = cartesian_adp(atoms.cell, tensors[~isotropic])
+        return tensors
+
     if isinstance(adp, dict):
-        tensors = {_symbol_of(key): _as_tensor(value) for key, value in adp.items()}
+        given = {_symbol_of(key): _as_tensor(value) for key, value in adp.items()}
         symbols = atoms.get_chemical_symbols()
-        missing = set(symbols) - set(tensors)
+        missing = set(symbols) - set(given)
         if missing:
             raise ValueError(f"ADPs are missing for the elements {sorted(missing)}.")
-        validated = np.array([tensors[symbol] for symbol in symbols], dtype=float)
-        validated = validated.reshape((n, 3, 3))
-    elif isinstance(adp, Number) or np.shape(adp) in ((), (3, 3)):
-        validated = np.tile(_as_tensor(adp), (n, 1, 1))
+        tensors = np.array([given[symbol][0] for symbol in symbols]).reshape((n, 3, 3))
+        isotropic = np.array([given[symbol][1] for symbol in symbols], dtype=bool)
+        validated = to_cartesian(tensors, isotropic)
+    elif isinstance(adp, Number) or np.shape(adp) in ((), (6,), (3, 3)):
+        tensor, isotropic = _as_tensor(adp)
+        validated = to_cartesian(
+            np.tile(tensor, (n, 1, 1)), np.full(n, isotropic, dtype=bool)
+        )
     elif np.shape(adp) == (n,):
         validated = np.asarray(adp, dtype=float)[:, None, None] * np.eye(3)
+    elif np.shape(adp) == (n, 6):
+        validated = to_cartesian(_tensor_from_cif_order(adp), np.zeros(n, dtype=bool))
+    elif np.shape(adp) == (n, 3, 3):
+        validated = to_cartesian(adp, np.zeros(n, dtype=bool))
     else:
-        validated = np.asarray(adp, dtype=float)
-        if validated.shape != (n, 3, 3):
-            raise ValueError(
-                f"ADPs must be given as a float, an ({n},) array of U_iso, a (3, 3) "
-                f"tensor or an ({n}, 3, 3) array for {n} atoms, got shape "
-                f"{validated.shape}; give three diagonal elements per element as "
-                "a dict."
-            )
+        raise ValueError(
+            f"ADPs must be given as a float, an ({n},) array of U_iso, a (3, 3) "
+            f"tensor, six components, or an ({n}, 3, 3) or ({n}, 6) array for {n} "
+            f"atoms, got shape {np.shape(adp)}; give three diagonal elements per "
+            "element as a dict."
+        )
 
-    transposed = np.swapaxes(validated, -1, -2)
-    if not np.allclose(validated, transposed, rtol=1e-8, atol=1e-14):
+    return _check_tensors(validated)
+
+
+def _check_symmetric(tensors: np.ndarray) -> None:
+    if not np.allclose(tensors, np.swapaxes(tensors, -1, -2), rtol=1e-8, atol=1e-14):
         raise ValueError("ADP tensors must be symmetric.")
-    validated = (validated + transposed) / 2
-
-    if n:
-        scale = np.max(np.abs(validated), axis=(-2, -1))
-        if np.any(np.linalg.eigvalsh(validated) < -1e-8 * scale[:, None]):
-            raise ValueError("ADP tensors must be positive semi-definite.")
-
-    return validated
 
 
-def set_adp(atoms: Atoms, adp: Any) -> Atoms:
+def set_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> Atoms:
     """A copy of the atoms carrying the given ADPs.
 
     Parameters
@@ -191,36 +349,31 @@ def set_adp(atoms: Atoms, adp: Any) -> Atoms:
     atoms : ase.Atoms
         The atoms.
     adp : float, np.ndarray or dict
-        Cartesian ADPs [Å²] in the frame of `atoms`, as for :func:`validate_adp`.
-        None removes them.
+        ADPs [Å²], as for :func:`validate_adp`: tensors are crystallographic
+        ``U^ij`` relative to the cell of `atoms` (IUCr/CIF convention, as in a CIF
+        file or a paper), unless `cartesian` is True. None removes them.
+    cartesian : bool
+        If True, tensors are Cartesian ``U_cart`` in the frame of `atoms`, such as
+        those of a phonon calculation.
 
     Returns
     -------
     atoms : ase.Atoms
-        A copy of `atoms` with the tensors in the array named by `ADP_ARRAY`.
+        A copy of `atoms` carrying the Cartesian tensors in the array named by
+        `ADP_ARRAY`, and their cell in ``atoms.info`` under `ADP_CELL_INFO`.
     """
     atoms = atoms.copy()
     if adp is None:
         if atoms.has(ADP_ARRAY):
             del atoms.arrays[ADP_ARRAY]
-        return atoms
-    atoms.set_array(ADP_ARRAY, validate_adp(atoms, adp))
+    else:
+        atoms.set_array(ADP_ARRAY, validate_adp(atoms, adp, cartesian=cartesian))
+    _record_adp_frame(atoms)
     return atoms
 
 
-def get_adp(atoms: Atoms) -> Optional[np.ndarray]:
-    """The Cartesian ADP tensors the atoms carry [Å²], or None.
-
-    Parameters
-    ----------
-    atoms : ase.Atoms
-        The atoms.
-
-    Returns
-    -------
-    adp : np.ndarray or None
-        Tensors with shape (N, 3, 3).
-    """
+def _cartesian_adp(atoms: Atoms) -> Optional[np.ndarray]:
+    """The Cartesian tensors the atoms carry, as stored, or None."""
     if not atoms.has(ADP_ARRAY):
         return None
     return np.asarray(atoms.get_array(ADP_ARRAY), dtype=float).reshape(
@@ -228,8 +381,38 @@ def get_adp(atoms: Atoms) -> Optional[np.ndarray]:
     )
 
 
+def get_adp(atoms: Atoms, cartesian: bool = False) -> Optional[np.ndarray]:
+    """The ADP tensors the atoms carry [Å²], or None.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms.
+    cartesian : bool
+        If False (default), the crystallographic ``U^ij`` relative to the cell of
+        `atoms` (IUCr/CIF convention); if True, the Cartesian ``U_cart``.
+
+    Returns
+    -------
+    adp : np.ndarray or None
+        Tensors with shape (N, 3, 3).
+    """
+    adp = _cartesian_adp(_resolve_adp_frame(atoms))
+    if adp is None or cartesian:
+        return adp
+    if atoms.cell.rank < 3:
+        raise ValueError(
+            "Crystallographic U^ij need a cell with three lattice vectors; use "
+            "cartesian=True."
+        )
+    return crystallographic_adp(atoms.cell, adp)
+
+
 def sigmas_to_adp(sigmas: np.ndarray) -> np.ndarray:
-    """Displacement standard deviations as ADP tensors.
+    """Displacement standard deviations as Cartesian ADP tensors.
+
+    A standard deviation sigma [Å] is the root-mean-square displacement along one
+    direction, so ``U = sigma^2``.
 
     Parameters
     ----------
@@ -251,11 +434,10 @@ def sigmas_to_adp(sigmas: np.ndarray) -> np.ndarray:
 
 
 def resolve_adp(
-    atoms: Atoms, sigmas: Optional[np.ndarray], name: str = "thermal_sigma"
+    atoms: Atoms, sigmas: Optional[np.ndarray], name: str = "sigmas"
 ) -> Optional[np.ndarray]:
-    """The ADP tensors of the atoms, from either standard deviations or the tensors
-    they carry, but not both. Standard deviations that are all zero count as not
-    given.
+    """The Cartesian ADP tensors of the atoms, from either standard deviations or
+    the tensors they carry, but not both.
 
     Parameters
     ----------
@@ -272,20 +454,15 @@ def resolve_adp(
     adp : np.ndarray or None
         Tensors with shape (N, 3, 3) [Å²], or None if neither is given.
     """
-    adp = get_adp(atoms)
-    if sigmas is not None and not np.any(sigmas):
-        # Standard deviations that are all zero ask for no smearing, as the old
-        # default of 0.0 did; for atoms that carry tensors they count as not
-        # given.
-        if adp is not None:
-            return adp
+    adp = _cartesian_adp(_resolve_adp_frame(atoms))
     if sigmas is None:
         return adp
     if adp is not None:
         raise ValueError(
             f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and `{name}` "
-            "is also given. Give one of them: pass None, or remove the tensors with "
-            f"abtem.adp.set_adp(atoms, None)."
+            "is also given, which would smear them twice (an explicit zero "
+            "included). Give one of them: pass None, or remove the tensors with "
+            "abtem.adp.set_adp(atoms, None)."
         )
     return sigmas_to_adp(sigmas)
 
@@ -397,6 +574,35 @@ def kind_tensor(kind_components: np.ndarray) -> np.ndarray:
     return tensor + np.triu(tensor, 1).T
 
 
+def _convention_factor(cell: np.ndarray, convention: str) -> np.ndarray:
+    """The factor taking ``U^ij`` to the given convention: 1 for ``'U'``, ``8 pi^2``
+    for ``'B'`` and ``2 pi^2 a*_i a*_j`` for ``'beta'``."""
+    if convention == "U":
+        return np.ones((3, 3))
+    if convention == "B":
+        return np.full((3, 3), _8PI2)
+    if convention == "beta":
+        lengths = _reciprocal_lengths(cell)
+        return 2 * np.pi**2 * np.outer(lengths, lengths)
+    raise ValueError(f"convention must be 'U', 'B' or 'beta', not {convention!r}")
+
+
+def _reciprocal_lengths(cell: np.ndarray) -> np.ndarray:
+    """``|a*|, |b*|, |c*|``, without a factor of 2 pi [1/Å]."""
+    return np.linalg.norm(np.linalg.inv(cell).T, axis=1)
+
+
+def _as_matrices(adp: np.ndarray) -> np.ndarray:
+    adp = np.asarray(adp, dtype=float)
+    if adp.shape[-1] == 6:
+        return _tensor_from_cif_order(adp)
+    if adp.shape[-2:] != (3, 3):
+        raise ValueError(
+            f"ADPs must have shape (..., 6) or (..., 3, 3), got {adp.shape}."
+        )
+    return adp
+
+
 def cartesian_adp(
     cell: Cell | np.ndarray, adp: np.ndarray, convention: str = "U"
 ) -> np.ndarray:
@@ -408,49 +614,52 @@ def cartesian_adp(
         The unit cell, with the lattice vectors as rows [Å].
     adp : np.ndarray
         Crystallographic ADPs with shape (..., 6), in the CIF order
-        (11, 22, 33, 12, 13, 23), or (..., 3, 3).
+        (11, 22, 33, 12, 13, 23), or (..., 3, 3). The cross terms are the matrix
+        elements, not doubled.
     convention : {'U', 'B', 'beta'}
         ``'U'`` for ``U^ij`` [Å²] (CIF ``_atom_site_aniso_U_ij``), ``'B'`` for
         ``B^ij = 8 pi^2 U^ij`` [Å²] (``_atom_site_aniso_B_ij``) and ``'beta'`` for
-        the dimensionless ``beta_ij = 2 pi^2 a*_i a*_j U^ij``.
+        the dimensionless ``beta^ij = 2 pi^2 a*_i a*_j U^ij``
+        (``_atom_site_aniso_beta_ij``).
 
     Returns
     -------
     adp : np.ndarray
-        Cartesian tensors ``U_cart = A N U N A^T`` with shape (..., 3, 3) [Å²],
+        Cartesian tensors ``U_cart = A N U^ij N A^T`` with shape (..., 3, 3) [Å²],
         with A the lattice vectors as columns and N = diag(|a*|, |b*|, |c*|).
     """
     cell = np.asarray(cell, dtype=float)
-    adp = np.asarray(adp, dtype=float)
+    u_ij = _as_matrices(adp) / _convention_factor(cell, convention)
+    AN = cell.T * _reciprocal_lengths(cell)[None]
+    return np.einsum("ia,...ab,jb->...ij", AN, u_ij, AN)
 
-    if adp.shape[-1] == 6:
-        u11, u22, u33, u12, u13, u23 = np.moveaxis(adp, -1, 0)
-        adp = np.stack(
-            [
-                np.stack([u11, u12, u13], axis=-1),
-                np.stack([u12, u22, u23], axis=-1),
-                np.stack([u13, u23, u33], axis=-1),
-            ],
-            axis=-2,
-        )
-    elif adp.shape[-2:] != (3, 3):
-        raise ValueError(
-            f"ADPs must have shape (..., 6) or (..., 3, 3), got {adp.shape}."
-        )
 
-    reciprocal_lengths = np.linalg.norm(np.linalg.inv(cell).T, axis=1)
+def crystallographic_adp(
+    cell: Cell | np.ndarray, adp: np.ndarray, convention: str = "U"
+) -> np.ndarray:
+    """Convert Cartesian tensors to crystallographic ADPs, the inverse of
+    `cartesian_adp`.
 
-    if convention == "U":
-        pass
-    elif convention == "B":
-        adp = adp / _8PI2
-    elif convention == "beta":
-        adp = adp / (2 * np.pi**2 * np.outer(reciprocal_lengths, reciprocal_lengths))
-    else:
-        raise ValueError(f"convention must be 'U', 'B' or 'beta', not {convention!r}")
+    Parameters
+    ----------
+    cell : ase.cell.Cell or np.ndarray
+        The unit cell, with the lattice vectors as rows [Å].
+    adp : np.ndarray
+        Cartesian tensors ``U_cart`` with shape (..., 3, 3) [Å²].
+    convention : {'U', 'B', 'beta'}
+        Return ``U^ij`` [Å²], ``B^ij = 8 pi^2 U^ij`` [Å²] or
+        ``beta^ij = 2 pi^2 a*_i a*_j U^ij``.
 
-    AN = cell.T * reciprocal_lengths[None]
-    return np.einsum("ia,...ab,jb->...ij", AN, adp, AN)
+    Returns
+    -------
+    adp : np.ndarray
+        ``U^ij = (A N)^-1 U_cart (A N)^-T``, or its B or beta, with shape
+        (..., 3, 3).
+    """
+    cell = np.asarray(cell, dtype=float)
+    inverse = np.linalg.inv(cell.T * _reciprocal_lengths(cell)[None])
+    u_ij = np.einsum("ia,...ab,jb->...ij", inverse, _as_matrices(adp), inverse)
+    return u_ij * _convention_factor(cell, convention)
 
 
 # The CIF tags of anisotropic ADPs, by convention, as ASE stores them (lower case).
@@ -484,14 +693,38 @@ def _cif_floats(tags: dict, key: str) -> Optional[np.ndarray]:
     )
 
 
+# The ADP types of _atom_site_adp_type with anisotropic values in the aniso loop.
+_CIF_ANISO_TYPES = ("uani", "bani")
+
+# A site whose ADPs deviate from its site symmetry by more than this [Å²] is
+# reported; CIF values carry uncertainties of order 1e-4 Å² or less.
+_SITE_SYMMETRY_TOLERANCE = 1e-4
+
+
 def _cif_site_tensors(tags: dict, cell: np.ndarray) -> dict[str, np.ndarray]:
     """The Cartesian ADP tensor of each site of the asymmetric unit, keyed by its
-    label: anisotropic where given, otherwise isotropic, otherwise none."""
+    label.
+
+    A site with a complete row in the aniso loop, matched by label, gets its
+    anisotropic tensor; any other site its isotropic value, if any. A site
+    declared anisotropic (``_atom_site_adp_type`` Uani or Bani) that falls back,
+    and a site whose aniso row has unknown components, are reported.
+    """
     labels = _cif_list(tags, "_atom_site_label")
     if labels is None:
         raise ValueError("The CIF has no _atom_site_label loop.")
 
+    adp_types = _cif_list(tags, "_atom_site_adp_type") or _cif_list(
+        tags, "_atom_site_thermal_displace_type"
+    )
+    adp_types = (
+        {label: str(t).lower() for label, t in zip(labels, adp_types)}
+        if adp_types
+        else {}
+    )
+
     tensors: dict[str, np.ndarray] = {}
+    incomplete: list[str] = []
 
     aniso_labels = _cif_list(tags, "_atom_site_aniso_label")
     for convention, tag in _CIF_ANISO_TAGS.items():
@@ -505,18 +738,59 @@ def _cif_site_tensors(tags: dict, cell: np.ndarray) -> dict[str, np.ndarray]:
         ]
         cartesian = cartesian_adp(cell, np.stack(columns, axis=-1), convention)
         for label, tensor in zip(aniso_labels, cartesian):
-            if label not in tensors and np.all(np.isfinite(tensor)):
+            if label in tensors:
+                continue
+            if np.all(np.isfinite(tensor)):
                 tensors[label] = tensor
+            else:
+                incomplete.append(label)
 
+    declared_without_row = []
     for tag, factor in _CIF_ISO_TAGS.items():
         values = _cif_floats(tags, tag)
         if values is None:
             continue
         for label, value in zip(labels, values):
-            if label not in tensors and np.isfinite(value):
-                tensors[label] = value * factor * np.eye(3)
+            if label in tensors or not np.isfinite(value):
+                continue
+            # an isotropic tensor, U_iso I in Cartesian coordinates
+            tensors[label] = value * factor * np.eye(3)
+            if adp_types.get(label) in _CIF_ANISO_TYPES and label not in incomplete:
+                declared_without_row.append(label)
+
+    if incomplete:
+        warnings.warn(
+            f"The anisotropic ADPs of the sites {sorted(set(incomplete))} have "
+            "unknown components; their isotropic values are used, where given.",
+            stacklevel=3,
+        )
+    if declared_without_row:
+        warnings.warn(
+            f"The sites {sorted(declared_without_row)} are anisotropic "
+            "(_atom_site_adp_type), but have no row in the aniso loop; their "
+            "equivalent isotropic values are used.",
+            stacklevel=3,
+        )
+    multipole = [label for label, t in adp_types.items() if t == "umpe"]
+    if multipole:
+        warnings.warn(
+            f"The multipole-expansion ADPs (Umpe) of the sites {sorted(multipole)} "
+            "are not supported; their equivalent isotropic values are used.",
+            stacklevel=3,
+        )
 
     return tensors
+
+
+def _site_symmetrized(
+    tensor: np.ndarray, operations: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """The tensor averaged over the Cartesian rotations of the site-symmetry group,
+    and the largest change [Å²]."""
+    symmetrized = np.mean(
+        np.einsum("mia,ab,mjb->mij", operations, tensor, operations), 0
+    )
+    return symmetrized, float(np.abs(symmetrized - tensor).max())
 
 
 def _cif_site_positions(tags: dict, cell: np.ndarray) -> np.ndarray:
@@ -547,9 +821,16 @@ def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
     operation with rotation R gets ``R_c U R_c^T``, where ``R_c = A R A^-1`` is the
     rotation in Cartesian coordinates and A has the lattice vectors as columns.
 
+    A site falls back to its isotropic value only if it has no complete row in the
+    aniso loop; a site declared anisotropic by ``_atom_site_adp_type`` that falls
+    back is reported. Each site's tensor must be positive semi-definite, and is
+    averaged over the operations that map the site onto itself, so that it has the
+    symmetry of its site (a deviation beyond the uncertainty of CIF values is
+    reported).
+
     The ADPs of a CIF are those of the temperature it was measured at
-    (``_diffrn_ambient_temperature``), and a refinement may include static
-    disorder in them.
+    (``_diffrn_ambient_temperature``), and a refinement includes static disorder
+    and model errors in them.
 
     Parameters
     ----------
@@ -612,22 +893,48 @@ def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
         rotations = np.eye(3)[None]
         translations = np.zeros((1, 3))
 
+    A = cell.T
+    cartesian_rotations = A @ rotations @ np.linalg.inv(A)
+
+    def maps(positions: np.ndarray, targets: np.ndarray) -> np.ndarray:
+        """Which operations map each position onto its target, (N, M)."""
+        images = np.einsum("mij,nj->nmi", rotations, positions) + translations[None]
+        difference = images - targets[:, None]
+        difference -= np.round(difference)
+        return np.all(np.abs(difference) < symprec, axis=-1)
+
+    # Each site's tensor is checked, and averaged over the operations that map
+    # the site onto itself, so that it has the symmetry of its site.
+    site_labels = [label for label in labels if label in site_tensors]
+    _check_tensors(
+        np.array([site_tensors[label] for label in site_labels]), site_labels
+    )
+    stabilizers = maps(site_positions, site_positions)
+    asymmetric = []
+    for index, label in enumerate(labels):
+        if label not in site_tensors:
+            continue
+        symmetrized, change = _site_symmetrized(
+            site_tensors[label], cartesian_rotations[stabilizers[index]]
+        )
+        if change > _SITE_SYMMETRY_TOLERANCE:
+            asymmetric.append(label)
+        site_tensors[label] = symmetrized
+    if asymmetric:
+        warnings.warn(
+            f"The ADPs of the sites {asymmetric} do not have the symmetry of their "
+            f"sites (by more than {_SITE_SYMMETRY_TOLERANCE} Å²); they are "
+            "averaged over the site-symmetry operations.",
+            stacklevel=2,
+        )
+
     # The operation that generated each atom: R x_site + t = x_atom (mod 1).
-    # (N, M, 3): every operation applied to the site of every atom.
-    scaled = atoms.get_scaled_positions(wrap=False)
-    sites = site_positions[kinds]
-    images = np.einsum("mij,nj->nmi", rotations, sites) + translations[None]
-    difference = images - scaled[:, None]
-    difference -= np.round(difference)
-    matches = np.all(np.abs(difference) < symprec, axis=-1)
+    matches = maps(site_positions[kinds], atoms.get_scaled_positions(wrap=False))
     if not np.all(np.any(matches, axis=1)):
         raise RuntimeError(
             "Could not find the symmetry operation that generated every atom."
         )
     operation = np.argmax(matches, axis=1)
-
-    A = cell.T
-    cartesian_rotations = A @ rotations @ np.linalg.inv(A)
 
     adp = np.zeros((len(atoms), 3, 3))
     for i, (kind, op) in enumerate(zip(kinds, operation)):
@@ -637,6 +944,7 @@ def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
             adp[i] = R @ tensor @ R.T
 
     atoms.set_array(ADP_ARRAY, adp)
+    _record_adp_frame(atoms)
     return atoms
 
 
@@ -696,11 +1004,12 @@ def debye_adp(
     Theta)`` at T = 0, from the zero-point motion, and ``3 hbar^2 T / (m k_B
     Theta^2)`` at high T.
 
-    The model is an estimate. It is closest for elemental crystals with a Debye
-    temperature fitted to their Debye-Waller factors, which can differ from the
-    calorimetric one; in a compound, the Debye temperature of an element is not that
-    of the element's own crystal. For the full tensors of a given crystal, see
-    `adp_from_phonopy`.
+    The model is an estimate of thermal displacements only; refined ADPs, as in a
+    CIF file, also contain static disorder and model errors. It is closest for
+    elemental crystals with a Debye temperature fitted to their Debye-Waller
+    factors, which can differ from the calorimetric one; in a compound, the Debye
+    temperature of an element is not that of the element's own crystal. For the
+    full tensors of a given crystal, see `adp_from_phonopy`.
 
     Parameters
     ----------
@@ -713,8 +1022,9 @@ def debye_adp(
 
     Returns
     -------
-    adp : np.ndarray
-        Tensors ``U_iso I`` with shape (N, 3, 3) [Å²]; attach them with `set_adp`.
+    u_iso : np.ndarray
+        ``U_iso`` of each atom with shape (N,) [Å²]; attach them with
+        ``set_adp(atoms, u_iso)``, which takes them as isotropic in any cell.
     """
     from scipy.constants import atomic_mass, hbar, k  # noqa: PLC0415
 
@@ -745,7 +1055,7 @@ def debye_adp(
         selected = theta == value
         u_iso[selected] = 3 * hbar**2 / (masses[selected] * k * value) * bracket
 
-    return u_iso[:, None, None] * 1e20 * np.eye(3)
+    return u_iso * 1e20
 
 
 def adp_from_phonopy(
@@ -763,7 +1073,9 @@ def adp_from_phonopy(
     (2 k_B T)) / omega``
 
     summed over the phonon modes nu of the q-point mesh, with their eigenvectors e
-    and frequencies omega. The force constants may come from any calculator, such
+    and frequencies omega. These are thermal displacements only; refined ADPs, as
+    in a CIF file, also contain static disorder and model errors. The force
+    constants may come from any calculator, such
     as DFT or a machine-learned potential, or from a database: phonondb
     (``phonopy_params.yaml.xz`` for each of ~10,000 Materials Project entries, on
     NIMS MDR) or the force constants of the Materials Project.
@@ -796,8 +1108,8 @@ def adp_from_phonopy(
     Returns
     -------
     atoms : ase.Atoms
-        The cell, carrying the Cartesian ADP tensors [Å²] in the array named by
-        `ADP_ARRAY`, in the frame of the phonon calculation.
+        The cell, carrying the ADP tensors [Å²] of the phonon calculation (see
+        `get_adp` for ``U^ij`` or ``U_cart``).
     """
     if isinstance(phonon, str):
         import phonopy  # noqa: PLC0415
@@ -835,7 +1147,7 @@ def adp_from_phonopy(
 
     primitive = to_atoms(phonon.primitive)
     if cell == "primitive":
-        return set_adp(primitive, primitive_adp)
+        return set_adp(primitive, primitive_adp, cartesian=True)
 
     # Each atom of the unit cell is a lattice translate of an atom of the
     # primitive cell, whose tensor it has.
@@ -849,7 +1161,7 @@ def adp_from_phonopy(
     if np.any(distance[np.arange(len(unitcell)), match] > 1e-5):
         raise RuntimeError("Could not map the unit cell onto the primitive cell.")
 
-    return set_adp(unitcell, primitive_adp[match])
+    return set_adp(unitcell, primitive_adp[match], cartesian=True)
 
 
 def debye_waller_factors(

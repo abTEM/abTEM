@@ -17,22 +17,23 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
-from abtem.adp import ADP_ARRAY, get_adp
+from abtem.adp import ADP_ARRAY, _cartesian_adp, _resolve_adp_frame
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
     _box_strain_warning_suppressed,
     _cell_in_plane_frame,
+    _quiet_per_axis_sigmas,
     _rotate_atoms_to_plane,
     _stacklevel_outside_package,
     _warn_if_box_is_strained,
     _wrap_far_atoms,
-    wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
     orthogonalize_cell,
     pad_atoms,
+    wrap_and_snap_atoms,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -1593,14 +1594,14 @@ def _check_adp_and_parametrization_sigmas(frozen_phonons, integrator) -> None:
 
     # The first configuration; a lazily read trajectory is checked when it is built.
     atoms = frozen_phonons.atoms
-    if not isinstance(atoms, Atoms) or get_adp(atoms) is None:
+    if not isinstance(atoms, Atoms) or _cartesian_adp(atoms) is None:
         return
 
     parametrization = getattr(integrator, "parametrization", None)
     if parametrization is None:
         parametrization = getattr(integrator, "correction_parametrization", None)
 
-    if parametrization is not None and any(parametrization.sigmas.values()):
+    if parametrization is not None and parametrization.sigmas:
         raise ValueError(
             f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
             "parametrization has `sigmas`. Give one of them: remove the tensors "
@@ -1611,7 +1612,8 @@ def _check_adp_and_parametrization_sigmas(frozen_phonons, integrator) -> None:
 
 def _validate_frozen_phonons(atoms):
     if isinstance(atoms, Atoms):
-        atoms = atoms.copy()
+        # ADP tensors follow a cell rotated since they were set
+        atoms = _resolve_adp_frame(atoms).copy()
         atoms.calc = None
 
     if not hasattr(atoms, "randomize"):
@@ -3223,14 +3225,15 @@ class CrystalPotential(_PotentialBuilder):
                 f"num_configs >= {n_tiles} to silence this."
             )
 
-        new_fp = FrozenPhonons(
-            fp.atoms,
-            num_configs=n_tiles if enlarge else fp.num_configs,
-            sigmas=fp.sigmas,
-            directions=fp.directions,
-            ensemble_mean=fp.ensemble_mean,
-            seed=int(member_seed) if reseed else int(fp.seed[0]),
-        )
+        with _quiet_per_axis_sigmas():
+            new_fp = FrozenPhonons(
+                fp.atoms,
+                num_configs=n_tiles if enlarge else fp.num_configs,
+                sigmas=fp.sigmas,
+                directions=fp.directions,
+                ensemble_mean=fp.ensemble_mean,
+                seed=int(member_seed) if reseed else int(fp.seed[0]),
+            )
         if "frozen_phonons" in unit._arg_keys(type(unit)):
             # ``GPAWPotential`` takes its frozen phonons next to its calculators,
             # which may be unread ``.gpw`` paths that its constructor cannot take

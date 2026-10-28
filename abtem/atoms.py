@@ -19,7 +19,7 @@ from ase.data import chemical_symbols
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
-from abtem.adp import _transform_adp_array
+from abtem.adp import _record_adp_frame, _transform_adp_array
 from abtem.core.utils import get_dtype, is_scalar, label_to_index
 
 axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
@@ -374,6 +374,7 @@ def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarr
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
+    _record_adp_frame(atoms)
 
     atoms.pbc = True
     atoms.wrap()
@@ -1533,6 +1534,8 @@ def cut_cell(
     new_atoms.extend(atoms_in_cell(missed, margin=margin))
 
     # new_atoms = wrap_with_tolerance(new_atoms)
+    # The box is a new cell in the same frame.
+    _record_adp_frame(new_atoms)
     return new_atoms
 
 
@@ -1802,6 +1805,37 @@ def validate_per_atom_property(
         return atom_property_dict_to_atom_property_array(atoms, validated_props)
 
     return validated_props
+
+
+_per_axis_sigmas_quiet: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_per_axis_sigmas_quiet", default=False
+)
+
+
+@contextlib.contextmanager
+def _quiet_per_axis_sigmas():
+    """Silence the deprecation of per-axis standard deviations while abTEM rebuilds
+    an object the user already made, such as frozen phonons for a lazy block."""
+    token = _per_axis_sigmas_quiet.set(True)
+    try:
+        yield
+    finally:
+        _per_axis_sigmas_quiet.reset(token)
+
+
+def _warn_if_per_axis_sigmas(anisotropic: bool, stacklevel: int = 3) -> None:
+    """Deprecate standard deviations given along the Cartesian axes."""
+    if anisotropic and not _per_axis_sigmas_quiet.get():
+        warnings.warn(
+            "Standard deviations along the Cartesian axes, (sigma_x, sigma_y, "
+            "sigma_z), are deprecated: they have no crystallographic meaning in a "
+            "skewed cell. Give ADP tensors instead, for example "
+            "abtem.adp.set_adp(atoms, {'Si': (u_xx, u_yy, u_zz)}, cartesian=True) "
+            "with u = sigma**2 [Å²], or crystallographic U^ij without "
+            "cartesian=True.",
+            FutureWarning,
+            stacklevel=stacklevel,
+        )
 
 
 def validate_sigmas(

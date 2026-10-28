@@ -104,20 +104,31 @@ Features:
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 
-- Anisotropic displacement parameters (ADPs): full Cartesian tensors U [Å²] carried by the atoms as
-  `atoms.arrays["adp"]`. They are set with `abtem.adp.set_adp`, read from a CIF file through ASE
+- Anisotropic displacement parameters (ADPs), following the IUCr conventions (Trueblood et al. 1996).
+  `abtem.adp.set_adp` and `get_adp` take and return the crystallographic U^ij [Å²] relative to the cell of
+  the atoms, as in a CIF file or a paper (`cartesian=True` for Cartesian tensors, such as those of phonons),
+  and the atoms carry the Cartesian tensors. They are read from a CIF file through ASE
   (`abtem.adp.read_cif_adp(path)`, or `abtem.adp.adp_from_cif_tags` for atoms from
-  `ase.io.read(path, store_tags=True)`: anisotropic `U`, `B` or `beta`, falling back to isotropic values per
-  site, converted to Cartesian tensors and expanded with the space group), computed from phonons
-  (`abtem.adp.adp_from_phonopy`, for a phonopy calculation or a file such as phonondb's
-  `phonopy_params.yaml.xz`) or estimated with the Debye model (`abtem.adp.debye_adp`). The same tensors
-  are used by every simulation mode: the Bloch-wave Debye-Waller factor `exp(-2 pi^2 g^T U g)`, the averaged
+  `ase.io.read(path, store_tags=True)`): anisotropic `U`, `B` or `beta` matched by site label, isotropic
+  values only for sites without an aniso row (reported for `Uani`/`Bani` sites by `_atom_site_adp_type`),
+  non-positive-definite sites refused, and each site's tensor averaged over its site symmetry before the
+  space-group expansion. They are also computed from phonons (`abtem.adp.adp_from_phonopy`, for a phonopy
+  calculation or a file such as phonondb's `phonopy_params.yaml.xz`) or estimated with the Debye model
+  (`abtem.adp.debye_adp`); these are thermal displacements only. `cartesian_adp` and `crystallographic_adp`
+  convert between U^ij (or `B`, `beta`) and Cartesian tensors, checked against cctbx. The same tensors are
+  used by every simulation mode: the Bloch-wave Debye-Waller factor `exp(-2 pi^2 g^T U g)`, the averaged
   multislice potential of all three projection integrators (the in-plane block of U, applied in Fourier
   space), and `FrozenPhonons(atoms)` without `sigmas`, which draws the displacements from U. The tensors
-  turn and strain with the atoms when a potential rotates them to a `plane` or orthogonalizes their cell,
-  and in `rotate_atoms` and the EBSD slabs, as anisotropic frozen-phonon displacements do. Giving standard
-  deviations as well (`thermal_sigma`, `Parametrization(sigmas=...)` or `FrozenPhonons(sigmas=...)`) raises an
-  error ([PR #646](https://github.com/abTEM/abTEM/pull/646))
+  turn and strain with the atoms when abTEM rotates them to a `plane`, orthogonalizes their cell, or
+  applies `rotate_atoms`, `flip_atoms` or an EBSD slab, as anisotropic frozen-phonon displacements do; a
+  cell rotated with its atoms elsewhere, such as by `ase.Atoms.rotate(..., rotate_cell=True)`, is detected
+  and the tensors are rotated with it. Giving standard deviations as well (`sigmas` or
+  `Parametrization(sigmas=...)`), an explicit zero included, raises an error
+  ([PR #646](https://github.com/abTEM/abTEM/pull/646))
+    - `StructureFactor`, `calculate_structure_factors` and `calculate_scattering_factors` name the standard
+      deviation of the displacements `sigmas`, as `FrozenPhonons` and the parametrizations do; `thermal_sigma`
+      is a deprecated alias (`FutureWarning`). Standard deviations along the Cartesian axes, (σx, σy, σz),
+      are deprecated in `StructureFactor` and `FrozenPhonons`; give ADP tensors instead
     - The finite projection smears with the same Fourier-space Debye-Waller factor as the infinite one
       instead of a real-space `gaussian_filter` along the grid axes. For a width of a pixel or more the
       potential changes by ~5e-5 of its maximum; for a sub-pixel width, which neither resolves, by a few

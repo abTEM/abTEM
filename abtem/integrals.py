@@ -17,7 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
-from abtem.adp import ADP_ARRAY, adp_kinds, get_adp
+from abtem.adp import ADP_ARRAY, _cartesian_adp, adp_kinds
 from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
@@ -371,7 +371,7 @@ def _sinc_on_device(gpts, sampling, device, device_key):
 def _refuse_adp_and_sigmas(atoms: Atoms, sigmas: Mapping[str, float]) -> None:
     """Raise if the atoms carry ADP tensors and the parametrization has standard
     deviations: both would smear the atoms."""
-    if any(sigmas.values()) and get_adp(atoms) is not None:
+    if sigmas and _cartesian_adp(atoms) is not None:
         raise ValueError(
             f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
             "parametrization has `sigmas`. Give one of them: remove the tensors "
@@ -404,7 +404,7 @@ def _adp_groups(
         The atomic number, the in-plane ADP (None for an atom that is not smeared)
         and the mask of the atoms of each group.
     """
-    adp = get_adp(atoms)
+    adp = _cartesian_adp(atoms)
 
     if adp is None:
         groups = []

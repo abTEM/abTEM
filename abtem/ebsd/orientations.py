@@ -21,7 +21,8 @@ from typing import Optional
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import _transform_per_atom_arrays
+from abtem.adp import _record_adp_frame, _resolve_adp_frame
+from abtem.atoms import _quiet_per_axis_sigmas, _transform_per_atom_arrays
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons
 
 __all__ = [
@@ -321,6 +322,8 @@ def rotated_slab(
     slab = block[inside]
     slab.translate(half)
     slab.cell = cell_array
+    # the box is a new cell in the frame the tensors were turned to
+    _record_adp_frame(slab)
 
     return slab, rotation
 
@@ -350,7 +353,8 @@ def _crystal_and_displacements(
     else:
         frozen_phonons = None
 
-    atoms = atoms.copy()
+    # ADP tensors follow a cell rotated since they were set
+    atoms = _resolve_adp_frame(atoms).copy()
     atoms.set_array("cell_index", np.arange(len(atoms)))
     return atoms, frozen_phonons
 
@@ -432,14 +436,15 @@ def _displaced(
         # and rotated by the slab itself
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
-    return _SlabFrozenPhonons(
-        slab,
-        rotation=rotation,
-        num_configs=frozen_phonons.num_configs,
-        sigmas=sigmas,
-        directions=frozen_phonons.directions,
-        seed=frozen_phonons.seed,
-    )
+    with _quiet_per_axis_sigmas():
+        return _SlabFrozenPhonons(
+            slab,
+            rotation=rotation,
+            num_configs=frozen_phonons.num_configs,
+            sigmas=sigmas,
+            directions=frozen_phonons.directions,
+            seed=frozen_phonons.seed,
+        )
 
 
 def _spglib_errors() -> tuple[type[Exception], ...]:
