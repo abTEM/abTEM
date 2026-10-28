@@ -304,11 +304,9 @@ def test_deprecated_names_and_per_axis_sigmas():
     with pytest.warns(FutureWarning, match="Cartesian axes"):
         abtem.StructureFactor(atoms, g_max=2.0, sigmas=(0.05, 0.06, 0.07))
 
-    # warned once where the frozen phonons are made, not again when a lazy
-    # potential rebuilds them for each block
-    with pytest.warns(FutureWarning, match="Cartesian axes") as record:
-        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=(0.05, 0.06, 0.07))
-    assert len(record) == 1
+    # frozen phonons keep them, as displacements along the axes of the atoms
+    # (the test configuration turns any warning into an error)
+    frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=(0.05, 0.06, 0.07))
     abtem.Potential(frozen_phonons, gpts=16, slice_thickness=2.0).build().compute()
 
 
@@ -728,9 +726,6 @@ def test_validate_adp_forms():
     assert get_adp(set_adp(set_adp(atoms, 0.01), None), cartesian=True) is None
 
 
-@pytest.mark.filterwarnings(
-    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
-)
 def test_bloch_debye_waller_factor_is_the_quadratic_form():
     # One atom at the origin, so the structure factor is its scattering factor
     # times exp(-2 pi^2 g^T U g); the isotropic and diagonal forms of the
@@ -1048,9 +1043,6 @@ def test_orthogonalized_cell_has_the_structure_factors_of_the_skewed_cell(plane)
     np.testing.assert_allclose(np.abs(got), np.abs(expected), atol=1e-6)
 
 
-@pytest.mark.filterwarnings(
-    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
-)
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell")
 @pytest.mark.parametrize(
     "case", ["cubic", "cubic zx", "hexagonal", "monoclinic strained"]

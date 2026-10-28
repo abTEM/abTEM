@@ -22,11 +22,6 @@ from abtem.inelastic.phonons import (
     EnergyResolvedAtomsEnsemble,
 )
 
-# These tests check the deprecated per-axis standard deviations on purpose.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
-)
-
 
 def _rotated(atoms, angle):
     atoms = atoms.copy()

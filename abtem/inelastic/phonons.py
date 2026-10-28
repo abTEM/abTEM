@@ -341,8 +341,6 @@ def validate_seeds(
 from abtem.atoms import (
     AtomProperties,
     B_to_sigma,
-    _quiet_per_axis_sigmas,
-    _warn_if_per_axis_sigmas,
     sigma_to_B,
     validate_per_atom_property,
     validate_sigmas,
@@ -375,12 +373,11 @@ class FrozenPhonons(BaseFrozenPhonons):
         `directions`.
 
         Anisotropic displacements may be given by providing a standard deviation for
-        each Cartesian direction (`x`, `y`, `z`); this form is deprecated, as it has
-        no crystallographic meaning in a skewed cell: give ADP tensors instead (see
-        :mod:`abtem.adp`), which may also be Cartesian. This may be a tuple of three
-        numbers for identical displacements for all atoms. A dict of tuples of three
-        numbers to specify displacements for each species. A list or array with three
-        numbers for each atom.
+        each Cartesian direction (`x`, `y`, `z`). This may be a tuple of three numbers
+        for identical displacements for all atoms. A dict of tuples of three numbers to
+        specify displacements for each species. A list or array with three numbers for
+        each atom. For tensors with off-diagonal elements, or given along the crystal
+        axes as in a CIF file, use ADP tensors instead (see :mod:`abtem.adp`).
 
         The directions of anisotropic standard deviations are the Cartesian axes of
         `atoms` as given. A potential that rotates the atoms to another `plane`, or
@@ -453,8 +450,7 @@ class FrozenPhonons(BaseFrozenPhonons):
                 )
             self._sigmas = None
         else:
-            self._sigmas, anisotropic = validate_sigmas(atoms, sigmas)
-            _warn_if_per_axis_sigmas(anisotropic)
+            self._sigmas = validate_sigmas(atoms, sigmas)[0]
             resolve_adp(
                 atoms, validate_sigmas(atoms, sigmas, return_array=True)[0], "sigmas"
             )
@@ -699,8 +695,7 @@ class FrozenPhonons(BaseFrozenPhonons):
     def _from_partitioned_args_func(cls, *args, **kwargs):
         args = unpack_blockwise_args(args)
         atoms, seed = args[0]
-        with _quiet_per_axis_sigmas():
-            new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
+        new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
         new = _wrap_with_array(new, len(new.ensemble_shape))
         return new
 

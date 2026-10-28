@@ -225,9 +225,6 @@ def test_chunks_of_frozen_phonons_hold_every_configuration(
         )
 
 
-@pytest.mark.filterwarnings(
-    "ignore:Standard deviations along the Cartesian axes:FutureWarning"
-)
 @pytest.mark.parametrize("plane", ["xz", "yz"])
 def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     charge_density_3d, plane

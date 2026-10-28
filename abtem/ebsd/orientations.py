@@ -22,7 +22,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.adp import _record_adp_frame, _resolve_adp_frame
-from abtem.atoms import _quiet_per_axis_sigmas, _transform_per_atom_arrays
+from abtem.atoms import _transform_per_atom_arrays
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons
 
 __all__ = [
@@ -436,15 +436,14 @@ def _displaced(
         # and rotated by the slab itself
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
-    with _quiet_per_axis_sigmas():
-        return _SlabFrozenPhonons(
-            slab,
-            rotation=rotation,
-            num_configs=frozen_phonons.num_configs,
-            sigmas=sigmas,
-            directions=frozen_phonons.directions,
-            seed=frozen_phonons.seed,
-        )
+    return _SlabFrozenPhonons(
+        slab,
+        rotation=rotation,
+        num_configs=frozen_phonons.num_configs,
+        sigmas=sigmas,
+        directions=frozen_phonons.directions,
+        seed=frozen_phonons.seed,
+    )
 
 
 def _spglib_errors() -> tuple[type[Exception], ...]:

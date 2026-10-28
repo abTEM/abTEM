@@ -128,7 +128,8 @@ Features:
     - `StructureFactor`, `calculate_structure_factors` and `calculate_scattering_factors` name the standard
       deviation of the displacements `sigmas`, as `FrozenPhonons` and the parametrizations do; `thermal_sigma`
       is a deprecated alias (`FutureWarning`). Standard deviations along the Cartesian axes, (σx, σy, σz),
-      are deprecated in `StructureFactor` and `FrozenPhonons`; give ADP tensors instead
+      are deprecated for `StructureFactor`, where they have no crystallographic meaning in a skewed cell;
+      give ADP tensors instead. `FrozenPhonons` keeps them, as displacements along the axes of the atoms
     - The finite projection smears with the same Fourier-space Debye-Waller factor as the infinite one
       instead of a real-space `gaussian_filter` along the grid axes. For a width of a pixel or more the
       potential changes by ~5e-5 of its maximum; for a sub-pixel width, which neither resolves, by a few

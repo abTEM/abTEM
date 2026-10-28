@@ -23,7 +23,6 @@ from abtem.atoms import (
     _box_strain_warning_silenced,
     _box_strain_warning_suppressed,
     _cell_in_plane_frame,
-    _quiet_per_axis_sigmas,
     _rotate_atoms_to_plane,
     _stacklevel_outside_package,
     _warn_if_box_is_strained,
@@ -3225,15 +3224,14 @@ class CrystalPotential(_PotentialBuilder):
                 f"num_configs >= {n_tiles} to silence this."
             )
 
-        with _quiet_per_axis_sigmas():
-            new_fp = FrozenPhonons(
-                fp.atoms,
-                num_configs=n_tiles if enlarge else fp.num_configs,
-                sigmas=fp.sigmas,
-                directions=fp.directions,
-                ensemble_mean=fp.ensemble_mean,
-                seed=int(member_seed) if reseed else int(fp.seed[0]),
-            )
+        new_fp = FrozenPhonons(
+            fp.atoms,
+            num_configs=n_tiles if enlarge else fp.num_configs,
+            sigmas=fp.sigmas,
+            directions=fp.directions,
+            ensemble_mean=fp.ensemble_mean,
+            seed=int(member_seed) if reseed else int(fp.seed[0]),
+        )
         if "frozen_phonons" in unit._arg_keys(type(unit)):
             # ``GPAWPotential`` takes its frozen phonons next to its calculators,
             # which may be unread ``.gpw`` paths that its constructor cannot take

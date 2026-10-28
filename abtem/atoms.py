@@ -1807,29 +1807,16 @@ def validate_per_atom_property(
     return validated_props
 
 
-_per_axis_sigmas_quiet: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_per_axis_sigmas_quiet", default=False
-)
-
-
-@contextlib.contextmanager
-def _quiet_per_axis_sigmas():
-    """Silence the deprecation of per-axis standard deviations while abTEM rebuilds
-    an object the user already made, such as frozen phonons for a lazy block."""
-    token = _per_axis_sigmas_quiet.set(True)
-    try:
-        yield
-    finally:
-        _per_axis_sigmas_quiet.reset(token)
-
-
 def _warn_if_per_axis_sigmas(anisotropic: bool, stacklevel: int = 3) -> None:
-    """Deprecate standard deviations given along the Cartesian axes."""
-    if anisotropic and not _per_axis_sigmas_quiet.get():
+    """Deprecate standard deviations given along the Cartesian axes for the
+    structure factors, where they have no crystallographic meaning in a skewed
+    cell. Frozen phonons keep them, as displacements along the axes of the atoms."""
+    if anisotropic:
         warnings.warn(
             "Standard deviations along the Cartesian axes, (sigma_x, sigma_y, "
-            "sigma_z), are deprecated: they have no crystallographic meaning in a "
-            "skewed cell. Give ADP tensors instead, for example "
+            "sigma_z), are deprecated for the structure factors: they have no "
+            "crystallographic meaning in a skewed cell. Give ADP tensors instead, "
+            "for example "
             "abtem.adp.set_adp(atoms, {'Si': (u_xx, u_yy, u_zz)}, cartesian=True) "
             "with u = sigma**2 [Å²], or crystallographic U^ij without "
             "cartesian=True.",
