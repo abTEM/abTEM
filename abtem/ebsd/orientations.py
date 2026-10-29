@@ -284,6 +284,8 @@ def rotated_slab(
         if origin.shape != (3,):
             raise ValueError(f"origin must have shape (3,), got {origin.shape}")
 
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms)
     if repetitions == (1, 1, 1):
         # the rotation below is in place, and the caller may reuse the block
         block = atoms.copy()

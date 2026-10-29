@@ -505,7 +505,7 @@ def test_set_adp_takes_crystallographic_u_ij():
     # they are not Cartesian. The oracle is cartesian_adp, which
     # test_cartesian_adp_of_a_skewed_cell checks independently.
     u_ij = np.array([0.011, 0.017, 0.009, 0.0, 0.003, 0.0])
-    atoms = set_adp(MONOCLINIC, u_ij)
+    atoms = set_adp(MONOCLINIC, {"Si": u_ij, "O": u_ij})
     expected = cartesian_adp(MONOCLINIC.cell, u_ij)
     np.testing.assert_allclose(
         get_adp(atoms, cartesian=True),
@@ -543,6 +543,17 @@ def test_set_adp_takes_crystallographic_u_ij():
 
     with pytest.raises(ValueError, match="cartesian=True"):
         set_adp(Atoms("Si"), np.eye(3) * 0.01)
+
+    # six atoms with one U_iso each, not six components for every atom
+    six = MONOCLINIC * (2, 1, 1)
+    u_iso = np.linspace(0.005, 0.01, 6)
+    np.testing.assert_allclose(
+        get_adp(set_adp(six, u_iso), cartesian=True),
+        u_iso[:, None, None] * np.eye(3),
+        atol=1e-15,
+    )
+    with pytest.raises(ValueError, match="in a dict"):
+        set_adp(MONOCLINIC, u_ij)
 
 
 def test_tensors_follow_a_cell_rotated_outside_abtem():
@@ -638,7 +649,7 @@ def test_conversions_match_cctbx():
     )
     atoms = Atoms("Si", cell=cell, pbc=True)
     np.testing.assert_allclose(
-        get_adp(set_adp(atoms, u_cif), cartesian=True)[0],
+        get_adp(set_adp(atoms, {"Si": u_cif}), cartesian=True)[0],
         as_matrix(u_cart),
         atol=1e-15,
     )
@@ -682,6 +693,169 @@ Si1 0.0121 0.0098 0.0143 0.0017 0.0026 -0.0011
         [[0.0121, 0.0, 0.0026], [0.0, 0.0098, 0.0], [0.0026, 0.0, 0.0143]]
     )
     np.testing.assert_allclose(get_adp(atoms)[site], expected, atol=1e-12)
+
+
+def _ase_rotation(angle, axis):
+    """ASE's rotation matrix, acting on column vectors."""
+    probe = Atoms(positions=np.eye(3))
+    probe.rotate(angle, axis)
+    return probe.positions.T
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["cubic 90 x", "orthorhombic 180 x", "hexagonal 60 z", "monoclinic 35 general"],
+)
+def test_rotations_of_the_cell_by_ase_are_followed(case):
+    # Rotations that map the lattice onto itself look like the same lattice;
+    # they are rotations all the same. Oracle: R U R^T with ASE's own matrix, and
+    # the structure factors, which must not change (the hkl turn with the cell).
+    cells = {
+        "cubic 90 x": (np.diag([3.9, 3.9, 3.9]), 90, "x"),
+        "orthorhombic 180 x": (np.diag([3.9, 4.6, 5.3]), 180, "x"),
+        "hexagonal 60 z": (
+            [[3.25, 0, 0], [-1.625, 1.625 * np.sqrt(3), 0], [0, 0, 5.2]],
+            60,
+            "z",
+        ),
+        "monoclinic 35 general": (MONOCLINIC.cell, 35, (1, 2, 3)),
+    }
+    cell, angle, axis = cells[case]
+    atoms = Atoms(
+        "SrTiO",
+        scaled_positions=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0.1)],
+        cell=cell,
+        pbc=True,
+    )
+    atoms = set_adp(atoms, random_tensors(3), cartesian=True)
+    rotated = atoms.copy()
+    rotated.rotate(angle, axis, rotate_cell=True)
+
+    R = _ase_rotation(angle, axis)
+    np.testing.assert_allclose(
+        get_adp(rotated, cartesian=True),
+        np.einsum("ia,nab,jb->nij", R, get_adp(atoms, cartesian=True), R),
+        atol=1e-12,
+    )
+    hkl = np.array([[1, 0, 5], [1, 2, 3], [0, 3, 1], [2, 1, 0]])
+    np.testing.assert_allclose(
+        calculate_structure_factors(hkl, rotated, "lobato", 100),
+        calculate_structure_factors(hkl, atoms, "lobato", 100),
+        atol=1e-6,
+    )
+
+
+def test_abtem_transforms_apply_an_earlier_rotation():
+    # A rotation by ASE, then one of abTEM's own transforms: the tensors are
+    # rotated first, then transformed (here mirrored, cut, orthogonalized).
+    from abtem.atoms import cut_cell, flip_atoms
+
+    atoms = set_adp(
+        Atoms("Si", scaled_positions=[(0.2, 0.3, 0.4)], cell=[4.1, 4.7, 5.3], pbc=True),
+        random_tensors(1),
+        cartesian=True,
+    )
+    rotated = atoms.copy()
+    rotated.rotate(90, "z", rotate_cell=True)
+    R = _ase_rotation(90, "z")
+    expected = R @ get_adp(atoms, cartesian=True)[0] @ R.T
+
+    mirror = np.diag([1.0, 1.0, -1.0])
+    np.testing.assert_allclose(
+        get_adp(flip_atoms(rotated, axis=2), cartesian=True)[0],
+        mirror @ expected @ mirror,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        get_adp(cut_cell(rotated, cell=(9.4, 8.2, 5.3)), cartesian=True)[0],
+        expected,
+        atol=1e-12,
+    )
+    orthogonal = abtem.orthogonalize_cell(rotated)
+    np.testing.assert_allclose(
+        get_adp(orthogonal, cartesian=True)[0], expected, atol=1e-12
+    )
+
+
+def test_unclassifiable_cell_changes_warn():
+    from abtem.adp import ADPFrameWarning
+
+    atoms = set_adp(MONOCLINIC, random_tensors(3), cartesian=True)
+
+    # a new basis together with a rotation cannot be classified
+    changed = atoms.copy()
+    changed.rotate(30, "z", rotate_cell=True)
+    changed.set_cell(
+        changed.cell[[1, 0, 2]] + changed.cell[[0, 0, 0]] * [[1], [0], [0]]
+    )
+    with pytest.warns(ADPFrameWarning):
+        stored = get_adp(changed, cartesian=True)
+    np.testing.assert_allclose(stored, get_adp(atoms, cartesian=True), atol=1e-15)
+
+    # relabelled, repeated and padded cells are the same frame, without warning
+    from ase.build import make_supercell
+
+    for same in (
+        atoms * (2, 1, 2),
+        make_supercell(atoms, [[1, 1, 0], [-1, 1, 0], [0, 0, 1]]),
+    ):
+        same.info.update(atoms.info)  # make_supercell drops the info
+        np.testing.assert_allclose(
+            get_adp(same, cartesian=True)[0],
+            get_adp(atoms, cartesian=True)[0],
+            atol=1e-15,
+        )
+    padded = atoms.copy()
+    padded.center(vacuum=3.0)
+    np.testing.assert_allclose(
+        get_adp(padded, cartesian=True), get_adp(atoms, cartesian=True), atol=1e-15
+    )
+
+
+def test_tensors_are_written_to_extended_xyz(tmp_path):
+    import ase.io
+
+    atoms = set_adp(MONOCLINIC, random_tensors(3), cartesian=True)
+    path = tmp_path / "atoms.xyz"
+    ase.io.write(path, atoms, format="extxyz")
+    read = ase.io.read(path)
+    # extended XYZ keeps about eight significant digits
+    np.testing.assert_allclose(
+        get_adp(read, cartesian=True), get_adp(atoms, cartesian=True), atol=1e-8
+    )
+
+
+def test_cif_site_shared_by_two_species(tmp_path):
+    # ASE makes one atom per shared site, of one species, whose kind is the first
+    # label; the atom gets the ADPs of its own species, with a warning that the
+    # species differ.
+    cif = """data_feco
+_cell_length_a 2.86
+_cell_length_b 2.86
+_cell_length_c 2.86
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_symmetry_space_group_name_H-M 'I m -3 m'
+_space_group_IT_number 229
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_U_iso_or_equiv
+Fe1 Fe 0 0 0 0.5 0.008
+Co1 Co 0 0 0 0.5 0.005
+"""
+    with pytest.warns(UserWarning, match="shared by several species"):
+        atoms = read_cif_adp(write_cif(tmp_path, cif))
+    for symbol, tensor in zip(
+        atoms.get_chemical_symbols(), get_adp(atoms, cartesian=True)
+    ):
+        expected = {"Fe": 0.008, "Co": 0.005}[symbol]
+        np.testing.assert_allclose(tensor, expected * np.eye(3), atol=1e-15)
 
 
 def test_validate_adp_forms():

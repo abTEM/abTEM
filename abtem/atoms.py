@@ -19,7 +19,7 @@ from ase.data import chemical_symbols
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
-from abtem.adp import _record_adp_frame, _transform_adp_array
+from abtem.adp import _record_adp_frame, _resolve_adp_frame, _transform_adp_array
 from abtem.core.utils import get_dtype, is_scalar, label_to_index
 
 axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
@@ -333,7 +333,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
 def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarray]:
     """`standardize_cell`, also returning the rotation it applies to the
     positions, as a 3x3 matrix acting on row vectors."""
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
 
     cell = np.array(atoms.cell)
 
@@ -345,6 +346,8 @@ def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarr
     if np.all(np.sum(np.abs(atoms.cell) < 1e-6, axis=0) == 2):
         new_order = np.argmax(np.abs(cell), axis=0)
         atoms.set_cell(np.diag(np.abs(cell[new_order])))
+        # the lattice vectors are relabelled, the atoms are not moved
+        _record_adp_frame(atoms)
 
         atoms.pbc = True
         atoms.wrap()
@@ -759,7 +762,8 @@ def rotate_atoms(
     Atoms
         The rotated atoms object.
     """
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
 
     if is_scalar(angles):
         padded_angles = (float(angles), 0.0, 0.0)
@@ -831,7 +835,8 @@ def _rotate_atoms_to_plane(
     if not isinstance(plane, str):
         raise NotImplementedError("plane must be given as a string, such as 'xz'.")
 
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
     rotation = _plane_rotation(plane)
 
     # A reversed axis gives the cell a negative lattice vector and the atoms
@@ -863,7 +868,8 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
     atoms : ase.Atoms
         Inverted atoms.
     """
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
     atoms.positions[:, axis] = atoms.cell[axis, axis] - atoms.positions[:, axis]
     mirror = np.eye(3)
     mirror[axis, axis] = -1.0
@@ -1323,7 +1329,8 @@ def orthogonalize_cell(
     # before `cut()` in the repeat-and-cut branch further down -- so copying
     # at only one of those call sites still leaves the others writing into
     # the caller's object.
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
 
     cell = atoms.cell
     cell[np.abs(cell) < 1e-6] = 0.0
@@ -1458,7 +1465,8 @@ def cut_cell(
     if isinstance(margin, SupportsFloat):
         margin = (float(margin), float(margin), float(margin))
 
-    atoms = atoms.copy()
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms).copy()
     if not np.all(np.isclose(origin, (0.0, 0.0, 0.0))):
         atoms.positions[:] = atoms.positions - origin
         atoms.wrap()

@@ -20,27 +20,34 @@ deviation sigma [Å] along each direction is ``U_cart = sigma^2 I``, and
 so that values from a CIF file or a paper mean what they say; ``cartesian=True``
 gives and returns ``U_cart``. `read_cif_adp` reads them from a CIF file.
 
-Inside, the atoms carry ``U_cart`` as the per-atom array named by `ADP_ARRAY`, with
-shape ``(N, 3, 3)``, which is unchanged when abTEM repeats, cuts or pads the cell
-and which every transformation abTEM applies to the positions also applies to the
-tensors: rotating to a plane, orthogonalizing or standardizing the cell,
-`abtem.atoms.rotate_atoms` and `abtem.atoms.flip_atoms`. A linear map ``F`` acting
-on row vectors, ``r -> r @ F``, takes a tensor to ``F^T U_cart F``. A tensor
-proportional to the identity is left as it is, as frozen phonons leave an isotropic
-displacement: an isotropic Gaussian is the same along any rotated axes, and the
-small strain an orthogonalization may need is not applied to it.
+Inside, the atoms carry ``U_cart`` as the per-atom array named by `ADP_ARRAY` (rows
+of nine values, which ASE writes to extended XYZ files), which is unchanged when
+abTEM repeats, cuts or pads the cell and which every transformation abTEM applies
+to the positions also applies to the tensors: rotating to a plane, orthogonalizing
+or standardizing the cell, `abtem.atoms.rotate_atoms` and `abtem.atoms.flip_atoms`.
+A linear map ``F`` acting on row vectors, ``r -> r @ F``, takes a tensor to
+``F^T U_cart F``. A tensor proportional to the identity is left as it is, as frozen
+phonons leave an isotropic displacement: an isotropic Gaussian is the same along
+any rotated axes, and the small strain an orthogonalization may need is not
+applied to it.
 
-The atoms also record the cell their tensors refer to. Atoms rotated by other means
-together with their cell, such as ``ase.Atoms.rotate(..., rotate_cell=True)``, have
-their tensors rotated with them when abTEM uses them. Atoms whose positions are
-rotated without their cell cannot be told from atoms that were not rotated; rotate
-those with `abtem.atoms.rotate_atoms`, or transform the tensors with
-`transform_adp`.
+The atoms also record the cell their tensors refer to (``atoms.info`` under
+`ADP_CELL_INFO`). Where atoms enter abTEM, a cell turned with its atoms by one
+rotation since then, such as by ``ase.Atoms.rotate(..., rotate_cell=True)``, also
+by a rotation that maps the lattice onto itself, turns the tensors with it. A cell
+along the same directions (vacuum added) or spanning the same lattice (a
+supercell, reordered or reversed lattice vectors) is the same frame. Any other
+change, such as a new basis together with a rotation, keeps the tensors with an
+`ADPFrameWarning`. Two cases cannot be detected: positions rotated without their
+cell (ASE's default ``rotate_cell=False``), which looks like no change, and a
+relabelling of the lattice vectors that equals a proper rotation (a cyclic
+permutation in a cubic cell), which looks like one. Rotate atoms with
+`abtem.atoms.rotate_atoms`, or transform the tensors with `transform_adp`.
 """
 
 from __future__ import annotations
 
-import itertools
+import re
 import warnings
 from numbers import Number
 from typing import Any, Optional
@@ -50,7 +57,8 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import atomic_numbers, chemical_symbols
 
-#: The name of the per-atom array holding the Cartesian ADP tensors [Å²].
+#: The name of the per-atom array holding the Cartesian ADP tensors [Å²], as rows of
+#: nine values.
 ADP_ARRAY = "adp"
 
 #: The key of ``atoms.info`` holding the cell the tensors refer to.
@@ -120,9 +128,15 @@ def transform_adp(adp: np.ndarray, linear_map: np.ndarray) -> np.ndarray:
 def _record_adp_frame(atoms: Atoms) -> None:
     """Record the current cell of the atoms as the one their tensors refer to."""
     if atoms.has(ADP_ARRAY):
-        atoms.info[ADP_CELL_INFO] = np.array(atoms.cell, dtype=float)
+        atoms.info[ADP_CELL_INFO] = np.array(atoms.cell, dtype=float).reshape(9)
     else:
         atoms.info.pop(ADP_CELL_INFO, None)
+
+
+def _store_adp(atoms: Atoms, adp: np.ndarray) -> None:
+    """Store Cartesian tensors on the atoms, as rows of nine values, which ASE can
+    write to extended XYZ files (it cannot write an (N, 3, 3) array)."""
+    atoms.set_array(ADP_ARRAY, np.asarray(adp, dtype=float).reshape((len(atoms), 9)))
 
 
 def _transform_adp_array(atoms: Atoms, linear_map: np.ndarray) -> None:
@@ -131,69 +145,90 @@ def _transform_adp_array(atoms: Atoms, linear_map: np.ndarray) -> None:
     now refer to."""
     if not atoms.has(ADP_ARRAY):
         return
-    atoms.set_array(ADP_ARRAY, transform_adp(atoms.get_array(ADP_ARRAY), linear_map))
+    _store_adp(atoms, transform_adp(_cartesian_adp(atoms), linear_map))
     _record_adp_frame(atoms)
 
 
-def _frame_rotation(reference: np.ndarray, cell: np.ndarray) -> Optional[np.ndarray]:
-    """The rotation of the frame from a reference cell to a cell, if the cell is the
-    reference cell rigidly rotated, with each lattice vector possibly scaled or
-    reversed; otherwise None.
+class ADPFrameWarning(UserWarning):
+    """The cell of atoms carrying ADP tensors changed in a way abTEM cannot
+    classify, so the tensors are used as stored."""
 
-    A cell spanning the same lattice (a supercell, or reordered or reversed
-    lattice vectors) or with lattice vectors along the same directions (vacuum
-    added) has the same frame. A rotation is a proper orthogonal matrix acting on
-    row vectors.
+
+def _frame_change(reference: np.ndarray, cell: np.ndarray) -> tuple[str, Any]:
+    """How the frame changed from a reference cell to a cell.
+
+    Returns ``("same", None)`` if every lattice vector points along the same
+    direction (vacuum added, a supercell along the lattice vectors) or the cell
+    spans the same lattice (a supercell, reordered or reversed lattice vectors);
+    ``("rotated", R)`` if every lattice vector, in the same order, is turned by
+    one proper rotation R acting on row vectors (rescaled vectors allowed, so
+    vacuum may have been added as well); and ``("unknown", None)`` otherwise.
+
+    The rotation test comes first, so that a rotation mapping the lattice onto
+    itself (90 degrees in a cubic cell, 180 degrees in any orthogonal one) is
+    seen. A relabelling of the lattice vectors that equals a proper rotation,
+    such as a cyclic permutation in a cubic cell, cannot be told from one.
     """
-    reference = np.asarray(reference, dtype=float)
+    reference = np.asarray(reference, dtype=float).reshape(-1)
     cell = np.asarray(cell, dtype=float)
-    if (
-        reference.shape != (3, 3)
-        or np.linalg.matrix_rank(reference) < 3
-        or np.linalg.matrix_rank(cell) < 3
-    ):
-        return None
-
-    lattice = cell @ np.linalg.inv(reference)
-    if np.allclose(lattice, np.round(lattice), atol=_FRAME_TOLERANCE):
-        return None
+    if reference.size != 9 or np.linalg.matrix_rank(cell) < 3:
+        return "same", None
+    reference = reference.reshape(3, 3)
+    if np.linalg.matrix_rank(reference) < 3:
+        return "same", None
 
     old = reference / np.linalg.norm(reference, axis=1, keepdims=True)
     new = cell / np.linalg.norm(cell, axis=1, keepdims=True)
+    if np.allclose(old, new, rtol=0, atol=_FRAME_TOLERANCE):
+        return "same", None
 
-    best, best_residual = None, np.inf
-    for signs in itertools.product((1.0, -1.0), repeat=3):
-        target = new * np.array(signs)[:, None]
-        # orthogonal Procrustes: the rotation R minimizing |old @ R - target|
-        u, _, vt = np.linalg.svd(old.T @ target)
-        rotation = u @ vt
-        if np.linalg.det(rotation) < 0:
-            continue
-        residual = np.abs(old @ rotation - target).max()
-        if residual < best_residual:
-            best, best_residual = rotation, residual
+    # orthogonal Procrustes: the rotation R minimizing |old @ R - new|
+    u, _, vt = np.linalg.svd(old.T @ new)
+    rotation = u @ vt
+    if (
+        np.linalg.det(rotation) > 0
+        and np.abs(old @ rotation - new).max() < _FRAME_TOLERANCE
+    ):
+        return "rotated", rotation
 
-    if best is None or best_residual > _FRAME_TOLERANCE:
-        return None
-    if np.allclose(best, np.eye(3), atol=_FRAME_TOLERANCE):
-        return None
-    return best
+    lattice = cell @ np.linalg.inv(reference)
+    if np.allclose(lattice, np.round(lattice), rtol=0, atol=_FRAME_TOLERANCE):
+        return "same", None
+
+    return "unknown", None
 
 
 def _resolve_adp_frame(atoms: Atoms) -> Atoms:
     """The atoms with their tensors in the frame of their current cell.
 
-    If the cell has been rotated since the tensors were set (by ASE, for example),
-    a copy with the tensors rotated with it is returned; otherwise the atoms."""
+    If the cell was rotated together with the atoms since the tensors were set (by
+    ``ase.Atoms.rotate(..., rotate_cell=True)``, for example), a copy with the
+    tensors rotated with it is returned. If it changed in a way that is neither
+    that nor a change of the same frame, the tensors are kept with an
+    `ADPFrameWarning`. Otherwise the atoms are returned."""
     if not atoms.has(ADP_ARRAY) or ADP_CELL_INFO not in atoms.info:
         return atoms
 
-    rotation = _frame_rotation(atoms.info[ADP_CELL_INFO], atoms.cell)
-    if rotation is None:
+    change, rotation = _frame_change(atoms.info[ADP_CELL_INFO], atoms.cell)
+    if change == "same":
         return atoms
 
     atoms = atoms.copy()
-    _transform_adp_array(atoms, rotation)
+    if change == "rotated":
+        _transform_adp_array(atoms, rotation)
+        return atoms
+
+    warnings.warn(
+        "The cell of the atoms has changed since their ADP tensors were set, in a "
+        "way that is neither a rotation of the cell with the atoms nor a new cell "
+        "in the same frame (such as a supercell or added vacuum); the tensors are "
+        "used as they were stored. If the atoms were also rotated, set the "
+        "tensors again with abtem.adp.set_adp, or transform them with "
+        "abtem.adp.transform_adp.",
+        ADPFrameWarning,
+        stacklevel=3,
+    )
+    _record_adp_frame(atoms)
     return atoms
 
 
@@ -273,11 +308,15 @@ def validate_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> np.ndarray:
 
         - a float, ``U_iso`` for every atom;
         - an (N,) array, ``U_iso`` for each atom;
-        - a (3, 3) tensor, or six components in the CIF order
-          (11, 22, 33, 12, 13, 23), for every atom;
-        - an (N, 3, 3) or (N, 6) array, one tensor per atom;
+        - a (3, 3) tensor for every atom;
+        - an (N, 3, 3) array, or an (N, 6) array of components in the CIF order
+          (11, 22, 33, 12, 13, 23), one tensor per atom;
         - a dict keyed by chemical symbol or atomic number, of a ``U_iso``, three
-          diagonal elements, six components or a (3, 3) tensor for each element.
+          diagonal elements, six components in the CIF order or a (3, 3) tensor
+          for each element.
+
+        Three or six bare values are not accepted for all atoms, as they could be
+        one ``U_iso`` per atom; give them per element in a dict.
 
         An isotropic ``U_iso`` is ``U_iso I`` in Cartesian coordinates, whatever the
         cell. Tensors are crystallographic ``U^ij`` relative to the cell of `atoms`
@@ -314,7 +353,7 @@ def validate_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> np.ndarray:
         tensors = np.array([given[symbol][0] for symbol in symbols]).reshape((n, 3, 3))
         isotropic = np.array([given[symbol][1] for symbol in symbols], dtype=bool)
         validated = to_cartesian(tensors, isotropic)
-    elif isinstance(adp, Number) or np.shape(adp) in ((), (6,), (3, 3)):
+    elif isinstance(adp, Number) or np.shape(adp) in ((), (3, 3)):
         tensor, isotropic = _as_tensor(adp)
         validated = to_cartesian(
             np.tile(tensor, (n, 1, 1)), np.full(n, isotropic, dtype=bool)
@@ -328,9 +367,9 @@ def validate_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> np.ndarray:
     else:
         raise ValueError(
             f"ADPs must be given as a float, an ({n},) array of U_iso, a (3, 3) "
-            f"tensor, six components, or an ({n}, 3, 3) or ({n}, 6) array for {n} "
-            f"atoms, got shape {np.shape(adp)}; give three diagonal elements per "
-            "element as a dict."
+            f"tensor, or an ({n}, 3, 3) or ({n}, 6) array for {n} atoms, got shape "
+            f"{np.shape(adp)}; give three diagonal elements or six components per "
+            "element in a dict."
         )
 
     return _check_tensors(validated)
@@ -367,7 +406,7 @@ def set_adp(atoms: Atoms, adp: Any, cartesian: bool = False) -> Atoms:
         if atoms.has(ADP_ARRAY):
             del atoms.arrays[ADP_ARRAY]
     else:
-        atoms.set_array(ADP_ARRAY, validate_adp(atoms, adp, cartesian=cartesian))
+        _store_adp(atoms, validate_adp(atoms, adp, cartesian=cartesian))
     _record_adp_frame(atoms)
     return atoms
 
@@ -806,6 +845,62 @@ def _cif_site_positions(tags: dict, cell: np.ndarray) -> np.ndarray:
     raise ValueError("The CIF gives no positions of the sites.")
 
 
+def _element_of(text: Any) -> Optional[str]:
+    """The element of a CIF type symbol or label, such as 'Fe' of 'Fe2+' or 'Fe1'."""
+    match = re.match(r"[A-Z][a-z]?", str(text))
+    if match is None:
+        return None
+    element = match.group(0)
+    if element in atomic_numbers:
+        return element
+    return element[0] if element[0] in atomic_numbers else None
+
+
+def _labels_of_atoms(
+    atoms: Atoms,
+    tags: dict,
+    labels: list,
+    kinds: np.ndarray,
+    site_positions: np.ndarray,
+    site_tensors: dict[str, np.ndarray],
+    symprec: float,
+) -> list:
+    """The site label of each atom: that of its kind, or, for a site shared by
+    several species, the label at the same position with the atom's element."""
+    types = _cif_list(tags, "_atom_site_type_symbol") or labels
+    elements = [_element_of(t) for t in types]
+
+    difference = site_positions[:, None] - site_positions[None]
+    difference -= np.round(difference)
+    shared = np.all(np.abs(difference) < symprec, axis=-1)
+
+    symbols = atoms.get_chemical_symbols()
+    result = []
+    differing = set()
+    for symbol, kind in zip(symbols, kinds):
+        candidates = np.flatnonzero(shared[kind])
+        index = kind
+        if len(candidates) > 1:
+            matching = [j for j in candidates if elements[j] == symbol]
+            if matching:
+                index = matching[0]
+            tensors = [site_tensors.get(labels[j]) for j in candidates]
+            if any(t is None for t in tensors) or not all(
+                np.allclose(t, tensors[0]) for t in tensors
+            ):
+                differing.add(tuple(labels[j] for j in candidates))
+        result.append(labels[index])
+
+    if differing:
+        warnings.warn(
+            f"The sites {sorted(differing)} are shared by several species with "
+            "different ADPs, and ASE represents each by one atom of one species; "
+            "it gets the ADPs of that species.",
+            stacklevel=3,
+        )
+    return result
+
+
 def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
     """The ADPs of atoms read from a CIF file by ASE, as Cartesian tensors.
 
@@ -875,8 +970,15 @@ def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
             )
         kinds = np.arange(len(atoms))
 
+    # ASE represents a site shared by several species (partial occupancy) by one
+    # atom of one of them, whose kind is the first of their labels: the atom gets
+    # the ADPs of the label of its own element.
+    site_labels_of_atoms = _labels_of_atoms(
+        atoms, tags, labels, kinds, site_positions, site_tensors, symprec
+    )
+
     missing = sorted(
-        {labels[kind] for kind in kinds if labels[kind] not in site_tensors}
+        {label for label in site_labels_of_atoms if label not in site_tensors}
     )
     if missing:
         warnings.warn(
@@ -937,13 +1039,13 @@ def adp_from_cif_tags(atoms: Atoms, symprec: float = 1e-4) -> Atoms:
     operation = np.argmax(matches, axis=1)
 
     adp = np.zeros((len(atoms), 3, 3))
-    for i, (kind, op) in enumerate(zip(kinds, operation)):
-        tensor = site_tensors.get(labels[kind])
+    for i, op in enumerate(operation):
+        tensor = site_tensors.get(site_labels_of_atoms[i])
         if tensor is not None:
             R = cartesian_rotations[op]
             adp[i] = R @ tensor @ R.T
 
-    atoms.set_array(ADP_ARRAY, adp)
+    _store_adp(atoms, adp)
     _record_adp_frame(atoms)
     return atoms
 

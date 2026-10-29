@@ -121,8 +121,11 @@ Features:
   space), and `FrozenPhonons(atoms)` without `sigmas`, which draws the displacements from U. The tensors
   turn and strain with the atoms when abTEM rotates them to a `plane`, orthogonalizes their cell, or
   applies `rotate_atoms`, `flip_atoms` or an EBSD slab, as anisotropic frozen-phonon displacements do; a
-  cell rotated with its atoms elsewhere, such as by `ase.Atoms.rotate(..., rotate_cell=True)`, is detected
-  and the tensors are rotated with it. Giving standard deviations as well (`sigmas` or
+  cell rotated with its atoms elsewhere, such as by `ase.Atoms.rotate(..., rotate_cell=True)`, also by a
+  rotation that maps the lattice onto itself, is detected and the tensors are rotated with it, and a cell
+  changed in a way that is neither that nor the same frame (a supercell, reordered axes, vacuum) keeps the
+  tensors with an `ADPFrameWarning`. The tensors are stored as rows of nine values, which ASE writes to
+  extended XYZ files. An atom on a CIF site shared by several species gets the ADPs of its own species. Giving standard deviations as well (`sigmas` or
   `Parametrization(sigmas=...)`), an explicit zero included, raises an error
   ([PR #646](https://github.com/abTEM/abTEM/pull/646))
     - `StructureFactor`, `calculate_structure_factors` and `calculate_scattering_factors` name the standard

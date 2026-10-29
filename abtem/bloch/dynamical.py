@@ -268,10 +268,10 @@ def calculate_scattering_factors(
     sigmas : float, dict or sequence, optional
         Standard deviation sigma of the atomic displacements along any direction
         [Å], with ``U = sigma^2``: one value for all atoms, one per element (as a
-        dict) or one per atom. Three values per atom or element along the Cartesian
-        axes, (σx, σy, σz), are deprecated; give ADP tensors instead. If None
-        (default), the ADP tensors the atoms carry are used, if any. Giving both
-        raises an error, also for an explicit zero.
+        dict) or one per atom, or three per atom or element along the Cartesian axes
+        of `atoms`, (σx, σy, σz) (deprecated for `StructureFactor`; give ADP tensors
+        instead). If None (default), the ADP tensors the atoms carry are used, if
+        any. Giving both raises an error, also for an explicit zero.
     occupancy : float, dict or sequence
         The occupancy of the atoms.
     cutoff : {'taper', 'hard'}

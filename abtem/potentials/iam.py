@@ -1617,7 +1617,12 @@ def _validate_frozen_phonons(atoms):
 
     if not hasattr(atoms, "randomize"):
         if isinstance(atoms, (list, tuple)):
-            frozen_phonons = AtomsEnsemble(atoms)
+            frozen_phonons = AtomsEnsemble(
+                [
+                    _resolve_adp_frame(member) if isinstance(member, Atoms) else member
+                    for member in atoms
+                ]
+            )
         elif isinstance(atoms, Atoms):
             frozen_phonons = DummyFrozenPhonons(atoms)
         else:
