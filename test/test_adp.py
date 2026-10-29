@@ -1301,6 +1301,115 @@ def test_ebsd_slab_carries_rotated_tensors(rutile):
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_and_crystal_potential_with_tensors(rutile, device):
+    # The ADP potential through PRISM and CrystalPotential, against the same
+    # potential through multislice and the repeated atoms. PRISM at
+    # interpolation 1 equals multislice to float32 rounding (4e-7 measured); a
+    # potential without the tensors differs by 3e-2.
+    atoms = exaggerated(rutile)
+    potential = abtem.Potential(
+        atoms * (2, 2, 3), gpts=64, slice_thickness=1.0, device=device
+    )
+    scan = abtem.CustomScan([(1.0, 1.5), (4.0, 2.2)])
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    detector = abtem.PixelatedDetector(max_angle=60)
+
+    def patterns(measurement):
+        return np.asarray(asnumpy(measurement.array))
+
+    multislice = patterns(
+        probe.multislice(potential, scan=scan, detectors=detector, lazy=False)
+    )
+    prism = patterns(
+        abtem.SMatrix(
+            potential=potential,
+            energy=100e3,
+            semiangle_cutoff=20,
+            interpolation=1,
+            device=device,
+        ).scan(scan, detectors=detector, lazy=False)
+    )
+    unsmeared = patterns(
+        probe.multislice(
+            abtem.Potential(
+                set_adp(atoms, None) * (2, 2, 3),
+                gpts=64,
+                slice_thickness=1.0,
+                device=device,
+            ),
+            scan=scan,
+            detectors=detector,
+            lazy=False,
+        )
+    )
+    assert np.abs(prism - multislice).sum() / multislice.sum() < 1e-4
+    assert np.abs(unsmeared - multislice).sum() / multislice.sum() > 1e-2
+
+    # a crystal tiled from an ADP unit is the potential of the repeated atoms
+    # (1.4e-7 of the maximum measured)
+    slice_thickness = atoms.cell[2, 2] / 2
+    unit = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
+    )
+    crystal = asnumpy(
+        abtem.CrystalPotential(unit, repetitions=(2, 2, 2)).build(lazy=False).array
+    )
+    repeated = asnumpy(
+        abtem.Potential(
+            atoms * (2, 2, 2),
+            gpts=(64, 64),
+            slice_thickness=slice_thickness,
+            device=device,
+        )
+        .build(lazy=False)
+        .array
+    )
+    np.testing.assert_allclose(crystal, repeated, rtol=0, atol=1e-5 * repeated.max())
+
+
+# one patch about the pole covers only the directions near it, and says so
+@pytest.mark.filterwarnings("ignore:.*farther than max_angle:UserWarning")
+def test_ebsd_with_tensors_equals_per_axis_sigmas():
+    # Frozen phonons drawn from diagonal Cartesian tensors displace the atoms of
+    # each slab as the per-axis standard deviations do, through the skewed fcc
+    # primitive cell and a slab at a general orientation (1e-7 measured); the
+    # same tensors with the axes swapped differ by 2.5e-2.
+    from abtem.ebsd import EBSDReferencePattern
+
+    silicon = bulk("Si", "diamond", a=5.431)
+    sigmas = np.array([0.05, 0.09, 0.13])
+
+    def reference(frozen_phonons):
+        return asnumpy(
+            EBSDReferencePattern(
+                frozen_phonons,
+                30e3,
+                n_patches=1,
+                slab_cell=(6.0, 6.0, 4.0),
+                gpts=8,
+                direction_gpts=30,
+                max_angle=200.0,
+                centrosymmetric=True,
+            )
+            .build(pbar=False, lazy=False)
+            .array
+        )
+
+    def tensors(values):
+        return set_adp(silicon, np.diag(values**2), cartesian=True)
+
+    by_sigmas = reference(
+        abtem.FrozenPhonons(silicon, 2, sigmas={"Si": tuple(sigmas)}, seed=3)
+    )
+    by_tensors = reference(abtem.FrozenPhonons(tensors(sigmas), 2, seed=3))
+    swapped = reference(abtem.FrozenPhonons(tensors(sigmas[::-1]), 2, seed=3))
+
+    scale = np.abs(by_sigmas).max()
+    np.testing.assert_allclose(by_tensors, by_sigmas, rtol=0, atol=1e-5 * scale)
+    assert np.abs(swapped - by_sigmas).max() > 1e-2 * scale
+
+
 @pytest.mark.slow
 def test_bloch_waves_pair_with_multislice_for_full_tensors(rutile):
     # Paraxial Bloch waves against first-order multislice, as in
