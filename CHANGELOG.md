@@ -140,6 +140,20 @@ Performance:
       5.7 s, with a peak of 3.9 GB instead of 9.3 GB (2.5 instead of 6 complex beams x beams
       matrices); the error against double precision is 2.6e-4 instead of 4.3e-4. Kyanite's 28,898
       beams, which ran out of memory, fit with a peak of 16.7 GB
+- Bloch waves have a second solver, chosen by the configuration key `bloch.solver`: `"band"` reduces
+  the structure matrix in place to band form with matrix products and expands the incident wave in
+  Chebyshev polynomials of the band matrix, instead of diagonalizing it (`"eigh"`). The default `"auto"`
+  uses it on a GPU when it is estimated to be faster, which is for thousands of beams; on the CPU, and
+  for small or very thick crystals, the eigendecomposition is faster
+  ([PR #642](https://github.com/abTEM/abTEM/pull/642))
+    - Measured for one orientation on a 24 GB RTX 4090 in single precision, with thicknesses to 1000 Å:
+      monoclinic ZrO2 (13,903 beams) takes 0.71 s instead of 2.90 s (real symmetric form) and 1.13 s
+      instead of 5.77 s (complex), and kyanite (28,898 beams) 2.56 s instead of 24.3 s. The peak memory
+      is a quarter (0.5-0.7 instead of 2.5 complex beams x beams matrices, 1.1-1.3 instead of 5.0), so
+      kyanite's complex form fits (7.2 GB). The error against double precision is 4.8e-5, 9.4e-5 and
+      9.7e-5 instead of 2.6e-4, 4.3e-4 and 1.3e-3: the eigendecomposition's grows with the number of
+      beams
+    - The expansion costs about 0.3 s per 1000 Å of the largest thickness on that GPU
     - A rotation series computes the structure factors once, not once per orientation or dask block
 
 Dependencies:
