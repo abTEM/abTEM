@@ -70,6 +70,7 @@ from abtem.multislice import (
     allocate_multislice_measurements,
 )
 from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -126,6 +127,17 @@ def _find_spin_axis(waves: "Waves") -> int:
         )
 
     return spin_axis
+
+
+def _validate_untilted(waves: "Waves") -> None:
+    # Neither scheme propagates tilt (the scalar multislice applies it in its
+    # propagator or as a translation), and a tilted beam would also need the
+    # tan(tilt) . A_xy part of the line integral of A in its magnetic phase.
+    if waves.base_tilt != (0.0, 0.0) or _get_tilt_axes(waves):
+        raise NotImplementedError(
+            "the Pauli multislice does not support tilted waves; tilt the "
+            "sample (atoms and fields) instead"
+        )
 
 
 def _validate_field(field, potential, name: str, expected_cls) -> None:
@@ -452,7 +464,9 @@ def _pauli_multislice_step_split(
     A_x = vector_potential_slice[0].astype(complex_dtype)
     A_y = vector_potential_slice[1].astype(complex_dtype)
 
-    A_x_uniform, A_y_uniform = uniform_ramps if uniform_ramps is not None else (None, None)
+    A_x_uniform, A_y_uniform = (
+        uniform_ramps if uniform_ramps is not None else (None, None)
+    )
 
     if xp.any(A_x) or xp.any(A_y) or A_x_uniform is not None:
         A_x_padded = gradient_stencil.pad_field(A_x)
@@ -634,6 +648,7 @@ def pauli_multislice_and_detect(
     use_split = isinstance(algorithm, FourierMultislice)
 
     spin_axis = _find_spin_axis(waves)
+    _validate_untilted(waves)
 
     if vector_potential is None:
         raise ValueError("vector_potential is required for the Pauli multislice")
@@ -1249,6 +1264,7 @@ def pauli_multislice(
     waves.grid.match(potential.grid)
 
     _find_spin_axis(waves)
+    _validate_untilted(waves)
 
     if waves.is_lazy:
         # The Pauli step mixes the two spin components inside each dask

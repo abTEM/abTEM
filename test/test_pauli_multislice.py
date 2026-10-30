@@ -166,6 +166,28 @@ def test_requires_spin_axis():
         pauli_multislice(waves, potential, vector_potential=A, magnetic_field=B)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("algorithm", ALGORITHMS.values(), ids=ALGORITHMS.keys())
+def test_tilted_waves_raise(lazy, algorithm):
+    """Tilt used to be dropped silently: the exit wave of a 20 mrad probe came
+    out unshifted while the scalar multislice moved it by tan(tilt) * depth."""
+    gpts, extent, n, dz = 16, 10.0, 2, 1.0
+    potential = vacuum_potential(n, gpts, extent, dz)
+    A, B = zero_fields(n, gpts, extent, dz)
+    waves = abtem.PlaneWave(
+        energy=ENERGY, gpts=gpts, extent=extent, tilt=(20.0, 0.0)
+    ).build(lazy=lazy)
+
+    with pytest.raises(NotImplementedError, match="tilted"):
+        pauli_multislice(
+            waves.to_spinor((1, 0)),
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            algorithm=algorithm,
+        )
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_scalar_limit(device):
     """With A = B = 0 each spinor channel must match the scalar real-space
