@@ -377,7 +377,8 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
     assert isinstance(patterns.ensemble_axes_metadata[0], NonLinearAxis)
     assert isinstance(patterns.ensemble_axes_metadata[1], EnergyAxis)
     assert patterns.ensemble_axes_metadata[1].values == tuple(energies)
-    assert patterns.metadata["energy"] == energies
+    # the EnergyAxis is the one record of the energies
+    assert patterns.metadata["energy"] is None
     waves = ensemble.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=lazy)
     assert waves.shape == (3, 2, 2, 16, 16)
     assert isinstance(waves.ensemble_axes_metadata[1], EnergyAxis)
@@ -441,7 +442,8 @@ def test_energy_ensemble_blocks_keep_every_energy():
     ensemble = BlochWaves(structure_factor, energy=[100e3, 200e3], sg_max=0.1).rotate(
         "x", np.array([0.0, 0.02])
     )
-    assert ensemble.energy == 100e3  # backward compatible
+    # a distribution of the energies, as PlaneWave(energy=[...]).energy
+    np.testing.assert_array_equal(ensemble.energy.values, [100e3, 200e3])
     blocks = ensemble.ensemble_blocks(1).compute()
     assert blocks.shape == (2,)
     np.testing.assert_array_equal(blocks[1]._energies, [100e3, 200e3])

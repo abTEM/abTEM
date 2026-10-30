@@ -23,6 +23,7 @@ from abtem.detectors import (
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
+    WindowedPixelatedDetector,
 )
 from abtem.ebsd import (
     EBSD,
@@ -87,6 +88,7 @@ __all__ = [
     "SegmentedDetector",
     "FlexibleAnnularDetector",
     "PixelatedDetector",
+    "WindowedPixelatedDetector",
     "WavesDetector",
     "RadialSensitivity",
     "Images",
