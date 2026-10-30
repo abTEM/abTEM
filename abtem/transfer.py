@@ -520,7 +520,7 @@ def hard_aperture(
     alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution
 ) -> np.ndarray:
     """
-    Calculates an array with a disk of ones and a soft edge.
+    Calculates an array with a disk of ones and a hard edge.
 
     Parameters
     ----------
@@ -536,7 +536,16 @@ def hard_aperture(
     hard_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
-    return xp.array(alpha <= semiangle_cutoff).astype(get_dtype(complex=False))
+
+    semiangle_cutoff_array = xp.asarray(semiangle_cutoff)
+
+    semiangle_cutoff_array, alpha = expand_dims_to_broadcast(
+        semiangle_cutoff_array, xp.asarray(alpha)
+    )
+
+    return xp.asarray(alpha <= semiangle_cutoff_array).astype(
+        get_dtype(complex=False)
+    )
 
 
 class Aperture(BaseAperture):
