@@ -180,6 +180,29 @@ def _accelerator_device():
 
 _ACCELERATOR = _accelerator_device()
 
+
+def _metal_kernels_are_usable() -> bool:
+    """Whether the emulated double precision can run here: abTEM's Metal kernels
+    need the real Metal device, not the torch CPU device that CI stands in for it."""
+    if _ACCELERATOR != "mps":
+        return False
+    from abtem.core import backend
+
+    try:
+        backend.check_metal_kernels_are_available()
+    except RuntimeError:
+        return False
+    return True
+
+
+_METAL_KERNELS = _metal_kernels_are_usable()
+_NO_KERNELS_REASON = (
+    "emulated float64 needs the Metal kernels, which torch's CPU device cannot run"
+)
+requires_metal_kernels = pytest.mark.skipif(
+    not _METAL_KERNELS, reason=_NO_KERNELS_REASON
+)
+
 # The accelerator half of every ["cpu", gpu] device parametrization. It used to
 # be the literal "gpu" (CuPy/CUDA); it now resolves to whichever accelerator the
 # machine actually has, so the same tests exercise Metal on Apple silicon and
@@ -254,11 +277,28 @@ devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
 
+def skip_float64_on_single_precision_arrays(device, reason="float64 arrays"):
+    """Skip a test that needs ``reason`` on the arrays of ``device`` when those are
+    the single-precision arrays of the Metal backend: it holds no float64, which
+    only the emulation of `float64_devices` (float64 on the host) gets around."""
+    if device == gpu.values[0] and _ACCELERATOR == "mps":
+        pytest.skip(f"the float32 arrays of the Metal backend cannot be {reason}")
+
+
+def skip_float64_without_metal_kernels(device):
+    """Skip a test that sets double precision in its body for the case of the
+    Metal backend (`gpu`) where the emulation's kernels cannot run."""
+    if device == gpu.values[0] and _ACCELERATOR == "mps" and not _METAL_KERNELS:
+        pytest.skip(_NO_KERNELS_REASON)
+
+
 def float64_devices(function):
     """Parametrize a test over `device` and run it in double precision with the
     numpy FFT, which the comparisons at 1e-10 of the maximum need (the
-    `float64_config` fixture of conftest.py). The `float64` marker makes the
-    collection hook of conftest.py skip the Metal case."""
+    `float64_config` fixture of conftest.py). On Metal that is the emulated double
+    precision of abtem.core._double_float, at the same tolerances as elsewhere; the
+    `float64` marker lets the collection hook of conftest.py skip its 'mps' case
+    where the Metal kernels cannot run (torch's CPU device)."""
     function = pytest.mark.usefixtures("float64_config")(function)
     return devices(pytest.mark.float64(function))
 

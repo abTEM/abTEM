@@ -20,7 +20,7 @@ Tests that set float64 use correspondingly tighter bounds (stated in place).
 import ase
 import numpy as np
 import pytest
-from utils import gpu
+from utils import gpu, skip_float64_on_single_precision_arrays
 
 import abtem
 from abtem import distributions
@@ -568,6 +568,9 @@ def test_weighted_energy_axis(device, tiny_potential):
 def test_weighted_reduction_dtype_and_direct_oracle(dtype, lazy, device):
     from abtem.core.axes import ParameterAxis
     from abtem.core.backend import get_array_module as xp_for
+
+    if dtype == "float64":
+        skip_float64_on_single_precision_arrays(device)
 
     rng = np.random.default_rng(0)
     host = rng.integers(0, 1000, size=(4, 3, 5, 6)).astype(dtype)
