@@ -11,6 +11,13 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- `RealSpaceMultislice(order="exact", expansion_scope="full")` evaluates the one-way root of the full operator without a
+  Taylor series, by a Lanczos iteration with the finite-difference Laplacian on the propagating band (new parameters
+  `propagating_cutoff`, `lanczos_tolerance` and `max_iterations`). The series diverges where `2 sigma V / k` reaches 1, which
+  is the case for the whole band at low energies and at the nuclei of heavy atoms at any energy: on graphene at 1 keV the
+  exact root (with the backscatter correction, which `expansion_scope="full"` always applies) is within 1.4 % of an exact
+  two-way solution where the series of order 1 is 7 % and the split step 8 % off, and it works at the orders and grids
+  where the series fails ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
@@ -132,6 +139,10 @@ Dependencies:
 
 Bugfixes:
 
+- `RealSpaceMultislice(expansion_scope="full")` now warns about a potential with the default infinite projection, which
+  puts the whole projected potential of an atom in one slice, so that the potential per unit thickness it needs grows as
+  1 / thickness and the result does not converge: use `projection="finite"`
+  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
