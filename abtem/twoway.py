@@ -12,10 +12,11 @@ in a basis of the beams g with |g| < cutoff, psi = sum_g phi_g(z) exp(2 pi i g.r
 coupled equations for phi_g(z) are integrated with the Numerov method (fourth order) on
 the potential's slices, with outgoing boundary conditions in the vacuum on both sides,
 by a block-tridiagonal solve. Backscattering and evanescent beams are exact; the only
-truncations are the beam set and the z step. For a normally incident wave the basis is
-reduced to the beams that couple to it: the reciprocal lattice of the structure's
-primitive translations, and one combination per orbit of its point symmetries (see
-:func:`structure_symmetry`).
+truncations are the beam set and the z step. For a plane wave of any direction the
+beams are the plane waves k_t + g of the reciprocal lattice, reduced to the sublattice
+that the structure's primitive translations leave coupled; for a normally incident wave
+the basis is further reduced to one combination per orbit of the structure's point
+symmetries (see :func:`structure_symmetry`).
 """
 
 from __future__ import annotations
@@ -27,10 +28,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import scipy.linalg as sla
 
-from abtem.core.backend import asnumpy
+from abtem.core import config
+from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.potentials.iam import PotentialArray
-from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
     from ase import Atoms
@@ -38,9 +39,24 @@ if TYPE_CHECKING:
     from abtem.potentials.iam import BasePotential
     from abtem.waves import PlaneWave, Waves
 
-# The block solve needs double precision whatever abtem.config["precision"] is: the
-# evanescent beams make the blocks ill-conditioned in single precision.
-_COMPLEX = np.complex128
+
+def _linear_algebra(xp):
+    """The LU factorisation and solve of the array module."""
+    if xp is np:
+        return sla.lu_factor, sla.lu_solve
+    from cupyx.scipy import linalg as cupy_linalg  # type: ignore
+
+    return cupy_linalg.lu_factor, cupy_linalg.lu_solve
+
+
+def _memory_budget(xp, limit: float) -> float:
+    """Bytes the solve may keep: ``limit``, and on a GPU at most 40 % of the free
+    memory."""
+    if xp is np:
+        return limit
+    free, _ = cp.cuda.Device().mem_info
+    return min(limit, 0.4 * free)
+
 
 _MAX_CENTRE_CANDIDATES = 24  # atoms of the smallest class tried for rotation centres
 _CHECKPOINT_BYTES = 4e9  # store every elimination block below this size
@@ -156,9 +172,22 @@ def structure_symmetry(atoms: Atoms, tolerance: float = 1e-4):
 
 
 class _BeamBasis:
-    """The beams of a normally incident wave and their reduction by symmetry."""
+    """The beams of the incident wave and their reduction by symmetry.
 
-    def __init__(self, gpts, sampling, cutoff, origin, operations, translations):
+    ``shift`` is the in-plane wave vector of the incident wave [1/Å]: the beams are the
+    plane waves g + shift of the reciprocal lattice with |g + shift| < cutoff.
+    """
+
+    def __init__(
+        self,
+        gpts,
+        sampling,
+        cutoff,
+        origin,
+        operations,
+        translations,
+        shift=(0.0, 0.0),
+    ):
         nx, ny = gpts
         lx, ly = nx * sampling[0], ny * sampling[1]
         ix = np.fft.fftfreq(nx, 1 / nx).round().astype(int)[:, None] * np.ones(
@@ -172,10 +201,11 @@ class _BeamBasis:
         lattice = np.ones((nx, ny), bool)
         for tx, ty in translations:
             lattice &= np.abs(np.exp(2j * np.pi * (ix * tx + iy * ty)) - 1) < 1e-9
-        keep = lattice & (np.hypot(gx, gy) < cutoff)
+        keep = lattice & (np.hypot(gx + shift[0], gy + shift[1]) < cutoff)
         self.gpts, self.origin = gpts, origin
         self.indices = np.argwhere(keep)  # (n_beams, 2): the grid indices of the beams
         self.gx, self.gy = gx[keep], gy[keep]
+        self.qx, self.qy = self.gx + shift[0], self.gy + shift[1]
         index = {
             (int(a), int(b)): i for i, (a, b) in enumerate(zip(ix[keep], iy[keep]))
         }
@@ -219,26 +249,48 @@ class _BeamBasis:
         self.sizes = np.array([len(m) for m in members], dtype=float)
         self.reduced = len(usable) > 1 and self.number_of_orbits < len(self.indices)
 
-    def coupling_function(self, fourier_coefficients, wave_number, sigma):
-        """The coupling matrix U_{g - h}(z_n) in the basis of orbits, for slice n."""
+    def coupling_function(self, fourier_coefficients, wave_number, sigma, xp=np):
+        """The coupling matrix U_{g - h}(z_n) in the basis of orbits, for slice n,
+        an array of the module ``xp``."""
         nx, ny = self.gpts
         u_k = 2 * wave_number * sigma * fourier_coefficients
         di = (self.indices[:, None, 0] - self.indices[None, :, 0]) % nx
         dj = (self.indices[:, None, 1] - self.indices[None, :, 1]) % ny
 
         if not self.reduced:
+            di, dj = xp.asarray(di), xp.asarray(dj)
             return lambda n: u_k[n][di, dj]
 
         order = np.argsort(self.orbit, kind="stable")
         starts = np.searchsorted(self.orbit[order], np.arange(self.number_of_orbits))
-        column_di, column_dj = di[:, self.representatives], dj[:, self.representatives]
-        weights = np.sqrt(self.sizes[None, :] / self.sizes[:, None])
+        column_di = xp.asarray(di[:, self.representatives])
+        column_dj = xp.asarray(dj[:, self.representatives])
+        real_dtype = np.empty(0, dtype=u_k.dtype).real.dtype
+        weights = xp.asarray(
+            np.sqrt(self.sizes[None, :] / self.sizes[:, None]).astype(real_dtype)
+        )
+
+        if xp is np:
+            order_indices = order
+
+            def orbit_sum(columns):
+                return np.add.reduceat(columns[order_indices], starts, axis=0)
+
+        else:
+            # no reduceat on the GPU: the sum over the members of every orbit is a
+            # product with the indicator matrix of the orbits
+            indicator = np.zeros((self.number_of_orbits, len(self.indices)), real_dtype)
+            indicator[self.orbit, np.arange(len(self.indices))] = 1.0
+            indicator = xp.asarray(indicator)
+
+            def orbit_sum(columns):
+                return indicator @ columns
 
         def coupling(n):
             columns = u_k[n][
                 column_di, column_dj
             ]  # U_{g - h0} for every g, h0 = member of O'
-            return np.add.reduceat(columns[order], starts, axis=0) * weights
+            return orbit_sum(columns) * weights
 
         return coupling
 
@@ -264,32 +316,35 @@ def _numerov_wave_numbers(kz2, h):
     return phase / h
 
 
-def _solve_blocks(coupling, kz2, kappa, h, nz, incident):
+def _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp=np, dtype=np.complex128):
     """Solve the Numerov equations for waves incident from below (z < 0) on the slab.
 
-    ``coupling(n)`` is the coupling matrix of slice n, ``kz2`` the squared longitudinal
-    wave numbers of the beams in vacuum, ``kappa`` the wave numbers of the Numerov
-    recurrence in vacuum (:func:`_numerov_wave_numbers`), ``incident`` the amplitudes
-    (n_beams,) of the incident beams at z = 0. Returns the amplitudes phi (nz, n_beams)
-    at the slice centres z_n = (n + 1/2) h, in the block-Thomas solve with
-    checkpointing.
+    ``coupling(n)`` is the coupling matrix of slice n (an array of ``xp``), ``kz2`` the
+    squared longitudinal wave numbers of the beams in vacuum, ``kappa`` the wave numbers
+    of the Numerov recurrence in vacuum (:func:`_numerov_wave_numbers`), ``incident``
+    the amplitudes (n_beams,) of the incident beams at z = 0, all of them on the host.
+    Returns the amplitudes phi (nz, n_beams), of the complex type ``dtype`` and the
+    array module ``xp``, at the slice centres z_n = (n + 1/2) h, in the block-Thomas
+    solve with checkpointing.
     """
+    lu_factor, lu_solve = _linear_algebra(xp)
     nb = len(kz2)
-    identity = np.eye(nb, dtype=_COMPLEX)
+    identity = xp.eye(nb, dtype=dtype)
     c = h**2 / 12
-    outgoing = np.exp(1j * kappa * h)
+    outgoing = xp.asarray((np.exp(1j * kappa * h)).astype(dtype))
+    base = xp.diag(xp.asarray(kz2.astype(dtype)))
 
     def operator(n):
-        base = np.diag(kz2).astype(_COMPLEX)
         return base if n < 0 or n >= nz else base + coupling(n)
 
     vacuum_boundary = identity + c * operator(-1)
-    rhs = np.zeros((nz, nb), _COMPLEX)
+    rhs = xp.zeros((nz, nb), dtype)
     z0 = h / 2
-    incident_at_first = incident * np.exp(1j * kappa * z0)
-    rhs[0] = -vacuum_boundary @ (
-        incident_at_first * (np.exp(-1j * kappa * h) - outgoing)
+    incident_at_first = xp.asarray((incident * np.exp(1j * kappa * z0)).astype(dtype))
+    entrance = xp.asarray(
+        (np.exp(-1j * kappa * h) - np.exp(1j * kappa * h)).astype(dtype)
     )
+    rhs[0] = -vacuum_boundary @ (incident_at_first * entrance)
 
     def blocks(n):
         diagonal = -2 * (identity - 5 * c * operator(n))
@@ -303,30 +358,35 @@ def _solve_blocks(coupling, kz2, kappa, h, nz, incident):
         diagonal, upper, lower = blocks(n)
         if n > 0:
             diagonal = diagonal - lower @ previous
-        factor = sla.lu_factor(diagonal)
+        factor = lu_factor(diagonal)
         return (
             factor,
             lower,
-            (sla.lu_solve(factor, upper) if upper is not None else None),
+            (lu_solve(factor, upper) if upper is not None else None),
         )
 
-    full_bytes = nz * nb * nb * 16
-    stride = nz if full_bytes < _CHECKPOINT_BYTES else int(np.ceil(np.sqrt(nz)))
+    itemsize = np.dtype(dtype).itemsize
+    full_bytes = nz * nb * nb * itemsize
+    stride = (
+        nz
+        if full_bytes < _memory_budget(xp, _CHECKPOINT_BYTES)
+        else int(np.ceil(np.sqrt(nz)))
+    )
 
-    forward = np.empty((nz, nb), _COMPLEX)
+    forward = xp.empty((nz, nb), dtype)
     stored, checkpoints = {}, {}
     previous = None
     for n in range(nz):
         factor, lower, eliminated = eliminate(n, previous)
         right = rhs[n] - lower @ forward[n - 1] if n > 0 else rhs[n]
-        forward[n] = sla.lu_solve(factor, right)
+        forward[n] = lu_solve(factor, right)
         if stride == nz:
             stored[n] = eliminated
         elif n % stride == 0:
             checkpoints[n] = eliminated
         previous = eliminated
 
-    phi = np.empty((nz, nb), _COMPLEX)
+    phi = xp.empty((nz, nb), dtype)
     phi[-1] = forward[-1]
     if stride == nz:
         for n in range(nz - 2, -1, -1):
@@ -375,8 +435,9 @@ class TwoWaySolver:
     which at low energies carry most of the reflection (graphene at 200 eV reflects 7 %,
     almost all of it through evanescent beams) and change the transmitted beams by tens
     of percent. The cost grows with the cube of the number of beams: use it for the
-    small cells of crystals and 2D materials. A normally incident plane wave is
-    supported, on the CPU, without absorption.
+    small cells of crystals and 2D materials. A plane wave of any direction is
+    supported, with ensembles of tilts (the directions are solved one after the other),
+    on the CPU and on CUDA devices, in single or double precision, without absorption.
 
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
@@ -394,34 +455,52 @@ class TwoWaySolver:
         propagating beams only.
     symmetry : bool, optional
         Reduce the basis by the translation and point symmetry of the structure, found
-        from the atoms of the potential (default True). The results agree with the full
+        from the atoms of the potential (default True). A tilted wave keeps the
+        translations and the point operations that leave its in-plane wave vector
+        unchanged. The results agree with the full
         basis to the asymmetry of the sampled potential; a distorted structure is not
         symmetrised. A built :class:`.PotentialArray` carries no atoms and is solved in
         the full basis.
     symmetry_tolerance : float, optional
         Largest displacement [Å] by which a symmetry operation may miss an atom (default
         1e-4).
+    precision : {"float32", "float64"}, optional
+        Precision of the solve (complex64 or complex128). By default it is the
+        ``precision`` of the configuration, as for the rest of abTEM. The evanescent
+        beams make the blocks ill-conditioned, but in single precision the strong beams
+        are still accurate to about 1e-4 (up to 1e-3 for thick specimens of strong
+        scatterers at 30 keV, which take thousands of steps) and the reflected wave to
+        1e-5; use double precision for a reference.
     """
 
     cutoff: float = 4.5
     symmetry: bool = True
     symmetry_tolerance: float = 1e-4
+    precision: str | None = None
 
     def __post_init__(self):
         if self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
+        if self.precision not in (None, "float32", "float64"):
+            raise ValueError(
+                "precision must be 'float32', 'float64' or None, "
+                f"got {self.precision!r}"
+            )
 
     def scatter(
         self, plane_wave: PlaneWave, potential: BasePotential
     ) -> tuple[Waves, Waves]:
         """
-        Scatter a normally incident plane wave from the slab.
+        Scatter a plane wave from the slab.
 
         Parameters
         ----------
         plane_wave : PlaneWave
-            The incident wave. Its energy is used, and its grid is matched to the
-            potential.
+            The incident wave. Its energy and its tilt, or its ensemble of tilts, are
+            used, and its grid is matched to the potential. A tilted wave travels
+            along (tan x, tan y, 1) and, as in multislice, is stored without the carrier
+            of its direction: the beam g of the result is the plane wave g + k_t, the
+            incident one is g = 0, and the result carries the tilt in its metadata.
         potential : BasePotential
             The slab. A :class:`.Potential` or a built :class:`.PotentialArray`, without
             an ensemble axis.
@@ -438,8 +517,11 @@ class TwoWaySolver:
         from abtem.waves import Waves
 
         waves = plane_wave.match_grid(potential).build(lazy=False)
-        if waves.base_tilt != (0.0, 0.0) or _get_tilt_axes(waves):
-            raise NotImplementedError("TwoWaySolver supports normal incidence only.")
+        if any(not hasattr(axis, "tilt") for axis in waves.ensemble_axes_metadata):
+            raise NotImplementedError(
+                "TwoWaySolver supports ensembles of tilts only, not of other "
+                "parameters."
+            )
         if potential.ensemble_shape:
             raise NotImplementedError(
                 "TwoWaySolver does not support ensemble potentials."
@@ -452,87 +534,161 @@ class TwoWaySolver:
             if isinstance(potential, PotentialArray)
             else potential.build(lazy=False)
         )
+        device = built.device
+        if device == "mps":
+            raise NotImplementedError(
+                "TwoWaySolver does not run on Metal (no complex linear algebra); use "
+                "the CPU or a CUDA device."
+            )
+        xp = get_array_module(device)
+        precision = self.precision or config.get("precision")
+        real_dtype = np.float32 if precision == "float32" else np.float64
+        complex_dtype = np.complex64 if precision == "float32" else np.complex128
         thicknesses = np.asarray(built.slice_thickness, dtype=float)
         h = float(thicknesses.mean())
         if not np.allclose(thicknesses, h, rtol=1e-6):
             raise ValueError("TwoWaySolver needs slices of equal thickness.")
-        projected = np.asarray(asnumpy(built.array), dtype=np.float64)
+        projected = xp.asarray(built.array, dtype=real_dtype)
         nz, nx, ny = projected.shape
         sampling = tuple(waves._valid_sampling)
-        if 1 / (2 * max(sampling)) < 2 * self.cutoff:
-            raise ValueError(
-                f"The potential is sampled too coarsely for cutoff={self.cutoff}: use "
-                f"a sampling of at most {1 / (4 * self.cutoff):.4f} Å or a lower "
-                "cutoff."
-            )
 
-        origin, operations, translations = (0.0, 0.0), [("rot0", np.eye(2))], []
+        origin, all_operations, translations = (
+            (0.0, 0.0),
+            [("rot0", np.eye(2))],
+            [],
+        )
         if self.symmetry:
             try:
                 atoms = potential.frozen_phonons.atoms  # type: ignore[attr-defined]
             except AttributeError:
                 atoms = None
             if atoms is not None and len(atoms) > 0:
-                origin, operations, translations = structure_symmetry(
+                origin, all_operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
                 )
 
         wave_number = 2 * np.pi / wavelength
         sigma = energy2sigma(energy)
         _check_step(h, wave_number, self.cutoff)
-        basis = _BeamBasis(
-            (nx, ny), sampling, self.cutoff, origin, operations, translations
-        )
 
         # the potential's Fourier coefficients, with the origin moved onto the symmetry
         # axis
         fx = np.fft.fftfreq(nx, sampling[0])[:, None]
         fy = np.fft.fftfreq(ny, sampling[1])[None, :]
         shift = np.exp(2j * np.pi * (fx * origin[0] + fy * origin[1]))
-        fourier = np.fft.fft2(projected / h, axes=(1, 2)) / (nx * ny) * shift[None]
-        coupling = basis.coupling_function(fourier, wave_number, sigma)
-        if nz * basis.number_of_orbits**2 * 16 < _COUPLING_CACHE_BYTES:
-            cache = np.stack([coupling(n) for n in range(nz)])
-            coupling = lambda n: cache[n]  # noqa: E731
-
-        gx, gy = basis.gx[basis.representatives], basis.gy[basis.representatives]
-        if basis.reduced:
-            kz2 = wave_number**2 - 4 * np.pi**2 * (gx**2 + gy**2)
-        else:
-            kz2 = wave_number**2 - 4 * np.pi**2 * (basis.gx**2 + basis.gy**2)
-        exact = np.sqrt(kz2.astype(_COMPLEX))
-        kappa = _numerov_wave_numbers(kz2, h)
-        incident = np.zeros(len(kz2), _COMPLEX)
-        incident[int(np.argmin(np.abs(exact - wave_number)))] = 1.0
-
-        phi = _solve_blocks(coupling, kz2, kappa, h, nz, incident)
-        half = np.exp(1j * kappa * h / 2)
-        reflected = (phi[0] - incident * half) * half  # at the entrance plane z = 0
-        # The vacuum phase is removed with the exact wave number of the incident beam,
-        # and each beam's Numerov dispersion over the slab's thickness with it (exact in
-        # the vacuum parts of the slab, very nearly so in the rest).
-        thickness = nz * h
-        dispersion = np.where(
-            np.abs(exact.imag) < 1e-12, np.exp(-1j * (kappa - exact) * thickness), 1.0
+        fourier = xp.fft.fft2(projected / h, axes=(1, 2)) / (nx * ny)
+        fourier = (fourier * xp.asarray(shift.astype(complex_dtype))[None]).astype(
+            complex_dtype
         )
-        vacuum_phase = np.exp(-1j * wave_number * thickness)
-        transmitted = phi[-1] * half * dispersion * vacuum_phase
 
-        def to_waves(amplitudes):
-            """Real-space wave from per-orbit (or per-beam) amplitudes."""
-            if basis.reduced:
-                beam_amplitudes = np.zeros(len(basis.indices), _COMPLEX)
-                for o, members in enumerate(basis.members):
-                    beam_amplitudes[members] = amplitudes[o] / np.sqrt(len(members))
-            else:
-                beam_amplitudes = amplitudes
-            beam_amplitudes = beam_amplitudes * np.exp(
-                -2j * np.pi * (basis.gx * origin[0] + basis.gy * origin[1])
+        def solve(tilt):
+            """The transmitted and the reflected wave [arrays of the grid, on the host]
+            of the wave of this tilt [mrad]."""
+            # The incident wave travels along (tan x, tan y, 1), and is stored without
+            # its carrier exp(2 pi i (k_t . r + k_zt z)), as multislice does: the stored
+            # beam g is the plane wave g + k_t, and the incident one is g = 0.
+            tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+            norm = np.sqrt(1.0 + np.sum(tangent**2))
+            in_plane = tuple(tangent / (wavelength * norm))  # k_t [1/Å]
+            incident_kz = 2 * np.pi / (wavelength * norm)
+
+            if 1 / (2 * max(sampling)) < 2 * self.cutoff + np.hypot(*in_plane):
+                raise ValueError(
+                    f"The potential is sampled too coarsely for cutoff={self.cutoff}: "
+                    f"use a sampling of at most "
+                    f"{1 / (4 * self.cutoff + 2 * np.hypot(*in_plane)):.4f} Å or a "
+                    "lower cutoff."
+                )
+
+            # a tilted wave is invariant under the translations and under the point
+            # operations that leave its in-plane wave vector unchanged, the mirror along
+            # its direction, for example
+            operations = [
+                (name, matrix)
+                for name, matrix in all_operations
+                if np.allclose(matrix @ np.array(in_plane), in_plane, atol=1e-6)
+            ]
+            basis = _BeamBasis(
+                (nx, ny),
+                sampling,
+                self.cutoff,
+                origin,
+                operations,
+                translations,
+                shift=in_plane,
             )
-            spectrum = np.zeros((nx, ny), _COMPLEX)
-            spectrum[basis.indices[:, 0], basis.indices[:, 1]] = beam_amplitudes
-            array = np.fft.ifft2(spectrum) * (nx * ny)
-            array = array.astype(waves.array.dtype)
+            coupling = basis.coupling_function(fourier, wave_number, sigma, xp)
+            itemsize = np.dtype(complex_dtype).itemsize
+            if nz * basis.number_of_orbits**2 * itemsize < _memory_budget(
+                xp, _COUPLING_CACHE_BYTES
+            ):
+                cache = xp.stack([coupling(n) for n in range(nz)])
+                coupling = lambda n: cache[n]  # noqa: E731
+
+            qx, qy = basis.qx, basis.qy
+            if basis.reduced:
+                qx, qy = qx[basis.representatives], qy[basis.representatives]
+            kz2 = wave_number**2 - 4 * np.pi**2 * (qx**2 + qy**2)
+            exact = np.sqrt(kz2.astype(np.complex128))
+            kappa = _numerov_wave_numbers(kz2, h)
+            incident = np.zeros(len(kz2), np.complex128)
+            incident[int(np.argmin(np.abs(exact - incident_kz)))] = 1.0
+
+            phi = asnumpy(
+                _solve_blocks(coupling, kz2, kappa, h, nz, incident, xp, complex_dtype)
+            ).astype(np.complex128)
+            half = np.exp(1j * kappa * h / 2)
+            reflected = (phi[0] - incident * half) * half  # at the entrance plane z = 0
+            # The vacuum phase is removed with the exact wave number of the incident
+            # beam, and each beam's Numerov dispersion over the slab's thickness with it
+            # (exact in the vacuum parts of the slab, very nearly so in the rest).
+            thickness = nz * h
+            dispersion = np.where(
+                np.abs(exact.imag) < 1e-12,
+                np.exp(-1j * (kappa - exact) * thickness),
+                1.0,
+            )
+            vacuum_phase = np.exp(-1j * incident_kz * thickness)
+            transmitted = phi[-1] * half * dispersion * vacuum_phase
+
+            def to_array(amplitudes):
+                """Real-space wave from per-orbit (or per-beam) amplitudes."""
+                if basis.reduced:
+                    beam_amplitudes = np.zeros(len(basis.indices), np.complex128)
+                    for o, members in enumerate(basis.members):
+                        beam_amplitudes[members] = amplitudes[o] / np.sqrt(len(members))
+                else:
+                    beam_amplitudes = amplitudes
+                beam_amplitudes = beam_amplitudes * np.exp(
+                    -2j * np.pi * (basis.gx * origin[0] + basis.gy * origin[1])
+                )
+                spectrum = np.zeros((nx, ny), np.complex128)
+                spectrum[basis.indices[:, 0], basis.indices[:, 1]] = beam_amplitudes
+                return np.fft.ifft2(spectrum) * (nx * ny)
+
+            return to_array(transmitted), to_array(reflected)
+
+        # the total tilt of every member of the ensemble: the base tilt plus the value
+        # of each tilt axis, broadcast over the ensemble axes in their order
+        axes = waves.ensemble_axes_metadata
+        ensemble_shape = waves.shape[:-2]
+        tilts = np.broadcast_to(
+            np.asarray(waves.base_tilt, dtype=float), ensemble_shape + (2,)
+        ).copy()
+        for i, axis in enumerate(axes):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            shape = [1] * len(axes) + [2]
+            shape[i] = len(values)
+            tilts += values.reshape(shape)
+
+        results = [solve(tilt) for tilt in tilts.reshape(-1, 2)]
+        module = get_array_module(waves.device)
+
+        def to_waves(index):
+            array = np.stack([result[index] for result in results]).reshape(
+                ensemble_shape + (nx, ny)
+            )
+            array = module.asarray(array.astype(waves.array.dtype))
             return Waves(array, **waves._copy_kwargs(exclude=("array",)))
 
-        return to_waves(transmitted), to_waves(reflected)
+        return to_waves(0), to_waves(1)
