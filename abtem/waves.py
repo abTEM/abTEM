@@ -458,7 +458,9 @@ def reduce_ensemble(
         return _average_frozen_phonon_waves(output)
 
     if not isinstance(output, BaseMeasurements) and any(
-        isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+        isinstance(ax, FrozenPhononsAxis)
+        and not ax._ensemble_mean
+        and not ax._ensemble_mean_forced
         for ax in output.ensemble_axes_metadata
     ):
         warnings.warn(
