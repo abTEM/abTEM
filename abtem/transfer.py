@@ -1005,7 +1005,7 @@ class Vortex(BaseAperture):
         # cupy's xp.where requires an actual array condition, unlike numpy's,
         # which tolerates a bare bool
         nonzero = xp.asarray(quantum_number != 0)
-        array = xp.where(nonzero, array * xp.logical_not(center), array)
+        array = xp.where(nonzero & center, 0.0, array)
         return array
 
 

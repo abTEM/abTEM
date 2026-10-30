@@ -626,7 +626,8 @@ def test_lazy_matches_eager(device):
     assert np.abs(to_numpy(eager.array[1])).max() > 1e-4
 
 
-def test_vortex_probe_spinor():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_vortex_probe_spinor(device):
     """A Probe with the built-in Vortex aperture composes with to_spinor and
     the Pauli solver: scanned batches work, the lazy path matches eager
     bit-exactly, and the beam equals the hand-built vortex construction
@@ -659,6 +660,7 @@ def test_vortex_probe_spinor():
         energy=ENERGY,
         extent=extent,
         gpts=gpts,
+        device=device,
     )
 
     # the built-in Vortex equals the hand-built construction
@@ -670,6 +672,7 @@ def test_vortex_probe_spinor():
             extent=extent,
             gpts=gpts,
             soft=False,
+            device=device,
         )
         .build(lazy=False)
         .array
@@ -699,6 +702,7 @@ def test_vortex_probe_spinor():
         energy=ENERGY,
         extent=extent,
         gpts=gpts,
+        device=device,
     )
     bm = to_numpy(probe_m.build(scan=[list(Mp)], lazy=False).array)
     constant = np.vdot(bp.T, bm) / np.vdot(bp.T, bp.T)
