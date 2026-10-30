@@ -21,6 +21,8 @@ from typing import Optional
 import numpy as np
 from ase import Atoms
 
+from abtem.adp import _record_adp_frame, _resolve_adp_frame
+from abtem.atoms import _transform_per_atom_arrays
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons
 
 __all__ = [
@@ -282,6 +284,8 @@ def rotated_slab(
         if origin.shape != (3,):
             raise ValueError(f"origin must have shape (3,), got {origin.shape}")
 
+    # apply a rotation of the cell made outside abTEM to the ADP tensors first
+    atoms = _resolve_adp_frame(atoms)
     if repetitions == (1, 1, 1):
         # the rotation below is in place, and the caller may reuse the block
         block = atoms.copy()
@@ -298,6 +302,9 @@ def rotated_slab(
     block.rotate(
         zone_axis / np.linalg.norm(zone_axis), "z", center=anchor, rotate_cell=True
     )
+    # ASE rotates the positions only; per-atom ADP tensors and magnetic moments
+    # turn with them (row vectors map by R^T).
+    _transform_per_atom_arrays(block, rotation.T)
 
     positions = block.positions - anchor
     half = cell_array / 2.0
@@ -317,6 +324,8 @@ def rotated_slab(
     slab = block[inside]
     slab.translate(half)
     slab.cell = cell_array
+    # the box is a new cell in the frame the tensors were turned to
+    _record_adp_frame(slab)
 
     return slab, rotation
 
@@ -346,7 +355,8 @@ def _crystal_and_displacements(
     else:
         frozen_phonons = None
 
-    atoms = atoms.copy()
+    # ADP tensors follow a cell rotated since they were set
+    atoms = _resolve_adp_frame(atoms).copy()
     atoms.set_array("cell_index", np.arange(len(atoms)))
     return atoms, frozen_phonons
 
@@ -423,8 +433,9 @@ def _displaced(
         return slab
 
     sigmas = frozen_phonons.sigmas
-    if not isinstance(sigmas, dict):
-        # given per atom of the crystal
+    if sigmas is not None and not isinstance(sigmas, dict):
+        # given per atom of the crystal; ADP tensors (sigmas None) are carried
+        # and rotated by the slab itself
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
     return _SlabFrozenPhonons(

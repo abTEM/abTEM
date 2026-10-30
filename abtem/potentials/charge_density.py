@@ -13,13 +13,14 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
+from abtem.adp import ADP_ARRAY, _cartesian_adp
 from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
-from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
+from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons, FrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
@@ -414,6 +415,26 @@ class ChargeDensityPotential(_PotentialBuilder):
             self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             raise RuntimeError()
+
+        # Smearing the nuclei by ADP tensors but not the DFT electron density
+        # would smear part of the potential. Frozen phonons drawn from the
+        # tensors displace the nuclei and drop the tensors, as with sigmas.
+        draws_from_tensors = (
+            isinstance(self._frozen_phonons, FrozenPhonons)
+            and self._frozen_phonons.sigmas is None
+        )
+        first = self._frozen_phonons.atoms
+        if (
+            not draws_from_tensors
+            and isinstance(first, Atoms)
+            and _cartesian_adp(first) is not None
+        ):
+            raise ValueError(
+                "ChargeDensityPotential cannot smear its atoms by ADP tensors (the "
+                f"'{ADP_ARRAY}' array): the electron density would stay unsmeared. "
+                "Use FrozenPhonons(atoms, num_configs) to displace the atoms by "
+                "the tensors, or remove them with abtem.adp.set_adp(atoms, None)."
+            )
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
