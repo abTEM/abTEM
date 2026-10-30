@@ -359,9 +359,10 @@ def get_magnetization_from_gpaw(calc, gridrefinement: int = 2):
         axis is arbitrary (represented along z); False for genuinely
         directional non-collinear magnetization.
     """
+    # GPAW 26's legacy calculator has a `dft` shim too, without `densities`.
     dft = getattr(calc, "dft", None)
 
-    if dft is not None:
+    if hasattr(dft, "densities"):
         with _GPAW_LOCK:
             n = dft.densities().all_electron_densities(
                 grid_refinement=gridrefinement
