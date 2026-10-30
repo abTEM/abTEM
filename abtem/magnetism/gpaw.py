@@ -92,15 +92,27 @@ from abtem.slicing import _integrate_planes, is_number
 DEFAULT_MAGNETIZATION_G_MAX = 4.0
 
 
-def calculate_constant_magnetic_field(magnetization: np.ndarray) -> np.ndarray:
+def calculate_constant_magnetic_field(
+    magnetization: np.ndarray, slab_normal: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
-    Uniform part of the magnetic field, B_avg = mu_0 * mu_B * <m> [T].
+    Uniform part of the magnetic field B_avg [T] of a magnetization.
 
     A periodic vector potential can only represent a magnetic field with
     zero cell average [PRB 94, 174414 (2016), Appendix], so the field of a
     magnetic solid decomposes as B = B_p + B_avg, where B_p (zero average)
-    comes from the periodic vector potential and B_avg = mu_0 * M is the
-    volume average of the field, with M the magnetization of the material.
+    comes from the periodic vector potential and B_avg is the macroscopic
+    field, which depends on the shape of the sample through its
+    demagnetizing field. With M = mu_B * <m> the magnetization:
+
+    - without `slab_normal`, B_avg = mu_0 * M, the field of a 3D-periodic
+      solid (no demagnetizing field), as used in PRB 94, 174414;
+    - with `slab_normal` n, B_avg = mu_0 * (M - n (n . M)), the field inside
+      a slab infinite across n, such as a multislice sample (n along the
+      beam): B_n is continuous across the surfaces and zero outside, and the
+      tangential H is zero outside and continuous, so the normal part of
+      mu_0 * M is cancelled by the demagnetizing field.
+
     B_avg vanishes for antiferromagnets and other compensated textures.
 
     Parameters
@@ -108,6 +120,9 @@ def calculate_constant_magnetic_field(magnetization: np.ndarray) -> np.ndarray:
     magnetization : np.ndarray
         Magnetization density of shape (3,) + (nx, ny, nz) in units of
         Bohr magnetons per cubic Ångström.
+    slab_normal : array of three float, optional
+        Normal of the slab the sample is, in the frame of `magnetization`.
+        None for a 3D-periodic solid.
 
     Returns
     -------
@@ -116,7 +131,12 @@ def calculate_constant_magnetic_field(magnetization: np.ndarray) -> np.ndarray:
     """
     magnetization = np.asarray(magnetization)
     average_magnetization = magnetization.reshape(3, -1).mean(axis=1)
-    return vacuum_permeability * bohr_magneton * average_magnetization
+    average_field = vacuum_permeability * bohr_magneton * average_magnetization
+    if slab_normal is not None:
+        normal = np.asarray(slab_normal, dtype=float)
+        normal = normal / np.linalg.norm(normal)
+        average_field = average_field - normal * (normal @ average_field)
+    return average_field
 
 
 def calculate_non_periodic_magnetic_vector_potential(
@@ -172,8 +192,9 @@ def calculate_non_periodic_magnetic_vector_potential(
        bound currents vanish identically, curl(M) = 0 and M x n = 0, giving
        H = -M and B = 0 inside: the correct uniform field is then zero, not
        mu_0 * M. For M in the film plane the demagnetizing factor is ~0 and
-       B_avg = mu_0 * M stands. Choose `average_field` for the geometry
-       being modelled rather than passing this function's output blindly.
+       B_avg = mu_0 * M stands. `calculate_constant_magnetic_field` gives
+       the slab field with `slab_normal`, and `gpaw_magnetic_fields` does
+       by default (`demagnetization="slab"`).
 
        This choice is not cosmetic. For the FePt case above, dropping to
        B_avg = 0 removes the artifact at its source -- the C4 violation
@@ -1398,7 +1419,8 @@ class GPAWMagneticFields:
     from the periodic vector potential and integrates to zero average by
     construction. It is computed once from the calculator's magnetization
     while `gpaw_magnetic_fields` still holds a reference to it, permuted by
-    the same `plane`-dependent axis order as the field arrays. Pass it as
+    the same `plane`-dependent axis order as the field arrays, for the sample
+    geometry chosen by that function's `demagnetization`. Pass it as
     `pauli_multislice`'s `average_field` argument; it is left untouched by
     `.tile()` since it is a single global constant, not a per-slice field.
     """
@@ -1544,6 +1566,7 @@ def gpaw_magnetic_fields(
     lazy: Optional[bool] = None,
     potential_kwargs: Optional[dict] = None,
     field_kwargs: Optional[dict] = None,
+    demagnetization: Optional[str] = "slab",
 ) -> GPAWMagneticFields:
     """
     Build the electrostatic potential, magnetic vector potential and
@@ -1613,6 +1636,13 @@ def gpaw_magnetic_fields(
         Extra keyword arguments forwarded only to `GPAWPotential`, or only
         to `GPAWVectorPotential`/`GPAWMagneticField`, respectively (e.g.
         their differing `gridrefinement` defaults).
+    demagnetization : "slab" or None
+        Sample geometry for the uniform field `average_field`. "slab"
+        (default): an infinite slab normal to the beam, the geometry of a
+        multislice sample, where the demagnetizing field cancels the
+        component of mu_0 * M along the beam, so B_avg = mu_0 * M_xy. None:
+        a 3D-periodic solid, B_avg = mu_0 * M, the convention of PRB 94,
+        174414. See `calculate_constant_magnetic_field`.
 
     Returns
     -------
@@ -1624,6 +1654,11 @@ def gpaw_magnetic_fields(
         them under a non-default `plane`. Pass it to `pauli_multislice`'s
         `average_field` argument.
     """
+    if demagnetization not in ("slab", None):
+        raise ValueError(
+            f"demagnetization must be 'slab' or None, got {demagnetization!r}"
+        )
+
     if isinstance(calculators, (list, tuple)):
         if magnetic_calculator is None:
             raise ValueError(
@@ -1691,6 +1726,10 @@ def gpaw_magnetic_fields(
     # turned as the builder turned those of the field (to the box of a skewed
     # cell, to `plane`, and by the rotation `rotate_field` resolved to).
     average_field = vector_potential_builder._orient_constant_vector(average_field)
+
+    if demagnetization == "slab":
+        # The beam is along z in the frame of the built fields.
+        average_field[2] = 0.0
 
     return GPAWMagneticFields(
         potential=potential,

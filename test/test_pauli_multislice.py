@@ -824,6 +824,27 @@ def test_fields_bundle_defaults():
     assert np.array_equal(to_numpy(out_zero.array), to_numpy(out_none.array))
 
 
+def test_constant_magnetic_field_of_a_slab():
+    """Inside a slab the demagnetizing field cancels the normal part of
+    mu_0 * M and leaves the tangential part."""
+    from abtem.magnetism.gpaw import calculate_constant_magnetic_field
+
+    rng = np.random.default_rng(5)
+    magnetization = rng.standard_normal((3, 4, 5, 6)) + np.array([1.0, -2.0, 3.0])[
+        :, None, None, None
+    ]
+    periodic = calculate_constant_magnetic_field(magnetization)
+    normal = np.array([1.0, 2.0, 2.0]) / 3.0
+    slab = calculate_constant_magnetic_field(magnetization, slab_normal=2 * normal)
+
+    assert abs(slab @ normal) < 1e-12 * np.abs(periodic).max()
+    assert np.allclose(slab, periodic - normal * (periodic @ normal))
+    assert np.allclose(
+        calculate_constant_magnetic_field(magnetization, slab_normal=(0, 0, 1)),
+        [periodic[0], periodic[1], 0.0],
+    )
+
+
 def test_mismatched_slice_thickness_raises():
     """Equal slice counts but different slice thicknesses would silently
     mis-scale the field rates, so they must be rejected."""

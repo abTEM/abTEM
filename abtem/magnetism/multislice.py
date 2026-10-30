@@ -1099,9 +1099,10 @@ def pauli_multislice(
         orbital quantities -- for a vortex-beam OAM difference it can be
         comparable to the signal, while leaving total intensity and spin
         differences almost untouched. Note also that mu_0 * M is the
-        3D-periodic value with no demagnetizing field, which is the wrong
-        uniform field for a slab magnetized along its normal. See
-        `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
+        3D-periodic value with no demagnetizing field; inside a slab the
+        component along its normal (the beam) is cancelled, which
+        `gpaw_magnetic_fields` applies by default (its `demagnetization`).
+        See `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
         for the quantitative details and for mitigations.
 
         `average_field`'s ORBITAL contribution (the A_np added to the
@@ -1135,12 +1136,12 @@ def pauli_multislice(
         paper's own treatment of in-plane-magnetized FePt.
 
         For a beam significantly wider than the unit cell (e.g. a
-        large-OAM vortex probe), the interaction with this uniform field
+        large-OAM vortex probe), the interaction with an axial uniform field
         dominates the orbital (L.B) coupling — the periodic field alone
-        gives a near-vanishing, misleadingly small orbital signal for a
-        ferromagnet. Omit `average_field` only for compensated textures
-        (e.g. antiferromagnets, where B_avg = 0) or when deliberately
-        isolating the periodic-field contribution.
+        gives a much smaller orbital signal for a ferromagnet. An axial
+        B_avg = mu_0 * M_z is the 3D-periodic convention of PRB 94, 174414;
+        in a slab magnetized along the beam the demagnetizing field cancels
+        it, and only the periodic field remains.
     gauge_origin : "probe" or three float, optional
         Gauge origin r0 for the non-periodic A_np = 1/2 B_avg x (r - r0).
         Ignored unless `average_field` is nonzero.
