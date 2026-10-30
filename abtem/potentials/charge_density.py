@@ -76,19 +76,21 @@ def band_limit_fourier(
     g_max : float or None
         Band limit as a spatial frequency in reciprocal Ångström (cycles
         per Ångström, *not* angular frequency), consistent with abTEM's
-        reciprocal-space convention. `None` (or a non-finite value) returns
-        the array unchanged.
+        reciprocal-space convention: the passband, kept unchanged up to
+        ``g_max`` by the ``"cosine"`` and ``"sharp"`` tapers. `None` (or a
+        non-finite value) returns the array unchanged.
     taper : {"cosine", "gaussian", "sharp"}
         Shape of the filter's roll-off. A ``"sharp"`` (brick-wall) cutoff
         is a sinc-like kernel in real space and therefore rings around
         localized features -- visible as concentric fringes -- so it is not
         the default despite being the most literal reading of "band
         limit". ``"cosine"`` (default) applies a raised-cosine (Hann)
-        roll-off over ``g_max / 2 <= |g| <= g_max``, which suppresses that
-        ringing while still removing all content beyond ``g_max``
-        exactly. ``"gaussian"`` applies ``exp(-(|g| / g_max)**2)``, which
-        rings least of all but decays smoothly rather than reaching zero,
-        so a little content beyond ``g_max`` survives.
+        roll-off over ``g_max <= |g| <= 3 / 2 g_max``, above the passband,
+        which suppresses that ringing while removing all content beyond
+        ``3 / 2 g_max`` exactly. ``"gaussian"`` applies
+        ``exp(-(|g| / g_max)**2)``, which rings least of all but decays
+        smoothly rather than reaching zero, so it attenuates the passband and
+        a little content beyond ``g_max`` survives.
 
     Returns
     -------
@@ -107,10 +109,10 @@ def band_limit_fourier(
     elif taper == "gaussian":
         window = np.exp(-((k / g_max) ** 2))
     elif taper == "cosine":
-        g_inner = g_max / 2
-        window = np.clip((k - g_inner) / (g_max - g_inner), 0.0, 1.0)
+        g_outer = 1.5 * g_max
+        window = np.clip((k - g_max) / (g_outer - g_max), 0.0, 1.0)
         window = 0.5 * (1 + np.cos(np.pi * window))
-        window[k >= g_max] = 0.0
+        window[k >= g_outer] = 0.0
     else:
         raise ValueError(
             f"taper must be 'cosine', 'gaussian' or 'sharp', got {taper!r}"

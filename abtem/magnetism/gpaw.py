@@ -59,37 +59,39 @@ from abtem.slicing import _integrate_planes, is_number
 #: muffin-tin spheres, so placing it on a uniform grid band-limits it
 #: inherently -- without making it any less all-electron.
 #:
-#: The default of 4 1/Å is set to match the density cutoff of the LAPW code
-#: used for the reference calculations. WIEN2k expands rho and V in the
-#: interstitial region up to a largest wavevector GMAX given in bohr^-1,
-#: conventionally 12-14; converting to the spatial-frequency convention used
-#: here, GMAX = 12-14 bohr^-1 is 3.6-4.2 1/Å, so 4 1/Å sits in the middle of
-#: the range the reference calculation itself would have used.
+#: The default of 2.5 1/Å keeps the magnetization unchanged up to 2.5 1/Å
+#: (about 60 mrad at 200 kV) and rolls it off to zero at 3.75 1/Å (see the
+#: `taper` argument of `band_limit_fourier`). For comparison, WIEN2k -- the
+#: LAPW code of the reference calculations -- expands rho and V in the
+#: interstitial region up to GMAX = 12-14 bohr^-1 conventionally, which is
+#: 3.6-4.2 1/Å in the spatial-frequency convention used here; that limit
+#: does not apply inside the muffin-tin spheres, though, where the near-nucleus
+#: structure lives.
 #:
-#: Two independent checks support it. (1) Magnitudes: it brings every panel of
-#: PRB 94, 174414 Fig. 2 and Fig. 3 within the paper's own colorbar bounds,
-#: with the near-nucleus features appearing as the small unsaturated dots seen
-#: there. (2) Sign: the spin density at a heavy nucleus is *negative* from
-#: core polarization (measured at the Pt site of L1_0 FePt:
-#: -895 μB/Å³) even though the site's total moment is positive (+0.36 μB), so
-#: the sign of the smoothed value flips depending on how hard it is smoothed --
-#: the narrow negative core spike wins at a high cutoff, the broad positive
-#: valence cloud wins at a low one. The paper shows positive spin density and
-#: B_z at the Pt site; reproducing that sign requires a cutoff below ~5 1/Å
-#: with the default taper, which 4 1/Å satisfies while 6 1/Å does not. The
-#: sign is thus a sharper constraint on the cutoff than the magnitudes are.
+#: The value is set by two checks against PRB 94, 174414. (1) Magnitudes: the
+#: previous default, flat to 2 1/Å and zero at 4 1/Å, a filter close to this
+#: one, brought every panel of Fig. 2 and Fig. 3 within the paper's own
+#: colorbar bounds, with the near-nucleus features appearing as
+#: the small unsaturated dots seen there. (2) Sign, the sharper constraint:
+#: the spin density at a heavy nucleus is *negative* from core polarization
+#: (L1_0 FePt, Pt site: -915 μB/Å³ on a 0.024 Å grid) even though the site's
+#: total moment is positive (+0.38 μB), so the sign of the smoothed value
+#: flips depending on how hard it is smoothed -- the narrow negative core
+#: spike wins at a high cutoff, the broad positive valence cloud at a low
+#: one. The paper shows positive spin density and B_z at the Pt site. With
+#: this taper the Pt-site value is +0.35 μB/Å³ at 2.5 1/Å, +0.10 at 2.75 and
+#: -0.26 at 3 (GPAW PBE, PW 400 eV; positive at 2.5 on every grid from
+#: 0.1 Å to 0.024 Å, +0.15 at the least favourable), so the default sits
+#: below the crossover with some margin.
 #:
-#: Note that the band limit is applied with a smooth (raised-cosine) roll-off
-#: by default, not a brick-wall cutoff -- see the `taper` argument of
-#: `band_limit_fourier`. A sharp cutoff fixes the magnitudes just as well but
-#: leaves conspicuous concentric Gibbs fringes around each atom, since a
-#: brick-wall filter is a ringing (sinc-like) kernel in real space. Because
-#: the taper starts rolling off at `g_max / 2`, a given `g_max` removes
-#: somewhat more than a sharp cutoff at the same value would.
+#: The roll-off is a smooth raised cosine by default, not a brick-wall
+#: cutoff: a sharp cutoff fixes the magnitudes just as well but leaves
+#: conspicuous concentric Gibbs fringes around each atom, since a brick-wall
+#: filter is a ringing (sinc-like) kernel in real space.
 #:
 #: Pass `g_max=None` to disable band-limiting entirely and recover the raw
 #: pointwise construction.
-DEFAULT_MAGNETIZATION_G_MAX = 4.0
+DEFAULT_MAGNETIZATION_G_MAX = 2.5
 
 
 def calculate_constant_magnetic_field(
