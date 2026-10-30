@@ -896,7 +896,10 @@ class Waves(BaseWaves, ArrayObject):
             The spinor wave functions, with a length-2 `SpinAxis` as the
             first ensemble axis.
         """
-        spinor = np.array(polarization, dtype=get_dtype(complex=True))
+        if any(isinstance(axis, SpinAxis) for axis in self.ensemble_axes_metadata):
+            raise ValueError("the waves are spinor waves already")
+
+        spinor = np.array(polarization, dtype=self.dtype)
 
         if spinor.shape != (2,):
             raise ValueError(

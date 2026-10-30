@@ -472,8 +472,7 @@ class LaplaceOperator:
         wavelength, sampling, dtype = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap",
-            dtype=get_dtype(complex=True), device=device
+            self._accuracy, prefactor, mode="wrap", dtype=dtype, device=device
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
