@@ -873,7 +873,7 @@ def test_rectangular_grid(device):
 
 
 def test_auto_rotation_recorded():
-    """The rotation that rotate_field applies to the vector components is
+    """The rotation that rotate_field applies to the magnetization is
     recorded on the builder, so gpaw_magnetic_fields can transform the
     separately computed average_field consistently."""
     from abtem.magnetism.gpaw import (
@@ -908,6 +908,87 @@ def test_auto_rotation_recorded():
     )
     builder_none.build()
     assert builder_none._resolved_rotation_matrix is None
+
+
+def _smooth_random_density(shape, seed):
+    # band-limited, varying along every axis, so that no field component
+    # vanishes by symmetry
+    rng = np.random.default_rng(seed)
+    density = rng.standard_normal(shape)
+    for axis, n in enumerate(shape):
+        k = np.fft.fftfreq(n)[(slice(None),) + (None,) * (len(shape) - 1 - axis)]
+        density = np.real(
+            np.fft.ifft(np.fft.fft(density, axis=axis) * (np.abs(k) < 0.2), axis=axis)
+        )
+    return density
+
+
+@pytest.mark.parametrize("quantity", ["vector_potential", "magnetic_field"])
+def test_rotate_field_turns_the_magnetization(quantity):
+    """A rotated collinear field is the field of the turned magnetization.
+    Turning only the components of the built A and B left A_z right but got
+    A_x, A_y and every component of B wrong (B_z by 70%, with flipped sign)."""
+    from abtem.magnetism.gpaw import (
+        MagnetizationMagneticField,
+        MagnetizationVectorPotential,
+    )
+
+    builder_cls = {
+        "vector_potential": MagnetizationVectorPotential,
+        "magnetic_field": MagnetizationMagneticField,
+    }[quantity]
+
+    shape = (12, 14, 16)
+    cell = np.diag([6.0, 7.0, 8.0])
+    density = _smooth_random_density(shape, seed=3)
+    kwargs = dict(gpts=shape[:2], slice_thickness=1.0)
+
+    auto = builder_cls(density, cell, rotate_field="auto", **kwargs)
+    rotated = np.asarray(auto.build().array)
+
+    direction = auto._resolved_rotation_matrix @ np.array([0.0, 0.0, 1.0])
+    assert abs(direction[2]) < 1e-12
+    magnetization = direction[:, None, None, None] * density
+    direct = np.asarray(
+        builder_cls(magnetization, cell, rotate_field=None, **kwargs).build().array
+    )
+
+    assert np.abs(direct).max() > 0
+    assert np.allclose(rotated, direct, rtol=0, atol=1e-12 * np.abs(direct).max())
+
+
+@pytest.mark.parametrize("plane", ["xy", "yz", "zx"])
+def test_rotated_field_is_the_curl_of_the_rotated_vector_potential(plane):
+    """B_z = d_x A_y - d_y A_x holds slice by slice for the projected fields,
+    for any rotation and plane, only if both are fields of one magnetization."""
+    from abtem.magnetism.gpaw import (
+        MagnetizationMagneticField,
+        MagnetizationVectorPotential,
+    )
+
+    shape = (12, 14, 16)
+    cell = np.diag([6.0, 7.0, 8.0])
+    magnetization = np.stack(
+        [_smooth_random_density(shape, seed) for seed in (0, 1, 2)]
+    )
+    kwargs = dict(
+        rotate_field=(0.3, 0.5, 0.7), plane=plane, sampling=0.5, slice_thickness=1.0
+    )
+
+    A = MagnetizationVectorPotential(magnetization, cell, **kwargs).build()
+    B = MagnetizationMagneticField(magnetization, cell, **kwargs).build()
+    A_array, B_array = np.asarray(A.array), np.asarray(B.array)
+
+    nx, ny = A_array.shape[-2:]
+    kx = 2j * np.pi * np.fft.fftfreq(nx, A.sampling[0])[:, None]
+    ky = 2j * np.pi * np.fft.fftfreq(ny, A.sampling[1])[None]
+    A_hat = np.fft.fft2(A_array)
+    curl_z = np.real(np.fft.ifft2(kx * A_hat[:, 1] - ky * A_hat[:, 0]))
+
+    assert np.abs(B_array[:, 2]).max() > 0
+    assert np.allclose(
+        curl_z, B_array[:, 2], rtol=0, atol=1e-9 * np.abs(B_array[:, 2]).max()
+    )
 
 
 def test_iam_noncollinear_smoke():

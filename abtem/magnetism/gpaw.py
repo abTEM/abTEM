@@ -35,7 +35,6 @@ from abtem.potentials.gpaw import _GPAW_LOCK, GPAWPotential
 from abtem.potentials.iam import PotentialArray, _default_box, _FieldBuilder
 from abtem.slicing import _integrate_planes, is_number
 
-
 #: Default Fourier-space band limit [1/Å] applied to a magnetization density
 #: before the vector potential and magnetic field are constructed from it.
 #:
@@ -421,8 +420,8 @@ def get_magnetic_field_from_gpaw(
     return B
 
 
-#: Sentinel default for `rotate_field`: automatically rotate the
-#: largest-magnitude in-plane component into z (see
+#: Sentinel default for `rotate_field`: turn a collinear magnetization lying
+#: along the beam to the in-plane axis that gives the larger A_z (see
 #: `_auto_rotation_matrix_for_vector_field`). Pass an explicit Euler-angle
 #: tuple to pick a specific orientation, or `None` to disable rotation and
 #: see the raw (Az == 0) output.
@@ -446,6 +445,11 @@ def _auto_rotation_matrix_for_vector_field(vector_field: np.ndarray) -> np.ndarr
     """
     Rotation matrix that swaps whichever of the in-plane (x, y) components
     of `vector_field` has the larger aggregate magnitude into z.
+
+    `vector_field` is the vector potential of the magnetization along z; the
+    rotation is then applied to the magnetization, which is turned to x (the
+    x swap) or to -y (the y swap), and the field built again. Its A_z equals
+    the swapped component.
 
     `calculate_magnetic_vector_potential` always builds the magnetization as
     m = (0, 0, rho): collinear spin has no real-space direction, so GPAW's
@@ -746,8 +750,8 @@ class _MagnetizationMagnetics(_FieldBuilder):
         self.taper = taper
 
         self._rotate_field = rotate_field
-        #: The rotation applied to the field's vector components by
-        #: `rotate_field` when the slices were last computed (None until then,
+        #: The rotation applied to the magnetization (in the frame of `plane`)
+        #: by `rotate_field` when the slices were last computed (None until then,
         #: or when no rotation was applied). Consumers needing consistency with
         #: a separately computed constant field (see `gpaw_magnetic_fields`)
         #: use `_orient_constant_vector`, which applies it.
@@ -840,6 +844,24 @@ class _MagnetizationMagnetics(_FieldBuilder):
             magnetization, self._cell3d, g_max=self.g_max, taper=self.taper
         )
 
+        # `rotate_field` turns the magnetization, not the built field: turning
+        # only the components of A(r) and B(r), with r left where it is, gives
+        # neither the field of the turned magnetization nor a divergence-free A
+        # (only A_z happened to come out right). The field is linear in m, so
+        # the field of the turned magnetization is built again from m turned by
+        # the rotation, which acts on the components of the frame of `plane`,
+        # taken back to the frame of the cell.
+        rotation_matrix = self._resolve_rotation(vector_potential, collinear)
+        self._resolved_rotation_matrix = rotation_matrix
+        if rotation_matrix is not None:
+            frame = self._frame_matrix()
+            magnetization = _apply_rotation_matrix(
+                magnetization, frame.T @ rotation_matrix @ frame
+            )
+            vector_potential = calculate_vector_potential_from_magnetization(
+                magnetization, self._cell3d, g_max=self.g_max, taper=self.taper
+            )
+
         if self._quantity == "vector_potential":
             array = vector_potential
         elif self._quantity == "magnetic_field":
@@ -852,39 +874,52 @@ class _MagnetizationMagnetics(_FieldBuilder):
         ):
             # `_apply_rotation_matrix` acts on column vectors.
             array = _apply_rotation_matrix(array, self._box_rotation.T)
-            vector_potential = _apply_rotation_matrix(
-                vector_potential, self._box_rotation.T
-            )
 
         if self.plane != "xy":
             # The fields are rotated with the atoms: their grids are moved and
             # their components rotated by the same proper rotation, which reverses
             # one axis and its component for the planes that need it.
             array = _vector_field_to_plane(array, self.plane)
-            vector_potential = _vector_field_to_plane(vector_potential, self.plane)
-
-        rotate_field = self._rotate_field
-        self._resolved_rotation_matrix = None
-        if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:
-            # The auto swap exists because collinear spin has no real-space
-            # direction; a non-collinear magnetization is genuinely
-            # directional, so it is never auto-rotated.
-            if collinear:
-                rotation_matrix = _auto_rotation_matrix_for_vector_field(
-                    vector_potential
-                )
-                array = _apply_rotation_matrix(array, rotation_matrix)
-                self._resolved_rotation_matrix = rotation_matrix
-        elif rotate_field:
-            array = rotate_vector_field(array, rotate_field)
-            self._resolved_rotation_matrix = R.from_euler(
-                "xyz", rotate_field
-            ).as_matrix()
 
         if self._box_vectors is not None:
             array = _map_to_box_grid(array, self._box_vectors)
 
         return array
+
+    def _resolve_rotation(
+        self, vector_potential: np.ndarray, collinear: bool
+    ) -> Optional[np.ndarray]:
+        """The rotation matrix `rotate_field` resolves to, acting on components in
+        the frame of `plane`, or None for no rotation."""
+        rotate_field = self._rotate_field
+        if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:
+            # The auto swap exists because collinear spin has no real-space
+            # direction; a non-collinear magnetization is genuinely
+            # directional, so it is never auto-rotated. A collinear one only
+            # needs it while it lies along the beam, where A_z vanishes.
+            if not collinear or abs(self._frame_matrix()[2, 2]) < 0.5:
+                return None
+            # The sums the choice is made from do not depend on the grid, so
+            # only the components are taken to the frame of `plane`.
+            return _auto_rotation_matrix_for_vector_field(
+                _apply_rotation_matrix(vector_potential, self._frame_matrix())
+            )
+        if rotate_field:
+            return R.from_euler("xyz", rotate_field).as_matrix()
+        return None
+
+    def _frame_matrix(self) -> np.ndarray:
+        """The proper rotation taking the components of a vector in the frame of
+        the cell to those in the frame of `plane` (as `_field` turns them)."""
+        columns = []
+        for basis_vector in np.eye(3):
+            vector = basis_vector.reshape((3, 1, 1, 1))
+            if self._box_rotation is not None:
+                vector = _apply_rotation_matrix(vector, self._box_rotation.T)
+            if self.plane != "xy":
+                vector = _vector_field_to_plane(vector, self.plane)
+            columns.append(vector[:, 0, 0, 0])
+        return np.stack(columns, axis=1)
 
     def _orient_constant_vector(self, vector: np.ndarray) -> np.ndarray:
         """
@@ -893,14 +928,10 @@ class _MagnetizationMagnetics(_FieldBuilder):
         cell into its box, to `plane`, and by `rotate_field` as resolved when the
         slices were computed (so the slices must have been computed first).
         """
-        vector = np.asarray(vector, dtype=float).reshape((3, 1, 1, 1))
-        if self._box_rotation is not None:
-            vector = _apply_rotation_matrix(vector, self._box_rotation.T)
-        if self.plane != "xy":
-            vector = _vector_field_to_plane(vector, self.plane)
+        vector = self._frame_matrix() @ np.asarray(vector, dtype=float)
         if self._resolved_rotation_matrix is not None:
-            vector = _apply_rotation_matrix(vector, self._resolved_rotation_matrix)
-        return vector[:, 0, 0, 0]
+            vector = self._resolved_rotation_matrix @ vector
+        return vector
 
     def _project(self) -> np.ndarray:
         """
@@ -1133,7 +1164,8 @@ class MagnetizationMagneticField(_ArrayMagnetics, BaseMagneticField):
         Cell defining the region of space where the magnetization is
         defined.
     rotate_field : tuple of three float, "auto", or None
-        Euler-angle rotation applied to the built field. Defaults to None:
+        Euler-angle rotation applied to the magnetization, in the frame of
+        `plane`, before the field is built. Defaults to None:
         an explicitly given magnetization is genuinely directional. "auto"
         only applies to collinear (scalar) input.
 
@@ -1556,8 +1588,10 @@ def gpaw_magnetic_fields(
         Forwarded to `GPAWPotential` only.
     rotate_field : tuple of three float, "auto", or None
         Forwarded to `GPAWVectorPotential`/`GPAWMagneticField`. Defaults to
-        `"auto"`: automatically swap the larger-magnitude in-plane
-        component into z (see `_auto_rotation_matrix_for_vector_field`).
+        `"auto"`: a collinear magnetization, placed along z, is turned to the
+        in-plane axis whose field has the larger A_z (see
+        `_auto_rotation_matrix_for_vector_field`); rotations act on the
+        magnetization, before the field is built.
         In-plane magnitudes that agree to within a relative 1e-4 are a tie,
         which picks x, so that the choice for a crystal whose symmetry makes
         them equal (such as a hexagonal magnet) is not decided by round-off.
