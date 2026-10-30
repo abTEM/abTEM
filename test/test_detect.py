@@ -1184,3 +1184,20 @@ def test_components_with_margin_and_window_match_the_intensity_detection(
     np.testing.assert_allclose(
         elastic + diffuse, plain, rtol=1e-3, atol=1e-5 * plain.max()
     )
+
+
+def test_window_power_gain_is_computed_once_per_window_and_grid():
+    from scipy.signal import windows
+
+    from abtem.detectors import _window_power_gain
+
+    _window_power_gain.cache_clear()
+    shape = (40, 24)
+    gain = _window_power_gain("hann", shape)
+    taper = np.outer(windows.get_window("hann", 40), windows.get_window("hann", 24))
+    assert gain == float(1.0 / np.mean(taper**2))
+
+    assert _window_power_gain("hann", shape) == gain
+    assert _window_power_gain.cache_info().hits == 1
+    assert _window_power_gain("hann", (40, 25)) != gain
+    assert _window_power_gain("hamming", shape) != gain

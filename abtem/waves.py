@@ -511,6 +511,46 @@ class _WavesNormalization(WavesToWavesTransform):
         return array
 
 
+# The tapers of `Waves.window`, which a thickness series applies at every exit plane.
+# Two at most: a taper of an 8000 x 8000 grid is 256 MB at single precision.
+_window_tapers = None
+
+
+def _window_taper(window, shape, array):
+    """The separable window taper of the grid `shape`, as an array of the type, device
+    and precision of `array`; kept for the next call of the same window, grid, device
+    and precision."""
+    from scipy.signal import windows as scipy_windows
+
+    xp = get_array_module(array)
+    dtype = array.real.dtype
+
+    def build():
+        window_x = scipy_windows.get_window(window, shape[0])
+        window_y = scipy_windows.get_window(window, shape[1])
+        return xp.asarray(window_x[:, None] * window_y[None, :], dtype=dtype)
+
+    try:
+        hash(window)
+    except TypeError:  # nothing to key it by
+        return build()
+
+    if isinstance(array, da.Array):  # no device to key a lazy array by
+        return build()
+
+    from abtem.integrals import _DeviceArrayCache, _device_cache_key
+
+    global _window_tapers
+    if _window_tapers is None:
+        _window_tapers = _DeviceArrayCache(maxsize=2)
+
+    key = (window, tuple(shape), np.dtype(dtype).str, _device_cache_key(array, array))
+    taper = _window_tapers.get(key)
+    if taper is None:
+        taper = _window_tapers.put(key, build())
+    return taper
+
+
 class Waves(BaseWaves, ArrayObject):
     """Waves define a batch of arbitrary 2D wave functions defined by a complex array.
 
@@ -1009,8 +1049,6 @@ class Waves(BaseWaves, ArrayObject):
         windowed_waves : Waves
             The windowed (and optionally cropped) wave functions.
         """
-        from scipy.signal import windows as scipy_windows
-
         if isinstance(margin, (int, float)):
             margin = (float(margin), float(margin))
 
@@ -1030,12 +1068,7 @@ class Waves(BaseWaves, ArrayObject):
         if waves.reciprocal_space:
             raise NotImplementedError("window can only be applied in real space")
 
-        window_x = scipy_windows.get_window(window, waves.base_shape[0])
-        window_y = scipy_windows.get_window(window, waves.base_shape[1])
-        taper = window_x[:, None] * window_y[None, :]
-
-        xp = get_array_module(waves.array)
-        taper = xp.asarray(taper, dtype=waves.array.real.dtype)
+        taper = _window_taper(window, waves.base_shape, waves.array)
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = waves.array * taper

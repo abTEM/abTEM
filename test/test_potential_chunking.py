@@ -488,6 +488,69 @@ def _frozen_phonon_crystal(
     return CrystalPotential(unit, repetitions, **kwargs)
 
 
+class TestEnsembleChunksShareTheirMembers:
+    """Each build of an ensemble made its members again, and sliced their atoms
+    again, for every chunk: 193 times for one orientation of a 3DED series."""
+
+    @staticmethod
+    def _potential(device, num_configs=2):
+        atoms = bulk("Si", cubic=True) * (2, 2, 3)
+        return Potential(
+            FrozenPhonons(atoms, num_configs, sigmas=0.05, seed=3),
+            gpts=(32, 32),
+            slice_thickness=1.0,
+            device=device,
+        )
+
+    @devices
+    def test_the_atoms_are_sliced_once_per_member_not_once_per_chunk(
+        self, device, monkeypatch
+    ):
+        from abtem.potentials.iam import _FieldBuilderFromAtoms
+
+        sliced = []
+        prepare = _FieldBuilderFromAtoms._prepare_atoms
+
+        def counting(self):
+            sliced.append(self)
+            return prepare(self)
+
+        monkeypatch.setattr(_FieldBuilderFromAtoms, "_prepare_atoms", counting)
+        potential = self._potential(device)
+
+        chunks = list(potential.generate_chunked_slices(chunk_size=2))
+        assert len(chunks) > 2
+        assert len(sliced) == 2  # one per member of the ensemble
+
+        # a direct build keeps making its own, as it always did
+        potential.build(lazy=False)
+        assert len(sliced) == 4
+
+    @devices
+    def test_the_chunks_equal_the_built_potential(self, device):
+        potential = self._potential(device)
+        built = asnumpy(potential.build(lazy=False).array)
+        for chunk_size in (1, 2, 5, 100):
+            chunked = np.concatenate(
+                [
+                    asnumpy(chunk.array)
+                    for chunk in potential.generate_chunked_slices(
+                        chunk_size=chunk_size
+                    )
+                ],
+                axis=-3,
+            )
+            assert np.array_equal(chunked, built)
+
+    def test_an_ensemble_of_one_still_chunks(self):
+        potential = self._potential("cpu", num_configs=1)
+        chunks = list(potential.generate_chunked_slices(chunk_size=3))
+        assert np.array_equal(
+            np.concatenate([asnumpy(c.array) for c in chunks], axis=-3),
+            asnumpy(potential.build(lazy=False).array),
+        )
+
+
 class TestCrystalPotentialChunking:
     """Verify that CrystalPotential generates the correct slices when chunked."""
 

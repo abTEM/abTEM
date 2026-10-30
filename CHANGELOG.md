@@ -106,6 +106,35 @@ Features:
 
 Performance:
 
+- Multislice of an ensemble of atoms (such as a 3DED rotation series) no longer repeats host work for
+  every chunk or exit plane, and its potential needs fewer FFTs
+    - The atoms of an ensemble are sliced once per call of `generate_chunked_slices` instead of once per
+      chunk
+    - `Waves.window` keeps its taper, and the power gain of a window is computed once, instead of both
+      building an `n x n` array on the host at every exit plane
+    - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
+      and element
+    - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
+      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"`, on a GPU and
+      with torch (CPU and Metal; the wrapper allocates the output, which avoids a PyTorch warning of
+      the Metal kernels about resizing it);
+      this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
+      and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
+    - Measured with `benchmarks/bench_real_fft_potential.py` on an Apple silicon laptop (Metal,
+      single precision), the potential of the default projection builds 1.22x (1024 x 1024, 8 slices),
+      1.31x (2048 x 2048, 8 slices), 1.62x (4096 x 4096, 16 slices) and 1.67x (2048 x 2048, 80 slices)
+      faster with the real transforms
+    - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
+    - Measured for one orientation of a py3DED run (160 x 160 x 1000 Å, sampling 0.02 Å, slices of
+      0.4 Å, an 8000 x 8000 grid, 251 exit planes) on a 24 GB RTX 4090 in single precision: monoclinic
+      ZrO2 takes 91.1 s instead of 199.6 s (2.19x) and kyanite 104.5 s instead of 253.0 s (2.42x). The
+      patterns of the first three changes are bit-identical; with the real transforms they differ
+      from the old ones by 4e-6 of the largest value, about a tenth of the error of the single
+      precision run itself against a double precision one (4.6e-5 and 8.9e-5), which they leave
+      unchanged
+    - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
+      multislice run into stages, and measured commit by commit with
+      `benchmarks/bisect_multislice_gains.py`
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
   (and re-uploaded to the GPU) for each ([PR #350](https://github.com/abTEM/abTEM/pull/350))
 - Removed a redundant potential rebuild on every scan chunk ([PR #340](https://github.com/abTEM/abTEM/pull/340))

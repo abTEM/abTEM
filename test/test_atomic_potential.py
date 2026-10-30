@@ -1,9 +1,12 @@
+import ase
 import hypothesis.strategies as st
 import numpy as np
 import pytest
 from hypothesis import given
 
 import abtem
+from abtem.core.backend import asnumpy, get_array_module
+from abtem.core.fft import real_fft2_available
 from abtem.integrals import (
     _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
@@ -452,6 +455,214 @@ def _assert_no_key_component_may_be_dropped(make, call, variations):
             f"{component}={other!r} does not change the value, so dropping it "
             "from the key would go unseen"
         )
+
+
+class TestSincIsBuiltOncePerGrid:
+    """The scattering-factor integrator divided by a freshly built `sinc` at every
+    slice and element: about as much time as an FFT of the slice."""
+
+    @staticmethod
+    def _potential(device, integrator):
+        return abtem.Potential(
+            ase.Atoms(
+                "ZrO", positions=[(3.0, 3.0, 0.5), (9.0, 9.0, 2.5)], cell=(12.8, 12.8, 4.0)
+            ),
+            gpts=(64, 64),
+            slice_thickness=1.0,
+            integrator=integrator,
+            device=device,
+        )
+
+    @devices
+    def test_sinc_is_built_once_and_the_potential_is_unchanged(
+        self, device, monkeypatch
+    ):
+        import abtem.integrals as integrals
+
+        built = []
+        sinc = integrals.sinc
+
+        def counting_sinc(*args, **kwargs):
+            built.append(args)
+            return sinc(*args, **kwargs)
+
+        monkeypatch.setattr(integrals, "sinc", counting_sinc)
+        integrator = ScatteringFactorProjectionIntegrals()
+        got = self._potential(device, integrator).build(lazy=False)
+        # four slices, two elements, one grid
+        assert len(built) == 1
+        assert len(integrator._sinc_cache) == 1
+
+        # the oracle builds it for every call
+        monkeypatch.setattr(
+            ScatteringFactorProjectionIntegrals,
+            "_get_sinc",
+            lambda self, gpts, sampling, device, like: counting_sinc(
+                gpts, sampling, device
+            ),
+        )
+        reference = self._potential(device, ScatteringFactorProjectionIntegrals()).build(
+            lazy=False
+        )
+        assert len(built) > 2
+        assert np.array_equal(asnumpy(got.array), asnumpy(reference.array))
+
+    def test_sinc_is_not_served_across_grids_or_precisions(self):
+        integrator = ScatteringFactorProjectionIntegrals()
+        device = "cpu"
+        small = integrator._get_sinc((32, 32), (0.1, 0.1), device, like=np.zeros(1))
+        large = integrator._get_sinc((48, 48), (0.1, 0.1), device, like=np.zeros(1))
+        assert small.shape == (32, 32) and large.shape == (48, 48)
+
+        with abtem.config.set({"precision": "float64"}):
+            double = integrator._get_sinc((32, 32), (0.1, 0.1), device, like=np.zeros(1))
+        assert double.dtype == np.float64
+        assert integrator._get_sinc(
+            (32, 32), (0.1, 0.1), device, like=np.zeros(1)
+        ).dtype == np.float32
+
+    def test_the_cache_is_dropped_when_the_integrator_is_pickled(self):
+        import pickle
+
+        integrator = ScatteringFactorProjectionIntegrals()
+        self._potential("cpu", integrator).build(lazy=False)
+        assert len(integrator._sinc_cache) == 1
+        assert len(pickle.loads(pickle.dumps(integrator))._sinc_cache) == 0
+
+
+class TestSlicesOfSeveralElements:
+    """`generate_slices` allocated a slice of zeros and added the integral to it
+    whenever the atoms had more than one element."""
+
+    @devices
+    def test_a_slice_is_the_integral_of_its_atoms(self, device):
+        integrator = ScatteringFactorProjectionIntegrals()
+        potential = abtem.Potential(
+            ase.Atoms(
+                "ZrOZrO",
+                positions=[(3, 3.1, 0.5), (9, 8.7, 2.5), (6.2, 1.3, 1.5), (4, 7.7, 0.4)],
+                cell=(12.8, 12.1, 4.0),
+            ),
+            gpts=(64, 64),
+            slice_thickness=1.0,
+            integrator=integrator,
+            device=device,
+        )
+        sliced = potential.get_sliced_atoms()
+        slices = list(potential.generate_slices())
+        assert len(slices) == len(potential) == 4
+        for index, slice_ in enumerate(slices):
+            expected = integrator.integrate_on_grid(
+                sliced.get_atoms_in_slices(index),
+                a=sliced.slice_limits[index][0],
+                b=sliced.slice_limits[index][1],
+                gpts=potential.gpts,
+                sampling=potential.sampling,
+                device=device,
+            )
+            assert slice_.array.shape == (1, 64, 64)
+            assert np.array_equal(asnumpy(slice_.array[0]), asnumpy(expected))
+
+
+class TestInfiniteProjectionUsesRealFFTs:
+    """The deltas are real and the factor real and even, so the spectrum is Hermitian
+    and the half spectrum of `rfft2` holds all of it."""
+
+    @staticmethod
+    def _potential(device, gpts, integrator=None):
+        return abtem.Potential(
+            ase.Atoms(
+                "ZrOZrO",
+                positions=[
+                    (3.0, 3.1, 0.5),
+                    (9.0, 8.7, 2.5),
+                    (6.2, 1.3, 1.5),
+                    (4.0, 7.7, 0.4),
+                ],
+                cell=(12.8, 12.1, 4.0),
+            ),
+            gpts=gpts,
+            slice_thickness=1.0,
+            integrator=integrator or ScatteringFactorProjectionIntegrals(),
+            device=device,
+        )
+
+    @devices
+    @pytest.mark.parametrize("precision", ["float32", "float64"])
+    @pytest.mark.parametrize("gpts", [(64, 64), (64, 48), (63, 64), (64, 63), (45, 45)])
+    def test_matches_the_complex_transforms(self, device, precision, gpts, monkeypatch):
+        import abtem.integrals as integrals
+
+        real_calls, inverse_calls = [], []
+        rfft2, irfft2 = integrals.rfft2, integrals.irfft2
+        monkeypatch.setattr(
+            integrals, "rfft2", lambda *a, **k: real_calls.append(1) or rfft2(*a, **k)
+        )
+        monkeypatch.setattr(
+            integrals,
+            "irfft2",
+            lambda *a, **k: inverse_calls.append(1) or irfft2(*a, **k),
+        )
+        with abtem.config.set({"fft": "numpy", "precision": precision}):
+            real = asnumpy(self._potential(device, gpts).build(lazy=False).array)
+            # torch keeps the complex transforms, so there is nothing to compare there
+            xp = get_array_module(device)
+            real_transforms = real_fft2_available(xp.zeros(1, dtype=precision))
+            # one per element in each slice that has atoms: Zr and O, Zr, O ...
+            assert len(real_calls) == (4 if real_transforms else 0)
+            # ... and one inverse transform per slice, whatever its elements
+            assert len(inverse_calls) == (3 if real_transforms else 0)
+
+            monkeypatch.setattr(integrals, "real_fft2_available", lambda x: False)
+            complex_ = asnumpy(self._potential(device, gpts).build(lazy=False).array)
+
+        assert real.dtype == complex_.dtype == np.dtype(precision)
+        # rounding only: the transforms differ in how they round
+        epsilon = np.finfo(precision).eps
+        assert np.abs(real - complex_).max() <= 20 * epsilon * np.abs(complex_).max()
+
+    @devices
+    @pytest.mark.parametrize("shape", [(32, 32), (31, 32), (32, 31), (3, 17, 18)])
+    def test_the_transforms_work_on_every_device_without_a_warning(self, device, shape):
+        """Metal warned that it resized its output of the transforms of real data."""
+        import warnings
+
+        from abtem.core.fft import irfft2, rfft2
+
+        xp = get_array_module(device)
+        array = np.random.default_rng(0).random(shape).astype(np.float32)
+        with abtem.config.set({"fft": "numpy"}), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            half = rfft2(xp.asarray(array))
+            assert half.dtype == np.complex64
+            assert tuple(half.shape) == shape[:-1] + (shape[-1] // 2 + 1,)
+            back = irfft2(half, s=shape[-2:])
+            assert back.dtype == np.float32
+            assert tuple(back.shape) == shape
+        np.testing.assert_allclose(asnumpy(back), array, atol=1e-5)
+        reference = np.fft.rfft2(array.astype(np.float64))
+        np.testing.assert_allclose(asnumpy(half), reference, rtol=1e-4, atol=1e-3)
+
+    def test_other_libraries_keep_the_complex_transforms(self):
+        from abtem.core.fft import real_fft2_available
+
+        for library in ("fftw", "mkl"):
+            with abtem.config.set({"fft": library}):
+                assert not real_fft2_available(np.zeros((4, 4)))
+        with abtem.config.set({"fft": "numpy"}):
+            assert real_fft2_available(np.zeros((4, 4)))
+            assert not real_fft2_available(__import__("dask.array").array.zeros((4, 4)))
+
+    @pytest.mark.parametrize("shape", [(8, 8), (8, 7), (7, 8), (5, 6)])
+    def test_the_transforms_invert_each_other(self, shape):
+        from abtem.core.fft import irfft2, rfft2
+
+        array = np.random.default_rng(0).random(shape)
+        with abtem.config.set({"fft": "numpy"}):
+            half = rfft2(array)
+            assert half.shape == (shape[0], shape[1] // 2 + 1)
+            np.testing.assert_allclose(irfft2(half, s=shape), array, atol=1e-12)
+            np.testing.assert_allclose(half, np.fft.fft2(array)[:, : half.shape[1]])
 
 
 class TestIntegratorCaches:
