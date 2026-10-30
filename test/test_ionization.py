@@ -12,6 +12,7 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 CuPy isn't present.
 """
 import sys
+import warnings
 
 import ase
 import numpy as np
@@ -264,19 +265,129 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
         chunked_explicit_sites = chunked_explicit_sites.to_cpu()
         unchunked = unchunked.to_cpu()
 
-    # On the CPU the chunked and unchunked paths issue the same operations in
-    # the same order, so bit-identity is a real guarantee worth asserting. An
-    # accelerator is free to reassociate the accumulation behind a batch, which
-    # moves the last ULP without saying anything about the chunking logic this
-    # test is about -- compare at the precision the device actually offers.
-    if device == "cpu":
-        assert_equal = np.testing.assert_array_equal
-    else:
-        def assert_equal(actual, desired):
-            np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
+    # Not bit-identical: under load the CPU result moved in the last ULP between
+    # the chunked and unchunked scans (threaded accumulation order), as an
+    # accelerator's may. Sites resolved wrongly would move whole peaks.
+    def assert_equal(actual, desired):
+        np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
 
     assert_equal(chunked_auto_sites.array, unchunked.array)
     assert_equal(chunked_auto_sites.array, chunked_explicit_sites.array)
+
+
+def _site_scan(potential, device, sites):
+    """Single-point ionization scan of ``potential`` for the given ``sites``."""
+    tp = synthetic_transition_potential(
+        Z=79, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=1, energy=100e3, device=device,
+    )
+    probe = _make_probe(potential, device)
+    return to_host_array(
+        probe.transition_potential_scan(
+            potential=potential, transition_potentials=tp, scan=(1.0, 1.0),
+            detectors=abtem.AnnularDetector(inner=0, outer=40),
+            sites=sites, lazy=False,
+        )
+    )
+
+
+def _assert_same_ionization(actual, desired):
+    # The same sites in the same slices, reached by two routes: equal up to
+    # last-ULP float32 differences (atol is relative to the signal, which has
+    # zero bins). A site ionised in the wrong slice moves the signal by order
+    # 1 (whole bins go from 0 to ~3e-9, others change by ~2-5 %).
+    np.testing.assert_allclose(
+        actual, desired, rtol=1e-5, atol=1e-5 * np.abs(desired).max()
+    )
+
+
+def _au_at(z):
+    return ase.Atoms("Au", positions=[(1.0, 1.0, z)], cell=(4, 4, 8))
+
+
+@devices
+def test_explicit_sites_outside_a_non_periodic_cell_are_folded_as_the_potential_does(
+    device,
+):
+    """A non-periodic potential takes an atom given more than 2 Å outside its
+    cell along z as its image in the cell, and keeps one closer to a face in
+    the face slice. Explicit ``sites=`` of the same atoms must be sliced the
+    same way, so the scan equals ``sites=None``. They went straight into the
+    face slice unfolded: the atom at z = -3 Å, which the potential puts at
+    z = 5 Å (slice 2), was ionised in slice 0, and every exit plane from
+    slice 0 on differed.
+    """
+    # 4 slices of 2 Å. The first atom is 3 Å below the entrance face (folded
+    # to 5 Å, slice 2), the second 1 Å above the exit face (clamped, slice 3).
+    atoms = ase.Atoms(
+        "AuAu", positions=[(1.0, 1.0, -3.0), (3.0, 3.0, 9.0)], cell=(4, 4, 8)
+    )
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, exit_planes=1,
+            device=device,
+        )
+
+    auto = _site_scan(potential, device, None)
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        explicit = _site_scan(potential, device, atoms)
+    # The given atoms are not changed.
+    assert atoms.positions[0, 2] == -3.0
+
+    assert np.abs(auto).max() > 0
+    _assert_same_ionization(explicit, auto)
+
+    # The comparison can tell the slices apart: the unfolded site (slice 0)
+    # gives another signal than the folded one.
+    face_slice = atoms.copy()
+    face_slice.positions[0, 2] = 0.5
+    unfolded = _site_scan(potential, device, face_slice)
+    assert not np.allclose(unfolded, auto, rtol=1e-3, atol=0.0)
+
+    # A site within 2 Å of a face is not folded (that would put it at z = 1 Å,
+    # slice 0); it stays in the face slice 3, like a site inside it at z = 7 Å.
+    near_face = atoms[1:]
+    inside_face = near_face.copy()
+    inside_face.positions[0, 2] = 7.0
+    near = _site_scan(potential, device, near_face)
+    inside = _site_scan(potential, device, inside_face)
+    _assert_same_ionization(near, inside)
+
+
+@pytest.mark.parametrize("variant", ["finite_integrator", "cell_transform"])
+@devices
+def test_explicit_sites_are_folded_only_where_the_potential_folds(variant, device):
+    """The potential folds atoms far outside its cell along z only for an
+    infinite integrator and atoms it does not transform (a finite integrator
+    wraps by its margins; a transformed cell is not the cell of the given
+    atoms), so explicit sites are neither folded nor warned about by that rule
+    in the others."""
+    from abtem.integrals import GaussianProjectionIntegrals
+
+    atoms = _au_at(-3.0)
+    kwargs = {
+        "finite_integrator": {"integrator": GaussianProjectionIntegrals()},
+        "cell_transform": {"origin": (0.0, 0.0, 1.0)},
+    }[variant]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the potential's own
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, exit_planes=1,
+            device=device, **kwargs
+        )
+
+    with warnings.catch_warnings():
+        # the fold's warning, not the face-slice one SliceIndexedAtoms raises
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.filterwarnings("error", message=".*given more than")
+        explicit = _site_scan(potential, device, atoms)
+
+    # Clamped to the entrance face slice 0, like a site inside it at z = 0.5 Å,
+    # not folded to z = 5 Å (slice 2), which gives another signal.
+    in_face_slice = _site_scan(potential, device, _au_at(0.5))
+    folded = _site_scan(potential, device, _au_at(5.0))
+    assert not np.allclose(folded, in_face_slice, rtol=1e-3, atol=0.0)
+    _assert_same_ionization(explicit, in_face_slice)
 
 
 @devices
@@ -1275,9 +1386,35 @@ def test_filter_sites_aligns_mask_with_mixed_element_atoms(device):
     # (normalised, unit-intensity) probe is O(1) >> 1e-12: the B site must
     # survive, and the N site must never appear. A mask misaligned with the
     # original Atoms (length 2) would raise or return the N position (1, 1);
-    # a filter that drops everything returns an empty array.
-    assert isinstance(filtered, np.ndarray)
-    np.testing.assert_array_equal(filtered, np.array([[4.0, 4.0]]))
+    # a filter that drops everything returns an empty Atoms. The kept atoms are
+    # returned as Atoms for Atoms input, as in 1.0.10.
+    assert isinstance(filtered, ase.Atoms)
+    assert list(filtered.numbers) == [5]
+    np.testing.assert_array_equal(filtered.positions[:, :2], np.array([[4.0, 4.0]]))
+
+
+@devices
+def test_filter_sites_returns_the_form_of_its_input(device):
+    """Atoms give the kept atoms, positions give positions, and nothing is
+    filtered without a threshold."""
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2, device=device,
+    )
+    waves = _probe_waves(device=device)
+    positions = [(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)]
+    atoms = ase.Atoms("BBB", positions=positions, cell=(8, 8, 4))
+
+    kept_all = tp.filter_sites(waves, atoms, threshold=1e-30)
+    kept_none = tp.filter_sites(waves, atoms, threshold=1e30)
+    kept_array = tp.filter_sites(waves, atoms.positions[:, :2], threshold=1e-30)
+    unfiltered = tp.filter_sites(waves, atoms, threshold=None)
+
+    assert isinstance(kept_all, ase.Atoms) and len(kept_all) == 3
+    np.testing.assert_allclose(kept_all.positions, atoms.positions)
+    assert isinstance(kept_none, ase.Atoms) and len(kept_none) == 0
+    assert isinstance(kept_array, np.ndarray)
+    np.testing.assert_allclose(kept_array, atoms.positions[:, :2])
+    assert unfiltered is atoms
 
 
 def _symmetric_gaussian_transition_potential(gpts, extent, width=0.5, device="cpu"):
@@ -1362,7 +1499,7 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
         kept = tp.filter_sites(
             waves, sites, threshold=tp.absolute_threshold(waves, t)
         )
-        kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+        kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
         kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
         assert len(kept) < len(ij), f"t={t}: no site was dropped"
         assert kept_overlap >= t * total, (
@@ -1386,7 +1523,7 @@ def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     kept = tp.filter_sites(
         waves, sites, threshold=tp.absolute_threshold(waves, 1e-3)
     )
-    kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+    kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
     kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
     # The top pixel is unique (the next-ranked group of four ties sits ~15%
     # below it), so it survives alone.

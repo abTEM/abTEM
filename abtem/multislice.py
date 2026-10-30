@@ -132,6 +132,72 @@ def _fresnel_propagator_array(
     return f
 
 
+def _tilted_exact_fresnel_propagator_array(
+    thickness: float,
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    energy: float,
+    tilt: np.ndarray,
+    device: str,
+) -> np.ndarray:
+    """Exact (non-paraxial) propagator in the frame co-moving with tilted beams.
+
+    A beam tilted by (theta_x, theta_y) travels along (tan theta_x, tan theta_y, 1),
+    so its transverse and longitudinal wave numbers are k_t = K (tan theta_x,
+    tan theta_y) / N and k_zt = K / N, with N = sqrt(1 + tan^2 theta_x +
+    tan^2 theta_y) and K = 1 / lambda. Its wave is stored without the carrier
+    exp(2 pi i (k_t . r + k_zt z)), so the stored component k is the plane wave
+    k + k_t, which advances by
+
+        exp(2 pi i dz [sqrt(K^2 - |k + k_t|^2) - k_zt])
+
+    and is evanescent where |k + k_t| > K. To first order in k this is the
+    translation exp(-2 pi i dz k . tan(theta)) of the paraxial tilt model.
+
+    Parameters
+    ----------
+    thickness : float
+        Distance to propagate [Å].
+    gpts : two int
+        Number of grid points.
+    sampling : two float
+        Real-space sampling [Å].
+    energy : float
+        Electron energy [eV].
+    tilt : np.ndarray
+        Tilts [mrad] of shape (n, 2).
+    device : str
+        Device of the returned array.
+
+    Returns
+    -------
+    np.ndarray
+        Propagators of shape (n, *gpts).
+    """
+    xp = get_array_module(device)
+    complex_dtype = get_dtype(complex=True)
+    K = 1 / energy2wavelength(energy)
+
+    real_dtype = get_dtype(complex=False)
+    tan = np.tan(np.asarray(tilt).reshape(-1, 2) / 1e3)
+    norm = np.sqrt(1.0 + (tan**2).sum(-1))
+    ktx = xp.asarray(K * tan[:, 0] / norm, dtype=real_dtype)[:, None, None]
+    kty = xp.asarray(K * tan[:, 1] / norm, dtype=real_dtype)[:, None, None]
+    kzt = xp.asarray(K / norm, dtype=real_dtype)[:, None, None]
+
+    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+    kx, ky = kx[None, :, None], ky[None, None]
+
+    # sqrt(a) - sqrt(b) = (a - b) / (sqrt(a) + sqrt(b)), with a - b = -(|k + k_t|^2
+    # - |k_t|^2), is stable for small k; the principal branch of the complex root
+    # makes the evanescent components decay
+    dk2 = kx * (kx + 2 * ktx) + ky * (ky + 2 * kty)
+    kz = xp.sqrt((K**2 - (kx + ktx) ** 2 - (ky + kty) ** 2).astype(complex_dtype))
+    phase = -(2.0 * np.pi * thickness) * dk2 / (kz + kzt)
+
+    return complex_exponential(phase.astype(complex_dtype))
+
+
 def _apply_tilt_to_fresnel_propagator_array(
     array: np.ndarray,
     sampling: tuple[float, float],
@@ -165,10 +231,63 @@ def _apply_tilt_to_fresnel_propagator_array(
     return array
 
 
+def _apply_tilt_of_waves(array: np.ndarray, waves: Waves, thickness: float):
+    """Multiply a Fourier-space array by the translation of the beams of ``waves`` by
+    ``tan(tilt) * thickness``, for the base tilt and every tilt axis. The array gets
+    the ensemble axes of the tilts; without tilt it is returned as it is."""
+    if waves.base_tilt != (0.0, 0.0):
+        array = _apply_tilt_to_fresnel_propagator_array(
+            array,
+            sampling=waves._valid_sampling,
+            thickness=thickness,
+            tilt=waves.base_tilt,
+        )
+
+    xp = get_array_module(waves.device)
+
+    tilt_axes = _get_tilt_axes(waves)
+    if not tilt_axes:
+        return array
+
+    for axis in reversed(waves.ensemble_axes_metadata):
+        if hasattr(axis, "tilt"):
+            tilt = xp.asarray(axis.tilt)
+            array = _apply_tilt_to_fresnel_propagator_array(
+                array,
+                sampling=waves._valid_sampling,
+                tilt=tilt,
+                thickness=thickness,
+            )
+
+        else:
+            array = array[..., None, :, :]
+
+    return array
+
+
+def _translate_tilted_waves(waves: Waves, thickness: float) -> Waves:
+    """Translate the beams of tilted ``waves`` by ``tan(tilt) * thickness``, the
+    tilt of the paraxial propagator (orders 1 and 2), for algorithms that do not
+    apply it in a propagator. Untilted waves are returned as they are."""
+    if waves.base_tilt == (0.0, 0.0) and not _get_tilt_axes(waves):
+        return waves
+
+    xp = get_array_module(waves.device)
+    ones = xp.ones(waves._valid_gpts, dtype=get_dtype(complex=True))
+    factor = _apply_tilt_of_waves(ones, waves, thickness)
+    waves._array = fft2_convolve(waves._array, factor, overwrite_x=True)
+    return waves
+
+
 class FresnelPropagator:
     """
     The Fresnel propagator is used for propagating wave functions using the near-field
     approximation (Fresnel diffraction).
+
+    With ``order="exact"`` every plane-wave component advances with its exact
+    longitudinal wave number, also for tilted beams, whose components are the plane
+    waves k + k_t; ``order=1`` and ``2`` are the paraxial expansions, with tilt
+    applied as a translation.
     """
 
     def __init__(self):
@@ -225,6 +344,10 @@ class FresnelPropagator:
         thickness: float,
         order: Literal[1, 2, "exact"] = "exact",
     ) -> np.ndarray:
+        tilted = waves.base_tilt != (0.0, 0.0) or bool(_get_tilt_axes(waves))
+        if order == "exact" and tilted:
+            return FresnelPropagator._calculate_tilted_exact_array(waves, thickness)
+
         array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves._valid_gpts,
@@ -240,34 +363,41 @@ class FresnelPropagator:
             get_array_module(waves.device),
         )
 
-        if waves.base_tilt != (0.0, 0.0):
-            array = _apply_tilt_to_fresnel_propagator_array(
-                array,
-                sampling=waves._valid_sampling,
-                thickness=thickness,
-                tilt=waves.base_tilt,
-            )
+        return _apply_tilt_of_waves(array, waves, thickness)
 
-        xp = get_array_module(waves.device)
-
+    @staticmethod
+    def _calculate_tilted_exact_array(waves: Waves, thickness: float) -> np.ndarray:
+        # The exact kernel is not a product of per-axis factors, so it is built from
+        # the total tilt of every ensemble member: the base tilt plus the values of
+        # each tilt axis [mrad], broadcast over the ensemble axes in their order
+        # (other ensemble axes get length 1, as in the paraxial branch).
+        tilt = np.asarray(waves.base_tilt)
         tilt_axes = _get_tilt_axes(waves)
-        if not tilt_axes:
-            return array
+        if tilt_axes:
+            ensemble_axes = waves.ensemble_axes_metadata
+            n = len(ensemble_axes)
+            tilt = tilt.reshape((1,) * n + (2,))
+            for i, axis in enumerate(ensemble_axes):
+                if hasattr(axis, "tilt"):
+                    values = np.asarray(axis.tilt).reshape(-1, 2)
+                    shape = [1] * n + [2]
+                    shape[i] = len(values)
+                    tilt = tilt + values.reshape(shape)
 
-        for axis in reversed(waves.ensemble_axes_metadata):
-            if hasattr(axis, "tilt"):
-                tilt = xp.asarray(axis.tilt)
-                array = _apply_tilt_to_fresnel_propagator_array(
-                    array,
-                    sampling=waves._valid_sampling,
-                    tilt=tilt,
-                    thickness=thickness,
-                )
-
-            else:
-                array = array[..., None, :, :]
-
-        return array
+        array = _tilted_exact_fresnel_propagator_array(
+            thickness=thickness,
+            gpts=waves._valid_gpts,
+            sampling=waves._valid_sampling,
+            energy=waves._valid_energy,
+            tilt=tilt.reshape(-1, 2),
+            device=waves.device,
+        )
+        array *= antialias_aperture(
+            waves._valid_gpts,
+            waves._valid_sampling,
+            get_array_module(waves.device),
+        )
+        return array.reshape(tilt.shape[:-1] + array.shape[-2:])
 
     def propagate(
         self,
@@ -595,7 +725,9 @@ class FourierMultislice:
     Parameters
     ----------
     order : int, optional
-        Propagator order, one of 1, 2, or 'exact' (default 'exact')
+        Propagator order, one of 1, 2, or 'exact' (default 'exact'). With 'exact',
+        tilted beams are propagated exactly as well; orders 1 and 2 apply the tilt as
+        the paraxial translation by tan(theta) per unit depth.
     expansion_scope: str
         Specified for compatibility. Must be "propagator" (default "propagator")
     conjugate : bool, optional
@@ -627,9 +759,9 @@ class RealSpaceMultislice:
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
     tolerance: float, optional
-        Convergence tolerance for the per-slice exponent Taylor series
-        (default 1e-16); terms are added until the last term's relative
-        amplitude falls below this value.
+        Amplitude below which the exponent Taylor series is truncated
+        (default 1e-16). Raise it to stop the expansion early at the cost of
+        accuracy; the series also stops at `max_terms` regardless.
     """
 
     order: int = 1
@@ -735,7 +867,7 @@ def multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
-            return realspace_multislice_step(
+            result = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=next_slice,
@@ -745,6 +877,13 @@ def multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
             )
+            # the stencil knows nothing of the tilt of the beams, which the Fourier
+            # propagator applies as a translation
+            if isinstance(result, tuple):
+                _translate_tilted_waves(result[0], potential_slice.thickness)
+            else:
+                _translate_tilted_waves(result, potential_slice.thickness)
+            return result
 
     (
         extra_ensemble_axes_shape,
@@ -1023,7 +1162,7 @@ def transition_potential_multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice):
-            return realspace_multislice_step(
+            waves = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=None,
@@ -1033,6 +1172,7 @@ def transition_potential_multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=False,
             )
+            return _translate_tilted_waves(waves, potential_slice.thickness)
 
     if detectors is None:
         detectors = [WavesDetector()]

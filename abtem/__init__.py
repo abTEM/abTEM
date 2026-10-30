@@ -18,10 +18,18 @@ from abtem.detectors import (
     AnnularDetector,
     FlexibleAnnularDetector,
     PixelatedDetector,
+    RadialSensitivity,
     SegmentedDetector,
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
+)
+from abtem.ebsd import (
+    EBSD,
+    BackscatterDetector,
+    EBSDPatternImages,
+    EBSDReferencePattern,
+    ReferencePatternImages,
 )
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import (
@@ -85,6 +93,7 @@ __all__ = [
     "FlexibleAnnularDetector",
     "PixelatedDetector",
     "WavesDetector",
+    "RadialSensitivity",
     "Images",
     "DiffractionPatterns",
     "RealSpaceLineProfiles",
@@ -125,5 +134,10 @@ __all__ = [
     "transfer",
     "BlochWaves",
     "StructureFactor",
+    "EBSD",
+    "EBSDReferencePattern",
+    "BackscatterDetector",
+    "EBSDPatternImages",
+    "ReferencePatternImages",
     "StructureFactorArray",
 ]

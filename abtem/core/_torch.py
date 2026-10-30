@@ -1105,7 +1105,14 @@ def meshgrid(*arrays, indexing="xy"):
 def tile(x, reps):
     if isinstance(reps, (int, np.integer)):
         reps = (reps,)
-    return _wrap(torch.tile(_unwrap(x), tuple(reps)))
+    tensor = _unwrap(x)
+    if tensor.is_complex() and tensor.device.type == "mps":
+        # Metal cannot repeat a complex tensor ("repeat(): Not supported for
+        # complex yet"), so tile the real view, with the trailing (real, imaginary)
+        # axis left alone.
+        tiled = torch.tile(torch.view_as_real(tensor), (*reps, 1))
+        return _wrap(torch.view_as_complex(tiled))
+    return _wrap(torch.tile(tensor, tuple(reps)))
 
 
 @_serialized

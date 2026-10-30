@@ -14,7 +14,6 @@ from types import ModuleType
 from typing import Any, Union
 
 import dask.array as da
-import numba  # type: ignore
 import numpy as np
 import scipy  # type: ignore
 import scipy.ndimage  # type: ignore
@@ -113,53 +112,6 @@ _TORCH_IMPORT_IS_SAFE = _preload_torch_openmp()
 tp: Any = None
 TorchNDArray: Any = None
 _TORCH_LOAD_LOCK = threading.Lock()
-
-
-def _cap_numba_threads_to_omp_num_threads() -> None:
-    """Cap Numba's own thread pool to ``OMP_NUM_THREADS``, if set.
-
-    A fallback for the case where something already imported numba before
-    abtem: ``abtem.core._numba_threads``, imported as abtem's own first
-    statement, is the primary mechanism (seeds ``NUMBA_NUM_THREADS`` itself
-    before numba's first import, which applies process-wide -- see that
-    module's docstring for why this function's own approach, calling
-    ``numba.set_num_threads()`` after the fact, is not equivalent: it only
-    rebinds the *calling* thread's own active count, not a spawned worker
-    thread's, such as one of dask's threaded-scheduler tasks).
-
-    Every ``@njit(parallel=True)`` kernel in this package (the CPU Laplacian
-    stencil in ``finite_difference.py``, the magnetism kernels in
-    ``magnetism/pauli.py``, the partitioned S-matrix kernel in
-    ``prism/_partitioned_s_matrix.py``) uses Numba's own internal thread
-    pool. That pool defaults to the full visible CPU count and reads
-    neither ``OMP_NUM_THREADS`` nor ``OPENBLAS_NUM_THREADS`` -- Numba's
-    default "workqueue" threading layer (the fallback when neither TBB nor
-    OpenMP is available) is independent of both. Skipped when
-    ``NUMBA_NUM_THREADS`` is already set explicitly, so a deliberate,
-    Numba-specific choice already made by the caller is never overridden.
-    """
-    if "NUMBA_NUM_THREADS" in os.environ:
-        return
-
-    omp_num_threads = os.environ.get("OMP_NUM_THREADS")
-    if omp_num_threads is None:
-        return
-
-    try:
-        n = int(omp_num_threads)
-    except ValueError:
-        return
-
-    if n > 0:
-        # set_num_threads raises ValueError above Numba's own launch-time
-        # ceiling (numba.config.NUMBA_NUM_THREADS, itself derived from the
-        # visible CPU count unless NUMBA_NUM_THREADS constrained it at
-        # process start) -- clamp rather than let a larger OMP_NUM_THREADS
-        # crash the import.
-        numba.set_num_threads(min(n, numba.config.NUMBA_NUM_THREADS))
-
-
-_cap_numba_threads_to_omp_num_threads()
 
 
 ArrayModule = Union[ModuleType, str]
@@ -391,8 +343,14 @@ def _make_config_plugin(snapshot):
 
         def __init__(self, snapshot):
             self._snapshot = snapshot
+            self._origin_pid = os.getpid()
 
         def setup(self, worker=None):
+            # In-process workers (e.g. LocalCluster(processes=False)) share the
+            # client's configuration; replaying an older snapshot into it would
+            # undo configuration changes made after the push.
+            if os.getpid() == self._origin_pid:
+                return
             _apply_config_snapshot(self._snapshot)
 
     return _AbtemConfigPlugin(snapshot)

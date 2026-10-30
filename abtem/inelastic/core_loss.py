@@ -647,59 +647,7 @@ class BaseTransitionPotential(
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._double_channel = double_channel
-        # Memo for _as_pure_delayed, keyed by nothing but object identity --
-        # see that method.
-        self._delayed_pure_node = None
         super().__init__(**kwargs)
-
-    def _as_pure_delayed(self):
-        """A ``dask.delayed(self, pure=True)`` wrapper, memoized on this object.
-
-        Computing this tokenizes the whole payload via a content hash (dask's
-        ``_normalize_pickle`` fallback for objects with no
-        ``__dask_tokenize__``), which costs ~0.4 ms per MB of the underlying
-        array. Building the same scan graph many times against the same live
-        object -- a frozen-phonon or energy sweep reusing one transition
-        potential -- currently pays that cost on every call; memoizing here
-        means it pays it once.
-
-        Identity-keyed rather than content-keyed: an id()-based token would
-        be unsafe on its own (ids are reused after garbage collection, and
-        using one to build a token breaks determinism across processes), but
-        caching the ``Delayed`` as an attribute of the object it wraps
-        sidesteps that -- there is exactly one per live object, and it is
-        dropped before this object is ever pickled (see ``__getstate__``), so
-        a stale copy can never outlive the object it was built from.
-
-        This memo is only valid while the wrapped object's payload is not
-        mutated in place after the first call. The cached ``Delayed``'s dask
-        *key* is frozen from the content tokenized at that first call, but
-        the node still wraps a live reference to ``self``; an in-place edit
-        to ``self.array`` (or to any other state dask would tokenize) leaves
-        the key describing stale content while the node computes against
-        whatever ``self`` currently holds -- the same staleness hazard a
-        cached content hash would have, just moved one level up rather than
-        eliminated. Nothing under ``abtem/`` mutates a transition potential's
-        payload in place after handing it to ``transition_potential_scan``
-        today, so the risk is latent rather than live; a caller that does
-        would need to build its own fresh ``dask.delayed`` instead of going
-        through this memo.
-        """
-        if self._delayed_pure_node is None:
-            self._delayed_pure_node = dask.delayed(self, pure=True)
-        return self._delayed_pure_node
-
-    def __getstate__(self):
-        # The memoized node wraps self -- pickling it verbatim alongside self
-        # would embed a self-referential graph node inside the pickle, which
-        # at best doubles the payload for no benefit (the memo is a
-        # per-process, per-object convenience, not part of this object's
-        # identity) and at worst is exactly the kind of thing that made this
-        # object expensive to tokenize in the first place. Recomputed fresh
-        # wherever it is next needed.
-        state = self.__dict__.copy()
-        state["_delayed_pure_node"] = None
-        return state
 
     def _task_local(self, match_to=None):
         """A private view of this transition potential for one task.
@@ -725,12 +673,7 @@ class BaseTransitionPotential(
         that blanks an attribute there gets it blanked in this view as
         well -- except ``TransitionPotentialArray``, which defines its own
         ``__copy__`` that shares ``__dict__`` by reference instead (see that
-        method), so a ``_task_local`` view of an array transition potential
-        shares ``_delayed_pure_node`` with its source rather than getting it
-        blanked. That is inert today: ``_as_pure_delayed`` is only ever
-        called on the object handed directly to a scan method, never on a
-        ``_task_local``/``copy_to_device`` view, and pickling any view still
-        blanks the memo via ``__getstate__`` before it reaches a worker.
+        method).
 
         Parameters
         ----------
@@ -1042,12 +985,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
     # _local_potential_device_cache and _device_array_cache are derived state:
     # populated lazily from the array already compared and the requesting
-    # device. _delayed_pure_node is also derived (a memoized graph node, see
-    # _as_pure_delayed) and additionally would compare via Delayed.__eq__,
-    # which builds another lazy value rather than a bool -- exactly the
-    # "deferred content is guessed equal" trap fixed elsewhere in
-    # safe_equality, so it must be excluded rather than merely reset.
-    # __getstate__ already drops all three for pickling, for the same reason
+    # device. __getstate__ already drops both for pickling, for the same reason
     # -- they are a per-process convenience, not part of the object's
     # identity. Same pattern as Potential._sliced_atoms in
     # abtem/potentials/iam.py. _site_ceiling_cache is the same kind of
@@ -1057,7 +995,6 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _eq_exclude = (
         "_local_potential_device_cache",
         "_device_array_cache",
-        "_delayed_pure_node",
         "_site_ceiling_cache",
     )
 
@@ -1102,7 +1039,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         Parameters
         ----------
         max_angle : float
-            Maximum angle (in degrees) for the local potential calculation.
+            Maximum scattering angle [mrad] for the local potential calculation.
         space : str, optional
             Specifies the coordinate space in which the potential is calculated.
             Default is "reciprocal". Possible values are "reciprocal" and "real".
@@ -1367,30 +1304,46 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return new
 
     def __getstate__(self):
-        # All three caches are a per-process convenience and must not ride
-        # through pickle: the two device caches may hold cupy arrays and
-        # would bloat every dask task carrying this object (and break
-        # unpickling on CPU-only workers); _delayed_pure_node wraps self, so
-        # pickling it verbatim would embed a self-referential graph node
-        # inside the pickle. This overrides BaseTransitionPotential's own
-        # __getstate__ rather than calling it, so its reset is repeated here.
+        # Both device caches are a per-process convenience and must not ride
+        # through pickle: they may hold cupy arrays and would bloat every dask
+        # task carrying this object (and break unpickling on CPU-only workers).
         state = self.__dict__.copy()
         state["_local_potential_device_cache"] = None
         state["_device_array_cache"] = {}
-        state["_delayed_pure_node"] = None
         return state
 
     def filter_sites(self, waves, sites, threshold):
+        """The sites at which the transition potential overlaps the waves.
+
+        Parameters
+        ----------
+        waves : Waves or Probe
+            The waves that are scattered.
+        sites : Atoms, Atom or numpy.ndarray
+            The candidate sites, as atoms or as an (n, 2) array of positions.
+        threshold : float, optional
+            The absolute overlap threshold; sites with an overlap above it are kept.
+            Without a threshold all sites are kept.
+
+        Returns
+        -------
+        Atoms or numpy.ndarray
+            The sites that are kept, in the form they were given: the atoms of the
+            transition potential's element for `Atoms`, positions otherwise. Without
+            a threshold nothing is filtered and an `Atoms` or `Atom` is returned as
+            it is; with a threshold a single `Atom` gives an array of positions.
+        """
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
         # As in absolute_threshold: the mask below needs the intensity in memory
         waves = waves.ensure_computed(progress_bar=False).ensure_real_space()
 
-        # The mask below is computed over the validated array, which subsets
-        # an Atoms input to this element -- index that same array at the end,
-        # not the caller's object, or the two lengths disagree.
-        sites = self.validate_sites(sites)
-        validated_sites = sites
+        # The mask below is computed over the validated array, which subsets an
+        # Atoms input to this element: apply it to that subset, not to the whole
+        # of the caller's atoms, or the two lengths disagree.
+        original_sites = sites
+        validated_sites = self.validate_sites(sites)
+        kept = validated_sites
 
         if threshold is not None and threshold > 0.0:
             xp = get_array_module(waves.array)
@@ -1473,9 +1426,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
             # print(type(mask), type(sites))
 
-            sites = sites[mask]
+            kept = kept[mask]  # on the host: validated_sites was moved to the device
+            if isinstance(original_sites, Atoms):
+                return original_sites[original_sites.numbers == self.Z][mask]
 
-        return sites
+            return kept
+
+        # without a threshold nothing is filtered: the sites are returned as given
+        if isinstance(original_sites, (Atoms, Atom)):
+            return original_sites
+
+        return kept
 
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
@@ -1682,6 +1643,7 @@ def _extract_scattering_sites(potential, sites):
     """
     from abtem.slicing import SliceIndexedAtoms
 
+    explicit = sites is not None
     if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
@@ -1690,10 +1652,32 @@ def _extract_scattering_sites(potential, sites):
     if isinstance(sites, Atoms):
         # Follow the potential's own convention, so explicitly passed sites
         # are sliced exactly as sites=None would be.
+        periodic = getattr(potential, "periodic", True)
+        folds = getattr(potential, "_folds_atoms_far_outside_along_z", None)
+        if explicit and folds is not None and folds():
+            # Such a potential takes the atoms it is given more than
+            # FACE_SLICE_WARNING_DISTANCE outside its cell along z as their
+            # images in the cell, and slices them there; the atoms closer to a
+            # face stay where they are and are clamped to the face slice below.
+            # The potential's own atoms (sites=None) are folded already, so
+            # only explicit sites are folded and warned about here, by the same
+            # rule. Without it, a site at z = -5 Å in a 20 Å cell was ionised
+            # in the entrance face slice, where the potential has the atom at
+            # z = 15 Å.
+            from abtem.potentials.iam import (
+                _fold_far_outside_faces,
+                _warn_if_given_atoms_far_outside_along_z,
+            )
+
+            # Explicit sites are in the potential's frame, along its z.
+            _warn_if_given_atoms_far_outside_along_z([sites])
+            sites = sites.copy()
+            _fold_far_outside_faces(sites)
+
         sites = SliceIndexedAtoms(
             sites,
             slice_thickness=potential.slice_thickness,
-            wrap=getattr(potential, "periodic", True),
+            wrap=periodic,
         )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(

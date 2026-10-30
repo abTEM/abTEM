@@ -10,6 +10,7 @@ import threading
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from functools import lru_cache
 from numbers import Number
 from types import ModuleType
 from typing import (
@@ -36,6 +37,7 @@ from abtem.array import ArrayObject, _validate_array_items, stack
 from abtem.core import backend, config
 from abtem.core.axes import (
     AxisMetadata,
+    EnergyAxis,
     LinearAxis,
     NonLinearAxis,
     RealSpaceAxis,
@@ -45,6 +47,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import (
     asnumpy,
+    copy_to_device,
     cp,
     get_array_module,
     get_ndimage_module,
@@ -239,6 +242,22 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     return getattr(xp, name)
 
 
+def _on_device_of(array, like):
+    """`array` as an array on the device `like` lives on.
+
+    This is `xp.asarray` -- no copy when `array` is already there -- except for
+    CuPy, where an array on another GPU is not converted by `asarray` and cannot be
+    mixed with `like`: it is copied onto the GPU of `like`, read off `like` itself
+    rather than the current-device context, which can differ under multi-GPU use.
+    """
+    xp = get_array_module(like)
+    if cp is not None and xp is cp:
+        if get_array_module(array) is not cp or array.device != like.device:
+            with like.device:
+                return cp.array(array)
+    return xp.asarray(array)
+
+
 def _spatial_frequency_squared(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -254,6 +273,98 @@ def _spatial_frequency_squared(
     return kx[:, None] ** 2 + ky[None] ** 2
 
 
+def _radial_weight_map(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    sensitivity: Callable,
+    fftshift: bool = False,
+    xp: ModuleType = np,
+    offset: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    """
+    Build a per-pixel radial sensitivity weight map for a diffraction pattern grid.
+
+    The weight of each pixel is given by evaluating ``sensitivity`` at the radial
+    scattering angle (in mrad) of that pixel, measured from the detector centre, i.e.
+    from the optical axis displaced by ``offset``. The offset is applied like the
+    detector masks and bins apply it (whole pixels, without wrapping), so a weight
+    always belongs to the same pixels as its detector region; pixels shifted in from
+    beyond the Nyquist frequency get a weight of 0.
+
+    The map depends only on the grid/sensitivity, not on any diffraction pattern data,
+    so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp,
+    offset) at the same precision is evaluated once and reused across dask
+    blocks/scan positions instead of being recomputed (including, for a measured
+    sensitivity curve, the GPU-to-CPU round trip of the interpolation) on every call.
+    The returned array is shared between callers and must not be modified.
+
+    Parameters
+    ----------
+    gpts : two int
+        Number of grid points of the diffraction pattern.
+    sampling : two float
+        Angular sampling of the diffraction pattern [mrad].
+    sensitivity : callable
+        Function mapping radial scattering angle [mrad] to a sensitivity weight.
+    fftshift : bool, optional
+        If True, the zero-frequency is shifted to the center of the array.
+    xp : module, optional
+        The array module (``numpy`` or ``cupy``) of the returned weight map.
+    offset : two float, optional
+        Offset of the detector centre from the optical axis [mrad].
+
+    Returns
+    -------
+    weights : np.ndarray
+        Per-pixel sensitivity weights with shape ``gpts``.
+    """
+    # The precision is part of the cache key: the map must follow the configured
+    # precision, or a cached float64 map would widen float32 patterns.
+    return _radial_weight_map_cached(
+        tuple(int(n) for n in gpts),
+        tuple(float(d) for d in sampling),
+        sensitivity,
+        bool(fftshift),
+        xp,
+        tuple(float(o) for o in offset),
+        get_dtype(complex=False),
+    )
+
+
+@lru_cache(maxsize=32)
+def _radial_weight_map_cached(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    sensitivity: Callable,
+    fftshift: bool,
+    xp: ModuleType,
+    offset: tuple[float, float],
+    dtype,
+) -> np.ndarray:
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
+
+    alpha = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+
+    weights = xp.asarray(sensitivity(alpha), dtype=dtype)
+    if xp is np:
+        # A private copy: the callable may hand back an array it owns, and the
+        # cached map is made read-only below.
+        weights = np.array(weights, dtype=dtype)
+
+    if np.any(np.array(offset) != 0.0):
+        weights = _shift_bins_without_wrap(weights, offset, sampling, fill=0.0)
+
+    if fftshift:
+        weights = xp.fft.fftshift(weights)
+
+    if xp is np:
+        weights.flags.writeable = False
+
+    return weights
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -263,11 +374,28 @@ def _annular_detector_mask(
     fftshift: bool = False,
     xp: ModuleType = np,
     k2: Optional[np.ndarray] = None,
+    sensitivity: Optional[Callable] = None,
 ) -> np.ndarray | list[np.ndarray]:
     if k2 is None:
         k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
+
+    if sensitivity is not None:
+        # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
+        # float mask is rolled and fftshifted below, so the weights are computed here
+        # without an fftshift. Select (rather than multiply) by the weight so that a
+        # sensitivity callable that is undefined (e.g. NaN) outside [inner, outer] does
+        # not corrupt pixels the mask already excludes: 0 * nan is nan, but
+        # where(False, weights, 0) is always exactly 0.
+        weights = _radial_weight_map(
+            gpts=gpts,
+            sampling=sampling,
+            sensitivity=sensitivity,
+            fftshift=False,
+            xp=xp,
+        )
+        bins = xp.where(bins, weights, 0.0)
 
     if np.any(np.array(offset) != 0.0):
         bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
@@ -544,6 +672,35 @@ def _sum_run_length_encoded(array, result, separators):
             for j in range(separators[x], separators[x + 1]):
                 total += array[i, j]
             result[i, x] = total
+
+
+def _sum_runs(array, separators):
+    """Sum the runs of `array` (n_batch, n_selected) between `separators` into a
+    zeroed (n_batch, n_runs) array, with the kernel of the array's backend: the
+    CuPy RawKernel, the torch scatter-add, or the Numba loop. A complex array is
+    summed as its real and imaginary parts."""
+    xp = get_array_module(array)
+    if xp.iscomplexobj(array):
+        return _sum_runs(array.real, separators) + 1j * _sum_runs(
+            array.imag, separators
+        )
+    array = xp.ascontiguousarray(array)
+    result = xp.zeros((array.shape[0], len(separators) - 1), dtype=array.dtype)
+    if xp is cp:
+        sum_run_length_encoded_cuda(array, result, separators)
+    elif backend.tp is not None and xp is backend.tp:
+        from abtem.core._torch import sum_run_length_encoded
+
+        sum_run_length_encoded(array, result, separators)
+    else:
+        _sum_run_length_encoded(array, result, separators)
+    return result
+
+
+#: Average the step bins of `DiffractionPatterns.azimuthal_average` in one pass
+#: over the pixels (#602); False averages them bin by bin with a pattern-sized
+#: mask each, as before. Kept as a switch for benchmarking.
+AZIMUTHAL_STEP_SINGLE_PASS = True
 
 
 def _cupy_safe_coordinates(array, coordinates):
@@ -830,6 +987,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             to reduce an ensemble kept with ``ensemble_mean=False``.
         """
         if axis is None:
+            if "frozen_phonon_moments" in self.metadata:
+                # The amplitudes and intensities of a PixelatedDetector with
+                # components: the frozen phonons are averaged coherently and split
+                # into components before the other axes are averaged.
+                return _frozen_phonon_components_from_moments(self).reduce_ensemble()
+
             axis = tuple(
                 i
                 for i, axis_metadata in enumerate(self.axes_metadata)
@@ -1282,6 +1445,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         The offset of the origin of the measurement coordinates [Å] or [1/Å].
         """
 
+    @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        """The coordinates of the array's first pixel [Å] or [1/Å]; positions are
+        converted to pixel indices relative to it (periodically)."""
+        return self.offset
+
     def interpolate_line(
         self,
         start: tuple[float, float] | Atom | None = None,
@@ -1302,9 +1471,11 @@ class _BaseMeasurement2D(BaseMeasurements):
         ----------
         start : two float, Atom, optional
             Starting position of the line [Å] (alternatively taken from a selected
-            atom).
+            atom). Default is (0, 0).
         end : two float, Atom, optional
             Ending position of the line [Å] (alternatively taken from a selected atom).
+            Default is (0, y extent): the default line runs along y across the
+            whole image.
         sampling : float
             Sampling of grid points along the line [1 / Å].
         gpts : int
@@ -1343,7 +1514,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         if end is None and fractional:
             end = (0.0, 1.0)
         elif end is None:
-            end = (0.0, self.extent[0])
+            end = (0.0, self.extent[1])
 
         if fractional:
             extent = self.extent
@@ -1364,7 +1535,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             scan.add_margin(margin)
 
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+            (scan.get_positions(lazy=False) - self._first_pixel_coordinates)
+            / self.sampling
         )
 
         if width:
@@ -1376,14 +1548,16 @@ class _BaseMeasurement2D(BaseMeasurements):
                 )
             direction = direction / length
             perpendicular_direction = xp.array([-direction[1], direction[0]])
-            n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            n = int(xp.floor(width / min(self.sampling) / 2) * 2 + 1)
             # The offsets are spaced by min(sampling) along the perpendicular
             # direction in physical units (Å) and only then converted to
             # pixels (`positions` is in pixels): applying the physical unit
             # vector directly in pixel space tilts and stretches the offsets
             # whenever the sampling is anisotropic.
+            # A single sample is on the line itself.
+            offsets = xp.linspace(-n / 2, n / 2, n) if n > 1 else xp.zeros(1)
             perpendicular_positions = (
-                xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                offsets[:, None]
                 * min(self.sampling)
                 * perpendicular_direction[None]
                 / xp.asarray(self.sampling)
@@ -1517,7 +1691,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             sigma = (sigma,) * 2
 
         sigma = (0,) * (len(self.shape) - 2) + tuple(
-            s / d for s, d in zip(sigma, self.sampling)
+            _width_in_pixels(s, d) for s, d in zip(sigma, self.sampling)
         )
 
         if xp is np:
@@ -1630,7 +1804,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Lorentzian has heavier tails than the Gaussian, so a larger truncation
             is recommended.
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1651,10 +1827,16 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         xp = get_array_module(self.array)
 
+        # 'reflect' is about the edge of the last pixel, the edge sample being
+        # repeated, as in gaussian_filter (scipy.ndimage's 'reflect'). That is
+        # numpy.pad's 'symmetric' and dask's map_overlap 'reflect'; numpy.pad's
+        # own 'reflect' mirrors about the last pixel centre (scipy's 'mirror').
         if boundary == "periodic":
             mode = "wrap"
-        elif boundary in ("reflect", "constant"):
-            mode = boundary
+        elif boundary == "reflect":
+            mode = "symmetric"
+        elif boundary == "constant":
+            mode = "constant"
         else:
             raise ValueError(
                 f"boundary must be 'periodic', 'reflect', or 'constant', got {boundary!r}"
@@ -1663,7 +1845,9 @@ class _BaseMeasurement2D(BaseMeasurements):
         if np.isscalar(half_width):
             half_width = (half_width,) * 2
 
-        hw_pixels = tuple(hw / d for hw, d in zip(half_width, self.sampling))
+        hw_pixels = tuple(
+            _width_in_pixels(hw, d) for hw, d in zip(half_width, self.sampling)
+        )
 
         # Two spatial axes are the trailing dims; build a true 2-D kernel.
         axes = (self.array.ndim - 2, self.array.ndim - 1)
@@ -1739,7 +1923,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             (default is 10.0). The Gaussian component uses the SciPy default
             (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1804,7 +1990,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Truncate the Lorentzian component at this many half-widths
             (default 10.0). The Gaussian component uses the SciPy default (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -2163,14 +2351,8 @@ class Images(_BaseMeasurement2D):
                 # elsewhere: the input is required to be complex (its real and
                 # imaginary parts are the two gradient components) and
                 # _integrate_gradient_2d returns xp.real(...) of the result,
-                # in the precision of the gradient combined with the frequency
-                # grid.
-                meta=xp.array(
-                    (),
-                    dtype=np.result_type(
-                        np.finfo(self.array.dtype).dtype, xp.fft.fftfreq(1).dtype
-                    ),
-                ),
+                # in the precision of the gradient.
+                meta=xp.array((), dtype=np.finfo(self.array.dtype).dtype),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -2651,7 +2833,10 @@ class _BaseMeasurement1D(BaseMeasurements):
         # ("output must have complex dtype").
         new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
-            map_coordinates(array[i], new_points, new_array[i], order=order)
+            # By keyword: Metal's map_coordinates is SciPy's run on the host, and
+            # takes `output` only as a keyword. Passed positionally it is copied
+            # to the host like any other argument, written there and discarded.
+            map_coordinates(array[i], new_points, output=new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 
@@ -2949,8 +3134,9 @@ def _integrate_gradient_2d(gradient, sampling):
     xp = get_array_module(gradient)
     gx, gy = gradient.real, gradient.imag
     (nx, ny) = gx.shape[-2:]
-    ikx = xp.fft.fftfreq(nx, d=sampling[0])
-    iky = xp.fft.fftfreq(ny, d=sampling[1])
+    # fftfreq is float64: cast it, so that single-precision gradients stay so.
+    ikx = xp.fft.fftfreq(nx, d=sampling[0]).astype(gx.dtype)
+    iky = xp.fft.fftfreq(ny, d=sampling[1]).astype(gx.dtype)
     grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing="ij")
     k = grid_ikx**2 + grid_iky**2
     k[k == 0] = 1e-12
@@ -3057,6 +3243,15 @@ def _gaussian_kernel_2d(
 # For the Lorentzian kernel the minimum radius is 1, so the maximum operand
 # is x/hw = 1/hw; squaring overflows when hw < 1/sqrt(float_max).
 _LORENTZIAN_SAFE_HW = 1.0 / np.sqrt(np.finfo(np.float64).max)  # ≈ 7.5e-155
+
+
+def _width_in_pixels(width: float, sampling: float) -> float:
+    """A filter width [Å] in pixels of `sampling` [Å]. An axis sampled at 0 Å,
+    such as that of a scan whose positions coincide (a zero-length line scan), is
+    constant along it, so a filter does nothing there: 0 pixels."""
+    if sampling == 0.0:
+        return 0.0
+    return width / sampling
 
 
 def _lorentzian_kernel_2d(
@@ -3442,8 +3637,8 @@ def _lorentzian_source_size(
 
     scan_sampling = _scan_sampling(measurements)
     hw_pixels = (
-        half_width[0] / scan_sampling[0],
-        half_width[1] / scan_sampling[1],
+        _width_in_pixels(half_width[0], scan_sampling[0]),
+        _width_in_pixels(half_width[1], scan_sampling[1]),
     )
     kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
@@ -3547,8 +3742,9 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
     for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
         if axis in _scan_axes(measurements):
             scan_sampling = _scan_sampling(measurements)[i]
-            padded_sigma += (sigma[i] / scan_sampling,)
-            depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+            sigma_pixels = _width_in_pixels(sigma[i], scan_sampling)
+            padded_sigma += (sigma_pixels,)
+            depth += (min(int(np.ceil(4.0 * sigma_pixels)), n),)
             i += 1
         else:
             padded_sigma += (0.0,)
@@ -3744,6 +3940,24 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _refuse_max_angle_for_several_energies(
+    measurements: "DiffractionPatterns | IndexedDiffractionPatterns",
+    alternatives: str,
+) -> None:
+    """Raise if `measurements` hold several energies, for a crop to a scattering
+    angle: the pixels (or spots) within an angle depend on the wavelength, so the
+    energies would not stack, and using one wavelength for all of them would crop
+    the others to the wrong angle."""
+    from abtem.array import _multi_energy_axis
+
+    if _multi_energy_axis(measurements) is not None:
+        raise ValueError(
+            "`max_angle` cannot crop diffraction patterns of several energies, since "
+            "the pixels or spots within an angle differ between the energies: "
+            f"pass {alternatives}, or index one energy first."
+        )
+
+
 def _per_energy(method=None, *, shared_outer: bool = False):
     """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
     ensemble on its own, and restack the results along the energy axis.
@@ -3796,6 +4010,13 @@ def _per_energy(method=None, *, shared_outer: bool = False):
     return decorator if method is None else decorator(method)
 
 
+class UnshiftedExportWarning(UserWarning):
+    """`DiffractionPatterns` with `fftshift=False` are exported with the zero
+    frequency moved to the centre. Filter it out for patterns that are unshifted
+    as said, e.g. ``warnings.filterwarnings("ignore",
+    category=UnshiftedExportWarning)``."""
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -3812,9 +4033,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
         be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
-        export an fftshifted copy, with increasing `kx` and `ky` coordinates, so
-        data that are already centred must be given with True: with the default
-        they are shifted a second time on export.
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates, and
+        warn (`UnshiftedExportWarning`) that they do. Data that are already
+        centred must therefore be given with True: with the default they are
+        shifted a second time on export, while the coordinates and plots in
+        memory look right.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
@@ -3935,18 +4158,35 @@ class DiffractionPatterns(_BaseMeasurement2D):
         kwargs["fftshift"] = True
         return self.__class__(**kwargs)
 
+    def _warn_unshifted_export(self, method: str) -> None:
+        # The export shifts unshifted patterns. Patterns that are already centred
+        # but were made with the default fftshift=False are shifted by half the
+        # grid, which nothing else shows: the coordinates and plots in memory
+        # follow the flag (#603).
+        warnings.warn(
+            f"{method} exports these diffraction patterns with the zero frequency "
+            "moved from index 0 to the centre, because they have fftshift=False. "
+            "If the zero frequency is already at the centre, make them with "
+            "fftshift=True.",
+            UnshiftedExportWarning,
+            stacklevel=3,
+        )
+
     def to_hyperspy(self, transpose: bool = True):
         if not self.fftshift:
+            self._warn_unshifted_export("to_hyperspy")
             return self._fftshifted().to_hyperspy(transpose)
         return super().to_hyperspy(transpose)
 
     def to_data_array(self):
         if not self.fftshift:
+            self._warn_unshifted_export("to_data_array")
             return self._fftshifted().to_data_array()
         return super().to_data_array()
 
     def to_quantem(self):
         if not self.fftshift:
+            self._warn_unshifted_export("to_quantem")
             return self._fftshifted().to_quantem()
         return super().to_quantem()
 
@@ -4265,6 +4505,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def angular_sampling(self) -> tuple[float, float]:
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
+
+        The angular sampling scales with the wavelength. For diffraction patterns of
+        several energies it is that of the highest energy, which is not the sampling
+        of the other energies: index one energy first to get its own. Methods that
+        use scattering angles evaluate each energy with its own sampling.
         """
         wavelength = energy2wavelength(self._get_energy())
         return (
@@ -4274,7 +4519,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def max_angles(self) -> tuple[float, float]:
-        """Maximum scattering angle in `x` and `y` [mrad]."""
+        """Maximum scattering angle in `x` and `y` [mrad]. For diffraction patterns of
+        several energies, that of the highest energy (see `angular_sampling`)."""
         return (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
@@ -4308,7 +4554,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_limits(self) -> list[tuple[float, float]]:
-        """Lowest and highest scattering angle in `x` and `y` [mrad]."""
+        """Lowest and highest scattering angle in `x` and `y` [mrad]. For diffraction
+        patterns of several energies, those of the highest energy (see
+        `angular_sampling`)."""
 
         limits = self.limits
         wavelength = energy2wavelength(self._get_energy())
@@ -4328,6 +4576,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return limits[0][0], limits[1][0]
 
     @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        # Unshifted patterns store the zero frequency first; the negative
+        # frequencies follow the positive ones and are reached periodically.
+        if self.fftshift:
+            return self.offset
+        return 0.0, 0.0
+
+    @property
     def extent(self) -> tuple[float, float]:
         limits = self.limits
         return limits[0][0] - limits[0][1], limits[1][0] - limits[1][1]
@@ -4343,7 +4599,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
-        """Scattering angle coordinates [mrad]."""
+        """Scattering angle coordinates [mrad]. For diffraction patterns of several
+        energies, those of the highest energy (see `angular_sampling`)."""
 
         # Derived from `coordinates` so the storage order (shifted or
         # unshifted, even or odd n) is handled in one place.
@@ -4667,8 +4924,20 @@ class DiffractionPatterns(_BaseMeasurement2D):
         fftshift,
         rotation,
         offset,
+        sensitivity=None,
     ):
         xp = get_array_module(array)
+
+        if sensitivity is not None:
+            weights = _radial_weight_map(
+                gpts=array.shape[-2:],
+                sampling=sampling,
+                sensitivity=sensitivity,
+                fftshift=fftshift,
+                xp=xp,
+                offset=offset,
+            )
+            array = array * weights
 
         # The flat index array and the separators are functions of the
         # detector geometry alone, but indexing a device array with a host
@@ -4728,6 +4997,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         outer: Optional[float] = None,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[Callable] = None,
     ):
         """
         Create polar measurements from the diffraction patterns by binning the
@@ -4757,6 +5027,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         offset : two float
             Offset of the bins from the origin in `x` and `y` [mrad].
             Default is (0.0, 0.0).
+        sensitivity : callable, optional
+            Function mapping radial scattering angle [mrad] to a per-pixel sensitivity
+            weight. If given, the diffraction patterns are weighted by this factor before
+            binning, simulating a radially varying detector sensitivity. By default the
+            bins are uniformly sensitive.
 
         Returns
         -------
@@ -4784,6 +5059,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                sensitivity=sensitivity,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 chunks=self.array.chunks[:-2]
                 + (
@@ -4807,6 +5083,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                sensitivity=sensitivity,
             )
 
         radial_sampling = (outer - inner) / nbins_radial
@@ -4866,7 +5143,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
     @staticmethod
-    def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):
+    def _integrate_fourier_space(
+        array, sampling, inner, outer, fftshift, offset, sensitivity=None
+    ):
         xp = get_array_module(array)
 
         bins = _annular_detector_mask(
@@ -4877,6 +5156,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             fftshift=fftshift,
             offset=offset,
             xp=xp,
+            sensitivity=sensitivity,
         )
 
         return xp.sum(array * bins, axis=(-2, -1))
@@ -4887,6 +5167,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         inner: float,
         outer: float = None,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[Callable] = None,
     ) -> Images:
         """
         Create images by integrating the diffraction patterns over an annulus defined by
@@ -4900,6 +5181,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Outer integration limit [mrad].
         offset : tuple of float
             Offset of center of annular integration region [mrad].
+        sensitivity : callable, optional
+            Function mapping radial scattering angle [mrad] to a per-pixel sensitivity
+            weight. If given, the diffraction patterns are weighted by this factor before
+            integration, simulating a radially varying detector sensitivity. By default
+            the detector is uniformly sensitive within the integration limits.
 
         Returns
         -------
@@ -4915,7 +5201,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 inners = inner
 
             measurements = [
-                self.integrate_radial(inner=inner, outer=outer)
+                self.integrate_radial(inner=inner, outer=outer, sensitivity=sensitivity)
                 for inner, outer in zip(inners, outers)
             ]
 
@@ -4942,6 +5228,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                sensitivity=sensitivity,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 meta=xp.array((), dtype=self.array.dtype),
             )
@@ -4953,6 +5240,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                sensitivity=sensitivity,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
@@ -4984,7 +5272,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com_x = (array * x[:, None]).sum(axis=(-2, -1)) / total_intensity
         com_y = (array * y[None]).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
-        return com
+        # Integer counts are summed in float64 (exact for realistic counts);
+        # the centers are returned in the precision of the coordinates.
+        return com.astype(np.result_type(x.dtype, y.dtype, np.complex64), copy=False)
 
     @_per_energy
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
@@ -5016,7 +5306,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         xp = get_array_module(self.array)
 
-        x, y = xp.asarray(x), xp.asarray(y)
+        # Coordinates in the precision of the data, so that float32 patterns give
+        # complex64 centers; counts of integer type get the configured precision.
+        if np.issubdtype(self.array.dtype, np.floating):
+            coordinate_dtype = np.result_type(self.array.dtype, np.float32)
+        else:
+            coordinate_dtype = get_dtype(complex=False)
+        x = xp.asarray(x, dtype=coordinate_dtype)
+        y = xp.asarray(y, dtype=coordinate_dtype)
 
         if self.is_lazy:
             base_axes = tuple(
@@ -5030,7 +5327,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 x=x,
                 y=y,
                 drop_axis=base_axes,
-                dtype=np.result_type(self.array.dtype, x.dtype, y.dtype, np.complex64),
+                dtype=np.result_type(x.dtype, y.dtype, np.complex64),
             )
         else:
             array = self._com(self.array, x=x, y=y)
@@ -5119,6 +5416,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         max_frequency : float, optional
             The maximum included spatial frequency in the cropped diffraction patterns.
         gpts : tuple of int
@@ -5136,6 +5434,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             raise ValueError(
                 "provide exactly one of 'max_angle', 'max_frequency' or 'gpts'"
             )
+
+        if max_angle is not None:
+            _refuse_max_angle_for_several_energies(self, "`max_frequency` or `gpts`")
 
         if gpts is None and max_angle is not None:
             gpts = (
@@ -5168,23 +5469,145 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_row_blocks(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        block_pixels: int = 1 << 16,
+    ):
+        """Yield `(start, first, last)` for blocks of whole rows of the pattern: the
+        first and last step bin of every pixel of the rows starting at row `start`,
+        as 2-D int32 arrays.
+
+        Bin k holds r with `k * radial_sampling - width / 2 <= r <
+        k * radial_sampling + width / 2`, that is `first <= k <= last`. The radii
+        are found in double precision, and the quotients are rounded as in
+        `safe_ceiling_int`, so an edge at a decimal multiple of the sampling is not
+        missed by rounding noise. The blocks hold about `block_pixels` pixels, so the
+        float64 temporaries stay small whatever the size of the pattern.
+        """
+        x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
+
+        def bound(q, shift, offset):
+            np.add(q, shift, out=q)
+            np.divide(q, radial_sampling, out=q)
+            np.add(q, offset, out=q)
+            np.round(q, 7, out=q)
+            np.floor(q, out=q)
+            return q.astype(np.int32)
+
+        rows = max(block_pixels // max(len(y), 1), 1)
+        for start in range(0, len(x), rows):
+            r = np.hypot(x[start : start + rows, None], y[None, :])
+            first = bound(r.copy(), -width / 2, 1.0)
+            last = bound(r, width / 2, 0.0)  # r itself is not needed after this
+            yield start, first, last
+
+    @staticmethod
     def _azimuthal_step_bounds(
-        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        device: str = "cpu",
     ) -> tuple[np.ndarray, np.ndarray]:
-        """The first and last step bin of every pixel, as int32 arrays on the host.
-        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
-        x, y = np.meshgrid(*coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
-        del x, y
-        # Bin k holds r with k * radial_sampling - width / 2 <= r <
-        # k * radial_sampling + width / 2, that is first <= k <= last. The
-        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
-        # multiple of the sampling is not missed by rounding noise.
-        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
-        first = first.astype(np.int32)
-        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
-        last = last.astype(np.int32)
-        return first, last
+        """The first and last step bin of every pixel, as int32 arrays on `device`.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes.
+
+        The bins are found in double precision on the host, then copied to the
+        device once: every block of a lazy average shares the copy instead of
+        transferring both arrays itself. Blocks that find the copy on another device
+        than their own (the node ran on a different worker, with several GPUs in one
+        process) copy it themselves: see `_on_device_of`.
+
+        The bounds are found a block of rows at a time (see
+        `_azimuthal_step_row_blocks`) and written into the int32 results, so the
+        peak host memory is the two results and a few small blocks, rather than a
+        meshgrid and its pattern-sized temporaries.
+        """
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        shape = tuple(len(c) for c in coordinates)
+        first = np.empty(shape, dtype=np.int32)
+        last = np.empty(shape, dtype=np.int32)
+        for start, first_rows, last_rows in row_blocks(
+            coordinates, radial_sampling, width
+        ):
+            first[start : start + len(first_rows)] = first_rows
+            last[start : start + len(last_rows)] = last_rows
+        return copy_to_device(first, device), copy_to_device(last, device)
+
+    @staticmethod
+    def _azimuthal_step_runs(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        num_bins: int,
+        device: str = "cpu",
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The pixels of every step bin as runs, for a single-pass average: the
+        flat pixel indices ordered by bin, the separators of the bins' runs and
+        the number of pixels in each bin, on `device`.
+
+        A pixel is in the bins `first..last` of `_azimuthal_step_bounds`, which
+        is one bin with the default `width == radial_sampling` and several for
+        overlapping bins; it then appears once in the run of each. With
+        overlapping bins (`width > radial_sampling`) the runs, and the gather of
+        the pixels they index, are larger than the pattern by a factor of about
+        `width / radial_sampling`. Within a bin the pixels keep their order in the
+        pattern.
+
+        The runs are sorted a block of rows at a time, in two passes over the
+        blocks of `_azimuthal_step_row_blocks`: the first counts the pixels of
+        every bin, which places the runs, and the second sorts each block by bin
+        and writes it into its place in the runs. Only the runs themselves, int32
+        indices when the pattern has fewer than 2**31 pixels, are pattern-sized.
+        """
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        size = int(np.prod([len(c) for c in coordinates]))
+        index_dtype = np.int32 if size < 2**31 else np.int64
+
+        def clipped(first, last):
+            # the bins of a pixel, first..last, within 0..num_bins - 1
+            first = np.maximum(first.ravel(), 0)
+            last = np.minimum(last.ravel(), num_bins - 1)
+            return first, last, np.maximum(last - first + 1, 0)
+
+        # a bin is in the range of a pixel from its first to its last: a bincount
+        # of the firsts less a bincount of the bins after the lasts, accumulated
+        delta = np.zeros(num_bins + 1, dtype=np.int64)
+        for _, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            valid = counts > 0
+            delta += np.bincount(first[valid], minlength=num_bins + 1)
+            delta -= np.bincount(last[valid] + 1, minlength=num_bins + 1)
+        bin_counts = np.cumsum(delta)[:num_bins]
+        separators = np.concatenate(([0], np.cumsum(bin_counts))).astype(np.int64)
+
+        pixels = np.empty(int(separators[-1]), dtype=index_dtype)
+        cursor = separators[:-1].copy()  # next free place in the run of each bin
+        for start, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            first = first.astype(np.int64)
+            if counts.size and counts.max() <= 1:  # no pixel in several bins
+                pixel = np.flatnonzero(counts)
+                bins = first[pixel]
+            else:
+                pixel = np.repeat(np.arange(first.size, dtype=np.int64), counts)
+                # the bin of each copy of a pixel: its first bin plus the copy's rank
+                starts = np.cumsum(counts) - counts
+                bins = np.repeat(first - starts, counts)
+                bins += np.arange(pixel.size, dtype=np.int64)
+            order = np.argsort(bins, kind="stable")
+            bins = bins[order]
+            block_counts = np.bincount(bins, minlength=num_bins)
+            block_starts = np.cumsum(block_counts) - block_counts
+            places = cursor[bins] + (np.arange(bins.size) - block_starts[bins])
+            pixels[places] = pixel[order] + start * len(coordinates[1])
+            cursor += block_counts
+        return (
+            copy_to_device(pixels, device),
+            copy_to_device(separators, device),
+            copy_to_device(bin_counts, device),
+        )
 
     @staticmethod
     def _azimuthal_average(
@@ -5195,29 +5618,44 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        step_runs: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
-        `step_bounds` are the first and last bin of every pixel for the step
-        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
-        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
-        weighting.
+        `step_runs` (`_azimuthal_step_runs`) average the step bins in one pass;
+        `step_bounds` are the first and last bin of every pixel, for averaging
+        the step bins one by one. `coordinates` are the 1-D pixel-unit
+        coordinates of the x and y axes and `coordinate_dtype` the precision they
+        are cast to, for the Gaussian weighting.
         """
         xp = get_array_module(array)
 
-        if weighting_function == "step":
-            first, last = (xp.asarray(bound) for bound in step_bounds)
-        else:
-            x, y = np.meshgrid(
-                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
-                indexing="ij",
+        if step_runs is not None:
+            # One gather of the binned pixels and one summing pass, instead of a
+            # pattern-sized mask and masked sum per bin.
+            pixels, separators, counts = (
+                _on_device_of(run, array) for run in step_runs
             )
-            r = np.sqrt(x**2 + y**2)
+            flat = array.reshape((-1, array.shape[-2] * array.shape[-1]))
+            sums = _sum_runs(flat[:, pixels], separators)
+            # an empty bin averages to 0, as bin by bin
+            values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
+            return values.reshape(array.shape[:-2] + centers.shape)
+
+        if weighting_function == "step":
+            # On the device of the array, unless a node shared by the blocks was
+            # computed elsewhere (see _azimuthal_step_bounds).
+            first, last = (_on_device_of(bound, array) for bound in step_bounds)
+        else:
+            # Broadcast rather than meshgrid, which not every array module has.
+            x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
+            r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
-        # the summed values are assigned back in.
-        values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
+        # the summed values are assigned back in. On the device of the array:
+        # a host array cannot take the device sums assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)
@@ -5272,7 +5710,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             For the 'step' weighting function, this is the full width of the ring: bin
             `k` holds the pixels with
             `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
-            so the default bins do not overlap.
+            so the default bins do not overlap. With overlapping bins
+            (`width > radial_sampling`) the pixel runs gathered and summed, and
+            their memory, grow in proportion to `width / radial_sampling`.
             For the 'gaussian' weighting function, the weight is
             `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
             of `width / 2`.
@@ -5302,11 +5742,38 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centers = np.arange(num_bins) * radial_sampling
 
         if weighting_function == "step":
-            # One node shared by every block, which holds the pattern-sized bounds.
-            step_bounds = self._azimuthal_step_bounds
-            if self.is_lazy:
-                step_bounds = dask.delayed(step_bounds, pure=True)
-            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+            # One node shared by every block, which holds the pattern-sized bounds:
+            # two int32 arrays of 2 * 4 * n_pixels bytes (34 MB for 2048 x 2048), on
+            # the device of the patterns, for as long as the graph or any of its
+            # blocks is alive.
+            #
+            # By default the node holds the bins as runs instead (#602): the
+            # binned pixel indices (int32, 4 * n_pixels bytes with the default
+            # non-overlapping bins), averaged in one pass. With overlapping bins
+            # (width > radial_sampling) the runs and the gather of the pixels they
+            # index scale as width / radial_sampling.
+            if AZIMUTHAL_STEP_SINGLE_PASS:
+                step_runs = self._azimuthal_step_runs
+                if self.is_lazy:
+                    step_runs = dask.delayed(step_runs, pure=True)
+                kwargs = dict(
+                    step_runs=step_runs(
+                        coordinates,
+                        radial_sampling,
+                        width,
+                        len(centers),
+                        device=self.device,
+                    )
+                )
+            else:
+                step_bounds = self._azimuthal_step_bounds
+                if self.is_lazy:
+                    step_bounds = dask.delayed(step_bounds, pure=True)
+                kwargs = dict(
+                    step_bounds=step_bounds(
+                        coordinates, radial_sampling, width, device=self.device
+                    )
+                )
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
@@ -6281,7 +6748,9 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-@jit(nopython=True, nogil=True)
+# cache=True keeps the compiled kernel on disk: compiling it took seconds on the
+# first call in every process and pytest-xdist worker.
+@jit(nopython=True, nogil=True, cache=True)
 def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
     for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
@@ -6596,6 +7065,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         k_max : float, optional
             The maximum included reciprocal lattice vector in the cropped diffraction
             spots.
@@ -6607,6 +7077,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
 
         if max_angle is not None and k_max is None:
+            _refuse_max_angle_for_several_energies(self, "`k_max`")
             wavelength = energy2wavelength(self._get_energy())
             k_max = max_angle / wavelength / 1e3
 
@@ -6992,6 +7463,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ]
         ensemble_axes_metadata.insert(axis, axis_metadata)
         metadata = diffraction_spots[0].metadata
+        if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+            # the axis carries every member's energy (see ArrayObject._stack)
+            metadata = {**metadata, "energy": None}
 
         return IndexedDiffractionPatterns(
             intensities, miller_indices, positions, ensemble_axes_metadata, metadata
@@ -7398,10 +7872,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
 def _validate_temperature(temperature) -> float:
     """The temperature [K] as a Python float, so that k_B T is formed in double
-    precision. A bool, and a negative or non-finite value, raise; a negative
-    temperature would swap the loss and gain weights."""
-    if isinstance(temperature, (bool, np.bool_)):
-        raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+    precision. A negative or non-finite value raises; a negative temperature
+    would swap the loss and gain weights."""
     temperature = float(temperature)
     if not (np.isfinite(temperature) and temperature >= 0.0):
         raise ValueError(
@@ -7498,14 +7970,6 @@ def _thermal_weight_tds(
 
 FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
 
-# The names "incoherent", "coherent" and "tds" and the current names they map
-# to. Passed as components they raise a ValueError naming the current name.
-_RENAMED_FROZEN_PHONON_COMPONENTS = {
-    "incoherent": "total",
-    "coherent": "elastic",
-    "tds": "diffuse",
-}
-
 
 def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], bool]:
     """The requested component names, in the order given, and whether they are
@@ -7536,10 +8000,6 @@ def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], boo
         if not isinstance(name, str):
             raise TypeError(
                 f"component names must be strings, got {type(name).__name__}"
-            )
-        if name in _RENAMED_FROZEN_PHONON_COMPONENTS:
-            raise ValueError(
-                f"{name!r} is now {_RENAMED_FROZEN_PHONON_COMPONENTS[name]!r}"
             )
         if name == "all":
             raise ValueError("'all' cannot be combined with other component names")
@@ -7766,6 +8226,111 @@ def elastic_diffuse_diffraction_patterns(
     return result._apply_block_direct(block_direct)
 
 
+def _frozen_phonon_components_from_moments(
+    measurements: BaseMeasurements, num_configurations: Optional[int] = None
+):
+    """The components a ``PixelatedDetector`` with ``components`` detected, from its
+    measurements with the ``frozen_phonon_moments`` metadata.
+
+    The measurements hold, per configuration, the real quantities named in
+    ``metadata["frozen_phonon_moments"]["channels"]`` stacked along the first base
+    axis: the real and imaginary part of the amplitude ψ and its intensity |ψ|². The
+    ``FrozenPhononsAxis`` is averaged first, over that axis alone, which gives the
+    mean amplitude m and the total T, and the components are formed from these as
+    in :func:`elastic_diffuse_diffraction_patterns`. Every other ensemble axis is
+    kept for the incoherent reduction of ``reduce_ensemble`` that follows.
+
+    ``num_configurations`` is the number of configurations N when the measurements
+    hold their mean already, as the eager PRISM scan accumulates it member by member
+    along a frozen-phonon axis of length 1; by default N is the length of that axis.
+    """
+    from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
+
+    info = measurements.metadata["frozen_phonon_moments"]
+    names = tuple(info["components"])
+    unbiased = info["unbiased"]
+    channels = info["channels"]
+
+    axes = measurements.ensemble_axes_metadata
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(axes)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "a PixelatedDetector with components needs a FrozenPhononsAxis in the "
+            "ensemble axes, e.g. from FrozenPhonons as the potential of the "
+            "multislice simulation."
+        )
+    if not axes[fp_axis_idx]._ensemble_mean:
+        raise ValueError(
+            "a PixelatedDetector with components needs the frozen phonons averaged: "
+            "build them with ensemble_mean=True. With ensemble_mean=False, detect "
+            "the exit waves with a WavesDetector and use "
+            "elastic_diffuse_diffraction_patterns."
+        )
+
+    N = (
+        measurements.shape[fp_axis_idx]
+        if num_configurations is None
+        else num_configurations
+    )
+    if N < 2 and _needs_the_diffuse_part(names, unbiased):
+        raise ValueError(
+            "the diffuse component, and the elastic component with unbiased=True, "
+            f"need at least 2 frozen-phonon configurations, got N={N}. The diffuse "
+            "intensity is the variance of the diffracted amplitude across "
+            "configurations, which is exactly zero for a single configuration."
+        )
+
+    # The averages of ψ and |ψ|² over the configurations, in the reduction of the
+    # array (a dask tree reduction when lazy).
+    mean = measurements.reduce_ensemble(axis=fp_axis_idx)
+    array = mean.array
+    size = array.shape[-2] // len(channels)
+    quantities = {
+        name: array[..., i * size : (i + 1) * size, :]
+        for i, name in enumerate(channels)
+    }
+
+    elastic = None
+    if "real" in quantities:
+        elastic = quantities["real"] ** 2 + quantities["imag"] ** 2
+    parts = _form_frozen_phonon_components(
+        quantities.get("intensity"), elastic, N, names, unbiased
+    )
+
+    ensemble_axes_metadata = list(mean.ensemble_axes_metadata)
+    if info["stacked"]:
+        xp = get_array_module(parts[0])
+        array = _array_module_fn(parts[0], xp, "stack")(parts, axis=0)
+        ensemble_axes_metadata = [
+            OrdinalAxis(label="component", values=names)
+        ] + ensemble_axes_metadata
+    else:
+        array = parts[0]
+
+    metadata = {
+        key: value
+        for key, value in mean.metadata.items()
+        if key != "frozen_phonon_moments"
+    }
+    metadata["frozen_phonon_component"] = list(names) if info["stacked"] else names[0]
+    metadata["num_configurations"] = N
+    metadata["unbiased"] = unbiased
+
+    return mean.__class__.from_array_and_metadata(
+        array,
+        axes_metadata=ensemble_axes_metadata + mean.base_axes_metadata,
+        metadata=metadata,
+    )
+
+
 def phonon_loss_diffraction_patterns(
     exit_waves,
     components: str | Sequence[str] = "diffuse",
@@ -7853,8 +8418,6 @@ def phonon_loss_diffraction_patterns(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    # Validated before the temperature check, so that a renamed component such
-    # as 'tds' gets the error that names its replacement.
     names, stacked = _validate_frozen_phonon_components(components)
     if temperature is not None and (stacked or names != ("diffuse",)):
         raise ValueError(
@@ -8054,16 +8617,27 @@ def momentum_resolved_spectrum(
         )
 
         # interpolate_line with width>0 returns the AVERAGE across the
-        # perpendicular direction.  Convert to a SUM to be consistent with the
-        # annular detector path (which sums all pixels inside the mask).
-        # n_perp is the number of perpendicular samples used internally.
+        # perpendicular direction.  Convert to a SUM over pixels to be
+        # consistent with the annular detector path (which sums all pixels
+        # inside the mask): each sample stands for the area between its
+        # neighbours along and across the slit, divided by the pixel area.
+        # interpolate_line places its n_perp perpendicular samples at
+        # linspace(-n_perp / 2, n_perp / 2, n_perp) * sampling_inv, i.e.
+        # n_perp / (n_perp - 1) * sampling_inv apart, and the N line samples
+        # (endpoint included) (q_max_inv - q_min_inv) / (N - 1) apart.
         n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+        perpendicular_step = sampling_inv * (
+            n_perp / (n_perp - 1) if n_perp > 1 else 1.0
+        )
+        line_step = (q_max_inv - q_min_inv) / (N - 1)
+        pixel_area = dp.sampling[0] * dp.sampling[1]
+        samples_to_sum = n_perp * line_step * perpendicular_step / pixel_area
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
         moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
         spectrum_array = moveaxis(
-            line_profiles.array * n_perp, energy_axis_idx, -1
+            line_profiles.array * samples_to_sum, energy_axis_idx, -1
         )
         q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 

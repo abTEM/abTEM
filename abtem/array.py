@@ -178,65 +178,40 @@ def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
     return None
 
 
-def _copy_with_scalar_energy(array_object: "ArrayObject", energy: Optional[float]):
-    """A copy of `array_object` sharing its array, with `energy` as its scalar
-    energy: `accelerator.energy`, and `metadata["energy"]` where the key is
-    present."""
-    kwargs = array_object._copy_kwargs(exclude=("array",))
-    kwargs["array"] = array_object._array
-    if "energy" in kwargs:
-        kwargs["energy"] = energy
-    if "energy" in (kwargs.get("metadata") or {}):
-        kwargs["metadata"]["energy"] = energy
-    return array_object.__class__(**kwargs)
+def _contradicting_energy_axis(scalar, axes) -> Optional[EnergyAxis]:
+    """The first `EnergyAxis` among `axes` holding an energy other than the scalar
+    energy `scalar` (compared to a relative 1e-9, not exactly), or None. A scalar
+    that is not a number, such as None, contradicts nothing."""
+    if not isinstance(scalar, Number):
+        return None
+    for axis in axes:
+        if isinstance(axis, EnergyAxis) and not np.allclose(
+            [float(value) for value in axis.values], float(scalar), rtol=1e-9, atol=0.0
+        ):
+            return axis
+    return None
 
 
-def _with_the_energy_of_a_single_valued_energy_axis(array_object: "ArrayObject"):
-    """`array_object`, or a copy of it carrying the energy of its single-valued
-    `EnergyAxis` in place of a different scalar energy.
+def _drop_stale_scalar_energy(axes, scalar_holders: Sequence[dict], source: str):
+    """Set to None the scalar energy (the "energy" entry of each dict in
+    `scalar_holders`) that contradicts an `EnergyAxis` among `axes`, with a warning.
 
-    A scalar energy (`accelerator.energy` or `metadata["energy"]`) takes
-    precedence over the axis in `resolve_energy`, so waves that carry both, with
-    an axis value that differs from the scalar, are evaluated at the wrong
-    wavelength. This is the state of a lazy block holding one energy of such
-    waves. The copy shares the array; the object itself is returned when it has
-    no such axis or no scalar energy that differs from the axis value.
-    """
-    axis = next(
-        (
-            axis
-            for axis in array_object.ensemble_axes_metadata
-            if isinstance(axis, EnergyAxis) and len(axis.values) == 1
-        ),
-        None,
-    )
-    if axis is None:
-        return array_object
-
-    energy = float(axis.values[0])
-    accelerator = getattr(array_object, "accelerator", None)
-    scalars = (
-        None if accelerator is None else accelerator.energy,
-        array_object._metadata.get("energy"),
-    )
-    if all(scalar is None or float(scalar) == energy for scalar in scalars):
-        return array_object
-
-    return _copy_with_scalar_energy(array_object, energy)
-
-
-def _without_scalar_energy(array_object: "ArrayObject"):
-    """`array_object`, or a copy of it with no scalar energy, so that only its
-    `EnergyAxis` decides the energies (see `resolve_energy`). The copy shares the
-    array."""
-    accelerator = getattr(array_object, "accelerator", None)
-    scalars = (
-        None if accelerator is None else accelerator.energy,
-        array_object._metadata.get("energy"),
-    )
-    if all(scalar is None for scalar in scalars):
-        return array_object
-    return _copy_with_scalar_energy(array_object, None)
+    Files written before an `EnergyAxis` was the one record of the energies of an
+    energy ensemble (such as the output of `stack` over energies) kept the scalar
+    energy of the first member beside the axis; `ArrayObject` now refuses that
+    combination, and the axis is what holds the energies, so loading drops the
+    leftover instead of failing."""
+    for holder in scalar_holders:
+        scalar = holder.get("energy")
+        axis = _contradicting_energy_axis(scalar, axes)
+        if axis is not None:
+            warnings.warn(
+                f"{source} holds the scalar energy {scalar} eV beside an EnergyAxis "
+                f"with the energies {tuple(axis.values)} eV, a leftover of an older "
+                "abTEM version; the scalar energy is ignored and the energies of the "
+                "EnergyAxis are used."
+            )
+            holder["energy"] = None
 
 
 def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
@@ -251,27 +226,18 @@ def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
     ensemble axes, among the array object's own axes in their natural order,
     which is the order every `_calculate_new_array` returns. This runs on the
     whole array of an eager call and on every block of a lazy one, whatever
-    energies the block holds. An array object with a single-valued energy axis,
-    such as a block holding one energy, is transformed at that energy even if it
-    carries a different scalar energy; one without such a scalar energy is
-    transformed as it is, not as a copy.
+    energies the block holds.
     """
     if not getattr(transform, "_splits_energy_ensembles", False):
         return transform._calculate_new_array(array_object)
 
     index = _multi_energy_axis(array_object)
     if index is None:
-        return transform._calculate_new_array(
-            _with_the_energy_of_a_single_valued_energy_axis(array_object)
-        )
+        return transform._calculate_new_array(array_object)
 
-    energies = array_object.ensemble_axes_metadata[index].values
     members = []
-    for j, energy in enumerate(energies):
+    for j in range(array_object.ensemble_shape[index]):
         items = array_object.get_items((slice(None),) * index + (j,))
-        if items.get("energy") is not None:
-            # A scalar energy on the ensemble is not this member's.
-            items["energy"] = energy
         members.append(transform._calculate_new_array(array_object.__class__(**items)))
 
     axis = len(transform.ensemble_shape) + index
@@ -714,6 +680,9 @@ class ComputableList(list):
             write_func = write_to_directory
 
         if not compute:
+            # The arrays are computed later, inside a task on the client's
+            # workers, which must then hold the configuration of this call.
+            _push_config_to_active_client()
             delayed_arrays = [
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
@@ -1193,6 +1162,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
         self._check_axes_metadata()
+        self._check_energy_matches_energy_axes()
 
         super().__init__(**kwargs)
 
@@ -1249,6 +1219,31 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 raise RuntimeError(
                     f"number of values for ordinal axis ({len(axis)}), does not match"
                     f"size of dimension ({n})"
+                )
+
+    def _check_energy_matches_energy_axes(self) -> None:
+        """Refuse a scalar energy that is not the energy of every member of an
+        `EnergyAxis`. The axis is the one record of the energies of an energy
+        ensemble, which leaves its scalar energy (`accelerator.energy` and
+        `metadata["energy"]`) unset, as a probe built with several energies does;
+        a scalar energy beside the axis would be read as the energy of every
+        member."""
+        accelerator = getattr(self, "_accelerator", None)
+        scalars = {
+            "energy": None if accelerator is None else accelerator.energy,
+            'metadata["energy"]': self._metadata.get("energy"),
+        }
+        for name, scalar in scalars.items():
+            axis = _contradicting_energy_axis(scalar, self._ensemble_axes_metadata)
+            if axis is not None:
+                raise ValueError(
+                    f"{name}={scalar} eV contradicts the EnergyAxis with the "
+                    f"energies {tuple(axis.values)} eV of this "
+                    f"{self.__class__.__name__}; the axis carries the energy "
+                    "of each member, leave the scalar energy unset (None). When "
+                    "reading a file written by an older abTEM version, load it "
+                    "with abtem.from_zarr, which drops such a leftover scalar "
+                    "energy."
                 )
 
     def _is_base_axis(self, axis: int | tuple[int, ...]) -> bool:
@@ -2246,6 +2241,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = self.array
         if self.is_lazy:
             warnings.warn("Lazy arrays are computed in memory before writing to tiff.")
+            _push_config_to_active_client()
             array = self._lazy_array.compute()
 
         return tifffile.imwrite(
@@ -2665,6 +2661,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
         origin is the coordinate of its first sample, in the units of the sampling; other
         axes get origin 0 and sampling 1.
+
+        The units of the axes are converted to quantem's spelling (for example "A" and
+        "A^-1"), and an axis without units gets "pixels". The signal units are the
+        "units" entry of the metadata, passed on unchanged; if there is none they are
+        "arb. unit". The metadata is deep-copied into the metadata of the Dataset, so
+        changing one does not change the other.
+
+        A quantem Dataset holds NumPy arrays only: a lazy object is computed (the
+        object itself stays lazy) and an array on a GPU is copied to the host.
+
+        Returns
+        -------
+        dataset : quantem.core.datastructures.Dataset
         """
 
         em = _optional_module(
@@ -2697,21 +2706,32 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             units.append(_normalize_unit(getattr(axis, "units", None)))
             origin.append(getattr(axis, "offset", 0.0))
 
-        if self.is_lazy:
-            self.compute()
+        # The signal units are the metadata units, as abTEM's own measurements set them
+        # ("arb. unit" by default). quantem only displays them, and reads the same
+        # symbols as abTEM ("Å", "%", "electrons"), so they are not normalized like
+        # the axis units. An empty string is a dimensionless signal and stays empty.
+        signal_units = self.metadata.get("units")
+        if signal_units is None:
+            signal_units = "arb. unit"
 
+        # compute() replaces the array of the object it is called on; computing a
+        # shallow copy leaves the caller lazy.
+        exported = copy.copy(self).compute() if self.is_lazy else self
+
+        # A quantem Dataset holds NumPy arrays only: it rejects CuPy arrays.
         dataset = em.core.datastructures.Dataset.from_array(
-            array=self.array,
+            array=asnumpy(exported.array),
             name=type(self).__name__,
             origin=tuple(origin),
             sampling=tuple(sampling),
             units=tuple(units),
-            signal_units=getattr(self, "units", "arb. units"),
+            signal_units=signal_units,
         )
 
-        # preserve abTEM metadata if present
-        if hasattr(self, "metadata"):
-            dataset._metadata = dict(self.metadata)
+        # Dataset.from_array takes no metadata; Dataset.metadata is the dict it
+        # holds, empty for a new dataset. Deep-copied, as in to_data_array, so that
+        # nested values are not shared with this object.
+        dataset.metadata.update(copy.deepcopy(self.metadata))
 
         return dataset
 
@@ -2749,6 +2769,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ]
         ensemble_axes_metadata.insert(axis, axis_metadata)
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
+        if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+            # The axis carries every member's energy, as for a probe built with
+            # several energies; the first member's scalar energy is not theirs.
+            if "energy" in kwargs:
+                kwargs["energy"] = None
+            if "energy" in (kwargs.get("metadata") or {}):
+                kwargs["metadata"]["energy"] = None
         return cls(**kwargs)
 
     def _partition_ensemble_axes_metadata(
@@ -2922,14 +2949,14 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
 
     # --- Detect format ---
     if "metadata0" in root.attrs:
-        return _from_zarr_canonical(root, chunks, decode_types)
+        return _from_zarr_canonical(root, chunks, decode_types, url)
     elif "kwargs0" in root.attrs:
-        return _from_zarr_legacy(root, chunks, decode_types)
+        return _from_zarr_legacy(root, chunks, decode_types, url)
     else:
         raise ValueError("Zarr file does not contain recognizable abTEM metadata.")
 
 
-def _from_zarr_canonical(root, chunks, decode_types):
+def _from_zarr_canonical(root, chunks, decode_types, url):
     import dask.array as da
 
     import abtem
@@ -2977,6 +3004,12 @@ def _from_zarr_canonical(root, chunks, decode_types):
 
         array = da.from_array(zarr_array, chunks=array_chunks)
 
+        _drop_stale_scalar_energy(
+            axes_list,
+            [metadata, *([] if kwargs is None else [kwargs])],
+            f"The zarr file {url}",
+        )
+
         try:
             obj = cls.from_array_and_metadata(
                 array,
@@ -3000,7 +3033,7 @@ def _from_zarr_canonical(root, chunks, decode_types):
     return imported[0] if len(imported) == 1 else imported
 
 
-def _from_zarr_legacy(root, chunks, decode_types):
+def _from_zarr_legacy(root, chunks, decode_types, url):
     import dask.array as da
     from dask import config
 
@@ -3039,6 +3072,12 @@ def _from_zarr_legacy(root, chunks, decode_types):
             array_chunks = chunks
 
         array = da.from_array(zarr_array, chunks=array_chunks)
+
+        _drop_stale_scalar_energy(
+            kwargs["ensemble_axes_metadata"],
+            [kwargs, kwargs.get("metadata") or {}],
+            f"The zarr file {url}",
+        )
 
         with config.set({"warnings.overspecified-grid": False}):
             imported.append(cls(array, **kwargs))
@@ -3110,17 +3149,7 @@ def stack(
 
     axis_metadata = validate_axis_metadata(axis_metadata)
 
-    stacked = arrays[0]._stack(arrays, axis_metadata, axis)
-    if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
-        # The scalar energy of the first member would misrepresent the others
-        # and take precedence over the axis (resolve_energy); the axis carries
-        # every member's energy, as for a probe built with several energies,
-        # whose metadata["energy"] is None as well.
-        if getattr(stacked, "accelerator", None) is not None:
-            stacked.accelerator.energy = None
-        if "energy" in stacked._metadata:
-            stacked._metadata["energy"] = None
-    return stacked
+    return arrays[0]._stack(arrays, axis_metadata, axis)
 
 
 def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
@@ -3159,8 +3188,14 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     axes_metadata = copy.deepcopy(arrays[0].axes_metadata)
     axes_metadata[axis] = concatenated_axes_metadata
 
+    metadata = arrays[0].metadata
+    # The scalar energy of the first array is not that of the others once the
+    # EnergyAxis holds theirs (see `stack`).
+    if _contradicting_energy_axis(metadata.get("energy"), axes_metadata) is not None:
+        metadata = {**metadata, "energy": None}
+
     return cls.from_array_and_metadata(
-        array=array, axes_metadata=axes_metadata, metadata=arrays[0].metadata
+        array=array, axes_metadata=axes_metadata, metadata=metadata
     )
 
 
