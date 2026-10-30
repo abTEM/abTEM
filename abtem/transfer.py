@@ -937,7 +937,7 @@ class Vortex(BaseAperture):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        return self._energy_ensemble_axes_metadata + self._get_axes_metadata_from_distributions(
+        distribution_axes = self._get_axes_metadata_from_distributions(
             quantum_number={
                 "label": "quantum_number",
                 # dimensionless (OAM in units of hbar); without this the axis
@@ -952,6 +952,7 @@ class Vortex(BaseAperture):
                 "tex_label": "$\\alpha_{cut}$",
             },
         )
+        return self._energy_ensemble_axes_metadata + distribution_axes
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
