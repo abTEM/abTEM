@@ -198,14 +198,15 @@ def calculate_non_periodic_magnetic_vector_potential(
        the slab field with `slab_normal`, and `gpaw_magnetic_fields` does
        by default (`demagnetization="slab"`).
 
-       This choice is not cosmetic. For the FePt case above, dropping to
-       B_avg = 0 removes the artifact at its source -- the C4 violation
-       falls from 1.14 to 0.026 without any symmetrization -- but the OAM
-       signal itself drops to 18-32% of its B_avg = mu_0 * M value, since
-       the uniform field dominates the orbital coupling for a probe wider
-       than the unit cell. The two conventions are physically different
-       predictions, not numerically equivalent, so the geometry has to be
-       decided deliberately.
+       This choice is not cosmetic. For PRB 94, 174414 Fig. 9 (FePt, 100 kV,
+       30 mrad l = +-1 vortices, 30x30 cells, 10-60 u.c.), the OAM signal
+       with B_avg = 0 is 6-21% of its B_avg = mu_0 * M value (with
+       `gauge_origin="probe"`) at a 2 mrad collection angle, 23-41% at 4,
+       41-58% at 6 and 52-79% at 8 mrad: the uniform field's orbital
+       coupling acts mostly at small angles. The spin signal is unchanged.
+       The two conventions are physically different predictions, not
+       numerically equivalent, so the geometry has to be decided
+       deliberately.
 
     A general alternative that avoids the artifact without giving up the
     uniform field: for a *uniform* B the paraxial evolution is analytic, so
