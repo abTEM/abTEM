@@ -450,6 +450,49 @@ def test_gpaw_magnetic_fields_report_the_strained_default_box_once(
     assert chosen[0].filename == __file__
 
 
+@pytest.fixture(scope="module")
+def hydrogen_calculator():
+    from gpaw import GPAW, PW
+
+    atoms = Atoms("H", positions=[[2.0, 2.0, 2.0]], cell=[4.0] * 3, pbc=True)
+    atoms.set_initial_magnetic_moments([1.0])
+    atoms.calc = GPAW(
+        mode=PW(200), xc="LDA", spinpol=True, txt=None, convergence={"density": 1e-4}
+    )
+    atoms.get_potential_energy()
+    return atoms.calc
+
+
+def test_gpaw_magnetic_fields_slab_average_field(hydrogen_calculator):
+    # With the magnetization left along the beam, the slab's demagnetizing field
+    # cancels mu_0 * M entirely; the 3D-periodic convention keeps all of it.
+    from abtem.magnetism.gpaw import gpaw_magnetic_fields
+    from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
+
+    def average_field(demagnetization):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return gpaw_magnetic_fields(
+                hydrogen_calculator,
+                sampling=0.2,
+                rotate_field=None,
+                demagnetization=demagnetization,
+            ).average_field
+
+    calc = hydrogen_calculator
+    expected = (
+        vacuum_permeability
+        * bohr_magneton
+        * calc.get_magnetic_moment()
+        / calc.atoms.get_volume()
+    )
+    assert abs(expected) > 0.1
+
+    periodic = average_field(None)
+    assert np.allclose(periodic, [0.0, 0.0, expected], rtol=1e-3, atol=1e-9)
+    assert np.array_equal(average_field("slab"), [0.0, 0.0, 0.0])
+
+
 # `GPAWPotential(repetitions=...)` lays out the box of the repeated crystal.
 
 
