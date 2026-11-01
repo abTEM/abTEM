@@ -25,9 +25,9 @@ algorithm objects as the scalar multislice (see `pauli_multislice`'s
 full Taylor expansion of exp(1j * dz * H), exact within a slice, while
 `FourierMultislice` applies a fast Strang-symmetrized operator-splitting
 scheme with the spectral Fourier propagator and exact pointwise
-transmission/Zeeman factors, trading a dz^3-commutator splitting error
-(requiring slice-thickness convergence, like conventional FFT
-multislice) for a 7-15x speedup. Fields follow the projected
+transmission/Zeeman factors, trading a splitting error that vanishes
+with slice thickness (and so needs converging in it, like conventional
+FFT multislice) for a 5-8x speedup at matched slicing. Fields follow the projected
 (slice-integrated) convention of `PotentialArray`: vector potential
 slices in Å²T, magnetic field slices in ÅT.
 """
@@ -385,11 +385,11 @@ def _pauli_multislice_step_split(
     with T_zeeman the *exact* pointwise electrostatic/A_z/Zeeman factor
     (the Zeeman part is a per-pixel 2x2 spin rotation computed in closed
     form) and G = i (e/(hbar k)) A_xy . grad_xy expanded in a short Taylor
-    series (its per-slice magnitude is ~1e-3, so 2-3 terms reach machine
+    series (its per-slice magnitude is small, so 2-3 terms reach machine
     precision). Propagation is applied by the caller in Strang-symmetrized
-    order (half-steps around each transmission), so the leading splitting
-    error is of order dz^3 double commutators, one order better than the
-    conventional (non-magnetic) FFT multislice algorithm.
+    order (half-steps around each transmission); the remaining splitting
+    error vanishes with slice thickness, at a rate measured to be like that
+    of the conventional (non-magnetic) FFT multislice algorithm.
     """
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
@@ -1196,10 +1196,10 @@ def pauli_multislice(
           paraxial equation of the papers), exact pointwise
           transmission/Zeeman factors (the Zeeman part as a closed-form
           per-pixel spin rotation), and a short internal Taylor series
-          for the A_xy gradient coupling only. Per-slice splitting
-          error is of order dz^3 double commutators — one order better
-          than the standard (non-magnetic) FFT multislice algorithm —
-          at 7-15x the speed of the default. ``conjugate`` and
+          for the A_xy gradient coupling only. Its splitting error
+          vanishes with slice thickness, which needs converging as for
+          the standard FFT multislice; measured 5-8x faster than the
+          default at matched slicing. ``conjugate`` and
           ``transpose`` are not supported for the Pauli operator.
 
         The two schemes differ in which error each carries: the
