@@ -27,9 +27,11 @@ full Taylor expansion of exp(1j * dz * H), exact within a slice, while
 scheme with the spectral Fourier propagator and exact pointwise
 transmission/Zeeman factors, trading a splitting error that vanishes
 with slice thickness (and so needs converging in it, like conventional
-FFT multislice) for a 5-8x speedup at matched slicing. Fields follow the projected
-(slice-integrated) convention of `PotentialArray`: vector potential
-slices in Å²T, magnetic field slices in ÅT.
+FFT multislice) for a speedup at matched slicing of 5x to over 50x,
+depending on how many Taylor terms per slice the series scheme needs.
+Fields follow the projected (slice-integrated) convention of
+`PotentialArray`: vector potential slices in Å²T, magnetic field slices
+in ÅT.
 """
 
 from __future__ import annotations
@@ -1120,8 +1122,9 @@ def pauli_multislice(
           per-pixel spin rotation), and a short internal Taylor series
           for the A_xy gradient coupling only. Its splitting error
           vanishes with slice thickness, which needs converging as for
-          the standard FFT multislice; measured 5-8x faster than the
-          default at matched slicing. ``conjugate`` and
+          the standard FFT multislice; 5x to over 50x faster than the
+          default at matched slicing, depending on how many Taylor terms
+          per slice the default needs. ``conjugate`` and
           ``transpose`` are not supported for the Pauli operator.
 
         The two schemes differ in which error each carries: the
