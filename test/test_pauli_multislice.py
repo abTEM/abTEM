@@ -215,6 +215,7 @@ def test_scalar_limit(device):
         potential,
         vector_potential=A,
         magnetic_field=B,
+        algorithm=RealSpaceMultislice(),
     )
 
     reference_array = to_numpy(reference.array)
@@ -575,6 +576,7 @@ def test_collinear_matches_adjusted_potential():
         potential,
         vector_potential=A,
         magnetic_field=B,
+        algorithm=RealSpaceMultislice(),
     )
 
     reference_array = to_numpy(reference.array)
@@ -959,6 +961,34 @@ def test_spin_rotation_matches_reference(device, spin_axis):
     )
     assert np.allclose(to_numpy(rotated), expected, rtol=1e-12, atol=1e-12)
     assert np.isclose(amplitude, np.abs(expected).sum(), rtol=1e-12)
+
+
+def test_default_algorithm_is_fourier():
+    """The default scheme is FourierMultislice(), as for Waves.multislice."""
+    gpts, extent, n, dz = 32, 10.0, 4, 1.0
+    rng = np.random.default_rng(6)
+    potential = abtem.PotentialArray(
+        rng.random((n, gpts, gpts)), slice_thickness=dz, extent=(extent, extent)
+    )
+    A = VectorPotentialArray(
+        rng.standard_normal((n, 3, gpts, gpts)), slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    B = MagneticFieldArray(
+        rng.standard_normal((n, 3, gpts, gpts)) * 100, slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20, gpts=gpts, extent=extent)
+    spinor = probe.build(lazy=False).to_spinor((1, 0))
+
+    def run(**kwargs):
+        out = pauli_multislice(
+            spinor.copy(), potential, vector_potential=A, magnetic_field=B, **kwargs
+        )
+        return to_numpy(out.array)
+
+    assert np.array_equal(run(), run(algorithm=FourierMultislice()))
+    assert not np.allclose(run(), run(algorithm=RealSpaceMultislice()))
 
 
 def test_mismatched_slice_thickness_raises():

@@ -21,14 +21,14 @@ correctness follows from the corrected wavelength alone.
 
 Two per-slice evolution schemes are provided, selected with the same
 algorithm objects as the scalar multislice (see `pauli_multislice`'s
-`algorithm` parameter): `RealSpaceMultislice` (the default) applies a
-full Taylor expansion of exp(1j * dz * H), exact within a slice, while
-`FourierMultislice` applies a fast Strang-symmetrized operator-splitting
-scheme with the spectral Fourier propagator and exact pointwise
-transmission/Zeeman factors, trading a splitting error that vanishes
-with slice thickness (and so needs converging in it, like conventional
-FFT multislice) for a speedup at matched slicing of 5x to over 50x,
-depending on how many Taylor terms per slice the series scheme needs.
+`algorithm` parameter): `FourierMultislice` (the default, as for the
+scalar multislice) applies a Strang-symmetrized operator-splitting scheme
+with the spectral Fourier propagator and exact pointwise
+transmission/Zeeman factors, with a splitting error that vanishes with
+slice thickness (and so needs converging in it, like conventional FFT
+multislice). `RealSpaceMultislice` applies a full Taylor expansion of
+exp(1j * dz * H), exact within a slice, at 5x to over 50x the cost at
+matched slicing, depending on how many Taylor terms per slice it needs.
 Fields follow the projected (slice-integrated) convention of
 `PotentialArray`: vector potential slices in Å²T, magnetic field slices
 in ÅT.
@@ -86,7 +86,7 @@ def _validate_algorithm(
     algorithm: Optional[FourierMultislice | RealSpaceMultislice],
 ) -> FourierMultislice | RealSpaceMultislice:
     if algorithm is None:
-        algorithm = RealSpaceMultislice()
+        algorithm = FourierMultislice()
 
     if isinstance(algorithm, RealSpaceMultislice):
         if algorithm.order != 1 or algorithm.expansion_scope != "propagator":
@@ -1099,22 +1099,8 @@ def pauli_multislice(
         Per-slice evolution scheme, selected with the same algorithm
         objects as the scalar `Waves.multislice`:
 
-        - `RealSpaceMultislice` (the default): full Taylor expansion of
-          the per-slice exponential of the complete Pauli operator
-          [PRB 94, 174414, Eq. (14)]. Exact within a slice (no
-          operator-splitting error), but its propagation term uses a
-          finite-difference Laplacian (`derivative_accuracy` field)
-          whose k-space dispersion error at coarse transverse sampling
-          does not shrink with slice thickness. Only ``order=1`` and
-          ``expansion_scope="propagator"`` are supported for the Pauli
-          operator. Its ``tolerance`` field directly trades speed for
-          per-slice accuracy: the magnetic signal is of relative order
-          1e-4 to 1e-8, so a tolerance a few orders below the signal
-          (rather than the 1e-16 default) reduces the per-slice term
-          count substantially at no meaningful cost (measured: ~1.9x
-          faster at 1e-7 for a relative signal change of ~8e-8).
-        - `FourierMultislice`: Strang-symmetrized operator splitting
-          with the spectral Fourier propagator of the requested
+        - `FourierMultislice` (the default): Strang-symmetrized operator
+          splitting with the spectral Fourier propagator of the requested
           ``order`` (half-steps around each transmission, merged into
           one FFT pair per slice; ``order=1`` solves the strictly
           paraxial equation of the papers), exact pointwise
@@ -1122,10 +1108,24 @@ def pauli_multislice(
           per-pixel spin rotation), and a short internal Taylor series
           for the A_xy gradient coupling only. Its splitting error
           vanishes with slice thickness, which needs converging as for
-          the standard FFT multislice; 5x to over 50x faster than the
-          default at matched slicing, depending on how many Taylor terms
-          per slice the default needs. ``conjugate`` and
-          ``transpose`` are not supported for the Pauli operator.
+          the standard FFT multislice. ``conjugate`` and ``transpose``
+          are not supported for the Pauli operator.
+        - `RealSpaceMultislice`: full Taylor expansion of the per-slice
+          exponential of the complete Pauli operator [PRB 94, 174414,
+          Eq. (14)]. Exact within a slice (no operator-splitting error),
+          but its propagation term uses a finite-difference Laplacian
+          (`derivative_accuracy` field) whose k-space dispersion error at
+          coarse transverse sampling does not shrink with slice
+          thickness, and it costs 5x to over 50x more than
+          `FourierMultislice` at matched slicing, depending on how many
+          Taylor terms per slice it needs. Only ``order=1`` and
+          ``expansion_scope="propagator"`` are supported for the Pauli
+          operator. Its ``tolerance`` field directly trades speed for
+          per-slice accuracy: the magnetic signal is of relative order
+          1e-4 to 1e-8, so a tolerance a few orders below the signal
+          (rather than the 1e-16 default) reduces the per-slice term
+          count substantially at no meaningful cost (measured: ~1.9x
+          faster at 1e-7 for a relative signal change of ~8e-8).
 
         The two schemes differ in which error each carries: the
         real-space series is exact in dz but approximates transverse

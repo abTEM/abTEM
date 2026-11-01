@@ -1,10 +1,10 @@
 """Benchmark the paraxial Pauli multislice (abtem.magnetism.multislice) for
 non-collinear magnetic scattering.
 
-Times both per-slice evolution schemes -- RealSpaceMultislice (per-slice-exact
-Taylor series, the default) and FourierMultislice (Strang split-step, 5x to
-over 50x faster at matched slicing depending on the workload, with a
-splitting error that vanishes with slice thickness) -- on CPU and,
+Times both per-slice evolution schemes -- FourierMultislice (Strang
+split-step, the default, with a splitting error that vanishes with slice
+thickness) and RealSpaceMultislice (per-slice-exact Taylor series, 5x to over
+50x slower at matched slicing depending on the workload) -- on CPU and,
 when CuPy is available, on GPU. Cross-checks GPU against CPU (same math,
 different backend, so results should agree to near machine precision) and
 reports the physical FePt spin magnetic signal both methods converge to.
