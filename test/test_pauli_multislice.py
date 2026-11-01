@@ -887,6 +887,80 @@ def test_split_series_zero_wave_and_term_limit():
         )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("accuracy", [2, 6])
+def test_a_dot_gradient_kernels_match_reference(device, accuracy):
+    """The fused A.grad stencil (wrap-around indexing, no padding) and its
+    series term, which adds itself to an accumulator and sums its absolute
+    values in the same pass, against np.roll finite differences."""
+    from abtem.magnetism.pauli import (
+        _a_dot_gradient_stencil,
+        first_derivative_fd_coefficients,
+    )
+
+    xp = np if device == "cpu" else __import__("cupy")
+    rng = np.random.default_rng(4)
+    M, H, W, sampling = 3, 9, 11, (0.1, 0.12)
+
+    def c(*shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    a, accumulator, Ax, Ay = c(M, H, W), c(M, H, W), c(H, W), c(H, W)
+    Ax_u, Ay_u = c(M, W), c(M, H)
+    coefficients = np.array(first_derivative_fd_coefficients[accuracy])
+    n = len(coefficients) // 2
+    reference = sum(
+        coefficients[k + n] / sampling[0] * np.roll(a, -k, axis=1)
+        for k in range(-n, n + 1)
+    ) * (Ax + Ax_u[:, None, :]) + sum(
+        coefficients[k + n] / sampling[1] * np.roll(a, -k, axis=2)
+        for k in range(-n, n + 1)
+    ) * (Ay + Ay_u[:, :, None])
+
+    stencil = _a_dot_gradient_stencil(accuracy, sampling, np.complex128, device)
+    d = [xp.asarray(x) for x in (a, Ax, Ay, Ax_u, Ay_u)]
+    assert np.allclose(to_numpy(stencil(*d)), reference, rtol=1e-12, atol=1e-12)
+
+    scale = 0.3 - 0.2j
+    accumulated = xp.asarray(accumulator.copy())
+    term, amplitude = stencil.series_term(*d, scale, accumulator=accumulated)
+    assert np.allclose(to_numpy(term), scale * reference, rtol=1e-12, atol=1e-12)
+    assert np.allclose(to_numpy(accumulated), accumulator + scale * reference)
+    assert np.isclose(amplitude, np.abs(scale * reference).sum(), rtol=1e-12)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("spin_axis", [0, 1, 2])
+def test_spin_rotation_matches_reference(device, spin_axis):
+    """The one-pass spin rotation and transmission, for any position of the
+    spin axis among the ensemble axes, and the amplitude it returns."""
+    from abtem.magnetism.pauli import spin_rotation
+
+    xp = np if device == "cpu" else __import__("cupy")
+    rng = np.random.default_rng(5)
+    shape = [3, 4, 4, 7, 8]
+    shape[spin_axis] = 2
+
+    def c(*shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    waves = c(*shape)
+    t, u, u_up_down, u_down_up = (c(7, 8) for _ in range(4))
+    up = np.take(waves, 0, axis=spin_axis)
+    down = np.take(waves, 1, axis=spin_axis)
+    expected = np.stack(
+        [(u * up + u_up_down * down) * t, (np.conj(u) * down + u_down_up * up) * t],
+        axis=spin_axis,
+    )
+
+    rotated = xp.asarray(waves)
+    amplitude = spin_rotation(
+        rotated, spin_axis, *(xp.asarray(x) for x in (t, u, u_up_down, u_down_up))
+    )
+    assert np.allclose(to_numpy(rotated), expected, rtol=1e-12, atol=1e-12)
+    assert np.isclose(amplitude, np.abs(expected).sum(), rtol=1e-12)
+
+
 def test_mismatched_slice_thickness_raises():
     """Equal slice counts but different slice thicknesses would silently
     mis-scale the field rates, so they must be rejected."""

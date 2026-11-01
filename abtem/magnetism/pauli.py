@@ -29,6 +29,13 @@ first_derivative_fd_coefficients = {
 }
 
 
+def _launch_3d(kernel, shape, *args):
+    """Launch a CUDA kernel over a (batch, x, y) grid of `shape`."""
+    threads = (4, 8, 8)
+    blocks = tuple(math.ceil(size / t) for size, t in zip(shape, threads))
+    kernel[blocks, threads](*args)
+
+
 @lru_cache(maxsize=None)
 def _a_dot_gradient_stencil(
     accuracy: int,
@@ -41,16 +48,13 @@ def _a_dot_gradient_stencil(
     A_x * d/dx + A_y * d/dy of a wave-function array with periodic (wrap)
     boundaries.
 
-    The returned function takes (waves, A_x_padded, A_y_padded) where waves
-    has shape (..., nx, ny) — axis -2 is x and axis -1 is y, following the
-    abTEM array convention — and A_x_padded, A_y_padded are A_x, A_y
-    pre-padded with the same wrap boundary via the returned function's
-    `.pad_field` attribute.
-
-    A_x and A_y are constant across all Taylor-series terms of a slice's
-    exponential (only the wave function changes between terms), so the
-    caller pads them once per slice with `.pad_field` and reuses the result,
-    rather than re-padding on every term.
+    The returned function takes (waves, A_x, A_y, A_x_uniform, A_y_uniform)
+    where waves has shape (..., nx, ny) -- axis -2 is x and axis -1 is y,
+    following the abTEM array convention -- and A_x, A_y have shape (nx, ny).
+    Neighbours across the boundary are found by wrapping the index, so
+    neither the waves nor the fields are padded. Its `series_term` attribute
+    computes one Taylor-series term of exp(scale * A.grad), adds it to an
+    accumulator and sums its absolute values in the same pass.
 
     Cached on (accuracy, sampling, dtype, device): a fresh `@njit` closure
     forces numba to recompile from scratch even when functionally identical
@@ -71,7 +75,6 @@ def _a_dot_gradient_stencil(
     cx = np.roll(cx, -(len(cx) // 2))
     cy = np.roll(cy, -(len(cy) // 2))
     n = len(c) // 2
-    padding = n + 1
 
     # `Ax_u` / `Ay_u` carry a per-ensemble-member *uniform* contribution to
     # A_x / A_y, used by the probe-centred gauge (see `pauli_multislice`'s
@@ -83,110 +86,265 @@ def _a_dot_gradient_stencil(
     # leading axis is indexed modulo its length, so passing length-1 zeros
     # disables the term with no branching in the inner loop.
 
+    @njit(inline="always", fastmath=True)
+    def _point_cpu(a, m, i, j, ax, ay):
+        _, H, W = a.shape
+        cumul = dtype(0.0)
+        for k in range(-n, n + 1):
+            ik = i + k
+            if ik < 0:
+                ik += H
+            elif ik >= H:
+                ik -= H
+            jk = j + k
+            if jk < 0:
+                jk += W
+            elif jk >= W:
+                jk -= W
+            cumul += ax * cx[k] * a[m, ik, j]
+            cumul += ay * cy[k] * a[m, i, jk]
+        return cumul
+
+    # One pass over the rows of every member: rows rather than members are
+    # the parallel unit, so a single probe position still uses every core.
     @njit(parallel=True, fastmath=True)
-    def _stencil_cpu_batch(a, Ax, Ay, Ax_u, Ay_u):
+    def _stencil_cpu(a, Ax, Ay, Ax_u, Ay_u, out):
         M, H, W = a.shape
         Bu = Ax_u.shape[0]
-        # a.copy() + slice-fill rather than np.zeros_like: some numba/numpy
-        # pairings (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's
-        # internal np.zeros_like -> np.empty_like lowering inside @njit, while
-        # ndarray.copy() (used identically by finite_difference.py's Laplace
-        # stencil) is unaffected.
-        out = a.copy()
-        out[:] = 0
-        for m in prange(M):
+        for r in prange(M * H):
+            m = r // H
+            i = r % H
             bu = m % Bu
-            for i in range(n, H - n):
-                for j in range(n, W - n):
-                    ax = Ax[i, j] + Ax_u[bu, j]
-                    ay = Ay[i, j] + Ay_u[bu, i]
-                    cumul = dtype(0.0)
-                    for k in range(-n, n + 1):
-                        cumul += ax * cx[k] * a[m, i + k, j]
-                        cumul += ay * cy[k] * a[m, i, j + k]
-                    out[m, i, j] = cumul
-        return out
+            for j in range(W):
+                ax = Ax[i, j] + Ax_u[bu, j]
+                ay = Ay[i, j] + Ay_u[bu, i]
+                out[m, i, j] = _point_cpu(a, m, i, j, ax, ay)
+
+    @njit(parallel=True, fastmath=True)
+    def _series_term_cpu(
+        a, Ax, Ay, Ax_u, Ay_u, scale, out, accumulator, accumulate, row_amplitude
+    ):
+        M, H, W = a.shape
+        Bu = Ax_u.shape[0]
+        for r in prange(M * H):
+            m = r // H
+            i = r % H
+            bu = m % Bu
+            amplitude = 0.0
+            for j in range(W):
+                ax = Ax[i, j] + Ax_u[bu, j]
+                ay = Ay[i, j] + Ay_u[bu, i]
+                value = scale * _point_cpu(a, m, i, j, ax, ay)
+                out[m, i, j] = value
+                if accumulate:
+                    accumulator[m, i, j] += value
+                amplitude += abs(value)
+            row_amplitude[r] = amplitude
+
+    @cuda.jit(device=True)
+    def _point_gpu(a, m, i, j, ax, ay):
+        _, H, W = a.shape
+        cumul = dtype(0.0)
+        for k in range(-n, n + 1):
+            ik = i + k
+            if ik < 0:
+                ik += H
+            elif ik >= H:
+                ik -= H
+            jk = j + k
+            if jk < 0:
+                jk += W
+            elif jk >= W:
+                jk -= W
+            cumul += ax * cx[k] * a[m, ik, j]
+            cumul += ay * cy[k] * a[m, i, jk]
+        return cumul
 
     @cuda.jit
-    def _stencil_func_gpu_batch(a, Ax, Ay, Ax_u, Ay_u, out):
+    def _stencil_gpu(a, Ax, Ay, Ax_u, Ay_u, out):
         m, i, j = cuda.grid(3)
         M, H, W = a.shape
-        Bu = Ax_u.shape[0]
-        if m < M and n <= i < H - n and n <= j < W - n:
-            bu = m % Bu
+        if m < M and i < H and j < W:
+            bu = m % Ax_u.shape[0]
             ax = Ax[i, j] + Ax_u[bu, j]
             ay = Ay[i, j] + Ay_u[bu, i]
-            cumul = dtype(0.0)
-            for k in range(-n, n + 1):
-                cumul += ax * cx[k] * a[m, i + k, j]
-                cumul += ay * cy[k] * a[m, i, j + k]
-            out[m, i, j] = cumul
+            out[m, i, j] = _point_gpu(a, m, i, j, ax, ay)
 
-    def _stencil_gpu(a, Ax, Ay, Ax_u, Ay_u):
-        xp = get_array_module(a)
-        out = xp.zeros_like(a)
+    @cuda.jit
+    def _series_term_gpu(a, Ax, Ay, Ax_u, Ay_u, scale, out, accumulator, accumulate):
+        m, i, j = cuda.grid(3)
+        M, H, W = a.shape
+        if m < M and i < H and j < W:
+            bu = m % Ax_u.shape[0]
+            ax = Ax[i, j] + Ax_u[bu, j]
+            ay = Ay[i, j] + Ay_u[bu, i]
+            value = scale[0] * _point_gpu(a, m, i, j, ax, ay)
+            out[m, i, j] = value
+            if accumulate:
+                accumulator[m, i, j] += value
 
-        threads_x = 8
-        threads_y = 8
-
-        target_threads = 256
-        threads_m = max(1, target_threads // (threads_x * threads_y))
-
-        threadsperblock = (threads_m, threads_x, threads_y)
-
-        blockspergrid = (
-            math.ceil(a.shape[0] / threadsperblock[0]),
-            math.ceil(a.shape[1] / threadsperblock[1]),
-            math.ceil(a.shape[2] / threadsperblock[2]),
-        )
-        _stencil_func_gpu_batch[blockspergrid, threadsperblock](
-            a, Ax, Ay, Ax_u, Ay_u, out
-        )
-
-        return out
-
-    def pad_field(A):
-        """Pad a static A_x/A_y field with the stencil's wrap boundary.
-        Call once per slice and reuse across all Taylor-series terms."""
-        xp = get_array_module(A)
-        return xp.pad(xp.asarray(A), padding, mode="wrap")
-
-    def zero_uniform(xp, n_padded):
+    def zero_uniform(xp, n_points):
         """A disabled uniform term: one row of zeros, broadcast by the
         modulo indexing in the kernels."""
-        return xp.zeros((1, n_padded), dtype=dtype)
+        return xp.zeros((1, n_points), dtype=dtype)
 
-    def _stencil(a, Ax_padded, Ay_padded, Ax_uniform=None, Ay_uniform=None):
+    def _prepare(a, Ax_uniform, Ay_uniform):
+        if a.shape[-2] <= n or a.shape[-1] <= n:
+            raise ValueError(
+                f"the grid {a.shape[-2:]} is too small for a derivative stencil "
+                f"reaching {n} points"
+            )
         xp = get_array_module(a)
-
-        original_shape = a.shape
-        a = a.reshape(-1, *a.shape[-2:])
-
-        pad_width = [(0, 0), (padding,) * 2, (padding,) * 2]
-        a = xp.pad(a, pad_width=pad_width, mode="wrap")
-
+        a = xp.ascontiguousarray(a.reshape(-1, *a.shape[-2:]))
         if Ax_uniform is None:
             Ax_uniform = zero_uniform(xp, a.shape[2])
         if Ay_uniform is None:
             Ay_uniform = zero_uniform(xp, a.shape[1])
+        return xp, a, Ax_uniform, Ay_uniform
+
+    def _stencil(a, Ax, Ay, Ax_uniform=None, Ay_uniform=None):
+        original_shape = a.shape
+        xp, a, Ax_uniform, Ay_uniform = _prepare(a, Ax_uniform, Ay_uniform)
+        out = xp.empty_like(a)
 
         if device == "cpu":
-            result = _stencil_cpu_batch(a, Ax_padded, Ay_padded,
-                                        Ax_uniform, Ay_uniform)
+            _stencil_cpu(a, Ax, Ay, Ax_uniform, Ay_uniform, out)
         elif device == "gpu":
-            result = _stencil_gpu(a, Ax_padded, Ay_padded,
-                                  Ax_uniform, Ay_uniform)
+            _launch_3d(_stencil_gpu, a.shape, a, Ax, Ay, Ax_uniform, Ay_uniform, out)
         else:
             raise ValueError(f"Unsupported device: {device}")
 
-        result = result[:, padding:-padding, padding:-padding]
-        return result.reshape(original_shape)
+        return out.reshape(original_shape)
 
-    _stencil.pad_field = pad_field
+    def series_term(
+        a, Ax, Ay, Ax_uniform, Ay_uniform, scale, accumulator=None, out=None
+    ):
+        """
+        One Taylor-series term, `scale * (A_x d/dx + A_y d/dy) a`, and the sum
+        of its absolute values. When `accumulator` is given (a C-contiguous
+        array of the shape of `a`, not `a` itself), the term is also added to
+        it in the same pass. `out` may be passed to reuse a buffer of the
+        shape of `a`.
+        """
+        original_shape = a.shape
+        xp, a, Ax_uniform, Ay_uniform = _prepare(a, Ax_uniform, Ay_uniform)
+        if out is None:
+            out = xp.empty_like(a)
+        out = out.reshape(a.shape)
+
+        accumulate = accumulator is not None
+        if accumulate:
+            if not accumulator.flags.c_contiguous:
+                raise ValueError("the accumulator must be C-contiguous")
+            accumulator = accumulator.reshape(a.shape)
+        else:
+            accumulator = out
+
+        scale = dtype(scale)
+        if device == "cpu":
+            row_amplitude = np.empty(a.shape[0] * a.shape[1], dtype=a.real.dtype)
+            _series_term_cpu(
+                a, Ax, Ay, Ax_uniform, Ay_uniform, scale, out, accumulator,
+                accumulate, row_amplitude,
+            )
+            amplitude = row_amplitude.sum()
+        elif device == "gpu":
+            _launch_3d(
+                _series_term_gpu, a.shape, a, Ax, Ay, Ax_uniform, Ay_uniform,
+                xp.asarray([scale], dtype=dtype), out, accumulator, accumulate,
+            )
+            amplitude = xp.abs(out).sum()
+        else:
+            raise ValueError(f"Unsupported device: {device}")
+
+        return out.reshape(original_shape), float(amplitude)
+
+    _stencil.series_term = series_term
     _stencil.zero_uniform = zero_uniform
-    _stencil.padding = padding
+    # sum |c_k| per direction: the L1 norm of A.grad is at most
+    # max|A_x| * sum|c_x| + max|A_y| * sum|c_y| (each value of the waves
+    # enters 2n + 1 outputs, weighted by |c_k|).
+    _stencil.coefficient_sums = (float(np.abs(cx).sum()), float(np.abs(cy).sum()))
 
     return _stencil
+
+
+@njit(parallel=True)
+def _spin_rotation_cpu(a, t, u, u_up_down, u_down_up, row_amplitude):
+    P, _, Q, H, W = a.shape
+    for r in prange(P * Q * H):
+        p = r // (Q * H)
+        q = (r // H) % Q
+        i = r % H
+        amplitude = 0.0
+        for j in range(W):
+            up = a[p, 0, q, i, j]
+            down = a[p, 1, q, i, j]
+            new_up = (u[i, j] * up + u_up_down[i, j] * down) * t[i, j]
+            new_down = (u[i, j].conjugate() * down + u_down_up[i, j] * up) * t[i, j]
+            a[p, 0, q, i, j] = new_up
+            a[p, 1, q, i, j] = new_down
+            amplitude += abs(new_up) + abs(new_down)
+        row_amplitude[r] = amplitude
+
+
+@cuda.jit
+def _spin_rotation_gpu(a, t, u, u_up_down, u_down_up):
+    pq, i, j = cuda.grid(3)
+    P, _, Q, H, W = a.shape
+    if pq < P * Q and i < H and j < W:
+        p = pq // Q
+        q = pq % Q
+        up = a[p, 0, q, i, j]
+        down = a[p, 1, q, i, j]
+        a[p, 0, q, i, j] = (u[i, j] * up + u_up_down[i, j] * down) * t[i, j]
+        a[p, 1, q, i, j] = (
+            u[i, j].conjugate() * down + u_down_up[i, j] * up
+        ) * t[i, j]
+
+
+def spin_rotation(array, spin_axis, t, u, u_up_down, u_down_up):
+    """
+    Apply, in place and in one pass, the per-pixel spin rotation
+    [[u, u_up_down], [u_down_up, conj(u)]] followed by the scalar
+    transmission `t` to spinor waves whose spin axis is `spin_axis`, and
+    return the sum of the absolute values of the result. The per-pixel
+    factors have the shape of the last two axes; `array` must be
+    C-contiguous.
+    """
+    if not array.flags.c_contiguous:
+        raise ValueError("the spinor array must be C-contiguous")
+    shape = array.shape
+    P = math.prod(shape[:spin_axis])
+    Q = math.prod(shape[spin_axis + 1 : -2])
+    view = array.reshape((P, 2, Q) + shape[-2:])
+    xp = get_array_module(array)
+    if xp is np:
+        row_amplitude = np.empty(P * Q * shape[-2], dtype=array.real.dtype)
+        _spin_rotation_cpu(view, t, u, u_up_down, u_down_up, row_amplitude)
+        return float(row_amplitude.sum())
+    _launch_3d(
+        _spin_rotation_gpu, (P * Q,) + shape[-2:], view, t, u, u_up_down,
+        u_down_up,
+    )
+    return float(xp.abs(array).sum())
+
+
+@njit(parallel=True)
+def _add_inplace_cpu(a, b):
+    a = a.reshape(-1)
+    b = b.reshape(-1)
+    for i in prange(a.shape[0]):
+        a[i] += b[i]
+
+
+def add_inplace(a, b):
+    """`a += b` for C-contiguous arrays of the same shape, threaded on CPU."""
+    if get_array_module(a) is np:
+        _add_inplace_cpu(a, b)
+    else:
+        a += b
+    return a
 
 
 class ADotGradientOperator:

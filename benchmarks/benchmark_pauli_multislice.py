@@ -2,8 +2,9 @@
 non-collinear magnetic scattering.
 
 Times both per-slice evolution schemes -- RealSpaceMultislice (per-slice-exact
-Taylor series, the default) and FourierMultislice (Strang split-step, ~7-15x
-faster but with a slice-thickness-dependent splitting error) -- on CPU and,
+Taylor series, the default) and FourierMultislice (Strang split-step, ~5-8x
+faster at matched slicing, with a splitting error that vanishes with slice
+thickness) -- on CPU and,
 when CuPy is available, on GPU. Cross-checks GPU against CPU (same math,
 different backend, so results should agree to near machine precision) and
 reports the physical FePt spin magnetic signal both methods converge to.

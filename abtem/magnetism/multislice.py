@@ -57,7 +57,7 @@ from abtem.finite_difference import (
 )
 from abtem.magnetism.gpaw import GPAWMagneticFields
 from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
-from abtem.magnetism.pauli import ADotGradientOperator
+from abtem.magnetism.pauli import ADotGradientOperator, add_inplace, spin_rotation
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
     FourierMultislice,
@@ -227,9 +227,7 @@ def _probe_gauge_origins(waves: "Waves") -> Optional[np.ndarray]:
     return xy.reshape(-1, 2)
 
 
-def _uniform_vector_potential_ramps(
-    average_field, origins, x, y, extent, padding, xp, dtype
-):
+def _uniform_vector_potential_ramps(average_field, origins, x, y, extent, xp, dtype):
     """Per-member uniform A_x(y) / A_y(x) ramps for the probe-centred gauge.
 
     A_np = 1/2 B_avg x (r - r0) with r0 the member's own probe position. For
@@ -238,13 +236,11 @@ def _uniform_vector_potential_ramps(
     is what keeps a per-position gauge affordable.
 
     The displacement r - r0 is taken in the MINIMUM-IMAGE convention. The wave
-    is periodic and the stencil pads it by wrapping, so each periodic image of
-    the wave must see the field centred on the corresponding image of its own
-    probe; a ramp continued linearly into the padding would instead multiply
-    wrapped wave content by a value belonging to the unwrapped position. The
-    minimum image makes the ramp periodic -- consistent with the padding by
-    construction -- at the cost of a discontinuity on the line antipodal to
-    the probe, which is exactly where that probe has least amplitude.
+    is periodic and the stencil wraps around the cell, so each periodic image
+    of the wave must see the field centred on the corresponding image of its
+    own probe. The minimum image makes the ramp periodic, at the cost of a
+    discontinuity on the line antipodal to the probe, which is exactly where
+    that probe has least amplitude.
     """
     Bx, By, Bz = (float(component) for component in average_field)
 
@@ -259,20 +255,16 @@ def _uniform_vector_potential_ramps(
     sampling_x = float(x[1, 0] - x[0, 0]) if x.shape[0] > 1 else 1.0
     sampling_y = float(y[0, 1] - y[0, 0]) if y.shape[1] > 1 else 1.0
 
-    x_padded = (
-        np.arange(-padding, x.shape[0] + padding) * sampling_x + float(x[0, 0])
-    )
-    y_padded = (
-        np.arange(-padding, y.shape[1] + padding) * sampling_y + float(y[0, 0])
-    )
+    x_grid = np.arange(x.shape[0]) * sampling_x + float(x[0, 0])
+    y_grid = np.arange(y.shape[1]) * sampling_y + float(y[0, 0])
 
     def minimum_image(coordinates, origin, period):
         delta = coordinates[None] - origin[:, None]
         return (delta + period / 2.0) % period - period / 2.0
 
     # A_x = -1/2 B_z (y - y0);  A_y = +1/2 B_z (x - x0)
-    A_x = -0.5 * Bz * minimum_image(y_padded, origins[:, 1], extent[1])
-    A_y = 0.5 * Bz * minimum_image(x_padded, origins[:, 0], extent[0])
+    A_x = -0.5 * Bz * minimum_image(y_grid, origins[:, 1], extent[1])
+    A_y = 0.5 * Bz * minimum_image(x_grid, origins[:, 0], extent[0])
 
     return xp.asarray(A_x, dtype=dtype), xp.asarray(A_y, dtype=dtype)
 
@@ -376,6 +368,7 @@ def _pauli_multislice_step_split(
     tolerance: float = 1e-16,
     max_terms: int = 300,
     uniform_ramps: Optional[tuple] = None,
+    scratch: Optional[list] = None,
 ) -> "Waves":
     """
     Apply the transmission part of one slice of the paraxial Pauli
@@ -391,6 +384,10 @@ def _pauli_multislice_step_split(
     order (half-steps around each transmission); the remaining splitting
     error vanishes with slice thickness, at a rate measured to be like that
     of the conventional (non-magnetic) FFT multislice algorithm.
+
+    `scratch` is a list the caller keeps between slices; it holds two
+    wave-sized buffers for the series terms, so they are not allocated anew
+    for every slice.
     """
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
@@ -407,57 +404,34 @@ def _pauli_multislice_step_split(
     phase = phase - (e_over_hbar * thickness) * vector_potential_slice[2]
     transmission = complex_exponential(phase).astype(complex_dtype)
 
-    array = waves._array
-
-    up = (slice(None),) * spin_axis + (0,)
-    down = (slice(None),) * spin_axis + (1,)
+    array = xp.ascontiguousarray(waves._array)
 
     if magnetic_field_slice is not None:
         # Exact per-pixel Zeeman rotation exp(-i theta . sigma) with
         # theta = dz (e lambda / 4 pi hbar) B; Pauli-matrix identity
-        # exp(-i theta n.sigma) = cos(theta) - i sin(theta) n.sigma.
+        # exp(-i theta n.sigma) = cos(theta) - i sin(theta) n.sigma. Applied
+        # with the transmission in one pass over the waves.
         zeeman_coefficient = e_over_hbar * wavelength / (4 * np.pi)
         theta = (zeeman_coefficient * thickness) * magnetic_field_slice
-
-        if xp.any(theta[0]) or xp.any(theta[1]):
-            theta_mag = xp.sqrt(theta[0] ** 2 + theta[1] ** 2 + theta[2] ** 2)
-            cos = xp.cos(theta_mag)
-            # sin(theta)/theta via sinc, exact and finite at theta = 0.
-            sinc = xp.sinc(theta_mag / np.pi).astype(complex_dtype)
-            u_diag = (cos - 1.0j * sinc * theta[2]).astype(complex_dtype)
-            u_diag_conj = (cos + 1.0j * sinc * theta[2]).astype(complex_dtype)
-            u_up_down = (-1.0j * sinc * (theta[0] - 1.0j * theta[1])).astype(
-                complex_dtype
-            )
-            u_down_up = (-1.0j * sinc * (theta[0] + 1.0j * theta[1])).astype(
-                complex_dtype
-            )
-            # Accumulate each output component in place instead of via the
-            # nested expression transmission * (a * up + b * down), which
-            # holds several wave-sized temporaries at once; per-slice
-            # allocation churn at that scale fragments the CuPy memory
-            # pool over many slices.
-            new_up = u_diag * array[up]
-            new_up += u_up_down * array[down]
-            new_up *= transmission
-            new_down = u_diag_conj * array[down]
-            new_down += u_down_up * array[up]
-            new_down *= transmission
-            array[up] = new_up
-            array[down] = new_down
-            # Release the wave-sized buffers before the gradient series
-            # below allocates its own.
-            del new_up, new_down
-        else:
-            # Collinear fast path: the rotation is diagonal, exp(∓i theta_z).
-            array[up] *= transmission * complex_exponential(-theta[2]).astype(
-                complex_dtype
-            )
-            array[down] *= transmission * complex_exponential(theta[2]).astype(
-                complex_dtype
-            )
+        theta_mag = xp.sqrt(theta[0] ** 2 + theta[1] ** 2 + theta[2] ** 2)
+        cos = xp.cos(theta_mag)
+        # sin(theta)/theta via sinc, exact and finite at theta = 0.
+        sinc = xp.sinc(theta_mag / np.pi).astype(complex_dtype)
+        u_diag = (cos - 1.0j * sinc * theta[2]).astype(complex_dtype)
+        u_up_down = (-1.0j * sinc * (theta[0] - 1.0j * theta[1])).astype(
+            complex_dtype
+        )
+        u_down_up = (-1.0j * sinc * (theta[0] + 1.0j * theta[1])).astype(
+            complex_dtype
+        )
     else:
-        array *= transmission
+        # No field: the identity rotation, which applies the transmission and
+        # measures the waves in the same single pass.
+        u_diag = xp.ones_like(transmission)
+        u_up_down = u_down_up = xp.zeros_like(transmission)
+    initial_amplitude = spin_rotation(
+        array, spin_axis, transmission, u_diag, u_up_down, u_down_up
+    )
 
     # exp(i dz G) with i dz G = -dz (e lambda / 2 pi hbar) A_xy . grad_xy,
     # by Taylor series; converges in 2-3 terms for physical field strengths.
@@ -469,38 +443,48 @@ def _pauli_multislice_step_split(
         uniform_ramps if uniform_ramps is not None else (None, None)
     )
 
-    initial_amplitude = xp.abs(array).sum()
-
     # Every term is linear in the wave, so a zero wave needs none (and the
     # convergence ratio below would be 0 / 0).
     if initial_amplitude > 0 and (
         xp.any(A_x) or xp.any(A_y) or A_x_uniform is not None
     ):
-        A_x_padded = gradient_stencil.pad_field(A_x)
-        A_y_padded = gradient_stencil.pad_field(A_y)
-        gradient_exponent = complex_dtype(
-            -thickness * e_over_hbar * wavelength / (2 * np.pi)
-        )
+        gradient_exponent = -thickness * e_over_hbar * wavelength / (2 * np.pi)
 
-        term = gradient_exponent * gradient_stencil(
-            array, A_x_padded, A_y_padded, A_x_uniform, A_y_uniform
+        # Each term is computed, added to the waves and measured in one pass;
+        # the first is added separately, since its input is the waves.
+        if scratch is None:
+            scratch = []
+        if not scratch or scratch[0].shape != array.shape:
+            scratch[:] = [xp.empty_like(array), xp.empty_like(array)]
+        # Bound on the L1 norm of one application of gradient_exponent * A.grad,
+        # so that a term known to fall below the tolerance is not computed.
+        sum_cx, sum_cy = gradient_stencil.coefficient_sums
+        A_x_max, A_y_max = float(xp.abs(A_x).max()), float(xp.abs(A_y).max())
+        if A_x_uniform is not None:
+            A_x_max += float(xp.abs(A_x_uniform).max())
+            A_y_max += float(xp.abs(A_y_uniform).max())
+        step_bound = abs(gradient_exponent) * (A_x_max * sum_cx + A_y_max * sum_cy)
+
+        term, term_amplitude = gradient_stencil.series_term(
+            array, A_x, A_y, A_x_uniform, A_y_uniform, gradient_exponent,
+            out=scratch[0],
         )
-        array += term
+        add_inplace(array, term)
+        spare = scratch[1]
         for i in range(2, max_terms + 1):
-            term = (
-                gradient_exponent
-                * gradient_stencil(term, A_x_padded, A_y_padded,
-                                   A_x_uniform, A_y_uniform)
-                / i
+            if step_bound * term_amplitude / i <= tolerance * initial_amplitude:
+                break
+            new_term, term_amplitude = gradient_stencil.series_term(
+                term, A_x, A_y, A_x_uniform, A_y_uniform,
+                gradient_exponent / i, accumulator=array, out=spare,
             )
-            array += term
-            term_amplitude = xp.abs(term).sum()
+            term, spare = new_term, term
             if term_amplitude / initial_amplitude <= tolerance:
                 break
             # The guard `_multislice_exponential_series` applies: a growing or
             # non-finite term means the vector potential is too large for one
             # slice, and the series would otherwise return inf/nan silently.
-            if not xp.all(xp.isfinite(term)) or term_amplitude > initial_amplitude:
+            if not np.isfinite(term_amplitude) or term_amplitude > initial_amplitude:
                 raise DivergedError(
                     "the split-step A.grad series diverged: the in-plane vector "
                     "potential is too large for the slice thickness (the "
@@ -585,16 +569,10 @@ def _pauli_multislice_step(
     up = (slice(None),) * spin_axis + (0,)
     down = (slice(None),) * spin_axis + (1,)
 
-    # A_x, A_y are constant across every Taylor-series term of this slice's
-    # exponential (only the wave function changes between terms), so pad
-    # them once here instead of on every gradient_stencil call.
-    A_x_padded = gradient_stencil.pad_field(A_x)
-    A_y_padded = gradient_stencil.pad_field(A_y)
-
     def pauli_operator(array):
         out = laplace_stencil(array) * laplace_prefactor
         out += t_eff * array
-        out += gradient_coefficient * gradient_stencil(array, A_x_padded, A_y_padded)
+        out += gradient_coefficient * gradient_stencil(array, A_x, A_y)
 
         if B_z is not None:
             if B_minus is not None:
@@ -829,14 +807,12 @@ def pauli_multislice_and_detect(
                 "gauge_origin='probe' is currently implemented for the "
                 "split-step scheme only; pass algorithm=FourierMultislice()."
             )
-        stencil = a_dot_gradient.get_stencil(waves, device=waves.device)
         uniform_ramps = _uniform_vector_potential_ramps(
             average_field,
             probe_origins,
             x,
             y,
             extent,
-            stencil.padding,
             xp,
             get_dtype(complex=True),
         )
@@ -893,6 +869,7 @@ def pauli_multislice_and_detect(
         # antialias mask is folded into every kernel except the entry one
         # (one bandlimit per slice, matching the series method).
         previous_half = None
+        series_scratch = []
 
         for slice_index, potential_slice in enumerate(
             potential_configuration.generate_slices()
@@ -971,6 +948,7 @@ def pauli_multislice_and_detect(
                     tolerance=tolerance,
                     max_terms=max_terms,
                     uniform_ramps=uniform_ramps,
+                    scratch=series_scratch,
                 )
                 previous_half = thickness / 2
             else:
