@@ -1085,94 +1085,36 @@ def pauli_multislice(
         Detectors applied at the exit plane(s). Defaults to returning the
         exit wave functions.
     average_field : array of three float, optional
-        The uniform part of the magnetic field B_avg [T] (e.g. from
-        `calculate_constant_magnetic_field`), which a periodic vector
-        potential cannot represent — nonzero for ferromagnets. Adds the
-        non-periodic vector potential A_np = 1/2 B_avg x (r - r0) and a
-        constant Zeeman field. Since A_np is non-periodic, results are
-        only physical while the wave function has negligible amplitude at
-        the supercell boundary.
+        The uniform part of the magnetic field B_avg [T], which a periodic
+        vector potential cannot represent; nonzero for ferromagnets. Its
+        full vector adds a constant Zeeman field (spin precession). Its axial
+        (z) component also adds the non-periodic vector potential
+        A_np = 1/2 B_avg x (r - r0) for the orbital coupling; a transverse
+        component has no bounded A_np along the beam, so it is left out of
+        the orbital term with a warning (rotate the structure and fields to
+        make that direction the beam axis instead).
 
-        Enlarging the supercell does NOT remove the resulting boundary
-        error: |A_np| grows linearly with the cell size while the boundary
-        amplitude falls, so the artifact saturates (measured: a symmetry
-        violation that is flat from 10x10 unit cells upward, and ~500x
-        above the average_field=0 baseline). It shows up predominantly in
-        orbital quantities -- for a vortex-beam OAM difference it can be
-        comparable to the signal, while leaving total intensity and spin
-        differences almost untouched. Note also that mu_0 * M is the
-        3D-periodic value with no demagnetizing field; inside a slab the
-        component along its normal (the beam) is cancelled, which
-        `gpaw_magnetic_fields` applies by default (its `demagnetization`).
-        See `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
-        for the quantitative details and for mitigations.
-
-        `average_field`'s ORBITAL contribution (the A_np added to the
-        vector potential, driving the A.grad orbital coupling) is always
-        restricted to the axial (z, beam-parallel) component, even if
-        `average_field` itself has a nonzero transverse (x or y)
-        component -- a `UserWarning` is raised in that case, not an error,
-        because the ZEEMAN contribution (added directly to the local B,
-        no vector potential involved) is unaffected and still uses the
-        full vector: a transverse `average_field` still correctly drives
-        spin (Larmor) precession, it just does not drive orbital coupling.
-
-        The reason for the restriction: `average_field`'s orbital role
-        exists to represent a uniform *lateral* field without needing an
-        enormous supercell; depth has no analogous cost, since the
-        ordinary periodic `magnetic_field`, tiled slice by slice through
-        the true thickness, already represents z-dependence exactly. A
-        transverse orbital component would instead need
-        A_np = 1/2 B_avg x (r - r0) to also grow with propagation depth
-        (r0's z sits at the sample mid-thickness), and unlike the lateral
-        case there is no periodic wrapping along z to bound that (the
-        sample has a genuine entrance and exit, not a repeating unit) --
-        nor any gauge choice that fixes it the way `gauge_origin="probe"`
-        fixes the lateral case. Physically, a growing A_np there would be
-        correctly representing a beam that should be curving away from the
-        multislice axis under a transverse field, which paraxial
-        propagation cannot do; dropping it is not merely a numerical
-        convenience. For a genuinely transverse macroscopic magnetization's
-        orbital coupling, rotate the atomic structure and fields so that
-        direction becomes the new beam axis instead, matching the source
-        paper's own treatment of in-plane-magnetized FePt.
-
-        For a beam significantly wider than the unit cell (e.g. a
-        large-OAM vortex probe), the interaction with an axial uniform field
-        dominates the orbital (L.B) coupling — the periodic field alone
-        gives a much smaller orbital signal for a ferromagnet. An axial
-        B_avg = mu_0 * M_z is the 3D-periodic convention of PRB 94, 174414;
-        in a slab magnetized along the beam the demagnetizing field cancels
-        it, and only the periodic field remains.
+        For a probe wider than the unit cell, an axial B_avg dominates
+        orbital (OAM) signals of a ferromagnet. B_avg = mu_0 * M is the
+        3D-periodic value used by PRB 94, 174414; inside a slab magnetized
+        along the beam the demagnetizing field cancels it, which
+        `gpaw_magnetic_fields` applies by default (`demagnetization`).
+        A_np is not periodic, so results need negligible wave amplitude at
+        the supercell boundary, and its discretization leaves an artifact
+        in orbital signals that a larger supercell does not remove; see
+        `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`.
     gauge_origin : "probe" or three float, optional
-        Gauge origin r0 for the non-periodic A_np = 1/2 B_avg x (r - r0).
-        Ignored unless `average_field` is nonzero.
-
-        Default (None) puts r0 at the supercell centre, shared by every
-        probe position. That choice is not innocuous for a scan: a probe at
-        p then sits in a constant A_np(p) ~ (p - r0), and since the paraxial
-        operator is linear in A (the A^2 term is dropped) a constant vector
-        potential is not a pure gauge phase -- it tilts the beam, which
-        drifts laterally as it propagates by an amount that depends on where
-        in the cell the probe sits. The scanned image is then not
-        lattice-periodic and loses the crystal's point symmetry, at a
-        relative size of ~1e-5 for FePt at B_avg = 1.385 T, comparable to
-        the magnetic signal itself.
-
-        Pass "probe" to give every scan position its own gauge origin,
-        r0 = p. A beam entering parallel to a uniform axial B feels no
-        force (v x B = 0) and must travel straight wherever it enters;
-        r0 = p makes the canonical and kinetic transverse momenta agree at
-        the probe, so no spurious tilt is introduced, and lattice
-        periodicity (hence the crystal symmetry of the scan) is restored.
-        Verified on FePt: the four-fold symmetry violation of the scanned
-        intensity drops from 1.4e-5 to 7.8e-8, the latter being the
-        average_field=0 baseline.
-
-        Requires the split-step scheme (`FourierMultislice`), waves carrying
-        scan or position axes, and an axial B_avg (for a general direction
-        A_np is not separable). A length-3 sequence sets an explicit fixed
-        origin instead.
+        Gauge origin r0 of A_np; ignored unless `average_field` is nonzero.
+        The default (None) puts r0 at the supercell centre for every probe.
+        Because the paraxial operator is linear in A, the constant A_np(p)
+        a probe at p then sits in tilts it, which breaks the lattice
+        periodicity and point symmetry of a scan (four-fold violation
+        1.4e-5 for FePt, comparable to the magnetic signal). "probe" puts r0
+        at each scan position, where a beam parallel to an axial field
+        feels no force, and restores the symmetry (7.8e-8, the
+        average_field=0 baseline): use it for scans. It requires
+        `FourierMultislice`, waves with scan or position axes, and an axial
+        B_avg. A length-3 sequence sets a fixed origin.
     algorithm : RealSpaceMultislice or FourierMultislice, optional
         Per-slice evolution scheme, selected with the same algorithm
         objects as the scalar `Waves.multislice`:
