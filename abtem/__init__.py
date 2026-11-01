@@ -43,6 +43,7 @@ from abtem.magnetism.iam import (
     VectorPotential,
     VectorPotentialArray,
 )
+from abtem.magnetism.multislice import pauli_multislice
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -120,6 +121,7 @@ __all__ = [
     "VectorPotentialArray",
     "MagneticField",
     "MagneticFieldArray",
+    "pauli_multislice",
     "CustomScan",
     "LineScan",
     "GridScan",
