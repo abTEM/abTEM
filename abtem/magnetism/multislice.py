@@ -52,6 +52,7 @@ from abtem.detectors import BaseDetector, validate_detectors
 from abtem.finite_difference import (
     DivergedError,
     LaplaceOperator,
+    NotConvergedError,
     _multislice_exponential_series,
 )
 from abtem.magnetism.gpaw import GPAWMagneticFields
@@ -468,14 +469,19 @@ def _pauli_multislice_step_split(
         uniform_ramps if uniform_ramps is not None else (None, None)
     )
 
-    if xp.any(A_x) or xp.any(A_y) or A_x_uniform is not None:
+    initial_amplitude = xp.abs(array).sum()
+
+    # Every term is linear in the wave, so a zero wave needs none (and the
+    # convergence ratio below would be 0 / 0).
+    if initial_amplitude > 0 and (
+        xp.any(A_x) or xp.any(A_y) or A_x_uniform is not None
+    ):
         A_x_padded = gradient_stencil.pad_field(A_x)
         A_y_padded = gradient_stencil.pad_field(A_y)
         gradient_exponent = complex_dtype(
             -thickness * e_over_hbar * wavelength / (2 * np.pi)
         )
 
-        initial_amplitude = xp.abs(array).sum()
         term = gradient_exponent * gradient_stencil(
             array, A_x_padded, A_y_padded, A_x_uniform, A_y_uniform
         )
@@ -491,25 +497,21 @@ def _pauli_multislice_step_split(
             term_amplitude = xp.abs(term).sum()
             if term_amplitude / initial_amplitude <= tolerance:
                 break
-            # Same guard `_multislice_exponential_series` (the RealSpaceMultislice
-            # path) already applies: a growing or non-finite term means this
-            # per-slice Taylor series has left its radius of convergence, most
-            # often because `average_field` has a transverse (non-axial)
-            # component and the sample is thick enough that the non-periodic
-            # A_np = 1/2 B_avg x (r - r0) has grown large at this depth (there
-            # is no periodic wrapping available along z the way there is for
-            # x/y). Without this check the loop would silently run to
-            # max_terms accumulating inf/nan into `array` and return it as if
-            # nothing were wrong -- this raises instead.
+            # The guard `_multislice_exponential_series` applies: a growing or
+            # non-finite term means the vector potential is too large for one
+            # slice, and the series would otherwise return inf/nan silently.
             if not xp.all(xp.isfinite(term)) or term_amplitude > initial_amplitude:
                 raise DivergedError(
-                    "the split-step A.grad series diverged -- if `average_field` "
-                    "has a nonzero transverse (x or y) component, this is likely "
-                    "the non-periodic vector potential A_np growing large with "
-                    "propagation depth (see the `average_field` docstring on "
-                    "`pauli_multislice`); a purely axial average_field does not "
-                    "have this failure mode"
+                    "the split-step A.grad series diverged: the in-plane vector "
+                    "potential is too large for the slice thickness (the "
+                    "non-periodic A_np of `average_field` grows with the supercell "
+                    "size); use thinner slices"
                 )
+        else:
+            raise NotConvergedError(
+                f"the split-step A.grad series did not converge to a tolerance "
+                f"of {tolerance} in {max_terms} terms"
+            )
 
     waves._array = array
     return waves

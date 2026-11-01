@@ -849,6 +849,44 @@ def test_constant_magnetic_field_of_a_slab():
     )
 
 
+def test_split_series_zero_wave_and_term_limit():
+    """The split-step A.grad series returns a zero wave unchanged (its
+    convergence ratio used to be 0 / 0) and raises when it runs out of terms
+    instead of returning an unconverged wave."""
+    from abtem.finite_difference import NotConvergedError
+    from abtem.magnetism.multislice import _pauli_multislice_step_split
+    from abtem.magnetism.pauli import ADotGradientOperator
+
+    gpts, extent, n, dz = 16, 10.0, 2, 1.0
+    potential = vacuum_potential(n, gpts, extent, dz)
+    A_array = np.random.default_rng(3).standard_normal((n, 3, gpts, gpts)) * 50.0
+    A = VectorPotentialArray(A_array, slice_thickness=dz, extent=(extent, extent))
+    B = MagneticFieldArray(
+        np.zeros((n, 3, gpts, gpts)), slice_thickness=dz, extent=(extent, extent)
+    )
+    waves = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent).build(lazy=False)
+
+    zero = waves.to_spinor((1, 0))
+    zero._array = zero._array * 0
+    out = pauli_multislice(
+        zero, potential, vector_potential=A, magnetic_field=B,
+        algorithm=FourierMultislice(),
+    )
+    assert np.all(to_numpy(out.array) == 0)
+
+    potential_slice = next(potential.generate_slices())
+    with pytest.raises(NotConvergedError):
+        _pauli_multislice_step_split(
+            waves.to_spinor((1, 0)),
+            potential_slice,
+            A_array[0] / dz,
+            None,
+            a_dot_gradient=ADotGradientOperator(6),
+            spin_axis=0,
+            max_terms=2,
+        )
+
+
 def test_mismatched_slice_thickness_raises():
     """Equal slice counts but different slice thicknesses would silently
     mis-scale the field rates, so they must be rejected."""
