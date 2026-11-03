@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
 from numbers import Number
 from operator import mul
-from typing import TYPE_CHECKING, Optional, Sequence, Type
+from typing import TYPE_CHECKING, NamedTuple, Optional, Sequence, Type
 
 import dask
 import dask.array as da
@@ -2536,6 +2537,51 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         return waves
 
 
+def _has_finite_projection(unit) -> bool:
+    """Whether `unit` is an IAM potential with a finite projection, the only kind
+    whose slices near a surface depend on the atoms beyond it."""
+    return isinstance(unit, Potential) and unit.integrator.finite
+
+
+class _SurfaceGeometry(NamedTuple):
+    """The layout of the surface slices of a crystal with vacuum, in the slices of
+    the extended pool its builder makes (see `CrystalPotential._build_pool_array`)."""
+
+    entry_vacuum: tuple[float, ...]
+    exit_vacuum: tuple[float, ...]
+    # The units, from each surface, whose slices are calculated with the surface.
+    surface_units: int
+    # The units of the stack those are calculated in: the surface units and their
+    # neighbours within the cutoff.
+    stack_units: int
+    # The units of vacuum, in the slicing of the unit, that keep the periodic images of
+    # a stack out of reach of its slices.
+    reach: int
+
+
+def _surface_geometry(
+    unit, add_vacuum: bool, repetitions_z: int
+) -> _SurfaceGeometry | None:
+    """The layout of the surface slices of a crystal of `unit`, or None when they
+    need not be calculated: without vacuum, for a unit that is not an IAM
+    potential, and for one with an infinite projection (an atom is in one slice)."""
+    if not add_vacuum or not _has_finite_projection(unit):
+        return None
+    margin = unit._margins()[2]
+    height = float(unit.box[2])
+    # The number of units that a surface's neighbours within the cutoff reach.
+    reach = safe_ceiling_int(margin / height)
+    # The vacuum is a unit cell on each side, sliced as the unit is.
+    unit_slice_thickness = tuple(unit.slice_thickness)
+    return _SurfaceGeometry(
+        entry_vacuum=unit_slice_thickness,
+        exit_vacuum=unit_slice_thickness,
+        surface_units=min(reach, repetitions_z),
+        stack_units=min(repetitions_z, 2 * reach),
+        reach=reach,
+    )
+
+
 class CrystalPotential(_PotentialBuilder):
     """
     The crystal potential may be used to represent a potential consisting of a repeating
@@ -2593,6 +2639,29 @@ class CrystalPotential(_PotentialBuilder):
     ensemble_mean : bool, optional
         If True (default), the mean over the frozen-phonon ensemble is calculated.
         If False, the individual configurations are returned.
+    add_vacuum : bool, optional
+        Whether to add a layer of vacuum, one unit cell thick, at the entrance and at
+        the exit surface of the crystal. The default is True for a unit that is a
+        :class:`.Potential` with a finite projection, and False otherwise.
+
+        Without vacuum the crystal is a periodic stack, and the finite-projection
+        potential of its first and last slices includes the periodic images of the
+        unit beyond the surfaces, atoms that a slab does not have. With vacuum, the
+        slices within the integration cutoff of a surface (including the vacuum
+        slices, which hold the tails of the potential of the surface atoms) are
+        calculated without them, as for atoms in a slab with the same vacuum. This
+        costs the potential of about ``2 * ceil(cutoff / unit height)`` more units per
+        configuration of the unit, once. A cutoff longer than the vacuum is cut off
+        by the end of the vacuum. An infinite projection assigns each atom to one
+        slice, so for it the vacuum only adds empty slices, and the other slices
+        are unchanged. The potential of a unit that is not a `Potential` (a
+        precomputed `PotentialArray`, `GPAWPotential`) cannot be recalculated, and its
+        surface slices are left as they are.
+
+        The vacuum has the slice thicknesses of the unit, so with
+        ``slice_thickness='auto'`` its slices follow the crystal planes, and the
+        slicing of the atoms is unchanged. The vacuum slices count in `exit_planes`,
+        and the crystal's `box`, `thickness` and `num_slices` include them.
     """
 
     # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
@@ -2611,6 +2680,11 @@ class CrystalPotential(_PotentialBuilder):
     _shared_pool = None
     _member_pools = None
 
+    # A crystal pickled before `add_vacuum` loads without vacuum.
+    _add_vacuum = False
+    _entry_vacuum_slices = ()
+    _exit_vacuum_slices = ()
+
     def __init__(
         self,
         potential_unit: BasePotential,
@@ -2619,6 +2693,7 @@ class CrystalPotential(_PotentialBuilder):
         exit_planes: int | None = None,
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
+        add_vacuum: bool | None = None,
         _root_seed: int | tuple[int, ...] | None = None,
     ):
         # _root_seed is given when a crystal is rebuilt, e.g. for a lazy block
@@ -2662,8 +2737,20 @@ class CrystalPotential(_PotentialBuilder):
             potential_unit._valid_extent[1] * repetitions[1],
         )
 
-        box = extent + (potential_unit.thickness * repetitions[2],)
-        slice_thickness = potential_unit.slice_thickness * repetitions[2]
+        if add_vacuum is None:
+            add_vacuum = _has_finite_projection(potential_unit)
+        add_vacuum = bool(add_vacuum)
+
+        unit_slice_thickness = tuple(potential_unit.slice_thickness)
+        # One unit cell of vacuum on each side, sliced as the unit is, which
+        # keeps the slicing of a unit sliced along its crystal planes
+        # (slice_thickness='auto').
+        vacuum = unit_slice_thickness if add_vacuum else ()
+
+        box = extent + (
+            potential_unit.thickness * (repetitions[2] + 2 * add_vacuum),
+        )
+        slice_thickness = vacuum + unit_slice_thickness * repetitions[2] + vacuum
 
         assert hasattr(potential_unit, "device")
 
@@ -2683,6 +2770,9 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
+        self._add_vacuum = add_vacuum
+        self._entry_vacuum_slices = vacuum
+        self._exit_vacuum_slices = vacuum
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._root_seed = root_seed
         self._shared_pool: Optional[PotentialArray] = None
@@ -2706,6 +2796,11 @@ class CrystalPotential(_PotentialBuilder):
     @property
     def ensemble_mean(self) -> bool:
         return self._ensemble_mean
+
+    @property
+    def add_vacuum(self) -> bool:
+        """Whether the crystal has a unit cell of vacuum at each surface."""
+        return self._add_vacuum
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
@@ -2817,7 +2912,11 @@ class CrystalPotential(_PotentialBuilder):
 
     @property
     def num_slices(self) -> int:
-        return self._potential_unit.num_slices * self.repetitions[2]
+        return (
+            len(self._entry_vacuum_slices)
+            + self._potential_unit.num_slices * self.repetitions[2]
+            + len(self._exit_vacuum_slices)
+        )
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -2871,6 +2970,15 @@ class CrystalPotential(_PotentialBuilder):
         else:
             unit_atoms = self._potential_unit.get_transformed_atoms()
             tiled_atoms = unit_atoms * self._repetitions
+
+        if self._add_vacuum:
+            # The crystal sits between its vacuum layers.
+            tiled_atoms = tiled_atoms.copy()
+            vacuum = sum(self._entry_vacuum_slices)
+            tiled_atoms.positions[:, 2] += vacuum
+            cell = np.array(tiled_atoms.cell)
+            cell[2, 2] += 2 * vacuum
+            tiled_atoms.set_cell(cell, scale_atoms=False)
 
         self._sliced_atoms = SliceIndexedAtoms(
             tiled_atoms, slice_thickness=self.slice_thickness
@@ -3011,7 +3119,7 @@ class CrystalPotential(_PotentialBuilder):
                 # one task of this graph, which every block depends on; it
                 # derives the pool from the graph's one copy of the unit
                 shared_pool = dask.delayed(self._build_shared_pool)(
-                    lazy_unit, self._n_lateral_tiles
+                    lazy_unit, self._n_lateral_tiles, self._surfaces
                 )
             elif shared_pool is not None:
                 shared_pool = dask.delayed(shared_pool)
@@ -3024,7 +3132,7 @@ class CrystalPotential(_PotentialBuilder):
                 # block of its member has run.
                 member_pools = tuple(
                     dask.delayed(self._build_member_pool)(
-                        lazy_unit, self._n_lateral_tiles, int(seed)
+                        lazy_unit, self._n_lateral_tiles, int(seed), self._surfaces
                     )
                     for seed in self.seeds
                 )
@@ -3059,7 +3167,7 @@ class CrystalPotential(_PotentialBuilder):
                 potential_unit = potential_unit.ensure_computed(progress_bar=False)
             if build_pool:
                 shared_pool = self._build_shared_pool(
-                    potential_unit, self._n_lateral_tiles
+                    potential_unit, self._n_lateral_tiles, self._surfaces
                 )
 
             array = np.zeros((len(chunks[0]),), dtype=object)
@@ -3123,16 +3231,141 @@ class CrystalPotential(_PotentialBuilder):
         return self._pool_unit(self.potential_unit, self._n_lateral_tiles, member_seed)
 
     @classmethod
-    def _build_shared_pool(cls, unit: BasePotential, n_tiles: int) -> PotentialArray:
+    def _build_shared_pool(
+        cls, unit: BasePotential, n_tiles: int, surfaces=None
+    ) -> PotentialArray:
         """The pool every member draws from, unless each reseeds its own."""
-        return cls._pool_unit(unit, n_tiles, None).build(lazy=False)
+        return cls._build_pool_array(cls._pool_unit(unit, n_tiles, None), surfaces)
 
     @classmethod
     def _build_member_pool(
-        cls, unit: BasePotential, n_tiles: int, member_seed: int
+        cls, unit: BasePotential, n_tiles: int, member_seed: int, surfaces=None
     ) -> PotentialArray:
         """The pool of the member with seed `member_seed`, which reseeds its own."""
-        return cls._pool_unit(unit, n_tiles, member_seed).build(lazy=False)
+        return cls._build_pool_array(
+            cls._pool_unit(unit, n_tiles, member_seed), surfaces
+        )
+
+    @property
+    def _surfaces(self) -> int | None:
+        """What a pool needs to know of the surfaces of this crystal: its number of
+        z-repetitions when it has vacuum, otherwise None."""
+        return self.repetitions[2] if self._add_vacuum else None
+
+    @classmethod
+    def _build_pool_array(cls, pool_unit: BasePotential, surfaces) -> PotentialArray:
+        """
+        Build the pool of configurations the slices of a crystal are drawn from.
+
+        The pool holds the slices of the unit. With vacuum and a finite projection,
+        the slices of the surface units, calculated for a stack of units with
+        vacuum at its end, follow them along the slice axis, as the entrance part
+        (the vacuum slices and the first `surface_units` units) and the exit part
+        (the last `surface_units` units and the vacuum slices). A crystal takes its
+        surface slices from there rather than from its periodic unit, whose
+        neighbours beyond a surface are not atoms of the crystal.
+        """
+        potentials = pool_unit.build(lazy=False)
+        geometry = (
+            None if surfaces is None else _surface_geometry(pool_unit, True, surfaces)
+        )
+        if geometry is None:
+            return potentials
+
+        xp = get_array_module(pool_unit.device)
+        configurations = list(
+            np.asarray(pool_unit.to_atoms_ensemble().trajectory, dtype=object).ravel()
+        )
+        n_unit = len(pool_unit)
+        n_surface = geometry.surface_units * n_unit
+        entry_vacuum, exit_vacuum = geometry.entry_vacuum, geometry.exit_vacuum
+
+        # The padded side of a stack only keeps its periodic images out of reach.
+        padding = tuple(pool_unit.slice_thickness) * geometry.reach
+        entry_stack = cls._build_surface_stack(
+            pool_unit,
+            configurations,
+            geometry.stack_units,
+            entry_vacuum,
+            padding,
+        )
+        exit_stack = cls._build_surface_stack(
+            pool_unit,
+            configurations,
+            geometry.stack_units,
+            padding,
+            exit_vacuum,
+        )
+
+        # The padding is the far side of a stack: it is cut off here.
+        entry_cap = entry_stack[:, : len(entry_vacuum) + n_surface]
+        exit_cap = exit_stack[:, exit_stack.shape[1] - n_surface - len(exit_vacuum) :]
+
+        array = potentials.array
+        squeeze = array.ndim == 3
+        if squeeze:
+            array = array[None]
+        array = xp.concatenate([array, entry_cap, exit_cap], axis=1)
+        if squeeze:
+            array = array[0]
+
+        unit_slice_thickness = tuple(pool_unit.slice_thickness)
+        slice_thickness = (
+            unit_slice_thickness
+            + entry_vacuum
+            + unit_slice_thickness * geometry.surface_units
+            + unit_slice_thickness * geometry.surface_units
+            + exit_vacuum
+        )
+        return potentials.__class__(
+            array,
+            slice_thickness=slice_thickness,
+            extent=potentials.extent,
+            ensemble_axes_metadata=potentials.ensemble_axes_metadata,
+        )
+
+    @staticmethod
+    def _build_surface_stack(
+        pool_unit: Potential,
+        configurations: list[Atoms],
+        n_units: int,
+        entry_vacuum: tuple[float, ...],
+        exit_vacuum: tuple[float, ...],
+    ):
+        """The slices of each configuration of the unit, as a stack of `n_units`
+        copies of it between vacuum layers with the given slice thicknesses; with
+        the configuration axis first."""
+        xp = get_array_module(pool_unit.device)
+        unit_slice_thickness = tuple(pool_unit.slice_thickness)
+        slice_thickness = (
+            entry_vacuum + unit_slice_thickness * n_units + exit_vacuum
+        )
+        box = np.asarray(pool_unit.box, dtype=float)
+        offset = sum(entry_vacuum)
+
+        stacks = []
+        for configuration in configurations:
+            layers = []
+            for k in range(n_units):
+                layer = configuration.copy()
+                layer.positions[:, 2] += offset + k * box[2]
+                layers.append(layer)
+            atoms = layers[0]
+            for layer in layers[1:]:
+                atoms.extend(layer)
+            atoms.set_cell([box[0], box[1], sum(slice_thickness)], scale_atoms=False)
+            atoms.pbc = True
+
+            potential = Potential(
+                atoms,
+                gpts=pool_unit._valid_gpts,
+                slice_thickness=slice_thickness,
+                integrator=pool_unit.integrator,
+                device=pool_unit.device,
+            )
+            stacks.append(potential.build(lazy=False).array)
+
+        return xp.stack(stacks)
 
     @staticmethod
     def _pool_unit(
@@ -3219,7 +3452,7 @@ class CrystalPotential(_PotentialBuilder):
             member_seed = None if self.seeds is None else int(self.seeds[0])
             pool_unit = self._pool_unit_for_member(member_seed)
         if not isinstance(pool_unit, PotentialArray):
-            potentials = pool_unit.build(lazy=False)
+            potentials = self._build_pool_array(pool_unit, self._surfaces)
         else:
             potentials = pool_unit
 
@@ -3338,19 +3571,28 @@ class CrystalPotential(_PotentialBuilder):
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
         unit_slices = len(self.potential_unit)
-        global_idx = 0  # global slice counter across all z-repetitions
+        n_entry = len(self._entry_vacuum_slices)
+        n_crystal = unit_slices * self.repetitions[2]
 
-        # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
-        # Without it each (z-rep, unit-slice) pair re-tiles the same array via
-        # ``.tile(self.repetitions[:2])`` — for the no-frozen-phonon case
-        # (n_configs == 1) every z-rep produces an identical result so the
-        # cost scales linearly with ``repetitions[2]``. The cache turns this
-        # into ``n_configs * len(self.potential_unit)`` unique tile calls.
+        # With vacuum and a finite projection, the pool holds the slices of the
+        # surfaces after those of the unit (see _build_pool_array).
+        geometry = _surface_geometry(
+            self.potential_unit, self._add_vacuum, self.repetitions[2]
+        )
+        surface_units = 0 if geometry is None else geometry.surface_units
+        n_surface = surface_units * unit_slices
+        entry_cap_start = unit_slices
+        exit_cap_start = entry_cap_start + n_entry + n_surface
+
+        # Lazy cache of tiled pool slices, keyed by (config_idx, slice_idx).
+        # Without it each (z-rep, unit-slice) pair re-tiles the same array --
+        # for the no-frozen-phonon case (n_configs == 1) every z-rep produces an
+        # identical result so the cost scales linearly with ``repetitions[2]``.
+        # The cache turns this into ``n_configs * len(pool)`` unique tile calls.
         # For the SrTiO3 tutorial (reps=(4,4,25), 2 unit slices, no FP) this
         # is 2 tiles instead of 50; the cache footprint is bounded by the
         # tiled-unit byte size and released with the generator.
         tiled_cache: dict[tuple[int, int], PotentialArray] = {}
-        unit_generators: dict[int, object] = {}
         tile_xy = self.repetitions[:2]
 
         n_configs = potentials.shape[0]
@@ -3359,34 +3601,38 @@ class CrystalPotential(_PotentialBuilder):
         # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
+        if _pool_array.ndim == 3:
+            # a single configuration, with no configuration axis
+            _pool_array = _pool_array[None]
 
-        def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
-            key = (config_idx, j)
+        def _tiled_slice(config_idx: int, idx: int) -> PotentialArray:
+            key = (config_idx, idx)
             cached = tiled_cache.get(key)
             if cached is not None:
                 return cached
-            gen = unit_generators.get(config_idx)
-            if gen is None:
-                gen = potentials[config_idx].generate_slices()
-                unit_generators[config_idx] = gen
-            slic = next(gen).tile(tile_xy)
+            tiled = xp.tile(_pool_array[config_idx, idx], tile_xy)
+            slic = potentials.__class__(
+                tiled[None],
+                potentials.slice_thickness[idx : idx + 1],
+                extent=self.extent,
+            )
             tiled_cache[key] = slic
             return slic
 
-        def _mosaic_slice(config_tiles: np.ndarray, j: int) -> PotentialArray:
-            # Assemble sub-slice ``j`` of the lateral supercell by placing an
+        def _mosaic_slice(config_tiles: np.ndarray, idx: int) -> PotentialArray:
+            # Assemble pool slice ``idx`` of the lateral supercell by placing an
             # *independently drawn* pool configuration at every lateral
             # repetition (a mosaic), rather than replicating a single displaced
             # unit across all tiles. This is what reproduces genuine lateral
-            # (in-plane) thermal disorder: with plain ``.tile()`` every one of
+            # (in-plane) thermal disorder: with plain tiling every one of
             # the ``repetitions[0] * repetitions[1]`` tiles is a bit-identical
             # copy, so there is no in-plane disorder at all and no diffuse
             # (Kikuchi) scattering can form. ``config_tiles`` holds one pool
             # index per lateral tile, shaped ``repetitions[:2]``.
-            sub = _pool_array[:, j]  # (n_configs, uy, ux)
+            sub = _pool_array[:, idx]  # (n_configs, uy, ux)
             uy, ux = sub.shape[-2], sub.shape[-1]
             mosaic = sub[xp.asarray(config_tiles)]  # (rep0, rep1, uy, ux)
-            # Interleave to match ``PotentialArray.tile`` block layout, which
+            # Interleave to match the block layout of tiling, which
             # tiles the row axis by repetitions[0] and the col axis by
             # repetitions[1] (np.tile(array, (rep2, rep0, rep1))).
             mosaic = mosaic.transpose(0, 2, 1, 3).reshape(
@@ -3394,7 +3640,7 @@ class CrystalPotential(_PotentialBuilder):
             )
             return potentials.__class__(
                 mosaic[None],
-                potentials.slice_thickness[j : j + 1],
+                potentials.slice_thickness[idx : idx + 1],
                 extent=self.extent,
             )
 
@@ -3403,50 +3649,64 @@ class CrystalPotential(_PotentialBuilder):
         # configuration draws (see _draw_mosaic).
         drawn_tiles = self._draw_mosaic(n_configs)
 
-        for i in range(self.repetitions[2]):
+        def _pool_slice(repetition: int, idx: int) -> PotentialArray:
             # An independent displaced realisation per unit cell in the x, y
             # and z supercell directions. For a single-config pool this
-            # collapses to the cheap cached ``.tile()`` path below.
-            config_tiles = None if drawn_tiles is None else drawn_tiles[i]
+            # collapses to the cheap cached tiling.
+            if drawn_tiles is None:
+                return _tiled_slice(0, idx)
+            return _mosaic_slice(drawn_tiles[repetition], idx)
 
-            if global_idx + unit_slices <= first_slice:
-                # This entire z-repetition is before the requested window;
-                # advance the counter and skip.
-                global_idx += unit_slices
-                continue
+        def _empty_slice(index: int) -> PotentialArray:
+            array = xp.zeros((1,) + tuple(self.gpts), dtype=_pool_array.dtype)
+            return potentials.__class__(
+                array,
+                self.slice_thickness[index : index + 1],
+                extent=self.extent,
+            )
 
-            if global_idx >= last_slice:
-                # Past the requested window; nothing more to yield.
-                return
+        def _slice_at(index: int) -> PotentialArray:
+            if index < n_entry:
+                if geometry is None:
+                    return _empty_slice(index)
+                return _pool_slice(0, entry_cap_start + index)
 
-            for j in range(unit_slices):
-                # Iterate j from 0 even for slices before first_slice in a
-                # partially-overlapping rep, so the unit generator advances in
-                # order (j=0, j=1, ...). The tiling cache ensures each
-                # (config, j) pair is tiled at most once.
-                if config_tiles is None:
-                    slic = _tiled_slice(0, j)
-                else:
-                    slic = _mosaic_slice(config_tiles, j)
+            crystal_index = index - n_entry
+            if crystal_index >= n_crystal:
+                exit_index = crystal_index - n_crystal
+                if geometry is None:
+                    return _empty_slice(index)
+                return _pool_slice(
+                    self.repetitions[2] - 1, exit_cap_start + n_surface + exit_index
+                )
 
-                if global_idx >= first_slice:
-                    exit_planes = tuple(
-                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
-                    )
-                    # Mutating the cached slice's exit_planes is safe: consumer
-                    # reads exit_planes immediately on each yield and holds no
-                    # back-reference across iterations.
-                    slic._exit_planes = exit_planes
+            repetition, j = divmod(crystal_index, unit_slices)
+            if repetition < surface_units:
+                # near the entrance surface
+                idx = entry_cap_start + n_entry + crystal_index
+            elif repetition >= self.repetitions[2] - surface_units:
+                # near the exit surface
+                from_exit = crystal_index - (self.repetitions[2] - surface_units) * (
+                    unit_slices
+                )
+                idx = exit_cap_start + from_exit
+            else:
+                idx = j
+            return _pool_slice(repetition, idx)
 
-                    if return_depth:
-                        yield cum_thickness[global_idx], slic
-                    else:
-                        yield slic
+        for index in range(first_slice, last_slice):
+            slic = _slice_at(index)
 
-                global_idx += 1
+            exit_planes = tuple(np.where(exit_plane_after[index : index + 1])[0])
+            # Mutating the cached slice's exit_planes is safe: consumer
+            # reads exit_planes immediately on each yield and holds no
+            # back-reference across iterations.
+            slic._exit_planes = exit_planes
 
-                if global_idx >= last_slice:
-                    return
+            if return_depth:
+                yield cum_thickness[index], slic
+            else:
+                yield slic
 
     def generate_chunked_slices(
         self,
@@ -3479,7 +3739,7 @@ class CrystalPotential(_PotentialBuilder):
 
         xp = get_array_module(self.device)
         exit_plane_after = self._exit_plane_after
-        if self.potential_unit.num_configurations == 1:
+        if self.potential_unit.num_configurations == 1 and not self._add_vacuum:
             unit = self._built_pool().array[0]
             unit_thickness = self.potential_unit.slice_thickness
             slices = (
