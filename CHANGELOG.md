@@ -20,7 +20,8 @@ Features:
   thicknesses of the unit, so with `slice_thickness='auto'` it follows the crystal planes and the slicing of the
   atoms is unchanged. **Behaviour change:** a `CrystalPotential` of a finite-projection unit now has
   `2 * len(unit)` more (vacuum) slices and a taller `box`; pass `add_vacuum=False` for the previous stack. An
-  infinite projection is unchanged by default, and `add_vacuum=True` only adds empty slices.
+  infinite projection is unchanged by default, and `add_vacuum=True` only adds empty slices
+  ([PR #648](https://github.com/abTEM/abTEM/pull/648))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
