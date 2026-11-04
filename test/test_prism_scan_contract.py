@@ -360,6 +360,97 @@ def test_upsampled_prism_sizes_detectors_on_a_non_square_grid(
     )
 
 
+# a square cell sampled differently along x and y, and a rectangular cell
+_CUTOFF_CELLS = {
+    "square-cell": (ATOMS, (56, 64)),
+    "rectangular-cell": (bulk("Si", cubic=True) * (1, 2, 1), (48, 100)),
+}
+
+
+def _assert_values_match(measured, expected):
+    # PRISM results carry the band limit of the built S-matrix in their metadata,
+    # which multislice results have no reason to; the rest must agree
+    scale = _max_abs(expected)
+    for measured_i, expected_i in zip(measured, expected):
+        assert measured_i.shape == expected_i.shape
+        assert measured_i.axes_metadata == expected_i.axes_metadata
+        np.testing.assert_allclose(
+            measured_i.to_cpu().array,
+            expected_i.to_cpu().array,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * scale,
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("cell", list(_CUTOFF_CELLS))
+@devices
+def test_downsampled_prism_detects_to_the_antialias_cutoff_of_multislice(
+    cell, lazy, device
+):
+    # downsample="cutoff" keeps everything the full grid's antialias aperture
+    # passes, so at interpolation 1 the patterns, the radial bins and the
+    # automatic outer angle are those of multislice on the full grid
+    atoms, gpts = _CUTOFF_CELLS[cell]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    scan = _grid_scan(potential)
+    s_matrix = _s_matrix(potential, downsample="cutoff", device=device)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+
+    def detectors():
+        return [
+            abtem.PixelatedDetector(max_angle="cutoff"),
+            abtem.FlexibleAnnularDetector(),
+            abtem.AnnularDetector(50),
+        ]
+
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), lazy=lazy).compute()
+    expected = probe.scan(potential, scan=scan, detectors=detectors(), lazy=False)
+
+    probe.grid.match(potential)
+    assert measured[0].max_angles == pytest.approx(probe.cutoff_angles)
+    _assert_values_match(list(measured), list(expected))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"upsample": True}, {"upsample": True, "window_gpts": (24, 32)}],
+    ids=["prism", "upsample", "upsample-window"],
+)
+@devices
+def test_downsampled_prism_keeps_the_cutoff_at_interpolation_two(kwargs, device):
+    # at interpolation 2 the patterns lie on the grid the reduction detects on
+    # (the window, or with upsample the downsampled grid), whose angular sampling
+    # is coarser than that of the full grid; their outermost angle is the full
+    # grid's cutoff, rounded to that sampling
+    atoms, gpts = _CUTOFF_CELLS["square-cell"]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    # whole pixels of the (40, 40) downsampled grid, which the compressed
+    # reduction requires for its fast path
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    s_matrix = _s_matrix(
+        potential, interpolation=2, downsample="cutoff", device=device, **kwargs
+    )
+
+    measured = s_matrix.scan(
+        scan=scan, detectors=abtem.PixelatedDetector(max_angle="cutoff"), lazy=False
+    )
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    for angle, cutoff, sampling in zip(
+        measured.max_angles, probe.cutoff_angles, measured.angular_sampling
+    ):
+        assert abs(angle - cutoff) <= sampling
+
+
 # automatic batches are sized by the chunk size; with a 64 x 64 grid, 37 beams and
 # 4 exit planes (6 slices, exit_planes=2) one complex64 wave of one exit plane is
 # 32768 bytes

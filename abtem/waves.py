@@ -119,10 +119,16 @@ def _ensure_parity_of_gpts(
 
 
 def _antialias_cutoff_gpts(
-    gpts: tuple[int, int], sampling: tuple[float, float]
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    extent: Optional[tuple[float, float]] = None,
 ) -> tuple[int, int]:
+    """The number of points within the antialias cutoff of a grid of the given
+    ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
+    grid of ``gpts`` points at ``sampling``)."""
     kcut = 2.0 / 3.0 / max(sampling)
-    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    if extent is None:
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
 
@@ -233,18 +239,25 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         ]
 
     @property
+    def _antialias_sampling(self) -> tuple[float, float]:
+        """The sampling of the grid whose antialias aperture band-limits the waves:
+        their own, or that of the grid they were resampled from."""
+        return self.metadata.get("antialias_sampling", self._valid_sampling)
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            n = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
+            cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
+        else:
+            cutoff_gpts = _antialias_cutoff_gpts(
+                self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
-            m = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][1], self._valid_gpts[1]
-            )
-            return n, m
-        return _antialias_cutoff_gpts(self._valid_gpts, self._valid_sampling)
+        return (
+            min(cutoff_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], self._valid_gpts[1]),
+        )
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
@@ -1429,9 +1442,7 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            waves.antialias_cutoff_gpts
-        )
+        kwargs["metadata"]["antialias_sampling"] = waves._antialias_sampling
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()

@@ -382,6 +382,37 @@ def test_downsample(data, max_angle, normalization, lazy, device):
         np.testing.assert_allclose(new_mean_intensity, old_mean_intensity, rtol=1e-4)
 
 
+@pytest.mark.parametrize("repeat", [1, 2])
+@devices
+def test_downsample_to_the_cutoff_keeps_the_antialias_cutoff(repeat, device):
+    # a grid sampled differently along x and y: the pixel count within the
+    # antialias cutoff of the resampled waves still means the same angles
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves
+    for _ in range(repeat):
+        downsampled = downsampled.downsample(max_angle="cutoff")
+
+    assert downsampled.gpts != waves.gpts
+    assert downsampled.cutoff_angles == pytest.approx(waves.cutoff_angles)
+
+
+def test_waves_read_a_stored_adjusted_antialias_cutoff():
+    """Metadata stored by earlier versions holds the pixel count itself. The code
+    under test is device-independent metadata, so the test is not parametrised over
+    devices."""
+    waves = abtem.Waves(
+        np.zeros((38, 38), np.complex64),
+        energy=100e3,
+        extent=(5.43, 5.43),
+        metadata={"adjusted_antialias_cutoff_gpts": (26, 22)},
+    )
+
+    assert waves.antialias_cutoff_gpts == (26, 22)
+
+
 @given(
     data=st.data(),
     max_angle=st.sampled_from(["cutoff", "valid"]),

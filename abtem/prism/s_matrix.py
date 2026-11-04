@@ -78,7 +78,6 @@ from abtem.waves import (
     BaseWaves,
     Probe,
     Waves,
-    _antialias_cutoff_gpts,
     _average_ensemble_axes,
     _squeeze_flagged_axes,
     reduce_ensemble,
@@ -5560,18 +5559,27 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
+    def dummy_probes(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        plane: str = "entrance",
+        downsample: bool = True,
+        **kwargs,
+    ) -> Probe:
+        # the probes of the built S-matrix carry the band limit that build records
+        kwargs.setdefault("metadata", {**self.metadata, **self._built_metadata})
+        return super().dummy_probes(scan, ctf, plane, downsample, **kwargs)
+
     @property
     def _built_metadata(self) -> dict:
-        # What build adds to the metadata of a downsampled S-matrix: the antialias
-        # cutoff of the full grid, which sets the size of the pixelated and
-        # flexible annular detectors.
+        # What build adds to the metadata of a downsampled S-matrix: the sampling
+        # of the full grid, whose antialias cutoff band-limits the waves and sets
+        # the size of the pixelated and flexible annular detectors on every grid
+        # the reduction detects on.
         if self.downsampled_gpts == self.gpts:
             return {}
-        return {
-            "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
-                self.window_gpts, self.sampling
-            )
-        }
+        return {"antialias_sampling": self.sampling}
 
     def _built_dummy_probes(self, scan, ctf=None):
         # The dummy probes of the built S-matrix. With upsample, building computes
@@ -5582,9 +5590,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if not self._upsample_enabled:
             return self.build(lazy=True).dummy_probes(scan, ctf)
 
-        return self.dummy_probes(
-            scan, ctf, metadata={**self.metadata, **self._built_metadata}
-        )
+        return self.dummy_probes(scan, ctf)
 
     def _allocate_ensemble_measurements(self, waves, detectors):
         """The measurements of every member of the S-matrix ensemble, detected on

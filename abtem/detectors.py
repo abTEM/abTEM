@@ -2761,7 +2761,7 @@ class WavesDetector(BaseDetector):
         if self._gpts:
             # as `Waves.downsample` records it: the resampled waves keep the
             # band limit of the waves they were resampled from
-            metadata["adjusted_antialias_cutoff_gpts"] = waves.antialias_cutoff_gpts
+            metadata["antialias_sampling"] = waves._antialias_sampling
         return (metadata,)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:

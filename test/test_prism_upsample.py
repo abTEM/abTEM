@@ -429,11 +429,11 @@ def test_upsample_detectors(device):
 
     assert _relative_error(annular, annular_ref) < 0.05
 
-    # the reduction is downsampled to the antialias cutoff, so it has fewer
-    # 1 mrad radial bins than the reference; single bins hold a few discrete
-    # pixels each, hence compare bands within the common range
+    # the reduction keeps the full grid's antialias cutoff, so it has the
+    # reference's 1 mrad radial bins; single bins hold a few discrete pixels
+    # each, hence compare bands
     flexible, flexible_ref = to_host_array(flexible), to_host_array(flexible_ref)
-    assert flexible.shape[2] < flexible_ref.shape[2]
+    assert flexible.shape[2] == flexible_ref.shape[2]
     for inner, outer in [(0, 20), (20, 40), (40, 70)]:
         band = flexible[:, :, inner:outer].sum(axis=2)
         band_ref = flexible_ref[:, :, inner:outer].sum(axis=2)

@@ -140,6 +140,38 @@ def test_lazy_declared_shape_matches_computed_and_eager(
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("num_configs", [None, 3])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible"])
+def test_downsampled_outputs_detect_to_the_cutoff_of_multislice(
+    device, detector, num_configs, lazy
+):
+    # downsample="cutoff" keeps the full grid's antialias cutoff, so the size of
+    # the pixelated patterns and of the flexible annular bins is multislice's
+    potential = _potential(device, num_configs)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=ENERGY,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample="cutoff",
+    )
+    declared = s_matrix.transition_potential_scan(
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=_detector(detector),
+        sites=ATOMS,
+        lazy=lazy,
+        double_channel=False,
+    )
+    measured = declared.copy().compute(progress_bar=False) if lazy else declared
+    expected = _multislice(potential, _detector(detector))
+
+    assert declared.shape == measured.shape == expected.shape
+    _assert_close(measured, expected)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("num_configs", [None, 3])
 def test_results_carry_the_probe_metadata_of_multislice(device, num_configs, lazy):
     # the semiangle cutoff and the base tilt of the probe are what
     # DiffractionPatterns.block_direct reads
