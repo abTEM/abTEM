@@ -3146,6 +3146,7 @@ def _fourier_space_bilinear_nodes_and_weight(
     old_angular_sampling: tuple[float, float],
     new_angular_sampling: tuple[float, float],
     xp,
+    dtype,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nodes = []
     weights = []
@@ -3160,8 +3161,8 @@ def _fourier_space_bilinear_nodes_and_weight(
     )
 
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
+        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(dtype))
+        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(dtype))
         distances = k_new[None] - k[:, None]
         distances[distances < 0.0] = np.inf
         w = distances.min(0) / (k[1] - k[0])
@@ -4610,7 +4611,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
         xp = get_array_module(array)
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
-            array.shape[-2:], new_gpts, sampling, new_sampling, xp
+            array.shape[-2:],
+            new_gpts,
+            sampling,
+            new_sampling,
+            xp,
+            np.finfo(array.dtype).dtype,  # real, also for complex patterns
         )
 
         old_shape = array.shape
@@ -5945,19 +5951,19 @@ def _complex_from_real_and_imag(real, imag):
     return array
 
 
-def _polar_bins_to_grid(array, regions):
+def _polar_bins_to_grid(array, regions, real_dtype):
     """Place polar-bin values (..., nbins_radial, nbins_azimuthal) on a regular grid.
 
     ``regions`` labels each grid pixel with its flat bin index (radial major, as
     from ``_polar_detector_bins``), or a negative value outside every bin, which
-    becomes NaN. Gathers with the array's own module, so it works for NumPy and
-    CuPy, and per block of a dask array.
+    becomes NaN. The result has the real dtype ``real_dtype``. Gathers with the
+    array's own module, so it works for NumPy and CuPy, and per block of a dask array.
     """
     xp = get_array_module(array)
     flat = array.reshape(array.shape[:-2] + (-1,))
     labels = xp.asarray(regions)
-    gathered = flat[..., xp.maximum(labels, 0)].astype(np.float32)
-    return xp.where(labels < 0, np.float32(np.nan), gathered)
+    gathered = flat[..., xp.maximum(labels, 0)].astype(real_dtype)
+    return xp.where(labels < 0, real_dtype.type(np.nan), gathered)
 
 
 class PolarMeasurements(BaseMeasurements):
@@ -6440,7 +6446,9 @@ class PolarMeasurements(BaseMeasurements):
         Returns
         -------
         diffraction_patterns : DiffractionPatterns
-            The diffraction patterns discretized from the polar measurements.
+            The diffraction patterns discretized from the polar measurements, in the
+            real precision of the polar bins (the configured precision for integer
+            counts). Pixels outside every bin are NaN.
         """
 
         if np.isscalar(gpts):
@@ -6469,6 +6477,13 @@ class PolarMeasurements(BaseMeasurements):
             return_indices=False,
         )
 
+        # The real precision of the bins; counts get the configured precision, which
+        # holds the NaN outside the bins.
+        if np.issubdtype(self.array.dtype, np.integer):
+            dtype = np.dtype(get_dtype(complex=False))
+        else:
+            dtype = np.finfo(self.array.dtype).dtype
+
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
@@ -6477,11 +6492,12 @@ class PolarMeasurements(BaseMeasurements):
             new_array = array.map_blocks(
                 _polar_bins_to_grid,
                 regions=regions,
+                real_dtype=dtype,
                 chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=dtype),
             )
         else:
-            new_array = _polar_bins_to_grid(self.array, regions)
+            new_array = _polar_bins_to_grid(self.array, regions, dtype)
 
         wavelength = energy2wavelength(self._get_energy())
         sampling = (
