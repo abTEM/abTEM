@@ -139,6 +139,17 @@ def _to_hyperspy_axes_metadata(
     return hyperspy_axes
 
 
+def _chunk_axes_metadata(
+    axes_metadata: list[AxisMetadata], slices: Sequence[slice]
+) -> list[AxisMetadata]:
+    """The axes metadata of the chunk that `slices` selects along the leading axes;
+    the axes after them are kept whole."""
+    return [
+        axis[slic] if hasattr(axis, "__getitem__") else axis.copy()
+        for axis, slic in zip(axes_metadata, slices)
+    ] + list(axes_metadata[len(slices) :])
+
+
 def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     arr = arr.item()[index]
     return arr
@@ -2789,12 +2800,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                new_ensemble_axes_metadata = [
-                    axis[slic[i]] if hasattr(axis, "__getitem__") else axis.copy()
-                    for i, axis in enumerate(self.ensemble_axes_metadata)
-                ]
-
-                itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
+                itemset(
+                    ensemble_axes_metadata,
+                    index,
+                    _chunk_axes_metadata(self.ensemble_axes_metadata, slic),
+                )
 
         if lazy:
             ensemble_axes_metadata = da.from_array(ensemble_axes_metadata, chunks=1)
