@@ -3738,7 +3738,9 @@ def prism_effective_ionization_scan(
         return xp.einsum("pk,kl,pl->p", c.conj(), matrix, c).real
 
     def _record(exit_plane_index):
-        index = _validate_potential_ensemble_indices(0, exit_plane_index, potential)
+        index = _validate_potential_ensemble_indices(
+            (0,) * len(potential.ensemble_shape), exit_plane_index, potential
+        )
 
         for i, measurement in enumerate(measurements):
             # I(p) = c_p^dagger M c_p, real by construction since M is Hermitian.
