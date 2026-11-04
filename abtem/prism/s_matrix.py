@@ -33,7 +33,13 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
-from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
+from abtem.core.chunks import (
+    Chunks,
+    _chunk_bytes,
+    chunk_ranges,
+    equal_sized_chunks,
+    validate_chunks,
+)
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator, energy2wavelength
@@ -1184,6 +1190,15 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         waves = self.waves.multislice(potential)
         return self._copy_with_new_waves(waves)
 
+    def _window_crop(self, positions):
+        """The crop box (as ``window_crop`` returns it) of the windows centred on
+        the probe positions."""
+        xp = get_array_module(positions)
+        pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
+            self.window_offset
+        )
+        return window_crop(pixel_positions, self.window_gpts, self.gpts)
+
     def _reduce_to_waves(
         self,
         array,
@@ -1201,13 +1216,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             position_coefficients, dtype=get_dtype(complex=True)
         )
 
-        pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
-            self.window_offset
-        )
-
-        crop_corner, size, corners = window_crop(
-            pixel_positions, self.window_gpts, self.gpts
-        )
+        crop_corner, size, corners = self._window_crop(positions)
 
         array = wrapped_crop_2d(array, crop_corner, size)
 
@@ -1418,11 +1427,32 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             if self.is_lazy
             else self.array.shape[:-3]
         )
-        shape = (len(scan), int(np.prod(leading))) + self.window_gpts
+        num_leading = int(np.prod(leading))
+        shape = (len(scan), num_leading) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1, -1)
 
         dtype = np.dtype(self._complex_dtype)
-        return validate_chunks(shape, chunks, dtype=dtype, device=self.device)[0][0]
+        batch = validate_chunks(shape, chunks, dtype=dtype, device=self.device)[0][0]
+
+        if max_batch_reduction != "auto":
+            return batch
+
+        # a batch is contracted over the box that spans its positions and one
+        # window, so an automatic batch is halved until the contraction of its
+        # first block also fits the chunk size (the first block stands for all
+        # blocks of a regular scan; the crop of the S-matrix to the box, n_waves x
+        # box and never below n_waves x window, is not counted: it would drive the
+        # batch to 1 whenever that term alone exceeds the chunk size)
+        while batch > 1:
+            _, _, block = next(scan.generate_blocks(batch))
+            positions = block.item().get_positions()
+            box = int(np.prod(self._window_crop(positions)[1]))
+            contracted = positions.size // 2 * num_leading * box * dtype.itemsize
+            if contracted <= _chunk_bytes(self.device):
+                break
+            batch //= 2
+
+        return batch
 
     def _validate_reduction_scheme(self, reduction_scheme):
         if self.interpolation == (1, 1) and reduction_scheme == "no-chunks":
@@ -1576,7 +1606,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
             If 'auto', a batch holds the reduced waves of every exit plane and
-            S-matrix ensemble member within the chunk size.
+            S-matrix ensemble member within the chunk size, counting the region that
+            spans the positions of the batch when the waves are cropped to a window.
         rechunk : two int or str, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
@@ -1708,7 +1739,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
             If 'auto', a batch holds the reduced waves of every exit plane and
-            S-matrix ensemble member within the chunk size.
+            S-matrix ensemble member within the chunk size, counting the region that
+            spans the positions of the batch when the waves are cropped to a window.
         rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5501,7 +5533,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
             If 'auto', a batch holds the reduced waves of every exit plane and
-            S-matrix ensemble member within the chunk size.
+            S-matrix ensemble member within the chunk size, counting the region that
+            spans the positions of the batch when the waves are cropped to a window.
         reduction_scheme : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5979,7 +6012,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             is automatically chosen based on the abtem user configuration settings
             "dask.chunk-size" and "dask.chunk-size-gpu".
             If 'auto', a batch holds the reduced waves of every exit plane and
-            S-matrix ensemble member within the chunk size.
+            S-matrix ensemble member within the chunk size, counting the region that
+            spans the positions of the batch when the waves are cropped to a window.
         reduction_scheme : str, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
