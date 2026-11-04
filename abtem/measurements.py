@@ -4419,10 +4419,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
         if self.is_lazy:
+            array = self.no_base_chunks().array
+
             def block_chunks(shape):
                 return tuple(
-                    c if n == sum(c) else 1
-                    for n, c in zip(shape, self.array.chunks[:-2])
+                    c if n == sum(c) else 1 for n, c in zip(shape, array.chunks[:-2])
                 )
 
             lazy_args = [
@@ -4447,7 +4448,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             intensities = da.map_blocks(
                 index_block,
-                self.array,
+                array,
                 *lazy_args,
                 hkl=hkl,
                 mask_all=mask,
@@ -4458,7 +4459,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centering=centering,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
-                chunks=self.array.chunks[:-2] + (mask.sum(),),
+                chunks=array.chunks[:-2] + (mask.sum(),),
                 meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
@@ -4668,7 +4669,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
-        array = self.array
+        array = self.no_base_chunks().array
         if np.issubdtype(array.dtype, np.integer):
             # counts, e.g. from a detector, are interpolated in the configured
             # precision
@@ -4680,7 +4681,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sampling=self.sampling,
                 new_sampling=sampling,
                 new_gpts=gpts,
-                chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
@@ -5374,7 +5375,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array.map_blocks(
                 self._bandlimit,
                 inner=inner,
                 outer=outer,
@@ -5454,11 +5455,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._crop,
                 gpts=gpts,
                 fftshift=self.fftshift,
-                chunks=self.array.chunks[:-2] + gpts,
+                chunks=array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:

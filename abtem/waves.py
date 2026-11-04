@@ -859,8 +859,7 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        # The norm sums over the whole grid, so a lazy block must hold all of it.
-        return transform.apply(self.no_base_chunks())
+        return transform.apply(self)
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -1403,7 +1402,7 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        waves = self.ensure_real_space()
+        waves = self.ensure_real_space().no_base_chunks()
         xp = get_array_module(waves.array)
 
         if gpts is None:
@@ -1627,15 +1626,16 @@ class Waves(BaseWaves, ArrayObject):
                 else np.finfo(self.array.dtype).dtype
             )
 
+            array = self.no_base_chunks()._lazy_array
             pattern = da.map_blocks(
                 self._diffraction_pattern,
-                self.array,
+                array,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
                 reciprocal_space=self.reciprocal_space,
-                chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
         else:

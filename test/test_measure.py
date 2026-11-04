@@ -2851,6 +2851,63 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
     )
 
 
+_GRID_SPLIT_PATTERN_OPERATIONS = {
+    "bandlimit": lambda patterns: patterns.bandlimit(0, 10),
+    "block_direct": lambda patterns: patterns.block_direct(),
+    "crop": lambda patterns: patterns.crop(10),
+    "interpolate": lambda patterns: patterns.interpolate(0.03),
+    "index_diffraction_spots": lambda patterns: patterns.index_diffraction_spots(
+        cell=4.0
+    ),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_PATTERN_OPERATIONS))
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 17, 21),
+        (3, 9, 21),
+        (3, 17, 11),
+        (1, (10, 7), (4, 4, 13)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_diffraction_patterns_split_along_the_grid_match_eager(
+    device, chunks, operation
+):
+    """A lazy operation on diffraction patterns whose grid is in several dask
+    chunks gives the eager result: the grid is gathered into one chunk first."""
+    shape = (3, 17, 21)
+    array = np.random.default_rng(2).random(shape).astype(np.float32)
+    kwargs = dict(
+        sampling=0.05,
+        metadata={"energy": 1e5, "semiangle_cutoff": 10.0},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = DiffractionPatterns(copy_to_device(array, device), **kwargs)
+    lazy = DiffractionPatterns(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+    apply = _GRID_SPLIT_PATTERN_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager)
+        result = apply(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    assert computed.array.shape == expected_array.shape
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
 @given(
     gpts=st.integers(min_value=16, max_value=32),
     extent=st.floats(min_value=5, max_value=10),
