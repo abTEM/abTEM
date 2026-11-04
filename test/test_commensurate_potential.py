@@ -461,6 +461,18 @@ def test_slice_thickness_no_degenerate_trailing_slice():
     assert result == pytest.approx((1.0, 1.0, 1.15))
 
 
+def test_slice_thickness_splits_gaps_thicker_than_target():
+    """Planes further apart than the target (cubic fcc has them 0.5 a apart)
+    must be split into equal slices near the target, not left as one thick slice."""
+    atoms = bulk("Au", cubic=True)
+
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+
+    assert result == pytest.approx((atoms.cell[2, 2] / 4,) * 4)
+    potential = abtem.Potential(atoms, slice_thickness="auto", sampling="auto")
+    assert potential.slice_thickness == pytest.approx(result)
+
+
 def test_slice_thickness_merges_planes_closer_than_tolerance():
     """Two atoms much closer together than `tolerance` must be recognized as
     a single plane even when they straddle what would be a fixed-grid
