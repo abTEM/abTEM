@@ -132,6 +132,28 @@ Dependencies:
 
 Bugfixes:
 
+- PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
+  antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
+  `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
+  `SMatrix` report the full grid's cutoff angles. Before, the patterns were cropped to about two thirds of that
+  cutoff, and to a different size along x and y on a grid sampled differently along them. For the cubic Si cell
+  (5.43 Å) on a 56 x 64 grid at 100 keV, patterns of (26, 22) pixels become (38, 38), and the cutoff angles of
+  the dummy probes, 88.6 mrad unbuilt and 88.6 x 75.0 mrad for the built S-matrix, become 129.5 mrad. At a
+  larger interpolation factor the patterns lie on the coarser grid of the reduction and extend to the same
+  cutoff angle. The same applies to core-loss PRISM (`SMatrix.transition_potential_scan`): its pixelated and
+  flexible annular outputs have the sizes of core-loss multislice, and the automatic outer angle of
+  `AnnularDetector` and `FlexibleAnnularDetector` follows the full grid's cutoff. Results with
+  `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged, and C-PRISM
+  (`upsample=True`) with a window smaller than the downsampled grid keeps its previous cutoff
+- `SMatrix` records the band limit of its downsampled waves in the metadata key `antialias_sampling`, the
+  sampling of the full grid, instead of `adjusted_antialias_cutoff_gpts`. Waves stored with the old key read as
+  before, and `Waves.downsample` and `WavesDetector(gpts)` still record the old key
+- PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
+  `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
+  plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
+  and `reduce(lazy=True, disable_s_matrix_chunks=True)`, the lazy default on a GPU and with `upsample=True`,
+  averaged over a scan axis instead. `CompressedSMatrixArray.reduce` averages the ensemble with every `method`
+  and with `blend_angle`; it did so only with `method="expand"` and no `blend_angle`, the CPU default
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
