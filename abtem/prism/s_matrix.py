@@ -1422,7 +1422,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         chunks = (max_batch_reduction, -1, -1, -1)
 
         dtype = np.dtype(self._complex_dtype)
-        return validate_chunks(shape, chunks, dtype=dtype)[0][0]
+        return validate_chunks(shape, chunks, dtype=dtype, device=self.device)[0][0]
 
     def _validate_reduction_scheme(self, reduction_scheme):
         if self.interpolation == (1, 1) and reduction_scheme == "no-chunks":
@@ -3490,7 +3490,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         shape = (len(scan),) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1)
         validated_max_batch_reduction = validate_chunks(
-            shape, chunks, dtype=np.dtype(self._complex_dtype)
+            shape, chunks, dtype=np.dtype(self._complex_dtype), device=self.device
         )[0][0]
 
         pbar = config.get("diagnostics.task_progress", False)

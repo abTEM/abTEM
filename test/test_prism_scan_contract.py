@@ -487,3 +487,26 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def test_auto_reduction_batch_follows_the_chunk_size_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    # the window is the 48 x 48 grid (interpolation 1), 18432 bytes per position
+    potential = _potential(gpts=48)
+    s_matrix_array = _s_matrix(potential).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "1 MB", "dask.chunk-size-gpu": "180 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+        monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert cpu == 1_000_000 // 18432
+    assert gpu == 180_000 // 18432
