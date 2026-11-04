@@ -98,7 +98,7 @@ def commensurate_slice_thickness(
     # edge, or merge genuinely distinct planes that land in the same bin.
     z[z > cell_z - tolerance] = 0.0
     z = np.sort(z)
-    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])
+    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
     unique_z = z[unique_mask]
     unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
 
@@ -361,8 +361,9 @@ def commensurate_gpts(
         x[x > L - tolerance] = 0.0
         x = np.sort(x)
 
-        # De-duplicate: keep one representative per distinct atom plane
-        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])
+        # De-duplicate: keep one representative per distinct atom plane (there are
+        # none for an empty structure, which has no commensurability to find)
+        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])[: len(x)]
         unique_x = x[unique_mask]
 
         if len(unique_x) <= 1:
