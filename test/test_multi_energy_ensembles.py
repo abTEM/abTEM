@@ -160,6 +160,62 @@ def test_multi_energy_prism_pixelated_equals_single_energy_runs(
         assert multi.shape[-2:] == shapes[highest]
 
 
+# Si (1, 1, 2) on a grid sampled differently along x and y, a downsampled grid of
+# (40, 40) at interpolation 2 and a window of (24, 32); the scan takes whole
+# pixels of the downsampled grid, and three energies match neither the two scan
+# rows, the four scan columns nor the two frozen-phonon configurations
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("frozen_phonons", [False, True])
+@pytest.mark.parametrize("max_angle", ["cutoff", 60])
+def test_multi_energy_upsample_with_a_cropped_window(max_angle, frozen_phonons, lazy):
+    energies = [80e3, 100e3, 150e3]
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    if frozen_phonons:
+        atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1)
+    potential = abtem.Potential(atoms, gpts=(56, 64), slice_thickness=2)
+    scan = abtem.GridScan(
+        (0, 0),
+        (1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    def prism(energy, lazy):
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=energy,
+            semiangle_cutoff=20,
+            interpolation=2,
+            upsample=True,
+            window_gpts=(24, 32),
+            downsample=False,
+        )
+        return s_matrix.scan(
+            scan=scan, detectors=abtem.PixelatedDetector(max_angle=max_angle), lazy=lazy
+        )
+
+    multi = prism(energies, lazy)
+    declared = multi.shape
+    multi = multi.compute(progress_bar=False) if lazy else multi
+    assert declared == multi.shape
+
+    probe = abtem.Probe(energy=energies, semiangle_cutoff=20)
+    multislice = probe.scan(
+        potential,
+        scan=scan,
+        detectors=abtem.PixelatedDetector(max_angle=max_angle),
+        lazy=False,
+    )
+    assert multi.shape[-2:] == multislice.shape[-2:]
+    assert multi.shape[0] == len(energies)
+
+    single = prism(energies[1], False)
+    a, b = _same_pixels(multi[1], single)
+    _close(a, b, atol=1e-5 if lazy else 1e-10)
+
+
 @pytest.mark.parametrize(
     "make",
     [

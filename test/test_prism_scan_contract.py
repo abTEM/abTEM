@@ -11,7 +11,7 @@ pattern.
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import assert_array_objects_equal, devices
+from utils import assert_array_objects_equal, devices, to_host_array
 
 import abtem
 from abtem.core.axes import OrdinalAxis
@@ -593,22 +593,35 @@ def _averaged_defocus_ctf():
 @pytest.mark.parametrize("frozen_phonons", [None, False, True])
 @pytest.mark.parametrize("exit_planes", [None, 2])
 @devices
-def test_prism_averages_a_ctf_ensemble_as_the_built_s_matrix(
+def test_prism_averages_a_ctf_ensemble_as_multislice_of_each_member(
     path, frozen_phonons, exit_planes, device
 ):
+    # the intensity of a CTF ensemble is the mean of the intensities of its
+    # members, each a multislice run of the dummy probes with one defocus
     potential = _potential(frozen_phonons, device=device, exit_planes=exit_planes)
     s_matrix = _s_matrix(potential, device=device)
     scan = _grid_scan(potential)
+    ctf = _averaged_defocus_ctf()
 
     def detectors():
         return [abtem.AnnularDetector(30, 90), abtem.PixelatedDetector(max_angle=60)]
 
-    expected = s_matrix.build(lazy=False).reduce(
-        scan=scan, detectors=detectors(), ctf=_averaged_defocus_ctf()
-    )
+    members = [
+        s_matrix.dummy_probes(ctf=abtem.CTF(semiangle_cutoff=20, defocus=defocus)).scan(
+            potential=potential, scan=scan, detectors=detectors(), lazy=False
+        )
+        for defocus in ctf.defocus.values
+    ]
     measured = s_matrix.reduce(
-        scan=scan, detectors=detectors(), ctf=_averaged_defocus_ctf(), **_PATHS[path]
+        scan=scan, detectors=detectors(), ctf=ctf, **_PATHS[path]
     ).compute()
 
-    for measured_i, expected_i in zip(measured, expected):
-        _assert_matches(measured_i, expected_i)
+    for i, measured_i in enumerate(measured):
+        expected = np.mean([to_host_array(member[i]) for member in members], axis=0)
+        assert measured_i.shape == expected.shape
+        np.testing.assert_allclose(
+            to_host_array(measured_i),
+            expected,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * np.abs(expected).max(),
+        )

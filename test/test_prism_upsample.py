@@ -7,7 +7,14 @@ from test_prism import _aberrated_ctf
 from utils import devices, to_host_array
 
 import abtem
-from abtem import CompressedSMatrixArray, CustomScan, GridScan, Potential, Probe, SMatrix
+from abtem import (
+    CompressedSMatrixArray,
+    CustomScan,
+    GridScan,
+    Potential,
+    Probe,
+    SMatrix,
+)
 from abtem.core.backend import get_array_module
 from abtem.distributions import uniform
 from abtem.prism.s_matrix import SMatrixArray
@@ -446,6 +453,260 @@ def test_upsample_detectors(device):
     intensity = np.abs(to_host_array(waves)) ** 2
     intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
     assert _relative_error(intensity, intensity_ref) < 0.05
+
+
+# a cell of 7 x 7 unit cells at 0.1 A sampling (window (160, 160) in a downsampled
+# grid of (256, 256)), and a smaller grid sampled differently along x and y with
+# an explicit window; the scans take whole pixels of the downsampled grid, which
+# the compressed reduction requires for its fast path
+_CROPPED_WINDOWS = {
+    "interpolation-4": (
+        bulk("Si", cubic=True) * (7, 7, 1),
+        dict(sampling=0.1),
+        dict(interpolation=4),
+        (2, 4),
+    ),
+    "non-square": (
+        bulk("Si", cubic=True) * (1, 1, 2),
+        dict(gpts=(56, 64)),
+        dict(interpolation=2, window_gpts=(24, 32)),
+        (2, 4),
+    ),
+}
+
+
+@devices
+@pytest.mark.parametrize("frozen_phonons", [False, True])
+@pytest.mark.parametrize("window", list(_CROPPED_WINDOWS))
+def test_upsample_with_a_cropped_window_declares_the_shape_it_computes(
+    window, frozen_phonons, device
+):
+    # A pixelated pattern is detected on the downsampled grid, but the lazy shape
+    # and the allocation of a frozen-phonon ensemble follow the cropped window
+    atoms, potential_kwargs, s_matrix_kwargs, scan_gpts = _CROPPED_WINDOWS[window]
+    if frozen_phonons:
+        atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1)
+    potential = Potential(atoms, slice_thickness=2, device=device, **potential_kwargs)
+    scan = GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=scan_gpts,
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        upsample=True,
+        device=device,
+        **s_matrix_kwargs,
+    )
+
+    def detectors():
+        return abtem.PixelatedDetector(max_angle="cutoff")
+
+    eager = s_matrix.scan(scan=scan, detectors=detectors(), lazy=False)
+    lazy = s_matrix.scan(scan=scan, detectors=detectors(), lazy=True)
+    declared_shape = lazy.shape
+    lazy = lazy.compute()
+
+    assert declared_shape == lazy.shape == eager.shape
+    np.testing.assert_allclose(
+        to_host_array(lazy),
+        to_host_array(eager),
+        rtol=0,
+        atol=1e-5 * np.abs(to_host_array(eager)).max(),
+    )
+
+
+# The cell of the cropped-window tests below: a grid sampled differently along x and
+# y, a downsampled grid of (40, 40) at interpolation 2, a window of (24, 32) pixels,
+# and a scan of whole pixels of the downsampled grid.
+_WINDOW_ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
+_WINDOW_FROZEN_PHONONS = dict(num_configs=3, sigmas=0.05, seed=1)
+
+
+def _window_potential(atoms, device):
+    return Potential(atoms, gpts=(56, 64), slice_thickness=2, device=device)
+
+
+def _window_scan(potential):
+    return GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+
+def _window_s_matrix(potential, device, **kwargs):
+    return SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        window_gpts=(24, 32),
+        device=device,
+        **kwargs,
+    )
+
+
+def _assert_close_to(measured, expected):
+    measured, expected = to_host_array(measured), to_host_array(expected)
+    np.testing.assert_allclose(
+        measured, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
+_WINDOW_PATTERNS = {
+    "cutoff": dict(max_angle="cutoff"),
+    "valid": dict(max_angle="valid"),
+    "full": dict(max_angle="full"),
+    "angle": dict(max_angle=60),
+    "resample": dict(max_angle="cutoff", resample="uniform"),
+}
+
+
+@devices
+@pytest.mark.parametrize("frozen_phonons", [False, True])
+@pytest.mark.parametrize("downsample", [False, "cutoff"])
+@pytest.mark.parametrize("pattern", list(_WINDOW_PATTERNS))
+def test_upsample_with_a_cropped_window_detects_patterns_on_the_downsampled_grid(
+    pattern, downsample, frozen_phonons, device
+):
+    # The window only crops the probe; the pattern lies on the grid of the cell,
+    # at its angular sampling, as in multislice, whether it is allocated (an
+    # ensemble), declared (lazy) or detected
+    frozen = abtem.FrozenPhonons(_WINDOW_ATOMS, **_WINDOW_FROZEN_PHONONS)
+    potential = _window_potential(frozen if frozen_phonons else _WINDOW_ATOMS, device)
+    scan = _window_scan(potential)
+    s_matrix = _window_s_matrix(potential, device, downsample=downsample)
+
+    def detector():
+        return abtem.PixelatedDetector(**_WINDOW_PATTERNS[pattern])
+
+    eager = s_matrix.scan(scan=scan, detectors=detector(), lazy=False)
+    lazy = s_matrix.scan(scan=scan, detectors=detector(), lazy=True)
+    declared = (lazy.shape, lazy.angular_sampling)
+    lazy = lazy.compute()
+
+    assert declared == (lazy.shape, lazy.angular_sampling)
+    assert eager.shape == lazy.shape
+    assert eager.angular_sampling == pytest.approx(lazy.angular_sampling)
+    _assert_close_to(lazy.array, eager.array)
+
+    multislice = Probe(energy=100e3, semiangle_cutoff=20, device=device).scan(
+        potential, scan=scan, detectors=detector(), lazy=False
+    )
+    assert eager.angular_sampling == pytest.approx(multislice.angular_sampling)
+    expected_gpts = (
+        s_matrix.downsampled_gpts if pattern == "full" else multislice.shape[-2:]
+    )
+    assert eager.shape[-2:] == tuple(expected_gpts)
+
+    if frozen_phonons:
+        statics = [
+            _window_s_matrix(
+                _window_potential(atoms, device), device, downsample=downsample
+            ).scan(scan=scan, detectors=detector(), lazy=False)
+            for atoms in frozen
+        ]
+        mean = np.mean([to_host_array(static.array) for static in statics], axis=0)
+        _assert_close_to(eager.array, mean)
+
+
+def _padded_waves_patterns(waves, s_matrix):
+    """The diffraction patterns of window waves zero-padded to the downsampled grid,
+    scaled to the power convention of that grid, as an oracle independent of the
+    detector that pads."""
+    xp = get_array_module(waves.array)
+    gpts = tuple(s_matrix.downsampled_gpts)
+    padded = xp.zeros(waves.array.shape[:-2] + gpts, dtype=waves.array.dtype)
+    padded[..., : waves.gpts[0], : waves.gpts[1]] = waves.array * np.sqrt(
+        np.prod(waves.gpts) / np.prod(gpts)
+    ).astype(waves.array.real.dtype)
+    return abtem.Waves(
+        padded,
+        sampling=waves.sampling,
+        energy=waves.energy,
+        ensemble_axes_metadata=waves.ensemble_axes_metadata,
+    ).diffraction_patterns(max_angle="full")
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("downsample", [False, "cutoff"])
+@pytest.mark.parametrize("companion", ["flexible", "waves"])
+@pytest.mark.parametrize("blend_angle", [250, 80])
+def test_upsample_pattern_does_not_depend_on_the_other_detectors(
+    blend_angle, companion, downsample, lazy, device
+):
+    # A detector that cannot be routed through the blended reduction does not
+    # move the pattern to the window's coarser grid. Below the blend angle the
+    # patterns agree; 250 mrad lies beyond every detected angle.
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    scan = _window_scan(potential)
+    s_matrix = _window_s_matrix(
+        potential, device, downsample=downsample, blend_angle=blend_angle
+    )
+    others = {
+        "flexible": abtem.FlexibleAnnularDetector,
+        "waves": abtem.WavesDetector,
+    }
+
+    def run(detectors):
+        result = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
+        return result.compute() if lazy else result
+
+    alone = run(abtem.PixelatedDetector(max_angle="cutoff"))
+    shared, other = run(
+        [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()]
+    )
+
+    assert shared.shape == alone.shape
+    assert shared.angular_sampling == pytest.approx(alone.angular_sampling)
+    if companion == "waves":
+        # Next to a WavesDetector the pattern is that of the returned window waves,
+        # zero-padded to the downsampled grid (scaled to the power convention of
+        # that grid), and cropped to the pattern; it differs from the pattern of a
+        # scan without it by about 1.6e-2 of the maximum.
+        reference = _padded_waves_patterns(other, s_matrix)
+        _assert_close_to(shared.array, reference.crop(gpts=shared.shape[-2:]).array)
+        return
+    angles = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * sampling
+        for n, sampling in zip(alone.shape[-2:], alone.angular_sampling)
+    ]
+    inside = np.hypot(*np.meshgrid(*angles, indexing="ij")) < blend_angle
+    _assert_close_to(
+        to_host_array(shared.array)[..., inside],
+        to_host_array(alone.array)[..., inside],
+    )
+
+
+@devices
+def test_upsample_frozen_phonon_patterns_are_the_mean_of_the_member_patterns(device):
+    # next to a WavesDetector, which returns the window waves of every member, the
+    # pattern of the ensemble is the mean of the patterns of the padded member waves
+    frozen = abtem.FrozenPhonons(_WINDOW_ATOMS, **_WINDOW_FROZEN_PHONONS)
+    potential = _window_potential(frozen, device)
+    s_matrix = _window_s_matrix(potential, device)
+
+    shared, waves = s_matrix.scan(
+        scan=_window_scan(potential),
+        detectors=[abtem.PixelatedDetector(max_angle="cutoff"), abtem.WavesDetector()],
+        lazy=False,
+    )
+
+    members = _padded_waves_patterns(waves, s_matrix)
+    assert members.shape[0] == _WINDOW_FROZEN_PHONONS["num_configs"]
+    mean = members.crop(gpts=shared.shape[-2:]).array.mean(axis=0)
+    _assert_close_to(shared.array, mean)
 
 
 @devices
@@ -1494,10 +1755,15 @@ def test_upsample_offset_detectors_route_on_the_angles_they_cover():
     above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
     assert sides(below) == ["low"]
     assert sides(above) == ["high"]
-    assert sides(abtem.SegmentedDetector(
-        nbins_radial=1, nbins_azimuthal=4, inner=cut + r + 1, outer=150,
-        offset=offset,
-    )) == ["high"]
+    assert sides(
+        abtem.SegmentedDetector(
+            nbins_radial=1,
+            nbins_azimuthal=4,
+            inner=cut + r + 1,
+            outer=150,
+            offset=offset,
+        )
+    ) == ["high"]
     # outer <= cut, but the offset region reaches across it
     assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
     assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
@@ -1564,8 +1830,12 @@ def test_upsample_averages_a_ctf_ensemble(lazy, device):
 
 
 @devices
-@pytest.mark.parametrize("method", ["expand", "modes"])
-def test_compressed_reduce_averages_a_ctf_ensemble_by_every_method(method, device):
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"method": "expand"}, {"method": "modes"}, {"blend_angle": 10}],
+    ids=["expand", "modes", "blend"],
+)
+def test_compressed_reduce_averages_a_ctf_ensemble_by_every_method(kwargs, device):
     potential = _small_potential(device=device)
     built = SMatrix(
         potential=potential,
@@ -1576,16 +1846,17 @@ def test_compressed_reduce_averages_a_ctf_ensemble_by_every_method(method, devic
         device=device,
     ).build(lazy=False)
     detector = abtem.AnnularDetector(inner=40, outer=100)
-    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 5), endpoint=False)
+    # 3 defoci against a 2 x 4 scan, whole pixels of the grid for the blend
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(2, 4), endpoint=False)
     ctf = abtem.CTF(
-        semiangle_cutoff=20, defocus=uniform(-20, 20, 4, ensemble_mean=True)
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 3, ensemble_mean=True)
     )
 
     expected = _defocus_mean_reference(
-        built, scan, detector, ctf.defocus.values, method=method
+        built, scan, detector, ctf.defocus.values, **kwargs
     )
     measured = to_host_array(
-        built.reduce(scan=scan, detectors=detector, ctf=ctf, method=method)
+        built.reduce(scan=scan, detectors=detector, ctf=ctf, **kwargs)
     )
 
     assert measured.shape == expected.shape

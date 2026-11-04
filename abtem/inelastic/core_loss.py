@@ -1852,10 +1852,9 @@ def _prism_eels_detected_waves(s_matrix, scan):
     """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
     the downsampled grid of ``s_matrix`` divided by its interpolation factor.
     They carry the probe metadata of the elastic dummy probes (semiangle cutoff
-    and base tilt) and the band limit of the built S-matrix (``antialias_sampling``
-    when it is downsampled), which the detectors of the results read. They only
-    describe the grid; the array is a broadcast zero, so no memory is allocated
-    for it."""
+    and base tilt) and the antialias band limit of the built S-matrix, which the
+    detectors of the results read. They only describe the grid; the array is a
+    broadcast zero, so no memory is allocated for it."""
     from abtem.core.utils import safe_ceiling_int
     from abtem.waves import Waves
 

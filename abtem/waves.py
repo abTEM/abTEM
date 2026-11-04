@@ -1442,7 +1442,9 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["antialias_sampling"] = waves._antialias_sampling
+        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
+            waves.antialias_cutoff_gpts
+        )
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()

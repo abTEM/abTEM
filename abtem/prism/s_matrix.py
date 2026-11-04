@@ -1654,8 +1654,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
             # Ensemble axes flagged ensemble_mean (frozen phonons by default, or
-            # a CTF ensemble) are returned unreduced; they are averaged here, as
-            # the lazy branch averages them in _finalize_lazy_measurements.
+            # a CTF ensemble) are averaged here, as the lazy branch averages them
+            # in _finalize_lazy_measurements, unless the caller defers that.
             if not _defer_frozen_phonon_reduction:
                 measurements = [
                     _average_ensemble_axes(measurement) for measurement in measurements
@@ -1768,7 +1768,10 @@ class _FullGridPixelatedDetector(PixelatedDetector):
     differently windowed reductions share one angular grid (the intensity of a
     diffraction pattern does not depend on where the window sits in the padded
     frame). This is what lets the two branches of a blended reduction be
-    detected separately and their intensities added per pixel.
+    detected separately and their intensities added per pixel. Every reduction
+    of a cropped window applies it, through `_padded_pattern_detectors`, and the
+    shape and angular sampling of the measurements it allocates and declares are
+    those of the padded grid.
     """
 
     def __init__(self, detector: PixelatedDetector, gpts: tuple[int, int]):
@@ -1778,13 +1781,33 @@ class _FullGridPixelatedDetector(PixelatedDetector):
                 "reciprocal-space output"
             )
         self._pad_gpts = tuple(int(n) for n in gpts)
+        self._unpadded = detector
         super().__init__(
             max_angle=detector.max_angle,
             resample=detector.resample,
             reciprocal_space=detector.reciprocal_space,
             to_cpu=detector.to_cpu,
             url=detector.url,
+            _ensemble_gpts=detector._ensemble_gpts,
         )
+
+    def _crop_gpts(self, waves):
+        if not isinstance(waves, Waves):
+            return super()._crop_gpts(self._padded(waves))
+        # the padded grid alone: a broadcast zero, so a lazy ensemble (matched
+        # before it is split into energies) is neither computed nor allocated
+        xp = get_array_module(waves.array)
+        stand_in = Waves(
+            xp.broadcast_to(
+                xp.zeros((), dtype=waves.array.dtype),
+                waves.array.shape[:-2] + self._pad_gpts,
+            ),
+            sampling=tuple(waves._valid_sampling),
+            energy=waves.energy,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
+            metadata=waves.metadata,
+        )
+        return super()._crop_gpts(stand_in)
 
     def _padded(self, waves):
         if tuple(waves.gpts) == self._pad_gpts:
@@ -1824,6 +1847,25 @@ class _FullGridPixelatedDetector(PixelatedDetector):
 
     def _calculate_new_array(self, waves):
         return super()._calculate_new_array(self._padded(waves))
+
+
+def _padded_pattern_detectors(detectors, gpts, window_gpts):
+    """The detectors as a compressed reduction on ``window_gpts`` applies them: the
+    diffraction patterns of a cropped window are detected on the full grid ``gpts``
+    (see `_FullGridPixelatedDetector`), whichever branch of the reduction forms
+    them; every other detector reads the window."""
+    if tuple(window_gpts) == tuple(gpts):
+        return detectors
+    return [
+        (
+            _FullGridPixelatedDetector(detector, gpts)
+            if isinstance(detector, PixelatedDetector)
+            and detector.reciprocal_space
+            and not isinstance(detector, _FullGridPixelatedDetector)
+            else detector
+        )
+        for detector in detectors
+    ]
 
 
 class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
@@ -3354,7 +3396,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         _defer_frozen_phonon_reduction: bool = False,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         # as SMatrixArray._reduce, except that every reduction leaves the axes
-        # flagged ensemble_mean unreduced, which reduce averages
+        # flagged ensemble_mean unreduced, which reduce averages; the deferral
+        # flag is accepted because callers pass it to whatever build returns
         self.accelerator.check_is_defined()
 
         explicit_blend = blend_angle is not None
@@ -3472,6 +3515,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
 
         detectors = validate_detectors(detectors, self.dummy_probes())
+        if _blend_component is None:
+            detectors = _padded_pattern_detectors(
+                detectors, self.gpts, self.window_gpts
+            )
 
         from abtem.core.chunks import validate_chunks
 
@@ -3688,10 +3735,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         in between, no interpolation smearing of the Bragg reflections. The
         stitch is sharp at the cut; a blend taper does not apply to patterns.
         """
-        padded = [
-            _FullGridPixelatedDetector(detector, tuple(self.gpts))
-            for detector in detectors
-        ]
+        padded = _padded_pattern_detectors(detectors, self.gpts, self.window_gpts)
         low_list = ensure_list(
             self._reduce(
                 scan=scan,
@@ -3725,7 +3769,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             self._with_window(period)._reduce(
                 scan=scan,
                 ctf=ctf,
-                detectors=detectors,
+                detectors=[getattr(d, "_unpadded", d) for d in detectors],
                 max_batch_reduction=max_batch_reduction,
                 blend_angle=1e-12,
                 _blend_component="high",
@@ -4039,7 +4083,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         specimen and the probe (the probe tails plus the beam spreading over
         the thickness), falling back to the full grid when there is no
         potential; 'full' disables cropping. Unlike the PRISM cropping window,
-        this window is decoupled from the interpolation factor.
+        this window is decoupled from the interpolation factor. Diffraction
+        patterns of a :class:`.PixelatedDetector` are detected on the
+        downsampled grid, at its angular sampling, whatever the window.
     position_quantization : int, optional
         If given, the fractional part of the probe positions is quantized to this
         number of fractions of a pixel, limiting the number of reduction kernels
@@ -5996,6 +6042,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         Waves
             The detected measurement (if detector(s) given).
         """
+
+        if self._upsample_enabled:
+            detectors = _padded_pattern_detectors(
+                validate_detectors(detectors), self.downsampled_gpts, self.window_gpts
+            )
 
         # --- Multi-energy path ---
         # The reduction contracts away the expansion axis, so each energy can be
