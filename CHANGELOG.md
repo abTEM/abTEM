@@ -132,6 +132,32 @@ Dependencies:
 
 Bugfixes:
 
+- Double-channel core-loss multislice (`double_channel=True`, the default) could use the transmission function of
+  another slice, so repeated runs differed, with or without frozen phonons
+  ([#578](https://github.com/abTEM/abTEM/pull/578)). Double-channel core-loss results computed with 1.0.10 or
+  1.0.11 should be recomputed.
+- Lazy waves and diffraction patterns whose dask array is split along the grid (several chunks along `x` or `y`, as
+  `chunks="auto"`, a Zarr file or `rechunk` can give) are rechunked to one chunk along the grid before any operation
+  that needs the whole grid. Each block was transformed on its own: `apply_ctf` and the other transfer functions,
+  `PixelatedDetector`, `ensure_reciprocal_space`, `ensure_real_space`, `convolve`, `FresnelPropagator.propagate`,
+  `abtem.core.fft.fft2`/`ifft2`/`fftn` on dask arrays, `Waves.downsample` and `DiffractionPatterns.crop` gave wrong
+  values or a wrong shape without a warning, and `diffraction_patterns`, `multislice`, the annular detectors and
+  `DiffractionPatterns.bandlimit`, `block_direct`, `interpolate` and `index_diffraction_spots` raised. The ensemble
+  chunks of such an array are chosen again by dask, so that a block holds the whole grid of as many members as fit
+  dask's `array.chunk-size`. Arrays whose grid is in one chunk are unchanged
+  ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+- `to_hyperspy` listed the axes of the signal in an order other than the data's: with `transpose=False` the `x` and
+  `y` axes carried each other's size and calibration, and with two or more ensemble axes (such as the scan axes of a
+  4D-STEM export) the ensemble axes did, for either value of `transpose`. The axes now follow the order of the
+  exported array; the exported data are unchanged ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+- `PolarMeasurements.to_diffraction_patterns` returned float32 whatever the precision of the polar data, and
+  `DiffractionPatterns.interpolate` computed its interpolation weights in float32, which limited float64
+  interpolations to about $10^{-5}$ relative. Both now keep the precision of the data, and integer polar counts get
+  the configured precision. Float32 results are unchanged ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+- **Behaviour change:** `DiffractionPatterns.polar_binning` (and `radial_binning`) raises a `TypeError` for complex
+  diffraction patterns, for example from `Waves.diffraction_patterns(return_complex=True)`, instead of returning
+  complex polar measurements whose conversion to diffraction patterns kept only the real part. Bin the
+  `.intensity()` instead ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
