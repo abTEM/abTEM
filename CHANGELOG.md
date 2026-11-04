@@ -119,6 +119,23 @@ Performance:
   9.2 GB to 1.3 GB; an integer `max_batch*`, and a potential with one exit plane and no ensemble, are
   batched as before. Where a batch changes, values move by float32 rounding of the reduction only
   ([PR #563](https://github.com/abTEM/abTEM/pull/563))
+- More automatic batch sizes stay within the configured chunk size. Where a batch changes, values move by
+  float32 rounding of the reduction only; an integer `max_batch` or `max_batch_reduction` is batched as before
+    - `Probe.multislice`, `Probe.scan`, `Probe.transition_potential_scan` and `PlaneWave.multislice` size the
+      automatic `max_batch` for the output of a block, which holds one result per exit plane and detector for
+      each of its waves: a block of exit waves or diffraction patterns was that many times larger than
+      `dask.chunk-size` (18 times with 23 exit planes on a 128 x 128 grid). The batch is divided by the output
+      of the block in units of one wave when that exceeds one wave: detectors whose outputs together exceed
+      one wave per position also shrink the batch of a potential with a single exit plane, while for realistic
+      grid sizes and plane counts integrating detectors such as `AnnularDetector` and
+      `FlexibleAnnularDetector` are batched as before
+    - The automatic `max_batch_reduction` of `SMatrixArray.reduce`, `SMatrix.reduce`, `SMatrix.scan` and
+      `CompressedSMatrixArray.reduce` is sized with `dask.chunk-size-gpu` on a GPU, where it used
+      `dask.chunk-size` on every device
+    - The automatic `max_batch_reduction` of an interpolated PRISM reduction (a window smaller than the
+      S-matrix grid) also counts the box that the batch is contracted over, which spans the batch and one
+      window: the contracted array was 1.7 times the chunk size at `dask.chunk-size="1 MB"` and 5.8 times at
+      `"16 MB"` in a 44 x 44 scan, and is now below the chunk size
 - `BlochWaves.calculate_exit_waves` sums the plane-wave expansion as two matrix products, using that the
   beams are separable in x, y and z, instead of forming and reducing the (thickness, beam, x, y) array of
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
