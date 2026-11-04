@@ -648,7 +648,7 @@ def test_bloch_waves_match_multislice(device):
         return values, friedel
 
     structure_factor = StructureFactor(
-        cell, g_max=8.0, parametrization="lobato", thermal_sigma=0.0, device=device
+        cell, g_max=8.0, parametrization="lobato", sigmas=0.0, device=device
     )
     bloch_waves = BlochWaves(
         structure_factor=structure_factor, energy=energy, sg_max=0.5, g_max=2.0,

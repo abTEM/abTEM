@@ -150,7 +150,7 @@ def test_centering_templates_are_consistent_with_reflection_conditions(centering
         atoms,
         parametrization="lobato",
         g_max=10.0,
-        thermal_sigma=0.0,
+        sigmas=0.0,
         occupancy=1.0,
         device="cpu",
     )
@@ -214,7 +214,7 @@ def test_auto_detect_centering_counts_coincident_atoms_as_one_site():
             atoms,
             parametrization="lobato",
             g_max=10.0,
-            thermal_sigma=0.0,
+            sigmas=0.0,
             occupancy=1.0,
             device="cpu",
         )
@@ -262,7 +262,7 @@ def test_supercell_with_several_centerings_combines_reflection_conditions(
         atoms,
         parametrization="lobato",
         g_max=10.0,
-        thermal_sigma=0.0,
+        sigmas=0.0,
         occupancy=1.0,
         device="cpu",
     )
@@ -478,7 +478,7 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     thermal_sigma=st.floats(min_value=0.03, max_value=0.1),
     # The structure factor is truncated at g_max, which leaves a systematic error
     # versus the real-space potential that grows as thermal_sigma shrinks (less
-    # Debye-Waller damping at high g). At thermal_sigma=0.03 the error is ~3% for
+    # Debye-Waller damping at high g). At sigmas=0.03 the error is ~3% for
     # g_max=8, ~1.4% for g_max=10 and below 1% from g_max=11, so g_max < 10 would
     # not test the implementation against the 2.5% tolerance below.
     g_max=st.floats(min_value=10, max_value=16),
@@ -491,7 +491,7 @@ def test_potential_from_structure_factor(
     # argument and hands over to the built array, whose lazy and eager results
     # test_structure_factor_array_projected_potential_honors_lazy compares.
     structure_factor = abtem.StructureFactor(
-        atoms, g_max=g_max, thermal_sigma=thermal_sigma
+        atoms, g_max=g_max, sigmas=thermal_sigma
     )
 
     structure_factor_potential = structure_factor.get_projected_potential(
@@ -592,7 +592,7 @@ def test_structure_factor_matches_standard_crystallographic_sign_convention():
         atoms,
         parametrization="lobato",
         g_max=3.0,
-        thermal_sigma=0.0,
+        sigmas=0.0,
         occupancy=1.0,
         device="cpu",
     )
@@ -643,7 +643,7 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
 
     def diffraction_pattern(atoms):
         structure_factor = StructureFactor(
-            atoms, g_max=6.0, parametrization="lobato", thermal_sigma=0.0
+            atoms, g_max=6.0, parametrization="lobato", sigmas=0.0
         )
         bloch_waves = BlochWaves(
             structure_factor=structure_factor,
@@ -1217,7 +1217,7 @@ def test_projected_potential_slices_are_centred_on_their_slices(lazy):
 
     def structure_factor(z):
         atoms = Atoms("C", positions=[(1.1, 1.3, z)], cell=cell, pbc=True)
-        return StructureFactor(atoms, g_max=4.0, thermal_sigma=0.1)
+        return StructureFactor(atoms, g_max=4.0, sigmas=0.1)
 
     num_planes = structure_factor(0.0).get_potential_3d(lazy=False).shape[-1]
     dz = cell[2] / num_planes
@@ -1408,7 +1408,7 @@ def _silicon_bloch_waves(device, g_max=4.0, sg_max=0.1):
         bulk("Si", "diamond", a=5.43, cubic=True),
         g_max=g_max,
         parametrization="lobato",
-        thermal_sigma=0.0,
+        sigmas=0.0,
         device=device,
     )
     return BlochWaves(
@@ -1662,7 +1662,7 @@ def _cbed_silicon(device="cpu", semiangle_cutoff=9.0, cells=4, **probe_kwargs):
 
     def structure_factor(device):
         return StructureFactor(
-            atoms, g_max=3.0, parametrization="lobato", thermal_sigma=0.0, device=device
+            atoms, g_max=3.0, parametrization="lobato", sigmas=0.0, device=device
         )
 
     bloch_waves = BlochWaves(

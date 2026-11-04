@@ -23,13 +23,26 @@ from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
+from abtem.adp import (
+    ADP_ARRAY,
+    _cartesian_adp,
+    _resolve_adp_frame,
+    adp_square_roots,
+    is_isotropic,
+    resolve_adp,
+)
 from abtem.core.axes import (
     AxisMetadata,
     EnergyLossAxis,
     FrozenPhononsAxis,
     UnknownAxis,
 )
-from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
+from abtem.core.chunks import (
+    Chunks,
+    chunk_ranges,
+    iterate_chunk_ranges,
+    validate_chunks,
+)
 from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
@@ -363,7 +376,8 @@ class FrozenPhonons(BaseFrozenPhonons):
         each Cartesian direction (`x`, `y`, `z`). This may be a tuple of three numbers
         for identical displacements for all atoms. A dict of tuples of three numbers to
         specify displacements for each species. A list or array with three numbers for
-        each atom.
+        each atom. For tensors with off-diagonal elements, or given along the crystal
+        axes as in a CIF file, use ADP tensors instead (see :mod:`abtem.adp`).
 
         The directions of anisotropic standard deviations are the Cartesian axes of
         `atoms` as given. A potential that rotates the atoms to another `plane`, or
@@ -374,6 +388,15 @@ class FrozenPhonons(BaseFrozenPhonons):
         Gaussian is the same along any rotated axes, and its seeded displacement
         stays that of `sigma * r`. Per-atom standard deviations follow their atoms
         when the potential repeats the cell.
+
+        If None (default), the displacements are drawn from the full ADP tensors
+        `atoms` carry (see :mod:`abtem.adp`): the displacement of an atom with
+        tensor U is Gaussian with covariance U. The tensors are transformed with
+        the atoms, by the same linear map as anisotropic standard deviations, so a
+        diagonal tensor ``diag(sigma**2)`` gives the same displacements as the
+        standard deviations `sigma`. The displaced atoms no longer carry the
+        tensors, so that a potential does not also smear them. Giving `sigmas` for
+        atoms that carry tensors raises an error.
 
     directions : str, optional
         The directions in which the atoms are displaced, as a string of one or more of
@@ -398,9 +421,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         self,
         atoms: Atoms,
         num_configs: int,
-        sigmas: (
+        sigmas: Optional[
             float | dict[str, float] | dict[str, tuple[float, ...]] | Sequence[float]
-        ),
+        ] = None,
         directions: str = "xyz",
         ensemble_mean: bool = True,
         seed: Optional[int | tuple[int, ...]] = None,
@@ -416,7 +439,21 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms, atomic_numbers, cell=None
         )
 
-        self._sigmas = validate_sigmas(atoms, sigmas)[0]
+        # ADP tensors follow a cell rotated since they were set
+        atoms = _resolve_adp_frame(atoms)
+
+        if sigmas is None:
+            if _cartesian_adp(atoms) is None:
+                raise ValueError(
+                    "Give the displacement standard deviations `sigmas`, or atoms "
+                    f"that carry ADP tensors (the '{ADP_ARRAY}' array)."
+                )
+            self._sigmas = None
+        else:
+            self._sigmas = validate_sigmas(atoms, sigmas)[0]
+            resolve_adp(
+                atoms, validate_sigmas(atoms, sigmas, return_array=True)[0], "sigmas"
+            )
         self._directions = directions
         self._axes  # raises on an invalid direction now rather than when displacing
         self._atoms = atoms
@@ -448,8 +485,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         return self._seed
 
     @property
-    def sigmas(self) -> np.ndarray | dict[str, np.ndarray]:
-        """Displacement standard deviation for each atom."""
+    def sigmas(self) -> Optional[np.ndarray | dict[str, np.ndarray]]:
+        """Displacement standard deviation for each atom, or None if the ADP tensors
+        the atoms carry are used."""
         return self._sigmas
 
     @property
@@ -546,6 +584,11 @@ class FrozenPhonons(BaseFrozenPhonons):
         frame: Optional[np.ndarray] = None,
         directions_frame: Optional[np.ndarray] = None,
     ) -> Atoms:
+        if self._sigmas is None:
+            return self._randomize_adp(
+                atoms, frame=frame, directions_frame=directions_frame
+            )
+
         sigmas = self._sigmas_of(atoms)
 
         atoms = atoms.copy()
@@ -569,6 +612,14 @@ class FrozenPhonons(BaseFrozenPhonons):
         else:
             displacements = sigmas[:, None] * r
 
+        return self._apply_displacements(atoms, displacements, directions_frame)
+
+    def _apply_displacements(
+        self,
+        atoms: Atoms,
+        displacements: np.ndarray,
+        directions_frame: Optional[np.ndarray],
+    ) -> Atoms:
         axes = self._axes
         if len(set(axes)) < 3 and not _is_identity(directions_frame):
             # `directions` refers to the axes of `directions_frame`: the
@@ -594,6 +645,51 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms.positions[:, axis] += displacements[:, axis]
 
         return atoms
+
+    def _randomize_adp(
+        self,
+        atoms: Atoms,
+        frame: Optional[np.ndarray] = None,
+        directions_frame: Optional[np.ndarray] = None,
+    ) -> Atoms:
+        """Displace the atoms by Gaussians with the covariances of the ADP tensors
+        they carry.
+
+        The tensors are in the frame of `atoms`, ``F^T U F`` for the tensors U of
+        :attr:`atoms` and the linear map F = `frame`. As with anisotropic standard
+        deviations, the displacements of anisotropic atoms are drawn along the axes
+        of :attr:`atoms`, from U, and mapped by F, so a diagonal tensor gives the
+        same displacements as the standard deviations of its diagonal; isotropic
+        atoms are displaced along the axes of `atoms`.
+        """
+        adp = _cartesian_adp(atoms)
+        if adp is None:
+            raise RuntimeError(
+                f"The atoms to displace carry no ADP tensors (the '{ADP_ARRAY}' "
+                "array)."
+            )
+
+        atoms = atoms.copy()
+        del atoms.arrays[ADP_ARRAY]
+
+        rng = np.random.default_rng(self.seed[0])
+        r = rng.normal(size=(len(atoms), 3))
+
+        mapped = ~is_isotropic(adp)
+        if np.any(mapped) and not _is_identity(frame):
+            frame = _as_frame(frame)
+            inverse = np.linalg.inv(frame)
+            adp = adp.copy()
+            adp[mapped] = np.einsum("ai,nab,bj->nij", inverse, adp[mapped], inverse)
+        else:
+            mapped[:] = False
+
+        # r @ S has the covariance S S = U for the symmetric square root S of U.
+        displacements = np.einsum("ni,nij->nj", r, adp_square_roots(adp))
+        if np.any(mapped):
+            displacements[mapped] = displacements[mapped] @ frame
+
+        return self._apply_displacements(atoms, displacements, directions_frame)
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):

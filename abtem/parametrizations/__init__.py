@@ -50,7 +50,9 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     sigmas : dict or float
         The standard deviation of isotropic displacements for each element as a mapping
         from chemical symbols to a number. If given as a float the standard deviation of
-        the displacements is assumed to be identical for all atoms.
+        the displacements is assumed to be identical for all atoms. For per-atom or
+        anisotropic displacements, attach ADP tensors to the atoms instead (see
+        `abtem.adp`).
     """
 
     _functions: dict
@@ -388,7 +390,9 @@ class KirklandParametrization(Parametrization):
     sigmas : dict or float
         The standard deviation of isotropic displacements for each element as a mapping
         from chemical symbols to a number. If given as a float the standard deviation of
-        the displacements is assumed to be identical for all atoms.
+        the displacements is assumed to be identical for all atoms. For per-atom or
+        anisotropic displacements, attach ADP tensors to the atoms instead (see
+        `abtem.adp`).
 
     References
     ----------
@@ -477,7 +481,9 @@ class LobatoParametrization(Parametrization):
     sigmas : dict or float
         The standard deviation of isotropic displacements for each element as a mapping
         from chemical symbols to a number. If given as a float the standard deviation of
-        the displacements is assumed to be identical for all atoms.
+        the displacements is assumed to be identical for all atoms. For per-atom or
+        anisotropic displacements, attach ADP tensors to the atoms instead (see
+        `abtem.adp`).
 
     References
     ----------
@@ -596,7 +602,9 @@ class PengParametrization(Parametrization):
     sigmas : dict or float
         The standard deviation of isotropic displacements for each element as a mapping
         from chemical symbols to a number. If given as a float the standard deviation of
-        the displacements is assumed to be identical for all atoms.
+        the displacements is assumed to be identical for all atoms. For per-atom or
+        anisotropic displacements, attach ADP tensors to the atoms instead (see
+        `abtem.adp`).
 
     References
     ----------

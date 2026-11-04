@@ -17,6 +17,7 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
+from abtem.adp import ADP_ARRAY, _cartesian_adp, _resolve_adp_frame
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
@@ -26,12 +27,12 @@ from abtem.atoms import (
     _stacklevel_outside_package,
     _warn_if_box_is_strained,
     _wrap_far_atoms,
-    wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
     orthogonalize_cell,
     pad_atoms,
+    wrap_and_snap_atoms,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -1044,6 +1045,8 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._array_object = array_object
 
+        _check_adp_and_parametrization_sigmas(self._frozen_phonons, integrator)
+
         super().__init__(
             array_object=array_object,
             gpts=gpts,
@@ -1578,14 +1581,48 @@ class _PotentialBuilder(_FieldBuilder, BasePotential):
     pass
 
 
+def _check_adp_and_parametrization_sigmas(frozen_phonons, integrator) -> None:
+    """Refuse atoms that reach the integrator with ADP tensors when its
+    parametrization also has `sigmas`: both would smear the atoms.
+
+    Frozen phonons that draw their displacements from the tensors remove them from
+    the atoms they displace, so a parametrization may smear those (as it may
+    smear atoms displaced by standard deviations)."""
+    if isinstance(frozen_phonons, FrozenPhonons) and frozen_phonons.sigmas is None:
+        return
+
+    # The first configuration; a lazily read trajectory is checked when it is built.
+    atoms = frozen_phonons.atoms
+    if not isinstance(atoms, Atoms) or _cartesian_adp(atoms) is None:
+        return
+
+    parametrization = getattr(integrator, "parametrization", None)
+    if parametrization is None:
+        parametrization = getattr(integrator, "correction_parametrization", None)
+
+    if parametrization is not None and parametrization.sigmas:
+        raise ValueError(
+            f"The atoms carry ADP tensors (the '{ADP_ARRAY}' array) and the "
+            "parametrization has `sigmas`. Give one of them: remove the tensors "
+            "with abtem.adp.set_adp(atoms, None), or the sigmas from the "
+            "parametrization."
+        )
+
+
 def _validate_frozen_phonons(atoms):
     if isinstance(atoms, Atoms):
-        atoms = atoms.copy()
+        # ADP tensors follow a cell rotated since they were set
+        atoms = _resolve_adp_frame(atoms).copy()
         atoms.calc = None
 
     if not hasattr(atoms, "randomize"):
         if isinstance(atoms, (list, tuple)):
-            frozen_phonons = AtomsEnsemble(atoms)
+            frozen_phonons = AtomsEnsemble(
+                [
+                    _resolve_adp_frame(member) if isinstance(member, Atoms) else member
+                    for member in atoms
+                ]
+            )
         elif isinstance(atoms, Atoms):
             frozen_phonons = DummyFrozenPhonons(atoms)
         else:
@@ -1610,6 +1647,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     atoms : ase.Atoms or abtem.FrozenPhonons
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the
         independent atom model for calculating the electrostatic potential(s).
+        Atoms that carry anisotropic displacement parameters (see `abtem.adp`) give
+        the thermally averaged potential: each atom is smeared in the plane of the
+        slices by the in-plane block of its tensor, rotated with it to `plane`. As
+        for the `sigmas` of a parametrization, the smearing along the propagation
+        direction is not included in a finite projection.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential.
         Provide either "sampling" (spacing between consecutive grid points) or "gpts"
