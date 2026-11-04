@@ -2608,6 +2608,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         destination = ensemble_axes + axes_base_indices[::-1]
 
         if transpose:
+            # HyperSpy takes the axes in the order of the array's dimensions.
+            axes_base = axes_base[::-1]
             if self.is_lazy:
                 array = da.moveaxis(self.array, source=source, destination=destination)
             else:
@@ -2619,7 +2621,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # HyperSpy holds NumPy, dask or CuPy data, not torch backend arrays.
             array = asnumpy(array)
 
-        s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+        s = signal_type(array, axes=ensemble_axes_metadata + axes_base)
 
         if self.is_lazy:
             s = s.as_lazy()
