@@ -115,12 +115,15 @@ def _awaits_frozen_phonon_reduction(measurement):
     )
 
 
-def _averaged(measurement):
-    # A measurement whose leading ensemble axis is averaged block by block.
-    return (
-        isinstance(measurement, BaseMeasurements)
-        and measurement.axes_metadata
-        and measurement.axes_metadata[0]._ensemble_mean
+def _averaged_axes(measurement, num_axes):
+    # The axes among the leading num_axes of a measurement that are averaged
+    # block by block; wave functions keep every member.
+    if not isinstance(measurement, BaseMeasurements):
+        return ()
+    return tuple(
+        j
+        for j, axis in enumerate(measurement.axes_metadata[:num_axes])
+        if axis._ensemble_mean
     )
 
 
@@ -5621,42 +5624,44 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     def _detect_ensemble(self, waves, detectors, detect, squeeze):
         """The measurements of ``detect(s_matrix)`` for every member of the
-        S-matrix ensemble, allocated on ``waves``. A measurement whose leading
-        ensemble axis is flagged for the ensemble mean is averaged over it, and
-        that axis is squeezed with ``squeeze``; wave functions keep every
-        member."""
+        S-matrix ensemble, allocated on ``waves``. A measurement is averaged over
+        each of its ensemble axes flagged for the ensemble mean, and those axes
+        are squeezed with ``squeeze``; wave functions keep every member."""
         measurements = None
         if self.ensemble_shape:
             measurements = self._allocate_ensemble_measurements(waves, detectors)
 
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
+        for _, slics, s_matrix in self.generate_blocks(1):
             new_measurements = ensure_list(detect(s_matrix.item()))
 
             if measurements is None:
                 measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(measurements, new_measurements):
-                    if _averaged(measurement):
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
+                continue
 
-            num_blocks += 1
+            for measurement, new_measurement in zip(measurements, new_measurements):
+                averaged = _averaged_axes(measurement, len(self.ensemble_shape))
+                index = tuple(
+                    slice(None) if j in averaged else slic
+                    for j, slic in enumerate(slics)
+                )
+                measurement.array[index] += new_measurement.array
 
         for i, measurement in enumerate(measurements):
-            if _averaged(measurement):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze and "frozen_phonon_moments" in measurement.metadata:
-                    # The mean amplitude and intensity of the members: the
-                    # components are formed from them, with N the number of
-                    # members that were averaged.
-                    measurements[i] = _frozen_phonon_components_from_moments(
-                        measurement, num_configurations=num_blocks
-                    )
-                elif squeeze:
-                    measurements[i] = measurement.squeeze((0,))
+            averaged = _averaged_axes(measurement, len(self.ensemble_shape))
+            if not averaged:
+                continue
+            num_members = int(np.prod([self.ensemble_shape[j] for j in averaged]))
+            if num_members > 1:
+                measurement.array[:] /= num_members
+            if squeeze and "frozen_phonon_moments" in measurement.metadata:
+                # The mean amplitude and intensity of the members: the
+                # components are formed from them, with N the number of
+                # members that were averaged.
+                measurements[i] = _frozen_phonon_components_from_moments(
+                    measurement, num_configurations=num_members
+                )
+            elif squeeze:
+                measurements[i] = measurement.squeeze(averaged)
 
         return measurements
 
