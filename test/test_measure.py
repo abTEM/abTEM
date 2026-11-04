@@ -1083,7 +1083,6 @@ def test_dtype_preserving_operations_keep_complex():
         "interpolate_line": (lambda m: m.interpolate_line((0, 0), (2, 2)), im_e, im_l),
         "line_profile_interpolate": (lambda m: m.interpolate(gpts=128), lp_e, lp_l),
         "bandlimit": (lambda m: m.bandlimit(0, 10), dp_e, dp_l),
-        "polar_binning": (lambda m: m.polar_binning(4, 4, 0, 10), dp_e, dp_l),
         "integrate_radial": (lambda m: m.integrate_radial(0, 10), dp_e, dp_l),
         "azimuthal_average": (lambda m: m.azimuthal_average(), dp_e, dp_l),
     }
@@ -2953,6 +2952,27 @@ def test_diffraction_patterns_interpolate_in_float64_is_linear_interpolation(
         found = values[member][inside]
         expected *= found.sum() / expected.sum()
         np.testing.assert_allclose(found, expected, rtol=0, atol=1e-12 * found.max())
+
+
+@lazy_params
+@devices
+def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
+    lazy, device
+):
+    array = np.ones((2, 32, 32), dtype=np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.polar_binning(2, 4)
+    assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
 
 
 @given(

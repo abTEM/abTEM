@@ -5038,10 +5038,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         polar_measurements : PolarMeasurements
             The polar measurements.
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         if nbins_radial <= 0 or nbins_azimuthal <= 0:
             raise RuntimeError("number of bins must be greater than zero")
+
+        if np.iscomplexobj(self.array):
+            raise TypeError(
+                "polar binning of complex diffraction patterns is not supported, "
+                "bin their `.intensity()` instead"
+            )
 
         if outer is None:
             outer = min(self.max_angles)
@@ -5130,6 +5141,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         radially_binned_measurement : PolarMeasurements
             Radially binned polar measurement(s).
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         if outer is None:
