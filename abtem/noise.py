@@ -80,12 +80,7 @@ def _map_whole_base_arrays(array_object: ArrayObject, func, **kwargs) -> ArrayOb
     A block inside `apply_transform` does not know its global position, which
     the chunk-independent noise draws need; dask's `map_blocks` provides it.
     """
-    array = array_object.array
-    ensemble_dims = array.ndim - len(array_object.base_shape)
-    array = array.rechunk(
-        array.chunks[:ensemble_dims]
-        + tuple((n,) for n in array.shape[ensemble_dims:])
-    )
+    array = array_object.no_base_chunks().array
     xp = get_array_module(array)
     dtype = kwargs.pop("dtype", array.dtype)
     array = array.map_blocks(

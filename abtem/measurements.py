@@ -2341,9 +2341,7 @@ class Images(_BaseMeasurement2D):
         self._check_is_complex()
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.rechunk(
-                self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
@@ -2518,15 +2516,13 @@ class Images(_BaseMeasurement2D):
 
         array = None
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             if method == "fft":
                 array = array.map_blocks(
                     fft_interpolate,
                     new_shape=gpts,
                     normalization=normalization,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     # fft_interpolate works in the configured precision
                     meta=xp.array(
                         (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
@@ -2541,7 +2537,7 @@ class Images(_BaseMeasurement2D):
                     order=order,
                     cval=cval,
                     pad_mode=boundary,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -2648,9 +2644,7 @@ class Images(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             # Real on purpose, unlike the dtype-preserving map_blocks
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
             # a power spectrum even when the image itself is complex, with the
@@ -2886,13 +2880,13 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.extent / gpts
 
         if self.is_lazy:
-            array = self.array.rechunk(self.array.chunks[:-1] + ((self.shape[-1],),))
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._interpolate,
                 gpts=gpts,
                 endpoint=endpoint,
                 order=order,
-                chunks=self.array.chunks[:-1] + (gpts,),
+                chunks=array.chunks[:-1] + (gpts,),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
@@ -6478,7 +6472,7 @@ class PolarMeasurements(BaseMeasurements):
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
-            array = self.array.rechunk(self.array.chunks[:-2] + (-1, -1))
+            array = self.no_base_chunks().array
             xp = get_array_module(array)
             new_array = array.map_blocks(
                 _polar_bins_to_grid,
