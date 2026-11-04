@@ -150,10 +150,17 @@ def _max_batch_with_exit_planes(
     wave_bytes = (
         int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
     )
+
+    # The detectors of a multi-energy ensemble are sized by its highest energy.
+    sized = waves_builder
+    if isinstance(waves_builder.energy, BaseDistribution):
+        sized = waves_builder.copy()
+        sized.energy = float(max(waves_builder.energy.values))
+
     output_bytes = sum(
-        int(np.prod(detector._out_base_shape(waves_builder)[0]))
-        * np.dtype(detector._out_dtype(waves_builder)[0]).itemsize
-        for detector in validate_detectors(detectors, waves_builder)
+        int(np.prod(detector._out_base_shape(sized)[0]))
+        * np.dtype(detector._out_dtype(sized)[0]).itemsize
+        for detector in validate_detectors(detectors, sized)
     )
     ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
 

@@ -829,6 +829,29 @@ def test_auto_multislice_batch_holds_the_summed_output_of_several_detectors():
     assert sum(_largest_chunk_bytes(m) for m in measurements) <= _BATCH_CHUNK_SIZE
 
 
+def test_auto_multislice_batch_holds_every_exit_plane_of_every_energy():
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size.
+
+    The pixels of a multi-energy ensemble are those of its highest energy.
+    """
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    probe.energy = [80e3, 200e3]
+    assert potential.num_exit_planes == 4
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        measurement = probe.scan(
+            potential,
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=200),
+            lazy=True,
+        )
+
+    assert measurement.array.shape[:3] == (4, 12, 20)
+    assert _largest_chunk_bytes(measurement) <= _BATCH_CHUNK_SIZE
+
+
 @pytest.mark.parametrize(
     "detector",
     [abtem.WavesDetector(), abtem.AnnularDetector(30, 90)],
