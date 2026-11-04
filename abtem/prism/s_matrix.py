@@ -106,15 +106,6 @@ def _squeezed(measurements):
     )
 
 
-def _awaits_frozen_phonon_reduction(measurement):
-    # Detected by a PixelatedDetector with components or a WavesDetector with
-    # average_frozen_phonons: only the whole frozen-phonon ensemble can be reduced.
-    return (
-        "frozen_phonon_moments" in measurement.metadata
-        or "frozen_phonon_average" in measurement.metadata
-    )
-
-
 def _averaged(measurement):
     # A measurement whose leading ensemble axis is averaged block by block.
     return (
@@ -1512,9 +1503,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         _defer_frozen_phonon_reduction: bool = False,
     ):
         """Reduce each energy of a multi-energy build separately and stack the
-        measurements along its EnergyAxis, as :meth:`SMatrix.reduce` does. A
-        frozen-phonon reduction the caller defers (see :meth:`_reduce`) is deferred
-        for every energy, so that the stacked measurements still await it."""
+        measurements along its EnergyAxis, as :meth:`SMatrix.reduce` does. An
+        ensemble reduction the caller defers (see :meth:`_reduce`) is deferred for
+        every energy, so that the stacked measurements still await it."""
+
         energies = tuple(float(e) for e in self.ensemble_axes_metadata[axis].values)
 
         # Resolve the scan and the detectors once against the whole ensemble, so
@@ -1596,9 +1588,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         # reduce, keeping the position axis of a bare position for the caller
         # that assembles the results of several reductions. A caller that holds
-        # one member of a frozen-phonon ensemble defers the frozen-phonon
-        # reduction of the detectors that need all the members (components,
-        # average_frozen_phonons) to itself.
+        # one member of an S-matrix ensemble defers the averaging of every axis
+        # flagged ensemble_mean (frozen phonons, a CTF ensemble) to itself: it
+        # allocates the members' measurements with those axes, and the detectors
+        # that need all the members (components, average_frozen_phonons) can
+        # only be reduced there.
         energy_axis = self._energy_axis()
         if energy_axis is not None:
             return self._reduce_per_energy(
@@ -1661,17 +1655,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
             # Ensemble axes flagged ensemble_mean (frozen phonons by default, or
-            # a CTF ensemble) were returned unreduced, unlike the lazy branch,
-            # which averages them in _finalize_lazy_measurements.
-            measurements = [
-                (
-                    measurement
-                    if _defer_frozen_phonon_reduction
-                    and _awaits_frozen_phonon_reduction(measurement)
-                    else _average_ensemble_axes(measurement)
-                )
-                for measurement in measurements
-            ]
+            # a CTF ensemble) are returned unreduced; they are averaged here, as
+            # the lazy branch averages them in _finalize_lazy_measurements.
+            if not _defer_frozen_phonon_reduction:
+                measurements = [
+                    _average_ensemble_axes(measurement) for measurement in measurements
+                ]
 
         return _wrap_measurements(measurements)
 
@@ -3337,19 +3326,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
-        return _squeezed(
-            self._reduce(
-                scan=scan,
-                ctf=ctf,
-                detectors=detectors,
-                max_batch_reduction=max_batch_reduction,
-                max_batch_expansion=max_batch_expansion,
-                method=method,
-                blend_angle=blend_angle,
-                blend_window_gpts=blend_window_gpts,
-                blend_taper=blend_taper,
-            )
+        measurements = self._reduce(
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            max_batch_reduction=max_batch_reduction,
+            max_batch_expansion=max_batch_expansion,
+            method=method,
+            blend_angle=blend_angle,
+            blend_window_gpts=blend_window_gpts,
+            blend_taper=blend_taper,
         )
+        return _squeezed([_average_ensemble_axes(m) for m in ensure_list(measurements)])
 
     def _reduce(
         self,
@@ -3366,7 +3354,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         _blend_taper: float = None,
         _defer_frozen_phonon_reduction: bool = False,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
-        # as SMatrixArray._reduce
+        # as SMatrixArray._reduce, except that every reduction leaves the axes
+        # flagged ensemble_mean unreduced, which reduce averages
         self.accelerator.check_is_defined()
 
         explicit_blend = blend_angle is not None
@@ -3464,7 +3453,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ctf=ctf,
                 detectors=detectors,
                 max_batch_reduction=max_batch_reduction,
-                _defer_frozen_phonon_reduction=_defer_frozen_phonon_reduction,
+                _defer_frozen_phonon_reduction=True,
             )
 
         if ctf is None:

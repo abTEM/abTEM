@@ -15,6 +15,7 @@ from utils import assert_array_objects_equal, devices
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.distributions import uniform
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.potentials.iam import PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
@@ -487,3 +488,36 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def _averaged_defocus_ctf():
+    # 6 defoci: differs from the 2 configurations, the 4 exit planes and the
+    # 3 x 5 scan, so an axis landing on another raises or is caught by value
+    return abtem.CTF(
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 6, ensemble_mean=True)
+    )
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("frozen_phonons", [None, False, True])
+@pytest.mark.parametrize("exit_planes", [None, 2])
+@devices
+def test_prism_averages_a_ctf_ensemble_as_the_built_s_matrix(
+    path, frozen_phonons, exit_planes, device
+):
+    potential = _potential(frozen_phonons, device=device, exit_planes=exit_planes)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 90), abtem.PixelatedDetector(max_angle=60)]
+
+    expected = s_matrix.build(lazy=False).reduce(
+        scan=scan, detectors=detectors(), ctf=_averaged_defocus_ctf()
+    )
+    measured = s_matrix.reduce(
+        scan=scan, detectors=detectors(), ctf=_averaged_defocus_ctf(), **_PATHS[path]
+    ).compute()
+
+    for measured_i, expected_i in zip(measured, expected):
+        _assert_matches(measured_i, expected_i)

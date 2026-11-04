@@ -9,6 +9,7 @@ from utils import devices, to_host_array
 import abtem
 from abtem import CompressedSMatrixArray, CustomScan, GridScan, Potential, Probe, SMatrix
 from abtem.core.backend import get_array_module
+from abtem.distributions import uniform
 from abtem.prism.s_matrix import SMatrixArray
 
 # Every test that runs array code is parametrized over the device: the
@@ -1510,3 +1511,84 @@ def test_upsample_offset_detectors_route_on_the_angles_they_cover():
     assert built._snapped_blend_angle(
         40 + r + 1, [detector], built._offset_rounding_margin
     ) == pytest.approx(40 + r)
+
+
+def _defocus_mean_reference(built, scan, detector, defoci, **kwargs):
+    # the mean over the members, each reduced with its own single-defocus CTF
+    return np.mean(
+        [
+            to_host_array(
+                built.reduce(
+                    scan=scan,
+                    detectors=detector,
+                    ctf=abtem.CTF(semiangle_cutoff=20, defocus=defocus),
+                    **kwargs,
+                )
+            )
+            for defocus in defoci
+        ],
+        axis=0,
+    )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_upsample_averages_a_ctf_ensemble(lazy, device):
+    # 4 defoci and a 3 x 5 scan
+    potential = _small_potential(device=device)
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        device=device,
+    )
+    detector = abtem.AnnularDetector(inner=40, outer=100)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 5), endpoint=False)
+    ctf = abtem.CTF(
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 4, ensemble_mean=True)
+    )
+
+    expected = _defocus_mean_reference(
+        s_matrix.build(lazy=False), scan, detector, ctf.defocus.values
+    )
+    measured = to_host_array(
+        s_matrix.reduce(scan=scan, detectors=detector, ctf=ctf, lazy=lazy).compute()
+    )
+
+    assert measured.shape == expected.shape
+    np.testing.assert_allclose(
+        measured, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
+@devices
+@pytest.mark.parametrize("method", ["expand", "modes"])
+def test_compressed_reduce_averages_a_ctf_ensemble_by_every_method(method, device):
+    potential = _small_potential(device=device)
+    built = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        device=device,
+    ).build(lazy=False)
+    detector = abtem.AnnularDetector(inner=40, outer=100)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 5), endpoint=False)
+    ctf = abtem.CTF(
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 4, ensemble_mean=True)
+    )
+
+    expected = _defocus_mean_reference(
+        built, scan, detector, ctf.defocus.values, method=method
+    )
+    measured = to_host_array(
+        built.reduce(scan=scan, detectors=detector, ctf=ctf, method=method)
+    )
+
+    assert measured.shape == expected.shape
+    np.testing.assert_allclose(
+        measured, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
