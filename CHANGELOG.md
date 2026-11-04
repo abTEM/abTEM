@@ -121,6 +121,7 @@ Performance:
   ([PR #563](https://github.com/abTEM/abTEM/pull/563))
 - More automatic batch sizes stay within the configured chunk size. Where a batch changes, values move by
   float32 rounding of the reduction only; an integer `max_batch` or `max_batch_reduction` is batched as before
+  ([PR #649](https://github.com/abTEM/abTEM/pull/649))
     - `Probe.multislice`, `Probe.scan`, `Probe.transition_potential_scan` and `PlaneWave.multislice` size the
       automatic `max_batch` for the output of a block, which holds one result per exit plane and detector for
       each of its waves: a block of exit waves or diffraction patterns was that many times larger than
