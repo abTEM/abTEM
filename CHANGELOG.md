@@ -137,7 +137,7 @@ Bugfixes:
   multislice. The lazy build failed with "Chunks and shape must be of the same length/dimension", which also
   stopped the elastic `reduce` and `scan` without `upsample`, eager and lazy. With `ensemble_mean=True`, the eager
   `upsample=True` reduction and the eager `transition_potential_scan` raised an `IndexError`. Results with at
-  most one potential ensemble axis are unchanged
+  most one potential ensemble axis are unchanged ([PR #650](https://github.com/abTEM/abTEM/pull/650))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
