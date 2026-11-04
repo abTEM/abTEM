@@ -140,14 +140,29 @@ Bugfixes:
   (5.43 Å) on a 56 x 64 grid at 100 keV, patterns of (26, 22) pixels become (38, 38), and the cutoff angles of
   the dummy probes, 88.6 mrad unbuilt and 88.6 x 75.0 mrad for the built S-matrix, become 129.5 mrad. At a
   larger interpolation factor the patterns lie on the coarser grid of the reduction and extend to the same
-  cutoff angle. The same applies to core-loss PRISM (`SMatrix.transition_potential_scan`): its pixelated and
-  flexible annular outputs have the sizes of core-loss multislice, and the automatic outer angle of
-  `AnnularDetector` and `FlexibleAnnularDetector` follows the full grid's cutoff. Results with
-  `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged, and C-PRISM
-  (`upsample=True`) with a window smaller than the downsampled grid keeps its previous cutoff
+  cutoff angle. At `interpolation=1` the same applies to core-loss PRISM
+  (`SMatrix.transition_potential_scan`): its pixelated and flexible annular outputs have the sizes of core-loss
+  multislice. The automatic outer angle of `AnnularDetector` and `FlexibleAnnularDetector` follows the full
+  grid's cutoff at every interpolation, for a window that spans the downsampled grid. Results with
+  `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged
 - `SMatrix` records the band limit of its downsampled waves in the metadata key `antialias_sampling`, the
   sampling of the full grid, instead of `adjusted_antialias_cutoff_gpts`. Waves stored with the old key read as
   before, and `Waves.downsample` and `WavesDetector(gpts)` still record the old key
+- C-PRISM (`upsample=True`) with a window smaller than the downsampled grid, an explicit `window_gpts` or the
+  automatic window of a large cell, detects the diffraction patterns of a `PixelatedDetector` on the downsampled
+  grid, at the angular sampling of the cell, as multislice does, on the same grid whichever other detectors share
+  the scan. Before, a lazy scan declared a different shape and angular sampling than it computed, a frozen-phonon
+  scan or a multi-energy scan with a numeric `max_angle` raised `ValueError`, and a pattern scanned together with
+  a `FlexibleAnnularDetector` or `WavesDetector` lay on the window's coarser grid. **Behaviour change:** for the
+  cubic Si cell (5.43 Å) on a 56 x 64 grid at 100 keV with `interpolation=2`, `window_gpts=(24, 32)` and
+  `downsample="cutoff"`, `PixelatedDetector("cutoff")` gives (38, 38) pixels at 6.82 mrad instead of (16, 18),
+  `"valid"` (26, 26) instead of (12, 12), and `resample="uniform"` (38, 38) at 6.82 mrad instead of (16, 14) at
+  11.4 mrad. The automatic `FlexibleAnnularDetector` has 124 bins instead of 76, and the cutoff angles of
+  `SMatrix.dummy_probes()` are 125.0 x 127.8 mrad instead of 90.9 x 93.7 mrad. The automatic outer angle of
+  `AnnularDetector` and `FlexibleAnnularDetector` follows these cutoffs (`AnnularDetector(inner=50)` collects out
+  to 125.0 mrad instead of 90.9 mrad). Core-loss PRISM with `interpolation=2` on an 8 x 6 Å cell has the sizes of
+  the full window, (16, 12) and (12, 8) pixels and 74 bins instead of (10, 8), (8, 6) and 46 bins. Plain PRISM and
+  C-PRISM with a window that spans the downsampled grid already detected their patterns on that grid
 - PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
   `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
   plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
