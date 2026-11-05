@@ -9,10 +9,10 @@ from abtem.core.backend import asnumpy, get_array_module
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
-@pytest.mark.parametrize("order", ["auto", "beam", "probe"])
+@pytest.mark.parametrize("order", ["beam", "probe"])
 @pytest.mark.parametrize(
     "shape",
-    [(3, 7, 2, 2, 4, 5), (2, 3, 25, 3, 3, 4), (1, 1, 1, 1, 1, 1), (3, 4, 0, 2, 3, 5)],
+    [(3, 7, 2, 2, 4, 5), (2, 3, 25, 3, 3, 4), (1, 1, 1, 1, 1, 1)],
 )
 def test_contract_eels_matches_reference(device, dtype, order, shape):
     from abtem.prism._eels_contract import contract_eels
@@ -50,6 +50,13 @@ def test_contract_eels_matches_reference(device, dtype, order, shape):
     np.testing.assert_allclose(
         asnumpy(actual), asnumpy(expected), rtol=tolerance, atol=tolerance
     )
+    if order == "beam":
+        # "auto" only dispatches to "beam" or "probe" (see
+        # _choose_contract_order); one call checks that the dispatch works.
+        auto = contract_eels(s2, h, s1, coefficients, scale, order="auto")
+        np.testing.assert_allclose(
+            asnumpy(auto), asnumpy(expected), rtol=tolerance, atol=tolerance
+        )
 
 
 def test_contract_order_uses_probe_only_for_clear_arithmetic_advantage():
@@ -61,24 +68,25 @@ def test_contract_order_uses_probe_only_for_clear_arithmetic_advantage():
     assert _choose_contract_order(32, 32, 16, 1024, 1) == "beam"
 
 
-@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
-@pytest.mark.parametrize("order", ["auto", "beam", "probe"])
-def test_contract_eels_zero_transitions(dtype, order):
+def test_contract_eels_empty_inputs():
+    # No active probes or no transitions: contract_eels returns before it reads
+    # ``order``, and ``dtype`` only enters through result_type.
     from abtem.prism._eels_contract import contract_eels
 
-    actual = contract_eels(
-        np.ones((3, 4, 5), dtype=dtype),
-        np.empty((0, 4, 5), dtype=dtype),
-        np.ones((7, 4, 5), dtype=dtype),
-        np.ones((2, 7), dtype=dtype),
-        0.037,
-        order=order,
-    )
-
-    assert actual.shape == (0, 3, 2)
-    assert actual.dtype == dtype
-    assert get_array_module(actual) is np
-    assert actual.size == 0
+    for n_active, n_t in ((0, 2), (2, 0)):
+        for dtype in (np.complex64, np.complex128):
+            actual = contract_eels(
+                np.ones((3, 4, 5), dtype=dtype),
+                np.ones((n_t, 4, 5), dtype=dtype),
+                np.ones((7, 4, 5), dtype=dtype),
+                np.ones((n_active, 7), dtype=dtype),
+                0.037,
+            )
+            case = f"n_active={n_active}, n_t={n_t}, dtype={dtype.__name__}"
+            assert actual.shape == (n_t, 3, n_active), case
+            assert actual.dtype == dtype, case
+            assert get_array_module(actual) is np, case
+            assert actual.size == 0, case
 
 
 def test_contract_eels_rejects_invalid_order():

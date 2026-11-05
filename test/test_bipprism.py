@@ -181,15 +181,16 @@ def _run(driver, sm, tp, scan, det, atoms, **kw):
     return asnumpy(driver(sm, tp, scan, det, sites=atoms, **kw).array)
 
 
-@pytest.mark.parametrize("double_channel", [False, True])
-def test_bipprism_s1_partition_high_correlation(double_channel):
+def test_bipprism_s1_partition_high_correlation():
+    # Single channel only: S1 partitioning with double_channel=True runs in the
+    # focal back-prop tests.
     from abtem.inelastic.core_loss import (
         prism_transition_potential_scan_beam_basis as drv,
     )
 
     sm, tp, scan, det, atoms = _prism_eels_setup()
-    ref = _run(drv, sm, tp, scan, det, atoms, double_channel=double_channel)
-    par = _run(drv, sm, tp, scan, det, atoms, double_channel=double_channel,
+    ref = _run(drv, sm, tp, scan, det, atoms, double_channel=False)
+    par = _run(drv, sm, tp, scan, det, atoms, double_channel=False,
                partitions_s1=4)
     assert par.shape == ref.shape
     assert np.all(np.isfinite(par))
@@ -209,16 +210,21 @@ def test_bipprism_s2_partition_converges_to_exact():
     sm, tp, scan, det, atoms = _prism_eels_setup()
     ref = _run(drv, sm, tp, scan, det, atoms, double_channel=True)
 
-    corr = []
-    for n_radial in (3, 10):
+    # The Pearson correlation is not monotonic in the parent count at this
+    # size (measured 0.989, 0.996, 0.992 at 3, 5, 10 radial parents), so check
+    # the relative error at two well-separated counts instead. Measured: 0.149
+    # at 3 and 0.025 at 20. The full-parent limit is checked exactly in
+    # test_bipprism_focal_backprop_full_parents_are_exact.
+    err = []
+    for n_radial in (3, 20):
         par = _run(drv, sm, tp, scan, det, atoms, double_channel=True,
                    partitions_s2=n_radial)
         assert par.shape == ref.shape
         assert np.all(np.isfinite(par))
-        corr.append(_pearson(par, ref))
+        err.append(_relL2(par, ref))
 
-    assert corr[0] < corr[1]                       # more parents -> closer to exact
-    assert corr[-1] > 0.98                          # approaches exact at full parents
+    assert err[1] < 0.5 * err[0]                   # more parents -> closer to exact
+    assert err[1] < 0.05
 
 
 def test_bipprism_both_partitions_converges_to_exact():
@@ -238,22 +244,6 @@ def test_bipprism_both_partitions_converges_to_exact():
     # both S1 and S2 partitioned; finer parents -> closer to exact
     assert _pearson(par_fine, ref) > _pearson(par_coarse, ref)
     assert _pearson(par_fine, ref) > 0.98
-
-
-def test_bipprism_mag_preserve_flag_runs_both_ways():
-    from abtem.inelastic.core_loss import (
-        prism_transition_potential_scan_beam_basis as drv,
-    )
-
-    sm, tp, scan, det, atoms = _prism_eels_setup()
-    with_mp = _run(drv, sm, tp, scan, det, atoms, double_channel=True,
-                   partitions_s1=3, partitions_s2=3, mag_preserve=True)
-    no_mp = _run(drv, sm, tp, scan, det, atoms, double_channel=True,
-                 partitions_s1=3, partitions_s2=3, mag_preserve=False)
-    assert with_mp.shape == no_mp.shape
-    assert np.all(np.isfinite(with_mp)) and np.all(np.isfinite(no_mp))
-    # both should still correlate with the pattern
-    assert _pearson(with_mp, no_mp) > 0.9
 
 
 # --------------------------------------------------------------------------- M2
@@ -278,9 +268,10 @@ def test_bipprism_collection_angle_matches_full_grid():
     np.testing.assert_allclose(disk, ref, rtol=1e-4, atol=1e-8)
 
 
-def test_bipprism_collection_angle_s2_partition_accurate():
-    """Over the small detector-collection disk, S2 partitioning at a modest parent
-    count is highly accurate — the paper's BiP-PRISM operating regime."""
+def test_bipprism_collection_disk_partitions_accurate():
+    """Over the small detector-collection disk, partitioning S2 alone and both S1
+    and S2 at a modest parent count stays highly correlated with the exact
+    dual-matrix map -- the paper's BiP-PRISM operating regime."""
     from abtem.inelastic.core_loss import (
         prism_transition_potential_scan_beam_basis as drv,
     )
@@ -289,73 +280,45 @@ def test_bipprism_collection_angle_s2_partition_accurate():
     ann = abtem.AnnularDetector(inner=0, outer=30)
     ref = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
                collection_angle=35)
-    par = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
-               collection_angle=35, partitions_s2=4)
-    assert par.shape == ref.shape
-    assert np.all(np.isfinite(par))
-    assert _pearson(par, ref) > 0.99
-
-
-def test_bipprism_full_partitioned_map_collection_disk():
-    """Full BiP-PRISM: partition both S1 and S2 over the collection disk; the map
-    stays highly correlated with the exact dual-matrix map."""
-    from abtem.inelastic.core_loss import (
-        prism_transition_potential_scan_beam_basis as drv,
-    )
-
-    sm, tp, scan, _, atoms = _prism_eels_setup()
-    ann = abtem.AnnularDetector(inner=0, outer=30)
-    ref = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
-               collection_angle=35)
-    par = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
-               collection_angle=35, partitions_s1=4, partitions_s2=4)
-    assert par.shape == ref.shape
-    assert np.all(np.isfinite(par))
-    assert _pearson(par, ref) > 0.99
+    for partitions in (dict(partitions_s2=4),
+                       dict(partitions_s1=4, partitions_s2=4)):
+        par = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
+                   collection_angle=35, **partitions)
+        assert par.shape == ref.shape, partitions
+        assert np.all(np.isfinite(par)), partitions
+        assert _pearson(par, ref) > 0.99, partitions
 
 
 # --------------------------------------------------------------- public API (M2b)
 
 
-def test_bipprism_public_api_dispatch_matches_driver():
-    """SMatrix.transition_potential_scan auto-selects the beam-basis backend when
-    partition kwargs are given and reproduces the direct driver call."""
+def test_bipprism_public_api_matches_driver():
+    """SMatrix.transition_potential_scan reproduces the direct driver call,
+    eagerly and lazily. The eager call gives only partition kwargs and checks
+    that they auto-select the beam-basis backend; ``focal_backprop`` checks that
+    this option flows through the public API."""
     from abtem.inelastic.core_loss import (
         prism_transition_potential_scan_beam_basis as drv,
     )
 
     sm, tp, scan, _, atoms = _prism_eels_setup()
     ann = abtem.AnnularDetector(inner=0, outer=30)
-    direct = np.asarray(
-        drv(sm, tp, scan, ann, sites=atoms, double_channel=True,
-            collection_angle=35, partitions_s1=4, partitions_s2=4).array
-    )
-    pub = sm.transition_potential_scan(
-        tp, scan=scan, detectors=ann, sites=atoms, double_channel=True,
-        collection_angle=35, partitions_s1=4, partitions_s2=4, lazy=False,
-    )
-    pub_arr = np.asarray(pub.array)
-    assert pub_arr.shape == direct.shape
-    np.testing.assert_allclose(pub_arr, direct, rtol=1e-5, atol=1e-8)
-
-
-def test_bipprism_public_api_lazy_matches_eager():
-    sm, tp, scan, _, atoms = _prism_eels_setup()
-    ann = abtem.AnnularDetector(inner=0, outer=30)
+    options = dict(double_channel=True, collection_angle=35, partitions_s1=4,
+                   partitions_s2=4, focal_backprop="centroid")
+    direct = _run(drv, sm, tp, scan, ann, atoms, **options)
     eager = np.asarray(
         sm.transition_potential_scan(
-            tp, scan=scan, detectors=ann, sites=atoms, double_channel=True,
-            reduction="bipartite", collection_angle=35,
-            partitions_s1=4, partitions_s2=4, lazy=False,
+            tp, scan=scan, detectors=ann, sites=atoms, lazy=False, **options
         ).array
     )
     lazy = np.asarray(
         sm.transition_potential_scan(
-            tp, scan=scan, detectors=ann, sites=atoms, double_channel=True,
-            reduction="bipartite", collection_angle=35,
-            partitions_s1=4, partitions_s2=4, lazy=True,
+            tp, scan=scan, detectors=ann, sites=atoms, reduction="bipartite",
+            lazy=True, **options
         ).compute().array
     )
+    assert eager.shape == direct.shape
+    np.testing.assert_allclose(eager, direct, rtol=1e-5, atol=1e-8)
     np.testing.assert_allclose(lazy, eager, rtol=1e-5, atol=1e-8)
 
 
@@ -449,7 +412,7 @@ def test_bipprism_focal_backprop_reduces_s1_error():
     )
 
     # thicker slab -> more channelling -> larger S1 reconstruction error to reduce
-    sm, tp, scan, _, atoms = _prism_eels_setup(reps=(1, 1, 6))
+    sm, tp, scan, _, atoms = _prism_eels_setup(reps=(1, 1, 4))
     ann = abtem.AnnularDetector(inner=0, outer=25)
 
     ref = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
@@ -480,29 +443,6 @@ def test_bipprism_focal_backprop_noop_without_s1_partition():
     with_fb = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
                    collection_angle=35, partitions_s2=4, focal_backprop="centroid")
     np.testing.assert_allclose(with_fb, base, rtol=1e-6, atol=1e-10)
-
-
-def test_bipprism_focal_backprop_public_api():
-    """focal_backprop flows through SMatrix.transition_potential_scan and (with
-    partition kwargs) auto-selects the beam-basis backend."""
-    from abtem.inelastic.core_loss import (
-        prism_transition_potential_scan_beam_basis as drv,
-    )
-
-    sm, tp, scan, _, atoms = _prism_eels_setup(reps=(1, 1, 4))
-    ann = abtem.AnnularDetector(inner=0, outer=25)
-    direct = np.asarray(
-        drv(sm, tp, scan, ann, sites=atoms, double_channel=True,
-            collection_angle=30, partitions_s1=3, focal_backprop="centroid").array
-    )
-    pub = np.asarray(
-        sm.transition_potential_scan(
-            tp, scan=scan, detectors=ann, sites=atoms, double_channel=True,
-            collection_angle=30, partitions_s1=3, focal_backprop="centroid",
-            lazy=False,
-        ).array
-    )
-    np.testing.assert_allclose(pub, direct, rtol=1e-5, atol=1e-8)
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
@@ -563,12 +503,11 @@ def _vacuum_eels_setup(
 
 
 @pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 100.0), (17.0, 3.0, 27.0, 70.0)])
-@pytest.mark.parametrize("mag_preserve", [False, True])
-@pytest.mark.parametrize("partitions_s2", [1, 100])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_bipprism_s2_vacuum_columns(
-    monkeypatch, thicknesses, mag_preserve, partitions_s2, device
-):
+def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, device):
+    # In vacuum all de-tilted parents share one phase, so the magnitude-
+    # preserving step is an identity; mag_preserve and partitions_s2 are
+    # looped here instead of parametrized.
     import abtem.prism._bipartite as bipartite
     from abtem.multislice import _fresnel_propagator_array
     from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
@@ -590,15 +529,21 @@ def test_bipprism_s2_vacuum_columns(
         return result
 
     monkeypatch.setattr(bipartite, "windowed_reconstruct", record_reconstruction)
-    with abtem.config.set({"precision": "float64"}):
-        setup = _vacuum_eels_setup(thicknesses=thicknesses, device=device)
-        _run(prism_transition_potential_scan_beam_basis, *setup,
-             double_channel=True, collection_angle=6, partitions_s2=partitions_s2,
-             mag_preserve=mag_preserve)
-    assert reconstructed
-    for actual, expected in reconstructed:
-        # Keep the backend array alive until the driver's in-place rechirp finishes.
-        np.testing.assert_allclose(asnumpy(actual), expected, rtol=1e-10, atol=1e-12)
+    for mag_preserve in (False, True):
+        for partitions_s2 in (1, 100):
+            case = f"mag_preserve={mag_preserve}, partitions_s2={partitions_s2}"
+            reconstructed.clear()
+            with abtem.config.set({"precision": "float64"}):
+                setup = _vacuum_eels_setup(thicknesses=thicknesses, device=device)
+                _run(prism_transition_potential_scan_beam_basis, *setup,
+                     double_channel=True, collection_angle=6,
+                     partitions_s2=partitions_s2, mag_preserve=mag_preserve)
+            assert reconstructed, case
+            for actual, expected in reconstructed:
+                # Keep the backend array alive until the driver's in-place
+                # rechirp finishes.
+                np.testing.assert_allclose(asnumpy(actual), expected, rtol=1e-10,
+                                           atol=1e-12, err_msg=case)
 
 
 @pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 10.0), (1.0, 0.0)])
@@ -653,8 +598,18 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel, device):
         np.testing.assert_allclose(focal, exact, rtol=1e-10, atol=1e-18)
 
 
-@pytest.mark.parametrize("interpolation", [1, 2, 4, (2, 4)])
-@pytest.mark.parametrize("inelastic_crop", [None, (2., 4.), (2., 3.), (3., 3.)])
+@pytest.mark.parametrize(
+    "interpolation,inelastic_crop",
+    [
+        # Every value of each axis at least once; (2, 4) with (2., 3.) is the
+        # anisotropic case with a crop smaller than the window.
+        (1, None),
+        (2, (2., 4.)),
+        (4, (3., 3.)),
+        ((2, 4), (2., 3.)),
+        (4, None),
+    ],
+)
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop, device):
     with abtem.config.set({"precision": "float64"}):

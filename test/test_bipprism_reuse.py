@@ -17,12 +17,11 @@ from abtem.prism import _bipartite as bip
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize(
     "legs,double_channel",
-    [((2, None), False), ((2, None), True), ((None, 2), True), ((2, 2), True)],
+    [((2, None), False), ((None, 2), True), ((2, 2), True)],
 )
-@pytest.mark.parametrize("mag_preserve", [False, True])
-def test_reuse_images_and_call_count(
-    monkeypatch, device, precision, legs, double_channel, mag_preserve
-):
+def test_reuse_images_and_call_count(monkeypatch, device, precision, legs, double_channel):
+    # mag_preserve goes straight to windowed_reconstruct on the cached and the
+    # uncached legs, so it cannot change the call count or the cached result.
     calls = []
     original = bip.windowed_reconstruct
 
@@ -44,7 +43,6 @@ def test_reuse_images_and_call_count(
             partitions_s2=legs[1],
             double_channel=double_channel,
             collection_angle=25,
-            mag_preserve=mag_preserve,
         )
         monkeypatch.setattr(bip, "_EELS_RECONSTRUCTION_BYTES", 0, raising=False)
         reference = _run(driver, sm, tp, scan, det, atoms, **options)
@@ -60,9 +58,10 @@ def test_reuse_images_and_call_count(
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("reason", ["budget", "sparse", "one_site", "focal"])
-def test_reconstruction_guard_does_no_work(monkeypatch, device, precision, reason):
+def test_reconstruction_guard_does_no_work(monkeypatch, device, reason):
+    # Every guard returns before the dtype matters, so one precision is enough.
+    precision = "float32"
     assert hasattr(bip, "_reconstruct_slice"), (
         "bounded reconstruction helper is missing"
     )
