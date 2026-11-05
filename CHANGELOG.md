@@ -11,17 +11,20 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
-- `CrystalPotential(..., add_vacuum=...)` adds a unit cell of vacuum at the entrance and at the exit surface of
-  the crystal, by default for a unit with a finite projection. Without it the crystal is a periodic stack, whose
-  first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
-  (atoms a slab does not have; the exit slice was wrong by up to the potential of a whole atomic plane). With
-  vacuum, the surface slices and the vacuum slices, which hold the tails of the potential of the surface atoms,
-  are calculated as for a slab with that vacuum, and agree with it to rounding. The vacuum has the slice
-  thicknesses of the unit, so with `slice_thickness='auto'` it follows the crystal planes and the slicing of the
-  atoms is unchanged. **Behaviour change:** a `CrystalPotential` of a finite-projection unit now has
-  `2 * len(unit)` more (vacuum) slices and a taller `box`; pass `add_vacuum=False` for the previous stack. An
-  infinite projection is unchanged by default, and `add_vacuum=True` only adds empty slices
-  ([PR #648](https://github.com/abTEM/abTEM/pull/648))
+- `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
+  as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
+  whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
+  (atoms a slab does not have; the exit slice was wrong by up to the potential of a whole atomic plane) and miss the
+  tails of the potential of the surface atoms beyond them. With it, the slices within the integration cutoff of a
+  surface are calculated without the images, and the tails beyond the surface are added to the slice next to it,
+  which conserves the projected potential of the slab. The crystal itself is unchanged: its slices, `box`,
+  `thickness` and `exit_planes` are as without, so nothing shifts and the exit wave is not propagated further. The
+  tails are at the depth of the outermost slice rather than their own; the diffraction intensity of the exit wave is
+  3-10 times closer to that of a slab with vacuum than that of the periodic stack. The slicing of the atoms is
+  that of the unit, so `slice_thickness='auto'` is unchanged. **Behaviour change:** the first and last slices of a
+  `CrystalPotential` of a finite-projection unit differ from those of the periodic stack; pass
+  `correct_surfaces=False` for the previous ones. An infinite projection has no surfaces to correct, and a unit
+  that is not a `Potential` is left as it is ([PR #648](https://github.com/abTEM/abTEM/pull/648))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
