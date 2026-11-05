@@ -42,6 +42,12 @@ Features:
 - Linear-scaling PRISM-EELS for core-loss simulations: `SMatrix.transition_potential_scan`, with
   single- and double-channel scattering and an optional windowed inelastic crop
   ([PR #289](https://github.com/abTEM/abTEM/pull/289))
+    - BiP-PRISM beam partitioning for PRISM-EELS: `transition_potential_scan(reduction="beam_basis")`
+      uses a dual-scattering-matrix driver. `partitions_s1` and `partitions_s2` build `S1` and `S2` on
+      sparse hex-ring parent beams and reconstruct the full beam set at each atom by natural-neighbor
+      interpolation. `collection_angle` limits `S2` to the detector disk, and `focal_backprop` is an
+      optional accuracy lever for `S1`. Options that would have no effect raise a `ValueError`
+      ([PR #338](https://github.com/abTEM/abTEM/pull/338))
 - In addition to the Gaussian (G) distribution, now also implemented Lorentzian (L), Voigtian (convolution L * G) and
   pseudo-Voigtian (L + G) source-size distributions and filters ([PR #270](https://github.com/abTEM/abTEM/pull/270))
 - The exact free-space propagator is now the default for Fourier multislice,

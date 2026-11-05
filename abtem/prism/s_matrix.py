@@ -5708,14 +5708,38 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         sites,
         double_channel,
         inelastic_crop=None,
+        reduction="real_space",
+        partitions_s1=None,
+        partitions_s2=None,
+        n_angular=6,
+        mag_preserve=True,
+        collection_angle=None,
+        focal_backprop=None,
         squeeze=True,
     ):
         from abtem.inelastic.core_loss import (
             _prism_eels_detected_waves,
             prism_transition_potential_scan,
+            prism_transition_potential_scan_beam_basis,
         )
 
         def detect(s_matrix):
+            if reduction in ("beam_basis", "bipartite"):
+                return prism_transition_potential_scan_beam_basis(
+                    s_matrix=s_matrix,
+                    transition_potentials=transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
+                    partitions_s1=partitions_s1,
+                    partitions_s2=partitions_s2,
+                    n_angular=n_angular,
+                    mag_preserve=mag_preserve,
+                    collection_angle=collection_angle,
+                    focal_backprop=focal_backprop,
+                )
             return prism_transition_potential_scan(
                 s_matrix=s_matrix,
                 transition_potentials=transition_potentials,
@@ -5726,14 +5750,26 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 inelastic_crop=inelastic_crop,
             )
 
+        # The double-channel beam-basis reduction detects on the native grid.
+        native = double_channel and reduction != "real_space"
         return self._detect_ensemble(
-            _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
+            _prism_eels_detected_waves(self, scan, native=native),
+            detectors,
+            detect,
+            squeeze,
         )
 
     @staticmethod
     def _lazy_transition_potential_scan(
         s_matrix, scan, detectors, transition_potentials, sites, double_channel,
         inelastic_crop=None,
+        reduction="real_space",
+        partitions_s1=None,
+        partitions_s2=None,
+        n_angular=6,
+        mag_preserve=True,
+        collection_angle=None,
+        focal_backprop=None,
     ):
         s_matrix = s_matrix.item()
         measurements = s_matrix._eager_transition_potential_scan(
@@ -5743,6 +5779,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
+            reduction=reduction,
+            partitions_s1=partitions_s1,
+            partitions_s2=partitions_s2,
+            n_angular=n_angular,
+            mag_preserve=mag_preserve,
+            collection_angle=collection_angle,
+            focal_backprop=focal_backprop,
             squeeze=False,
         )
 
@@ -5761,6 +5804,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         double_channel: bool = False,
         inelastic_crop=None,
         lazy: bool = None,
+        reduction: str = "real_space",
+        partitions_s1: int | None = None,
+        partitions_s2: int | None = None,
+        n_angular: int = 6,
+        mag_preserve: bool = True,
+        collection_angle: float | None = None,
+        focal_backprop: str | float | None = None,
     ):
         """**Experimental** PRISM-based core-loss scan.
 
@@ -5806,6 +5856,49 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         lazy : bool, optional
             If True, create the measurements lazily using Dask; otherwise,
             compute eagerly. Defaults to the user configuration value.
+        reduction : {"real_space", "beam_basis", "bipartite"}, optional
+            Reduction backend. ``"real_space"`` (default) is the production
+            windowed real-space driver
+            (:func:`~abtem.inelastic.core_loss.prism_transition_potential_scan`).
+            ``"beam_basis"``/``"bipartite"`` use the dual-scattering-matrix
+            beam-basis driver
+            (:func:`~abtem.inelastic.core_loss.prism_transition_potential_scan_beam_basis`),
+            which supports **BiP-PRISM** beam partitioning. Any of
+            ``partitions_s1``, ``partitions_s2``, ``collection_angle`` or
+            ``focal_backprop`` being set auto-selects the beam-basis backend.
+            ``"bipartite"`` requires ``partitions_s1`` and/or ``partitions_s2``.
+            The detection grid depends on the backend. Double-channel beam-basis
+            detects on the native grid, like multislice. The other combinations
+            detect on the coarser PRISM-cell grid. At ``interpolation > 1`` the
+            two grids quantize detector edges differently. Results can then
+            differ by a few percent when an edge lies on the bright-field disk edge.
+        partitions_s1, partitions_s2 : int or None, optional
+            BiP-PRISM (paper Alg. 5) beam partitioning: build ``S1`` (aperture) and
+            ``S2`` (detector) on sparse hex-ring parent beams with this many radial
+            rings and reconstruct locally at each atom by windowed natural-neighbor
+            interpolation. ``None`` builds the full matrices. Requires the
+            beam-basis backend. ``partitions_s2`` requires ``double_channel=True``.
+        n_angular : int, optional
+            Base azimuthal parent sampling for the hex rings (default 6). Must be
+            an integer >= 1.
+        mag_preserve : bool, optional
+            Magnitude-preserving reconstruction (paper eq-magpreserve, default
+            ``True``) — needed for quantitative absolute intensities.
+        collection_angle : float or None, optional
+            ``S2`` detector-collection semiangle [mrad] limiting the ``S2`` beams to
+            the detector disk (BiP-PRISM map regime); leaves the detector-integrated
+            map unchanged while making ``partitions_s2`` accurate and cheap. Requires
+            the beam-basis backend and ``double_channel=True``. A ``ValueError`` is
+            raised if the disk is smaller than the angles a detector collects,
+            because the map would then come out too low. The last ionization
+            slice can populate beams beyond the antialias aperture.
+        focal_backprop : {"centroid"}, float or None, optional
+            S1-only accuracy lever (paper Sec. 3.3.6): back-propagate the ``S1``
+            parent columns to the scattering-centroid plane before windowed NNW
+            interpolation and forward-propagate afterwards. This optional
+            approximation may improve accuracy for some specimens; it is bypassed
+            when all S1 parents are retained. ``None`` (default) disables it.
+            Requires ``partitions_s1`` and the beam-basis backend.
 
         Returns
         -------
@@ -5816,6 +5909,39 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             gain a leading :class:`.EnergyAxis` dimension.
         """
         from abtem.inelastic.core_loss import _prism_eels_detected_waves
+
+        if reduction not in ("real_space", "beam_basis", "bipartite"):
+            raise ValueError(
+                f"unknown reduction {reduction!r} (use 'real_space', "
+                "'beam_basis' or 'bipartite')"
+            )
+        # Partition / collection kwargs only apply to the beam-basis backend;
+        # auto-select it so the user does not have to set both.
+        if reduction == "real_space" and (
+            partitions_s1 is not None
+            or partitions_s2 is not None
+            or collection_angle is not None
+            or focal_backprop is not None
+        ):
+            reduction = "beam_basis"
+        if (
+            reduction == "bipartite"
+            and partitions_s1 is None
+            and partitions_s2 is None
+        ):
+            raise ValueError(
+                "reduction='bipartite' needs partitions_s1 and/or partitions_s2; "
+                "without them it is the unpartitioned 'beam_basis' reduction."
+            )
+        if reduction != "real_space":
+            from abtem.inelastic.core_loss import _check_beam_basis_options
+
+            # Checked here as well as in the driver, so that a lazy scan fails
+            # now rather than when it is computed.
+            _check_beam_basis_options(
+                double_channel, partitions_s1, partitions_s2, n_angular,
+                collection_angle, focal_backprop,
+            )
 
         if scan is None:
             scan = GridScan(
@@ -5852,6 +5978,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     sites=sites,
                     double_channel=double_channel,
                     inelastic_crop=inelastic_crop,
+                    reduction=reduction,
+                    partitions_s1=partitions_s1,
+                    partitions_s2=partitions_s2,
+                    n_angular=n_angular,
+                    mag_preserve=mag_preserve,
+                    collection_angle=collection_angle,
+                    focal_backprop=focal_backprop,
                     lazy=lazy,
                 )
                 for e in self._energies
@@ -5862,6 +5995,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         scan = validate_scan(scan, self)
         lazy = validate_lazy(lazy)
 
+        if reduction != "real_space":
+            from abtem.inelastic.core_loss import _check_collection_angle
+
+            _check_collection_angle(self, detectors, collection_angle)
+
         if not lazy:
             measurements = self._eager_transition_potential_scan(
                 scan=scan,
@@ -5870,6 +6008,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 sites=sites,
                 double_channel=double_channel,
                 inelastic_crop=inelastic_crop,
+                reduction=reduction,
+                partitions_s1=partitions_s1,
+                partitions_s2=partitions_s2,
+                n_angular=n_angular,
+                mag_preserve=mag_preserve,
+                collection_angle=collection_angle,
+                focal_backprop=focal_backprop,
             )
             # Squeeze once, here, on the assembled measurements -- the level
             # Waves.transition_potential_multislice uses. The per-configuration
@@ -5927,10 +6072,21 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
+            reduction=reduction,
+            partitions_s1=partitions_s1,
+            partitions_s2=partitions_s2,
+            n_angular=n_angular,
+            mag_preserve=mag_preserve,
+            collection_angle=collection_angle,
+            focal_backprop=focal_backprop,
             meta=np.array((), dtype=object),
         )
 
-        waves = _prism_eels_detected_waves(self, scan)
+        # The grid the driver detects on: the native grid for the double-channel
+        # beam-basis reduction, the PRISM cell otherwise.
+        waves = _prism_eels_detected_waves(
+            self, scan, native=double_channel and reduction != "real_space"
+        )
 
         extra_axes_metadata = []
         if self.potential is not None:
