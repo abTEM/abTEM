@@ -249,6 +249,7 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
+            # waves stored with the pixel count itself
             cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
         else:
             cutoff_gpts = _antialias_cutoff_gpts(
@@ -1442,9 +1443,7 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            waves.antialias_cutoff_gpts
-        )
+        kwargs["metadata"]["antialias_sampling"] = waves._antialias_sampling
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()

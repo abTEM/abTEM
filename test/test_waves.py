@@ -386,8 +386,9 @@ def test_downsample(data, max_angle, normalization, lazy, device):
 @devices
 def test_downsample_keeps_the_antialias_cutoff(gpts, device):
     # a grid sampled differently along x and y: the pixel count within the
-    # antialias cutoff of the resampled waves still means the same angles when
-    # the new grid holds them, and is capped at its own grid otherwise
+    # antialias cutoff of the resampled waves still means the same angles, up to
+    # the pixel that the parity of the new grid adds or removes, when the new grid
+    # holds them, and is capped at its own grid otherwise
     waves = abtem.Probe(
         energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
     ).build(lazy=False)
@@ -402,7 +403,9 @@ def test_downsample_keeps_the_antialias_cutoff(gpts, device):
             np.array(downsampled.gpts) // 2 * downsampled.angular_sampling,
         )
     ]
-    assert downsampled.cutoff_angles == pytest.approx(expected)
+    assert downsampled.cutoff_angles == pytest.approx(
+        expected, abs=max(downsampled.angular_sampling)
+    )
 
 
 @devices
@@ -414,6 +417,48 @@ def test_downsample_twice_keeps_the_antialias_cutoff(device):
     downsampled = waves.downsample("cutoff").downsample("cutoff")
 
     assert downsampled.cutoff_angles == pytest.approx(waves.cutoff_angles)
+
+
+def _assert_cutoff_survives_tiling(source, resampled, repetitions):
+    # tiling changes the extent at fixed sampling, so the angles within the antialias
+    # cutoff stay those of the waves the resampled waves come from, up to the
+    # Nyquist angle of their own grid and the parity of the pixel count
+    tiled = resampled.tile(repetitions)
+
+    assert "adjusted_antialias_cutoff_gpts" not in tiled.metadata
+    expected = np.minimum(
+        source.cutoff_angles, np.array(tiled.gpts) // 2 * tiled.angular_sampling
+    )
+    assert tiled.cutoff_angles == pytest.approx(
+        expected, abs=max(tiled.angular_sampling)
+    )
+
+
+@pytest.mark.parametrize("repetitions", [(2, 2), (3, 1)])
+@pytest.mark.parametrize("gpts", [None, (45, 45), (39, 41)])
+@devices
+def test_tiling_downsampled_waves_keeps_the_antialias_cutoff(gpts, repetitions, device):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample(gpts=gpts) if gpts else waves.downsample("cutoff")
+
+    _assert_cutoff_survives_tiling(waves, downsampled, repetitions)
+
+
+@pytest.mark.parametrize("repetitions", [(2, 3), (3, 1)])
+@devices
+def test_tiling_resampled_waves_of_a_detector_keeps_the_antialias_cutoff(
+    repetitions, device
+):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    resampled = abtem.WavesDetector(gpts=(20, 24)).detect(waves)
+
+    _assert_cutoff_survives_tiling(waves, resampled, repetitions)
 
 
 def test_waves_read_a_stored_adjusted_antialias_cutoff():
