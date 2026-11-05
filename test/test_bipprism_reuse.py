@@ -127,6 +127,7 @@ def test_prepared_geometry_does_not_copy_to_host(monkeypatch, device):
         np.testing.assert_allclose(asnumpy(r), 1, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("remaining", [0.0, 10.0, 100.0])
 def test_cached_s2_vacuum_phase_and_support(monkeypatch, device, remaining):
@@ -149,6 +150,7 @@ def test_cached_s2_vacuum_phase_and_support(monkeypatch, device, remaining):
     np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-18)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize(
     "partitions,focal,active",
@@ -178,6 +180,7 @@ def test_driver_focal_cache_guard(monkeypatch, device, partitions, focal, active
     np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-18)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("position,expected_active", [((8.0, 8.0), 1), ((4.0, 4.0), 0)])
 def test_driver_counts_only_contributing_sites(

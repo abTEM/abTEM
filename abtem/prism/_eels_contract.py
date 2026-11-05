@@ -1,5 +1,7 @@
 """Private, backend-preserving contractions for PRISM EELS reconstruction."""
 
+import numpy as np
+
 from abtem.core.backend import get_array_module
 
 # Internal override for correctness checks and benchmarks; not a public setting.
@@ -38,7 +40,9 @@ def contract_eels(s2_crop, h_crop, s1_crop, coefficients, scale, order="auto"):
     n_transitions = h_crop.shape[0]
     n_active = coefficients.shape[0]
     n_pixels = s1_crop.shape[-2] * s1_crop.shape[-1]
-    dtype = xp.result_type(
+    # NumPy promotion on the dtypes: every backend (NumPy, CuPy, the torch
+    # shim) reports NumPy dtypes, but the torch shim has no result_type.
+    dtype = np.result_type(
         s2_crop.dtype, h_crop.dtype, s1_crop.dtype, coefficients.dtype
     )
     result = xp.empty((n_transitions, n_s2, n_active), dtype=dtype)

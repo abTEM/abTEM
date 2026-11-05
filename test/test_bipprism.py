@@ -502,6 +502,7 @@ def _vacuum_eels_setup(
     return sm, tp, abtem.CustomScan([(8, 8)]), abtem.PixelatedDetector(max_angle="full"), atoms
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 100.0), (17.0, 3.0, 27.0, 70.0)])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, device):
@@ -546,6 +547,7 @@ def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, device):
                                            atol=1e-12, err_msg=case)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 10.0), (1.0, 0.0)])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses, device):
@@ -578,6 +580,7 @@ def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses, 
             np.testing.assert_allclose(np.abs(actual[unsupported]), 1 / 256, atol=1e-15)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize("double_channel", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_bipprism_focal_backprop_full_parents_are_exact(double_channel, device):
@@ -598,6 +601,7 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel, device):
         np.testing.assert_allclose(focal, exact, rtol=1e-10, atol=1e-18)
 
 
+@pytest.mark.float64
 @pytest.mark.parametrize(
     "interpolation,inelastic_crop",
     [

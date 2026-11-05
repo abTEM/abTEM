@@ -8,7 +8,9 @@ from abtem.core.backend import asnumpy, get_array_module
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+# String dtypes, so that the collection hook of conftest.py sees "complex128"
+# and skips it on the single-precision torch backend.
+@pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 @pytest.mark.parametrize("order", ["beam", "probe"])
 @pytest.mark.parametrize(
     "shape",
@@ -46,7 +48,7 @@ def test_contract_eels_matches_reference(device, dtype, order, shape):
     assert actual.shape == (n_t, n_s2, n_active)
     assert actual.dtype == dtype
     assert get_array_module(actual) is xp
-    tolerance = 3e-5 if dtype == np.complex64 else 1e-12
+    tolerance = 3e-5 if np.dtype(dtype) == np.complex64 else 1e-12
     np.testing.assert_allclose(
         asnumpy(actual), asnumpy(expected), rtol=tolerance, atol=tolerance
     )
