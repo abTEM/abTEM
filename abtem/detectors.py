@@ -2759,9 +2759,8 @@ class WavesDetector(BaseDetector):
             # Read by `reduce_ensemble`, which averages the frozen phonons.
             metadata["frozen_phonon_average"] = True
         if self._gpts:
-            # as `Waves.downsample` records it: the resampled waves keep the
-            # band limit of the waves they were resampled from
-            metadata["antialias_sampling"] = waves._antialias_sampling
+            # as `Waves.downsample` records it
+            metadata.update(waves._resampling_metadata(self._gpts))
         return (metadata,)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:

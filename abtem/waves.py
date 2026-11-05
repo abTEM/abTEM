@@ -253,6 +253,24 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         return self.metadata.get("antialias_sampling", self._valid_sampling)
 
     @property
+    def _coarsest_sampling(self) -> tuple[float, float]:
+        """The sampling of the coarsest grid the waves were resampled onto, at which
+        their content ends: their own, if they were not resampled."""
+        return self.metadata.get("coarsest_sampling", self._valid_sampling)
+
+    def _resampling_metadata(self, gpts: tuple[int, int]) -> dict:
+        """The metadata of these waves resampled to ``gpts`` points over their
+        extent that keeps the band limit of the content."""
+        sampling = (self._valid_extent[0] / gpts[0], self._valid_extent[1] / gpts[1])
+        return {
+            "antialias_sampling": self._antialias_sampling,
+            "coarsest_sampling": tuple(
+                max(coarsest, new)
+                for coarsest, new in zip(self._coarsest_sampling, sampling)
+            ),
+        }
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
@@ -263,9 +281,14 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
             cutoff_gpts = _antialias_cutoff_gpts(
                 self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
+        # the content ends at the edge of the coarsest grid it was resampled onto
+        content_gpts = [
+            round(length / sampling)
+            for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
+        ]
         return (
-            min(cutoff_gpts[0], self._valid_gpts[0]),
-            min(cutoff_gpts[1], self._valid_gpts[1]),
+            min(cutoff_gpts[0], content_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1]),
         )
 
     @property
@@ -1451,7 +1474,7 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["antialias_sampling"] = waves._antialias_sampling
+        kwargs["metadata"].update(waves._resampling_metadata(gpts))
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()
