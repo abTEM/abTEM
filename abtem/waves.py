@@ -1691,12 +1691,14 @@ class Waves(BaseWaves, ArrayObject):
             }
             events = plasmons.draw_events(self, potential)
             measurements = events.apply(self).multislice(potential, detectors, **kwargs)
+            reduce = partial(
+                reduce_plasmon_axes,
+                lab_frame=plasmons.lab_frame,
+                order_axis=plasmons.order_axis,
+            )
             if isinstance(measurements, list):
-                return [
-                    reduce_plasmon_axes(m, lab_frame=plasmons.lab_frame)
-                    for m in measurements
-                ]
-            return reduce_plasmon_axes(measurements, lab_frame=plasmons.lab_frame)
+                return [reduce(m) for m in measurements]
+            return reduce(measurements)
 
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors, **multislice_func_kwargs

@@ -24,6 +24,8 @@ from abtem.inelastic.plasmons import (
     MonteCarloPlasmons,
     PhaseScramblePlasmons,
     QuadraturePlasmons,
+    drude_loss_function,
+    plasmon_loss_spectrum,
 )
 from abtem.measurements import (
     DiffractionPatterns,
@@ -79,6 +81,8 @@ __all__ = [
     "MonteCarloPlasmons",
     "PhaseScramblePlasmons",
     "QuadraturePlasmons",
+    "plasmon_loss_spectrum",
+    "drude_loss_function",
     "EnergyResolvedAtomsEnsemble",
     "Potential",
     "CrystalPotential",

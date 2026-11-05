@@ -635,10 +635,14 @@ class EnergyLossAxis(NonLinearAxis):
     """Ensemble axis for energy loss (e.g. phonon/TDS or EELS), distinct from
     the accelerating beam :class:`.EnergyAxis` so the two never collide in
     metadata or in code that pattern-matches on ``isinstance(ax, EnergyAxis)``.
+
+    The values are stored in eV; ``title_units`` ("meV" for phonon losses, "eV" for
+    plasmon losses) only sets how titles display them.
     """
 
     label: str = "energy loss"
     units: str = "eV"
+    title_units: str = "meV"
 
     def item_metadata(self, item, metadata=None):
         return {"energy_loss": self.values[item]}
@@ -646,15 +650,15 @@ class EnergyLossAxis(NonLinearAxis):
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
     ) -> str:
-        """Format title displaying energy loss in meV."""
+        """Format title displaying energy loss in ``title_units``."""
         if formatting is None:
             formatting = ".3g"
-        value_meV = self.values[0] * 1000.0
-        formatted = f"{value_meV:>{formatting}}"
+        scale = {"meV": 1000.0, "eV": 1.0}[self.title_units]
+        formatted = f"{self.values[0] * scale:>{formatting}}"
         if include_label:
-            return f"{self.label} = {formatted} meV"
+            return f"{self.label} = {formatted} {self.title_units}"
         else:
-            return f"{formatted} meV"
+            return f"{formatted} {self.title_units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

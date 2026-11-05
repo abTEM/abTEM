@@ -256,7 +256,9 @@ def _shift_events(array, shifts, axis: int, lazy: bool):
     return array.map_blocks(shift_block, dtype=array.dtype)
 
 
-def reduce_plasmon_axes(measurement, lab_frame: bool = False):
+def reduce_plasmon_axes(
+    measurement, lab_frame: bool = False, order_axis: PlasmonOrderAxis = None
+):
     """
     Average sampled plasmon scattering events into loss-order channels.
 
@@ -271,6 +273,10 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
         possible for diffraction patterns. If False (default), every event is kept
         in its own tilted frame of reference, the convention of the original
         implementation.
+    order_axis : PlasmonOrderAxis, optional
+        The loss-order axis of the model that drew the events, which carries its
+        parameters. Used for the result when its channels are the ones present in the
+        events.
 
     Returns
     -------
@@ -330,9 +336,9 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
     array = xp.moveaxis(array, 0, plasmon_axis_index)
 
     kwargs = measurement._copy_kwargs(exclude=("array",))
-    kwargs["ensemble_axes_metadata"][plasmon_axis_index] = PlasmonOrderAxis(
-        values=tuple(axis_values), model="monte_carlo"
-    )
+    if order_axis is None or tuple(order_axis.values) != tuple(axis_values):
+        order_axis = PlasmonOrderAxis(values=tuple(axis_values), model="monte_carlo")
+    kwargs["ensemble_axes_metadata"][plasmon_axis_index] = order_axis
 
     return measurement.__class__(array, **kwargs)
 
@@ -2587,3 +2593,255 @@ class MonteCarloPhonons:
             weights,
             ensemble_mean=self._ensemble_mean,
         )
+
+
+def drude_loss_function(
+    energy_losses: np.ndarray, excitation_energy: float, width: float
+) -> np.ndarray:
+    """Energy-loss function :math:`\\mathrm{Im}[-1/\\varepsilon(E)]` of a Drude metal.
+
+    With :math:`\\varepsilon(E) = 1 - E_p^2 / (E^2 + i E \\Gamma)`,
+
+    .. math::
+        \\mathrm{Im}\\left[\\frac{-1}{\\varepsilon(E)}\\right]
+            = \\frac{E \\Gamma E_p^2}{(E^2 - E_p^2)^2 + (E \\Gamma)^2},
+
+    a peak at :math:`E_p` with full width at half maximum :math:`\\Gamma` (Egerton,
+    Electron Energy-Loss Spectroscopy in the Electron Microscope, 3rd ed., Eq. 3.43).
+
+    Parameters
+    ----------
+    energy_losses : np.ndarray
+        Energy losses [eV].
+    excitation_energy : float
+        Plasmon energy :math:`E_p` [eV].
+    width : float
+        Plasmon peak width :math:`\\Gamma` [eV].
+    """
+    e = np.asarray(energy_losses, dtype=float)
+    return (
+        e
+        * width
+        * excitation_energy**2
+        / ((e**2 - excitation_energy**2) ** 2 + (e * width) ** 2)
+    )
+
+
+def _binned_gaussian(offsets: np.ndarray, bin_width: float, sigma: float):
+    """Mean over a bin of width ``bin_width`` centred at ``offsets`` of a unit-area
+    Gaussian of standard deviation ``sigma``; a delta function when ``sigma`` is 0."""
+    from scipy.special import erf
+
+    upper = offsets + bin_width / 2
+    lower = offsets - bin_width / 2
+
+    def cdf(x):
+        if sigma == 0.0:
+            return np.heaviside(x, 0.5)
+        return 0.5 * (1 + erf(x / (np.sqrt(2) * sigma)))
+
+    return (cdf(upper) - cdf(lower)) / bin_width
+
+
+def _single_loss_distribution(
+    loss_function, excitation_energy, critical_angle, energy, step, max_loss
+):
+    """Unit-area single-plasmon energy distribution sampled at ``j * step``.
+
+    The loss function is weighted by its integral over the scattering angles of the
+    plasmon models, :math:`\\ln(1 + \\theta_c^2 / \\theta_E(E)^2)` with
+    :math:`\\theta_E` proportional to the energy loss (Egerton Eq. 3.59), and the
+    energy is renormalized because the mean free path of the model already fixes the
+    total plasmon cross section.
+    """
+    e = np.arange(int(np.ceil(max_loss / step)) + 1) * step
+    distribution = np.zeros_like(e)
+    theta_e = characteristic_angle(e[1:], energy)
+    distribution[1:] = np.asarray(loss_function(e[1:]), dtype=float) * np.log1p(
+        critical_angle**2 / theta_e**2
+    )
+    if np.any(distribution < 0) or not np.all(np.isfinite(distribution)):
+        raise ValueError("the loss function must be finite and non-negative")
+    total = distribution.sum() * step
+    if total <= 0:
+        raise ValueError("the loss function vanishes on the energy grid")
+    return e, distribution / total
+
+
+def plasmon_loss_spectrum(
+    measurement,
+    energy_losses: np.ndarray,
+    thickness: float = None,
+    plasmon_width: float = 4.0,
+    energy_resolution: float = 0.5,
+    loss_function=None,
+    plasmons=None,
+):
+    """Energy-loss spectrum of a measurement with plasmon loss-order channels.
+
+    In the plasmon models every excitation loses the same energy distribution
+    independently of its scattering angle and depth, so the spectrum is a sum over the
+    loss orders of the simulated channel intensity times the energy distribution of
+    that order,
+
+    .. math::
+        I(E) = \\sum_n w_n\\, C_n\\, [R * S^{*n}](E),
+
+    where :math:`C_n` is the intensity of channel :math:`n` (for example inside a
+    spectrometer aperture, with an ``AnnularDetector(0, beta)``, or per pixel of a
+    diffraction pattern), :math:`w_n` its Poisson weight (one for
+    :class:`PhaseScramblePlasmons`, whose channels carry it already), :math:`S` the
+    unit-area single-plasmon energy distribution, :math:`S^{*n}` its ``n``-fold
+    self-convolution and :math:`R` the resolution function, which is the shape of the
+    zero-loss peak: a Gaussian of full width at half maximum ``energy_resolution``,
+    averaged over each energy bin.
+
+    :math:`S` is the loss function, by default the Drude function of
+    :func:`drude_loss_function`, weighted by its integral over the scattering angles
+    up to the critical angle. Its shape across the peak only enters the energy axis:
+    the channel intensities :math:`C_n` were simulated with the angular distribution
+    at the peak energy :math:`E_p`.
+
+    Parameters
+    ----------
+    measurement : BaseMeasurements
+        Measurement with a :class:`PlasmonOrderAxis`, as returned by a multislice run
+        with ``plasmons=`` and the loss orders resolved.
+    energy_losses : np.ndarray
+        Uniformly spaced energy losses [eV] at which to evaluate the spectrum; negative
+        values sample the energy-gain side of the zero-loss peak.
+    thickness : float, optional
+        Specimen thickness [Å]. Required for :class:`MonteCarloPlasmons` and
+        :class:`QuadraturePlasmons`, whose channels are each normalized to the
+        incident electron; for :class:`PhaseScramblePlasmons` it is only used to warn
+        when the simulated orders miss part of the Poisson distribution.
+    plasmon_width : float, optional
+        Full width at half maximum :math:`\\Gamma` [eV] of the Drude loss function.
+        Default is 4 eV. Ignored when ``loss_function`` is given.
+    energy_resolution : float, optional
+        Full width at half maximum [eV] of the zero-loss peak. Default is 0.5 eV; 0
+        puts the zero loss in the bin at 0 eV.
+    loss_function : callable, optional
+        Loss function :math:`\\mathrm{Im}[-1/\\varepsilon(E)]` evaluated at energy
+        losses [eV], for example interpolated from a measured or calculated dielectric
+        function, in place of the Drude function. Only its shape matters.
+    plasmons : MonteCarloPlasmons or QuadraturePlasmons or PhaseScramblePlasmons
+        The model that produced the measurement. Only needed when its loss-order axis
+        does not carry the model parameters.
+
+    Returns
+    -------
+    spectrum : BaseMeasurements
+        The measurement with an :class:`EnergyLossAxis` in place of the loss-order
+        axis, in intensity per eV.
+    """
+    from abtem.core.axes import EnergyLossAxis
+
+    order_axes = [
+        (i, axis)
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, PlasmonOrderAxis)
+    ]
+    if len(order_axes) != 1:
+        raise ValueError("the measurement must have one PlasmonOrderAxis")
+    axis_index, order_axis = order_axes[0]
+
+    if plasmons is not None:
+        model = plasmons.order_axis.model
+        parameters = plasmons.parameters
+    else:
+        model, parameters = order_axis.model, order_axis.parameters
+    if parameters is None:
+        raise ValueError(
+            "the loss-order axis does not carry the model parameters; pass the "
+            "model as 'plasmons'"
+        )
+
+    excitation_energy = parameters["excitation_energy"]
+    mean_free_path = parameters["mean_free_path"]
+    critical_angle = parameters["critical_angle"]
+    energy = measurement.metadata["energy"]
+
+    order_numbers = {label: n for n, label in ntuples.items()}
+    orders = [order_numbers[label] for label in order_axis.values]
+
+    if model != "phase_scramble" and thickness is None:
+        raise ValueError(
+            f"the channels of the {model} model are each normalized to the incident "
+            "electron; give the thickness to weight them"
+        )
+    if thickness is not None:
+        poisson = [excitations_weights(n, thickness, mean_free_path) for n in orders]
+        missing = 1.0 - sum(poisson)
+        if missing > 1e-2:
+            warnings.warn(
+                f"the simulated loss orders {orders} miss {missing:.3g} of the "
+                f"Poisson distribution at t / lambda = {thickness / mean_free_path:.3g}"
+                "; increase the maximum loss order",
+                stacklevel=2,
+            )
+    if model == "phase_scramble":
+        weights = [1.0] * len(orders)
+    else:
+        weights = poisson
+
+    energy_losses = np.asarray(energy_losses, dtype=float)
+    if energy_losses.ndim != 1 or len(energy_losses) < 2:
+        raise ValueError("energy_losses must be a 1D array of at least two values")
+    bin_width = energy_losses[1] - energy_losses[0]
+    if bin_width <= 0 or not np.allclose(
+        np.diff(energy_losses), bin_width, rtol=1e-6, atol=0
+    ):
+        raise ValueError("energy_losses must be uniformly spaced and increasing")
+
+    if loss_function is None:
+        loss_function = partial(
+            drude_loss_function,
+            excitation_energy=excitation_energy,
+            width=plasmon_width,
+        )
+        step = min(bin_width, plasmon_width / 20, excitation_energy / 50)
+    else:
+        step = min(bin_width, excitation_energy / 50)
+
+    sigma = energy_resolution / (2 * np.sqrt(2 * np.log(2)))
+    # the single-loss distribution is normalized over a range well past the spectrum
+    # so that its tail is not folded back into the peak
+    max_loss = max(energy_losses[-1] + 5 * sigma, 20 * excitation_energy)
+    e, single = _single_loss_distribution(
+        loss_function, excitation_energy, critical_angle, energy, step, max_loss
+    )
+
+    # n-fold self-convolutions by FFT, padded so that they do not wrap; masses past the
+    # spectrum cannot reach it through the resolution and are dropped
+    n_fft = 2 * len(e)
+    single_fft = np.fft.rfft(single * step, n_fft)
+    keep = e <= energy_losses[-1] + bin_width / 2 + 6 * sigma
+    masses = np.zeros((int(keep.sum()), len(orders)))
+    for k, (n, weight) in enumerate(zip(orders, weights)):
+        if n > 0:
+            masses[:, k] = weight * np.fft.irfft(single_fft**n, n_fft)[: len(e)][keep]
+
+    # the resolution matrix is applied in blocks of output bins to bound its memory
+    kernels = np.zeros((len(energy_losses), len(orders)))
+    for start in range(0, len(energy_losses), 256):
+        block = energy_losses[start : start + 256]
+        resolution = _binned_gaussian(block[:, None] - e[keep][None], bin_width, sigma)
+        kernels[start : start + 256] = resolution @ masses
+    for k, (n, weight) in enumerate(zip(orders, weights)):
+        if n == 0:
+            kernels[:, k] = weight * _binned_gaussian(energy_losses, bin_width, sigma)
+
+    array = measurement.array
+    xp = da if isinstance(array, da.core.Array) else get_array_module(array)
+    kernels = kernels.astype(array.dtype)
+    if xp is not da:
+        kernels = xp.asarray(kernels)
+    array = xp.tensordot(kernels, array, axes=([1], [axis_index]))
+    array = xp.moveaxis(array, 0, axis_index)
+
+    kwargs = measurement._copy_kwargs(exclude=("array",))
+    kwargs["ensemble_axes_metadata"][axis_index] = EnergyLossAxis(
+        values=tuple(float(value) for value in energy_losses), title_units="eV"
+    )
+    return measurement.__class__(array, **kwargs)
