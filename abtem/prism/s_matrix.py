@@ -15,7 +15,13 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.array import ArrayObject, ComputableList, stack, validate_lazy
+from abtem.array import (
+    ArrayObject,
+    ComputableList,
+    _chunk_axes_metadata,
+    stack,
+    validate_lazy,
+)
 from abtem.core import config
 from abtem.core.axes import (
     AxisMetadata,
@@ -121,12 +127,15 @@ def _awaits_frozen_phonon_reduction(measurement):
     )
 
 
-def _averaged(measurement):
-    # A measurement whose leading ensemble axis is averaged block by block.
-    return (
-        isinstance(measurement, BaseMeasurements)
-        and measurement.axes_metadata
-        and measurement.axes_metadata[0]._ensemble_mean
+def _averaged_axes(measurement, num_axes):
+    # The axes among the leading num_axes of a measurement that are averaged
+    # block by block; wave functions keep every member.
+    if not isinstance(measurement, BaseMeasurements):
+        return ()
+    return tuple(
+        j
+        for j, axis in enumerate(measurement.axes_metadata[:num_axes])
+        if axis._ensemble_mean
     )
 
 
@@ -527,7 +536,13 @@ def _lazy_reduce(
     detectors: list[BaseDetector],
     max_batch_reduction: int,
     pbar: bool = False,
+    block_info=None,
 ) -> np.ndarray:
+    # the axes metadata of the members this block holds, as multislice partitions it
+    location = block_info[0]["array-location"][: len(array.shape) - 3]
+    ensemble_axes_metadata = _chunk_axes_metadata(
+        ensemble_axes_metadata, [slice(start, stop) for start, stop in location]
+    )
     args = (array, ensemble_axes_metadata)
     waves = waves_partial(args).item()
 
@@ -931,9 +946,6 @@ def _no_chunks_reduce(
 
     array = s_matrix_array.array
 
-    # every block is reduced with the axes metadata of the whole array, hence an
-    # axis whose metadata has per-member values (the exit planes) must be one
-    # chunk; SMatrix.build makes it one, as one multislice yields every plane
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
 
     chunks = array.chunks[:-3] + ctf_chunks + scan.shape
@@ -5335,15 +5347,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
-            if not hasattr(s_matrix_blocks, "len"):
-                s_matrix_blocks = s_matrix_blocks[None]
-
-            if self.potential is not None and self.potential.ensemble_shape:
-                s_matrix_blocks = s_matrix_blocks[0]
-
-            wave_vector_blocks = np.tile(
-                wave_vector_blocks[None], (len(s_matrix_blocks), 1)
-            )
+            # one block per member of every potential ensemble axis, as
+            # MultisliceTransform._default_ensemble_chunks gives multislice
+            ensemble_symbols = tuple_range(len(s_matrix_blocks.shape))
+            n = len(ensemble_symbols)
 
             wave_vector_blocks = da.from_array(wave_vector_blocks, chunks=1)
 
@@ -5353,18 +5360,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_blocks = bind(wave_vector_blocks, bound)
 
             adjust_chunks = {
-                1: wave_vector_chunks[0],
-                2: (downsampled_gpts[0],),
-                3: (downsampled_gpts[1],),
+                n: wave_vector_chunks[0],
+                n + 1: (downsampled_gpts[0],),
+                n + 2: (downsampled_gpts[1],),
             }
 
-            symbols = (0, 1, 2, 3)
-            if self.potential is None or not self.potential.ensemble_shape:
-                symbols = symbols[1:]
+            symbols = ensemble_symbols + (n, n + 1, n + 2)
 
             new_axes = {}
             if exit_planes_shape:
-                plane_symbol = max(symbols) + 1
+                plane_symbol = n + 3
                 new_axes = {plane_symbol: exit_planes_shape[0]}
                 symbols = symbols[:-3] + (plane_symbol,) + symbols[-3:]
 
@@ -5374,9 +5379,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 self._build_s_matrix,
                 symbols,
                 s_matrix_blocks,
-                (0,),
-                wave_vector_blocks[..., None, None],
-                (0, 1, 2, 3),
+                ensemble_symbols,
+                wave_vector_blocks[:, None, None],
+                (n, n + 1, n + 2),
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
                 new_axes=new_axes,
@@ -5654,42 +5659,44 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     def _detect_ensemble(self, waves, detectors, detect, squeeze):
         """The measurements of ``detect(s_matrix)`` for every member of the
-        S-matrix ensemble, allocated on ``waves``. A measurement whose leading
-        ensemble axis is flagged for the ensemble mean is averaged over it, and
-        that axis is squeezed with ``squeeze``; wave functions keep every
-        member."""
+        S-matrix ensemble, allocated on ``waves``. A measurement is averaged over
+        each of its ensemble axes flagged for the ensemble mean, and those axes
+        are squeezed with ``squeeze``; wave functions keep every member."""
         measurements = None
         if self.ensemble_shape:
             measurements = self._allocate_ensemble_measurements(waves, detectors)
 
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
+        for _, slics, s_matrix in self.generate_blocks(1):
             new_measurements = ensure_list(detect(s_matrix.item()))
 
             if measurements is None:
                 measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(measurements, new_measurements):
-                    if _averaged(measurement):
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
+                continue
 
-            num_blocks += 1
+            for measurement, new_measurement in zip(measurements, new_measurements):
+                averaged = _averaged_axes(measurement, len(self.ensemble_shape))
+                index = tuple(
+                    slice(None) if j in averaged else slic
+                    for j, slic in enumerate(slics)
+                )
+                measurement.array[index] += new_measurement.array
 
         for i, measurement in enumerate(measurements):
-            if _averaged(measurement):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze and "frozen_phonon_moments" in measurement.metadata:
-                    # The mean amplitude and intensity of the members: the
-                    # components are formed from them, with N the number of
-                    # members that were averaged.
-                    measurements[i] = _frozen_phonon_components_from_moments(
-                        measurement, num_configurations=num_blocks
-                    )
-                elif squeeze:
-                    measurements[i] = measurement.squeeze((0,))
+            averaged = _averaged_axes(measurement, len(self.ensemble_shape))
+            if not averaged:
+                continue
+            num_members = int(np.prod([self.ensemble_shape[j] for j in averaged]))
+            if num_members > 1:
+                measurement.array[:] /= num_members
+            if squeeze and "frozen_phonon_moments" in measurement.metadata:
+                # The mean amplitude and intensity of the members: the
+                # components are formed from them, with N the number of
+                # members that were averaged.
+                measurements[i] = _frozen_phonon_components_from_moments(
+                    measurement, num_configurations=num_members
+                )
+            elif squeeze:
+                measurements[i] = measurement.squeeze(averaged)
 
         return measurements
 
