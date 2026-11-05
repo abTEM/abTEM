@@ -169,23 +169,28 @@ def test_make_displacement_field_rms_normalisation():
 # ---------------------------------------------------------------------------
 
 class TestApplyDisplacementField:
-    def test_zero_displacement_preserves_interior(self):
-        # RegularGridInterpolator wraps boundary pixels (p % x.max()), so
-        # the last column/row gets remapped to index 0; only check interior.
-        img = np.random.default_rng(0).random((16, 16))
-        result = _apply_displacement_field(img, np.zeros_like(img), np.zeros_like(img))
-        assert result.shape == (16, 16)
-        assert np.allclose(result[:-1, :-1], img[:-1, :-1], atol=1e-10)
+    def test_integer_displacement_rolls_the_image(self):
+        # The image is periodic with period n: zero displacement returns it
+        # unchanged and an integer displacement rolls it, every row and column
+        # included. Regression (#588): positions wrapped modulo n - 1, so the
+        # last row and column were replaced by the first even with zero
+        # displacement (a difference of up to 0.78 here).
+        img = np.random.default_rng(0).random((16, 12))
+        zeros = np.zeros_like(img)
+        for dx, dy in ((0, 0), (1, 0), (0, -2), (3, 5)):
+            result = _apply_displacement_field(img, zeros + dx, zeros + dy)
+            expected = np.roll(img, (-dx, -dy), axis=(0, 1))
+            np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12,
+                                       err_msg=str((dx, dy)))
 
     def test_half_pixel_displacement_interpolates_between_neighbours(self):
         # The x displacement is added to the axis-0 coordinate, and the image is
         # interpolated linearly: half a pixel gives the mean of each pixel and
-        # its neighbour along axis 0. The last row and column are wrapped (see
-        # above), so only the interior is checked.
-        img = np.random.default_rng(1).random((16, 16))
+        # its periodic neighbour along axis 0, the last row with the first.
+        img = np.random.default_rng(1).random((16, 12))
         result = _apply_displacement_field(img, np.ones_like(img) * 0.5, np.zeros_like(img))
         np.testing.assert_allclose(
-            result[:-1, :-1], 0.5 * (img[:-1, :-1] + img[1:, :-1]), atol=1e-12
+            result, 0.5 * (img + np.roll(img, -1, axis=0)), rtol=0, atol=1e-12
         )
 
     def test_output_finite_with_realistic_field(self):

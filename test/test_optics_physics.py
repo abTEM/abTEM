@@ -40,7 +40,7 @@ import pytest
 import scipy.constants as const
 from utils import devices
 
-from abtem import FrozenPhonons
+from abtem import FrozenPhonons, Probe
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.transfer import (
@@ -496,6 +496,24 @@ def test_hard_aperture_transmits_exactly_the_disk(device):
     kernel = asnumpy(ab_kernel(ap, device))
     assert set(np.unique(kernel)) == {0.0, 1.0}
     assert np.array_equal(kernel == 1.0, alpha < cutoff * 1e-3)
+
+
+@devices
+def test_hard_aperture_semiangle_ensemble_matches_single_apertures(device):
+    # Each member of a semiangle-cutoff ensemble gets its own hard cutoff: the
+    # probe built from the ensemble equals, member by member, a probe built from
+    # a single-semiangle aperture.
+    cutoffs = (15.0, 20.0)
+    kwargs = dict(energy=ENERGY, gpts=32, extent=10, device=device)
+    ensemble = Probe(aperture=Aperture(cutoffs, soft=False), **kwargs).build()
+    ensemble = asnumpy(ensemble.compute().array)
+    assert ensemble.shape == (len(cutoffs), 32, 32)
+
+    for member, cutoff in zip(ensemble, cutoffs):
+        single = Probe(aperture=Aperture(cutoff, soft=False), **kwargs).build()
+        single = asnumpy(single.compute().array)
+        atol = 10 * np.finfo(single.dtype).eps * np.abs(single).max()
+        np.testing.assert_allclose(member, single, rtol=0, atol=atol)
 
 
 def test_hard_aperture_edge_is_inclusive():

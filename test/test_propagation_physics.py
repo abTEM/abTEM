@@ -169,28 +169,43 @@ def _first_harmonic_shift(intensity, reference, extent):
     return np.array(shifts)
 
 
-@devices
-@pytest.mark.float64
-@pytest.mark.parametrize("tilt", [(20.0, 0.0), (0.0, -15.0), (12.0, 17.0)])
-def test_tilt_translates_beam_by_thickness_times_tan_theta(tilt, device):
-    # Oracle: geometry. A beam travelling at angle theta to the optic axis is
-    # displaced laterally by T tan(theta) over a depth T, in the direction of
-    # its transverse wave vector (+x for a positive x-tilt). In vacuum the
-    # tilted propagation must be an exact translation of the untilted one, so
-    # the shift theorem measures the displacement to round-off -- well below
-    # the T (tan(theta) - theta) = 1.6e-4 A difference of the small-angle
-    # model at 20 mrad. The cell is non-square, so an x/y swap is caught.
-    thickness = 60.0
+def _tilted_probe_shift(tilt, order, device, thickness=60.0, semiangle_cutoff=25.0):
     with abtem.config.set({"precision": "float64"}):
         vacuum = _vacuum(thickness=thickness, device=device)
-        kwargs = dict(energy=100e3, semiangle_cutoff=25, device=device)
+        kwargs = dict(energy=100e3, semiangle_cutoff=semiangle_cutoff, device=device)
         untilted = abtem.Probe(**kwargs).match_grid(vacuum)
         tilted = abtem.Probe(**kwargs, tilt=tilt).match_grid(vacuum)
+        algorithm = FourierMultislice(order=order)
 
-        reference = np.abs(to_host_array(untilted.multislice(vacuum, lazy=False))) ** 2
-        intensity = np.abs(to_host_array(tilted.multislice(vacuum, lazy=False))) ** 2
+        def run(probe):
+            exit_wave = probe.multislice(vacuum, lazy=False, algorithm=algorithm)
+            return np.abs(to_host_array(exit_wave)) ** 2
 
-    shift = _first_harmonic_shift(intensity, reference, vacuum.extent)
+        entrance = to_host_array(untilted.build(lazy=False).array)
+        spectrum = np.abs(np.fft.fft2(entrance)) ** 2
+        shift = _first_harmonic_shift(run(tilted), run(untilted), vacuum.extent)
+    return shift, spectrum, vacuum
+
+
+@devices
+@pytest.mark.float64
+@pytest.mark.parametrize("order", [1, 2])
+@pytest.mark.parametrize("tilt", [(20.0, 0.0), (0.0, -15.0), (12.0, 17.0)])
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error:UserWarning")
+def test_paraxial_tilt_translates_beam_by_thickness_times_tan_theta(
+    tilt, order, device
+):
+    # Oracle: geometry of the paraxial tilt model. A beam travelling at angle
+    # theta to the optic axis is displaced laterally by T tan(theta) over a depth
+    # T, in the direction of its transverse wave vector (+x for a positive
+    # x-tilt). For the expanded propagators the tilt is the linear phase ramp
+    # exp(-2 pi i k . tan(theta) dz), an exact translation of the untilted
+    # propagation, so the shift theorem measures the displacement to round-off --
+    # well below the T (tan(theta) - theta) = 1.6e-4 A difference of the
+    # small-angle model at 20 mrad. The cell is non-square, so an x/y swap is
+    # caught.
+    thickness = 60.0
+    shift, _, _ = _tilted_probe_shift(tilt, order, device, thickness=thickness)
     expected = thickness * np.tan(np.array(tilt) * 1e-3)
 
     np.testing.assert_allclose(shift, expected, rtol=0, atol=1e-9)
@@ -198,8 +213,45 @@ def test_tilt_translates_beam_by_thickness_times_tan_theta(tilt, device):
 
 @devices
 @pytest.mark.float64
+@pytest.mark.parametrize("tilt", [(20.0, 0.0), (0.0, -15.0), (12.0, 17.0)])
+def test_exact_tilted_beam_moves_with_its_group_velocity(tilt, device):
+    # Oracle: Ehrenfest. With the exact propagator every plane wave k + k_t of
+    # the tilted beam travels along its own direction, (k + k_t) / k_z(k + k_t),
+    # so the beam centre moves by T times the group velocity averaged over the
+    # probe's angular spectrum -- not exactly T tan(theta): for a uniform
+    # aperture of semiangle alpha the spread of directions adds about
+    # T tan(theta) alpha^2 / 2 (2-3e-4 A here). The tilted beam's direction is
+    # (tan theta_x, tan theta_y, 1), so k_t = K tan(theta) / sqrt(1 + |tan
+    # theta|^2). The shift theorem measures a translation, which the beam is to
+    # within ~5 % of that correction; requiring 10 % of it, and at least half of
+    # it, tests that the non-paraxial correction is there and has the right sign
+    # and direction.
+    thickness = 60.0
+    shift, spectrum, vacuum = _tilted_probe_shift(
+        tilt, "exact", device, thickness=thickness
+    )
+
+    K = 1 / energy2wavelength(100e3)
+    tan = np.tan(np.array(tilt) * 1e-3)
+    kt = K * tan / np.sqrt(1 + tan @ tan)
+    kx = np.fft.fftfreq(vacuum.gpts[0], vacuum.sampling[0])[:, None] + kt[0]
+    ky = np.fft.fftfreq(vacuum.gpts[1], vacuum.sampling[1])[None] + kt[1]
+    kz = np.sqrt(K**2 - kx**2 - ky**2)
+    weights = spectrum / spectrum.sum()
+    group_velocity = [(kx / kz * weights).sum(), (ky / kz * weights).sum()]
+    group_shift = thickness * np.array(group_velocity)
+
+    correction = np.abs(group_shift - thickness * tan)
+    np.testing.assert_array_less(np.abs(shift - group_shift), 0.1 * correction + 1e-9)
+    paraxial_deviation = np.abs(shift - thickness * tan)
+    np.testing.assert_array_less(0.5 * correction, paraxial_deviation + 1e-9)
+
+
+@devices
+@pytest.mark.float64
 @pytest.mark.parametrize("n", [2, 3])
-def test_tilted_plane_wave_matches_explicit_phase_ramp(n, device):
+@pytest.mark.parametrize("energy", [200e3, 300.0])
+def test_tilted_plane_wave_matches_explicit_phase_ramp(n, energy, device):
     # Oracle: frame invariance. abTEM represents a tilted beam in the frame
     # co-moving with it: the wave carries no phase ramp and the tilt enters
     # through the propagator, so its diffraction spot stays at k = 0. The
@@ -207,8 +259,8 @@ def test_tilted_plane_wave_matches_explicit_phase_ramp(n, device):
     # wave exp(2 pi i k_t x) with k_t = sin(theta) / lambda, whose diffraction
     # pattern is the tilted-frame one moved to k = k_t (~ theta / lambda). We
     # take k_t = n / L_x so that it falls on a grid point, and compare beam
-    # intensities after moving the lab pattern back by n pixels.
-    energy = 200e3
+    # intensities after moving the lab pattern back by n pixels. At 300 eV the
+    # tilts are 0.35 and 0.55 rad, far outside any small-angle expansion.
     wavelength = energy2wavelength(energy)
     atoms = _general_position_cell() * (1, 1, 12)
     with abtem.config.set({"precision": "float64"}):
@@ -241,31 +293,26 @@ def test_tilted_plane_wave_matches_explicit_phase_ramp(n, device):
         intensity /= intensity.sum()
         return np.array([intensity[(h + offset) % wave.shape[0], k] for h, k in orders])
 
-    lab_intensity = np.abs(np.fft.fft2(lab)) ** 2
-    # the lab-frame zero-order spot sits at k_t, i.e. index n along kx
-    assert np.unravel_index(lab_intensity.argmax(), lab_intensity.shape) == (n, 0)
+    # the lab-frame incident beam sits at k_t, i.e. index n along kx (after the
+    # specimen it need not be the strongest beam: at 300 eV it is not)
+    ramp_intensity = np.abs(np.fft.fft2(ramp)) ** 2
+    assert np.unravel_index(ramp_intensity.argmax(), ramp_intensity.shape) == (n, 0)
     lab_beams = beams(lab, offset=n)
 
     def r1(beams):
         return np.abs(beams - lab_beams).sum() / lab_beams.sum()
 
-    # The frames differ (i) at second order of the propagator expanded about
-    # k_t: the lab frame has the curvature 1 / cos^3(theta), the co-moving
-    # frame 1, a phase error of at most 2 pi T lambda k^2 (3/4) (lambda k_t)^2
-    # on the compared beams, which changes the (normalised) intensities by at
-    # most twice that in R1; and (ii) through the antialias aperture, centred
-    # on k = 0 in one frame and on k_t in the other, which only touches beams
-    # at the aperture edge that carry < 1e-4 of the intensity at this
-    # sampling (the residual falls with finer sampling).
-    k_max = np.hypot(4 / atoms.cell[0, 0], 4 / atoms.cell[1, 1])
-    phase_error = (
-        2 * np.pi * potential.thickness * wavelength * k_max**2
-        * 0.75 * (wavelength * k_t) ** 2
-    )
-    bound = 2 * phase_error + 1e-4
+    # The exact propagator of the co-moving frame is the lab-frame one evaluated
+    # at k + k_t, so the frames differ only through the antialias aperture,
+    # centred on k = 0 in one frame and on k_t in the other. At 200 keV it only
+    # touches beams at the aperture edge that carry < 1e-4 of the intensity at
+    # this sampling (the residual falls with finer sampling); at 300 eV every
+    # beam near the aperture edge is evanescent and decays by e^-20 per slice,
+    # so the frames agree to round-off.
+    bound = 1e-4 if energy > 1e4 else 1e-10
     assert r1(beams(comoving)) < bound
     # the structure is sensitive to the tilt sign: the opposite tilt is far off
-    assert r1(beams(mirrored)) > 10 * bound
+    assert r1(beams(mirrored)) > max(10 * bound, 1e-2)
 
 
 # ---------------------------------------------------------------------------

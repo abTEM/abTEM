@@ -83,7 +83,7 @@ class TestNumbaThreadsReachSpawnedWorkerThreads:
     where abTEM's parallel=True kernels actually execute, not just on
     whichever thread happened to import abtem.
 
-    numba.set_num_threads() (abtem/core/backend.py's fallback) only
+    numba.set_num_threads() only
     rebinds the *calling* thread's own active count -- a spawned worker
     thread (exactly what dask's threaded scheduler uses for a CPU-side
     lazy computation) sees Numba's unmodified default instead. Only

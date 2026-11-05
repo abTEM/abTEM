@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import warnings
 from abc import abstractmethod
 from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
@@ -11,7 +10,6 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import (
-    _stacklevel_outside_package,
     is_cell_orthogonal,
     wrap_and_snap_atoms,
 )
@@ -22,10 +20,12 @@ from abtem.core.utils import (
     safe_equality,
 )
 
-# How far outside the cell along z [Å] a non-periodic potential places an atom in
-# its face slice before warning. A thermal displacement is a few times its
-# standard deviation, which rarely exceeds 0.25 Å, so this is about 8 sigma: no
-# frozen phonon reaches it, but a misplaced atom or a wrong cell height does.
+# How far outside the cell along z [Å] an atom given to a non-periodic potential
+# with the infinite projection is kept in its face slice; further out it is
+# folded onto its image in the cell, with a warning when the potential is made.
+# A thermal displacement is a few times its standard deviation, which rarely
+# exceeds 0.25 Å, so this is about 8 sigma: no frozen phonon reaches it, but a
+# misplaced atom or a wrong cell height does.
 FACE_SLICE_WARNING_DISTANCE = 2.0
 
 
@@ -68,7 +68,9 @@ def commensurate_slice_thickness(
     Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
     and the cell height.  Adjacent plane-level slices are merged so that each resulting
     slice thickness is as close as possible to `target_thickness` while keeping
-    boundaries aligned with atomic planes.
+    boundaries aligned with atomic planes.  A gap between planes that is at least
+    1.5 times the target thickness (e.g. cubic fcc, with planes 0.5 a apart) is split
+    into equal slices, which leaves the boundaries aligned with the planes too.
 
     Parameters
     ----------
@@ -96,12 +98,23 @@ def commensurate_slice_thickness(
     # edge, or merge genuinely distinct planes that land in the same bin.
     z[z > cell_z - tolerance] = 0.0
     z = np.sort(z)
-    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])
+    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
     unique_z = z[unique_mask]
     unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
 
     boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
     plane_thicknesses = np.diff(boundaries)
+
+    # A gap between planes that is much thicker than the target cannot be brought
+    # closer to it by merging, so divide it evenly; no atoms lie inside the gap, so
+    # the new boundaries are as commensurate as the plane boundaries.
+    plane_thicknesses = np.concatenate(
+        [
+            np.full(n, t / n)
+            for t in plane_thicknesses
+            for n in [max(1, int(round(t / target_thickness)))]
+        ]
+    )
 
     merged = []
     acc = 0.0
@@ -348,8 +361,9 @@ def commensurate_gpts(
         x[x > L - tolerance] = 0.0
         x = np.sort(x)
 
-        # De-duplicate: keep one representative per distinct atom plane
-        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])
+        # De-duplicate: keep one representative per distinct atom plane (there are
+        # none for an empty structure, which has no commensurability to find)
+        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])[: len(x)]
         unique_x = x[unique_mask]
 
         if len(unique_x) <= 1:
@@ -658,24 +672,6 @@ def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
     return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
 
 
-def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
-    """Warn about atoms far enough outside [0, height] along z that placing them
-    in the face slice is a guess at their depth, not a correction of it."""
-    far = _far_outside_faces(z, height)
-    if not np.any(far):
-        return
-
-    warnings.warn(
-        f"{int(far.sum())} atom(s) lie more than {FACE_SLICE_WARNING_DISTANCE} Å "
-        f"outside the cell along z (0 to {height:.4g} Å). A non-periodic potential "
-        "keeps an atom that left the cell in the face slice it left through, which "
-        "is right for a small displacement such as a frozen phonon, but puts an "
-        "atom this far out at the wrong depth. Check the atomic positions against "
-        "the cell height.",
-        stacklevel=_stacklevel_outside_package(),
-    )
-
-
 class SliceIndexedAtoms(BaseSlicedAtoms):
     """
     Sliced atoms assigning each atom to a specific slice index.
@@ -755,9 +751,6 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         # depend on z within a slice, so the projected potential is conserved
         # exactly, where dropping the atom lost its whole contribution.
         if not wrap:
-            _warn_far_outside_faces(
-                self.atoms.positions[:, 2], float(np.sum(self.slice_thickness))
-            )
             labels = np.minimum(labels, len(self) - 1)
 
         # After a wrap there is no atom outside the cell, so say so rather

@@ -137,6 +137,44 @@ jobs:
           ABTEM_TORCH__DEVICE: cpu
         run: uv run pytest test -n logical -m torch ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
+  # The quantem export (`to_quantem`) against the real quantem package. quantem
+  # is not in the `test` group: it requires torch, torchvision, tensorboard and
+  # optuna, which would add several GB (torch's default Linux wheel bundles
+  # CUDA) to every cell of the matrix above, and installing torch there would
+  # also change which torch-backend test cases run. Here torch comes from its
+  # CPU wheel index, as in `torch-backend`. Runs the tests marked `quantem`,
+  # their torch-device cases on torch's CPU device. Not part of
+  # `all-tests-passed`: quantem is pre-1.0 and its API may still change.
+  quantem:
+    name: quantem export / python 3.13
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and set python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --group test
+
+      - name: Install quantem, with PyTorch's CPU wheels
+        run: |
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install quantem
+
+      # The tests skip when quantem cannot be imported; fail here instead.
+      - name: Check that quantem imports
+        run: uv run python -c "import quantem.core.datastructures"
+
+      - name: Run the quantem tests
+        env:
+          ABTEM_TORCH__DEVICE: cpu
+        run: uv run pytest test -n logical -m quantem
+
   # A single, stable check to require in branch protection on main, that
   # exists (at all) only for a run that includes --runslow -- PRs into main,
   # and every push/schedule/workflow_dispatch trigger (see RUNSLOW above).

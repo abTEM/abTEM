@@ -1,3 +1,5 @@
+import itertools
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -328,71 +330,146 @@ def test_prism_aberrated_ctf_matches_probe():
 
 
 class TestWrappedCrop2D:
-    """``wrapped_slices`` assumed ``-n <= start < n`` and ``0 < stop <= 2n``.
-
-    Outside that range it returned a wrongly shaped array instead of failing:
-    for a window entirely in negative indices, ``slice(0, stop)`` is Python's
-    negative indexing and selects ``n + stop`` rows rather than none. The crop
-    then reached the caller intact and surfaced as a broadcast error frames
-    away, in ``prism_transition_potential_scan``. Reachable from any model with
-    atoms far enough outside the cell.
+    """``wrapped_crop_2d`` is the crop of a periodic array: for any corner, also
+    several periods outside the array, and any size, also wider than one period.
+    A wrongly shaped crop used to surface as a broadcast error frames away, in
+    ``prism_transition_potential_scan``.
     """
 
     @staticmethod
     def _reference(array, corner, size):
-        """The crop by modulo index -- the definition of a periodic crop."""
-        i = (corner[0] + np.arange(size[0])) % array.shape[-2]
-        j = (corner[1] + np.arange(size[1])) % array.shape[-1]
-        return array[..., i[:, None], j[None, :]]
+        """The crop by explicit periodic tiling, independent of how the
+        implementation splits the window."""
+        reps = (
+            -(-(abs(corner[0]) + size[0]) // array.shape[-2]) * 2 + 1,
+            -(-(abs(corner[1]) + size[1]) // array.shape[-1]) * 2 + 1,
+        )
+        tiled = np.tile(array, (1,) * (array.ndim - 2) + reps)
+        origin = (
+            (reps[0] // 2) * array.shape[-2] + corner[0],
+            (reps[1] // 2) * array.shape[-1] + corner[1],
+        )
+        return tiled[
+            ..., origin[0] : origin[0] + size[0], origin[1] : origin[1] + size[1]
+        ]
 
-    @pytest.mark.parametrize("n, size", [(192, 64), (17, 5), (8, 8)])
-    def test_every_corner_gives_the_right_shape_and_values(self, n, size):
-        from abtem.prism.utils import wrapped_crop_2d
-
-        rng = np.random.default_rng(0)
-        array = rng.standard_normal((2, n, n))
-        # Several periods either side: the old code was correct only in a
-        # narrow band around zero, and wrong by n + size rows outside it.
-        for corner in range(-3 * n, 3 * n):
-            got = wrapped_crop_2d(array, (corner, 0), (size, size))
-            assert got.shape == (2, size, size)
-            assert np.array_equal(got, self._reference(array, (corner, 0), (size, size)))
-
-    def test_both_axes_wrap_independently(self):
+    @pytest.mark.parametrize(
+        "corner, size",
+        [((3, 5), (7, 9)), ((-50, 61), (7, 9)), ((-23, 30), (40, 33))],
+        ids=["in-range", "far-outside", "wider-than-period"],
+    )
+    def test_matches_the_periodic_tiling(self, corner, size):
         from abtem.prism.utils import wrapped_crop_2d
 
         rng = np.random.default_rng(1)
         array = rng.standard_normal((3, 24, 20))
-        for corner in [(-30, -25), (-5, 18), (23, -1), (47, 39), (-48, -40)]:
-            got = wrapped_crop_2d(array, corner, (7, 9))
-            assert got.shape == (3, 7, 9)
-            assert np.array_equal(got, self._reference(array, corner, (7, 9)))
+        got = wrapped_crop_2d(array, corner, size)
+        assert got.shape == (3, *size)
+        assert np.array_equal(got, self._reference(array, corner, size))
 
-    @pytest.mark.parametrize("size", [16, 24, 32, 48])
-    def test_windows_wider_than_one_period(self, size):
-        """Two slices cannot express these; the general path must.
+    @staticmethod
+    def _by_modulo(array, corner, size):
+        """The crop by modulo index: the definition of a periodic crop, and a
+        second oracle independent of both the implementation and the tiling."""
+        i = (corner[0] + np.arange(size[0])) % array.shape[-2]
+        j = (corner[1] + np.arange(size[1])) % array.shape[-1]
+        return array[..., i[:, None], j[None, :]]
 
-        The old code was correct here only for corners in a narrow band around
-        zero -- e.g. n=16, corner=-23, size=24 came back as 8x8 -- so sweep the
-        corner rather than picking one.
+    @staticmethod
+    def _edge_values(n):
+        """Corners (and sizes) at which an off-by-one in the split into runs
+        shows: zero, the last row, the first row past the period, one period
+        either side, and several periods out."""
+        return sorted({0, n - 1, n, n + 1, -1, -n, 2 * n + 1, -3 * n + 2})
+
+    @staticmethod
+    def _sizes(n):
+        return sorted({1, n - 1, n, n + 1, 2 * n + 2, 3 * n + 1})
+
+    def test_sweep_of_corners_and_sizes(self):
+        """Every combination of edge corners and sizes on both axes, so windows
+        that wrap on one axis only, on both, and on neither (including exactly
+        at the boundary) are all covered; then every corner from -3n to 3n on
+        each axis alone, which finds an error confined to a band of corners that
+        the edge corners step over. An odd and an even period, and leading axes.
         """
         from abtem.prism.utils import wrapped_crop_2d
 
-        n = 16
-        rng = np.random.default_rng(2)
-        array = rng.standard_normal((1, n, n))
-        for corner in range(-2 * n, 2 * n, 3):
-            got = wrapped_crop_2d(array, (corner, corner), (size, size))
-            assert got.shape == (1, size, size)
-            assert np.array_equal(
-                got, self._reference(array, (corner, corner), (size, size))
+        rng = np.random.default_rng(0)
+        shape = (17, 12)
+        array = rng.standard_normal((2, 3, *shape))
+
+        def check(corner, size):
+            got = wrapped_crop_2d(array, corner, size)
+            assert got.shape == array.shape[:-2] + size
+            assert np.array_equal(got, self._by_modulo(array, corner, size)), (
+                corner,
+                size,
             )
 
-    def test_wrapped_slices_refuses_more_than_one_period(self):
-        from abtem.prism.utils import wrapped_slices
+        rows = [
+            (c, s) for c in self._edge_values(shape[0]) for s in self._sizes(shape[0])
+        ]
+        columns = [
+            (c, s) for c in self._edge_values(shape[1]) for s in self._sizes(shape[1])
+        ]
+        for (corner_0, size_0), (corner_1, size_1) in itertools.product(rows, columns):
+            check((corner_0, corner_1), (size_0, size_1))
 
-        with pytest.raises(RuntimeError, match="exceeds the period"):
-            wrapped_slices(0, 25, 24)
+        # The other axis: not wrapping, wrapping, and one pixel wide.
+        for axis, n in enumerate(shape):
+            other = shape[1 - axis]
+            others = [(0, other), (-1, 4), (other, 1)]
+            for size in self._sizes(n):
+                for corner in range(-3 * n, 3 * n + 1):
+                    for other_corner, other_size in others:
+                        if axis == 0:
+                            check((corner, other_corner), (size, other_size))
+                        else:
+                            check((other_corner, corner), (other_size, size))
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64", "complex64", "complex128"])
+    def test_the_crop_keeps_the_dtype(self, dtype):
+        """Both the view and the copy: the copy is allocated here, so a hardcoded
+        dtype would show."""
+        from abtem.prism.utils import wrapped_crop_2d
+
+        array = np.arange(2 * 8 * 9).reshape(2, 8, 9).astype(dtype)
+        for corner in [(1, 1), (-1, -1)]:  # a view, and a copy
+            got = wrapped_crop_2d(array, corner, (5, 5))
+            assert got.dtype == array.dtype
+            assert np.array_equal(got, self._by_modulo(array, corner, (5, 5)))
+
+    def test_a_window_that_does_not_wrap_is_a_view(self):
+        """No copy: a window as large as the array (PRISM interpolation 1) must
+        not double the memory of the S-matrix. A window that wraps is a copy."""
+        from abtem.prism.utils import wrapped_crop_2d
+
+        array = np.zeros((3, 24, 20))
+        whole = wrapped_crop_2d(array, (0, 0), (24, 20))
+        assert whole.shape == array.shape and np.shares_memory(whole, array)
+        assert np.shares_memory(wrapped_crop_2d(array, (24, -20), (7, 9)), array)
+        # Exactly at the boundary: ends on the last row, and starts on the next period.
+        assert np.shares_memory(wrapped_crop_2d(array, (17, 11), (7, 9)), array)
+        assert np.shares_memory(wrapped_crop_2d(array, (-24, 20), (24, 20)), array)
+        # One row or column past the boundary wraps, and wraps on one axis only.
+        assert not np.shares_memory(wrapped_crop_2d(array, (18, 0), (7, 9)), array)
+        assert not np.shares_memory(wrapped_crop_2d(array, (0, 12), (7, 9)), array)
+        assert not np.shares_memory(wrapped_crop_2d(array, (-1, -1), (7, 9)), array)
+        assert not np.shares_memory(wrapped_crop_2d(array, (0, 0), (25, 20)), array)
+
+    @staticmethod
+    def _is_view(crop_of, array):
+        """Whether ``crop_of(array)`` is a view of ``array``: whether writing
+        into the array shows in the crop. Backend-neutral, as the torch backend
+        has no ``shares_memory``. Writes into ``array``: pass a throwaway."""
+        from abtem.core.backend import copy_to_device
+
+        got = crop_of(array)
+        before = to_host_array(copy_to_device(got, "cpu")).copy()
+        array += 1
+        after = to_host_array(copy_to_device(got, "cpu")).copy()
+        return not np.array_equal(before, after)
 
     @devices
     def test_matches_on_device(self, device):
@@ -401,13 +478,44 @@ class TestWrappedCrop2D:
 
         rng = np.random.default_rng(3)
         array = rng.standard_normal((2, 32, 32))
-        for corner in [(-40, 7), (-9, -9), (70, -70)]:
-            got = wrapped_crop_2d(copy_to_device(array, device), corner, (11, 11))
+        on_device = copy_to_device(array, device)
+        size = (11, 11)
+        # Hand-listed corners (window 11 on a period of 32) and whether the window
+        # wraps: it does when its far edge passes the end of a period.
+        corners = [
+            # wrapping on both axes, far outside the array
+            ((-40, 7), True), ((-9, -9), True),
+            # wrapping on the columns only, rows several periods out
+            ((70, -70), True),
+            # not wrapping: inside, ending on the last pixel, and whole periods out
+            ((0, 0), False), ((21, 21), False), ((32, -32), False),
+            ((-32, 64), False),
+            # one period plus one pixel: starts on pixel 1 again, no wrap
+            ((33, 1), False), ((1, 33), False),
+            # wrapping on one axis only, or by one pixel
+            ((22, 5), True), ((5, 22), True), ((-1, 0), True), ((0, -1), True),
+            ((22, 22), True),
+        ]  # fmt: skip
+        for corner, wraps in corners:
+            got = wrapped_crop_2d(on_device, corner, size)
             assert_array_matches_device(got, device)
             assert np.allclose(
                 to_host_array(copy_to_device(got, "cpu")),
-                self._reference(array, corner, (11, 11)),
+                self._reference(array, corner, size),
             )
+            is_view = self._is_view(
+                lambda a: wrapped_crop_2d(a, corner, size),
+                copy_to_device(array, device),
+            )
+            assert is_view != wraps
+
+        # a window wider than the period, wrapping on both axes
+        got = wrapped_crop_2d(on_device, (-5, 40), (45, 33))
+        assert_array_matches_device(got, device)
+        assert np.allclose(
+            to_host_array(copy_to_device(got, "cpu")),
+            self._reference(array, (-5, 40), (45, 33)),
+        )
 
 
 class TestWindowCrop:

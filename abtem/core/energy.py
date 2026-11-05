@@ -145,6 +145,9 @@ def resolve_energy(
     3. A single-element ``EnergyAxis`` in ``ensemble_axes_metadata`` -- the
        residual case during per-member partitioned computation.
 
+    An array object refuses a scalar energy that contradicts its
+    ``EnergyAxis`` at construction, so the stores never disagree.
+
     Returns
     -------
     float or None

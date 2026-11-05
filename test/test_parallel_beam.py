@@ -91,10 +91,12 @@ def test_default_scan_with_a_positive_cutoff_is_unchanged(potential):
     assert scan.gpts == tuple(int(n) for n in np.ceil(extent / expected))
 
 
-@pytest.mark.parametrize("semiangle_cutoff", [0, 0.0, -5.0])
-def test_prism_rejects_a_non_positive_cutoff(potential, semiangle_cutoff):
-    with pytest.raises(ValueError, match="positive 'semiangle_cutoff'"):
-        SMatrix(potential=potential, energy=ENERGY, semiangle_cutoff=semiangle_cutoff)
+def test_prism_rejects_a_non_positive_cutoff(potential):
+    for semiangle_cutoff in (0.0, -5.0):
+        with pytest.raises(ValueError, match="positive 'semiangle_cutoff'"):
+            SMatrix(
+                potential=potential, energy=ENERGY, semiangle_cutoff=semiangle_cutoff
+            )
 
 
 @pytest.fixture(scope="module")

@@ -431,13 +431,10 @@ def test_flexible_annular_detector_refuses_an_auto_sized_outer_angle(lazy):
             result.compute(progress_bar=False)
 
 
-def _stacked_exit_waves(energies, device, stale_energy=False):
+def _stacked_exit_waves(energies, device):
     """Single-energy exit waves stacked along an energy axis behind the scan axes."""
     singles = [_exit_waves(energy, device) for energy in energies]
-    waves = abtem.stack(singles, EnergyAxis(values=tuple(energies)), axis=2)
-    if stale_energy:
-        waves.accelerator.energy = energies[0]
-    return waves
+    return abtem.stack(singles, EnergyAxis(values=tuple(energies)), axis=2)
 
 
 # Stacked waves differ from a multi-energy run only in where their energies come
@@ -496,56 +493,6 @@ def test_multislice_with_a_waves_detector_on_stacked_exit_waves(lazy, device):
         np.testing.assert_allclose(
             member, reference, rtol=0, atol=1e-5 * np.abs(reference).max()
         )
-
-
-# No public path leaves a scalar energy on waves with an energy axis (stacking
-# leaves none, see test_detect_on_stacked_single_energy_waves), so the state is set
-# by hand. Eagerly, the ensemble is split into energies with the scalar on it; in
-# blocks of 2 and 1, the block of 2 is split the same way and the block of 1 is a
-# single-valued energy axis under a different scalar energy. The splitting
-# detectors share that code, so the annular detector stands for them.
-@pytest.mark.parametrize("chunks", [None, (2, 1)], ids=["eager", "2-1"])
-@devices
-def test_each_energy_is_detected_with_its_own_energy_despite_a_scalar_energy(
-    chunks, device
-):
-    """A scalar energy left on waves with an energy axis is not the energy of every
-    member, whatever energies a block holds."""
-    energies = [70e3, 50e3, 60e3]
-    waves = _stacked_exit_waves(energies, device, stale_energy=True)
-    waves._metadata["energy"] = energies[0]
-    assert waves.accelerator.energy == energies[0]
-    if chunks is not None:
-        waves = _lazy(waves, chunks)
-
-    with dask.config.set(scheduler="synchronous"):
-        detected = DETECTORS["annular"]().detect(waves)
-        if chunks is not None:
-            detected = detected.compute(progress_bar=False)
-
-    _assert_members_match_single_energy_runs(
-        detected, "annular", False, "gridscan", device, energies=energies
-    )
-
-
-# The crop is fixed on the whole ensemble before it is split into blocks, and a
-# lazy detection rebuilds the detector with it in every block, so blocks of 2 and 1
-# cover the eager crop as well.
-@devices
-def test_the_crop_of_an_ensemble_ignores_a_scalar_energy(device):
-    """The pixel count every energy is cropped to is that of the highest energy on
-    the axis, not that of a scalar energy left on the waves (here the lowest)."""
-    waves = _stacked_exit_waves(ENERGIES, device, stale_energy=True)
-    assert waves.accelerator.energy == min(ENERGIES)
-    waves = _lazy(waves, (2, 1))
-
-    with dask.config.set(scheduler="synchronous"):
-        detected = DETECTORS["pixelated"]().detect(waves)
-        detected = detected.compute(progress_bar=False)
-
-    _assert_members_match_single_energy_runs(
-        detected, "pixelated", False, "gridscan", device
-    )
 
 
 @devices

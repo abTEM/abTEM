@@ -378,7 +378,11 @@ class Visualization:
                 validated_indices += (axis_indices[k],)
                 k += 1
                 removed_axes += 1
-            elif i not in self._overlay:
+            elif i in self._overlay:
+                # kept whole, but its place must be held so that the indices of
+                # the later axes are not shifted onto it
+                validated_indices += (slice(None),)
+            else:
                 validated_indices += (0,)
 
         measurement = self._measurement[validated_indices]

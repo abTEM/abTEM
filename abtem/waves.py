@@ -127,6 +127,55 @@ def _antialias_cutoff_gpts(
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
 
 
+def _max_batch_with_exit_planes(
+    waves_builder: WavesBuilder,
+    potential: BasePotential,
+    detectors: Optional[BaseDetector | list[BaseDetector]],
+    max_batch: int | str,
+) -> int | str:
+    """An automatic ``max_batch`` divided so that a block of detector output fits
+    the chunk size.
+
+    A block returns one output per exit plane and detector for each of its waves, all
+    in one chunk. The automatic batch of waves is divided by the output of the
+    block, in units of one wave, when that exceeds one wave; an integer
+    ``max_batch`` is returned as it is.
+    """
+    if max_batch != "auto":
+        return max_batch
+
+    from abtem.core.chunks import estimate_scan_batch_size
+    from abtem.detectors import validate_detectors
+
+    wave_bytes = (
+        int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
+    )
+
+    # The detectors of a multi-energy ensemble are sized by its highest energy.
+    sized = waves_builder
+    if isinstance(waves_builder.energy, BaseDistribution):
+        sized = waves_builder.copy()
+        sized.energy = float(max(waves_builder.energy.values))
+
+    output_bytes = sum(
+        int(np.prod(detector._out_base_shape(sized)[0]))
+        * np.dtype(detector._out_dtype(sized)[0]).itemsize
+        for detector in validate_detectors(detectors, sized)
+    )
+    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+
+    if ratio <= 1:
+        return max_batch
+
+    return max(
+        1,
+        estimate_scan_batch_size(
+            waves_builder.gpts, waves_builder.dtype, waves_builder.device
+        )
+        // ratio,
+    )
+
+
 def _prebuild_reused_potential(
     potential: Optional[BasePotential], waves: Waves
 ) -> Optional[BasePotential]:
@@ -354,11 +403,54 @@ def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
     )
 
 
+def _average_frozen_phonon_waves(waves: Waves) -> Waves:
+    """The configuration-averaged wave function <ψ> of waves from a ``WavesDetector``
+    with ``average_frozen_phonons``: the last ``FrozenPhononsAxis`` is averaged,
+    coherently and over that axis alone, and every other ensemble axis is kept."""
+    axes = waves.ensemble_axes_metadata
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(axes)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs a FrozenPhononsAxis in "
+            "the ensemble axes, e.g. from FrozenPhonons as the potential of the "
+            "multislice simulation."
+        )
+    if not axes[fp_axis_idx]._ensemble_mean:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs the frozen phonons "
+            "averaged: build them with ensemble_mean=True."
+        )
+
+    num_configurations = waves.shape[fp_axis_idx]
+    # The mean of the array (a dask tree reduction when lazy).
+    averaged = waves._weighted_ensemble_mean(fp_axis_idx)
+
+    metadata = {
+        key: value
+        for key, value in averaged.metadata.items()
+        if key != "frozen_phonon_average"
+    }
+    metadata["num_configurations"] = num_configurations
+    kwargs = averaged._copy_kwargs(exclude=("metadata",))
+    return averaged.__class__(**kwargs, metadata=metadata)
+
+
 def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     """The ensemble with its axes flagged for averaging averaged, without squeezing
-    any axis. Wave functions keep every member of an ensemble."""
+    any axis. Wave functions keep every member of an ensemble, except the frozen
+    phonons of those from a ``WavesDetector`` with ``average_frozen_phonons``."""
     if isinstance(ensemble, BaseMeasurements):
         return ensemble.reduce_ensemble()
+    if ensemble.metadata.get("frozen_phonon_average"):
+        return _average_frozen_phonon_waves(ensemble)
     return ensemble
 
 
@@ -382,7 +474,11 @@ def reduce_ensemble(
     """
     Reduce an ensemble of wave functions or measurements by squeezing or averaging
     ensemble axes tagged for reduction with the "_squeeze" or "_ensemble_mean"
-    attribute of the axis metadata.
+    attribute of the axis metadata. Wave functions are passed through unchanged, except
+    those of a ``WavesDetector`` with ``average_frozen_phonons``, whose frozen-phonon
+    axis is averaged, and the measurements of a ``PixelatedDetector`` with
+    ``components``, which are split into elastic and diffuse intensity after the
+    frozen-phonon average.
 
     Parameters
     ----------
@@ -404,6 +500,11 @@ def reduce_ensemble(
         return outputs
 
     output = _squeeze_flagged_axes(ensemble)
+
+    if not isinstance(output, BaseMeasurements) and output.metadata.get(
+        "frozen_phonon_average"
+    ):
+        return _average_frozen_phonon_waves(output)
 
     if not isinstance(output, BaseMeasurements) and any(
         isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
@@ -676,7 +777,9 @@ class Waves(BaseWaves, ArrayObject):
 
     def _as_diffraction_patterns(self) -> DiffractionPatterns:
         """The Fourier coefficients of reciprocal-space waves, as unshifted
-        diffraction patterns on spatial-frequency axes [1/Å]."""
+        diffraction patterns on spatial-frequency axes [1/Å]. The exports shift
+        them directly: they are unshifted by construction, so the warning of
+        `DiffractionPatterns` about unshifted exports does not apply."""
         return DiffractionPatterns(
             self.array,
             sampling=self.reciprocal_space_sampling,
@@ -692,7 +795,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_hyperspy(transpose)
+            return self._as_diffraction_patterns()._fftshifted().to_hyperspy(transpose)
         return super().to_hyperspy(transpose)
 
     def to_data_array(self):
@@ -702,7 +805,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_data_array()
+            return self._as_diffraction_patterns()._fftshifted().to_data_array()
         return super().to_data_array()
 
     def to_quantem(self):
@@ -712,7 +815,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_quantem()
+            return self._as_diffraction_patterns()._fftshifted().to_quantem()
         return super().to_quantem()
 
     def convolve(
@@ -805,8 +908,7 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        # The norm sums over the whole grid, so a lazy block must hold all of it.
-        return transform.apply(self.no_base_chunks())
+        return transform.apply(self)
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -1349,7 +1451,7 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        waves = self.ensure_real_space()
+        waves = self.ensure_real_space().no_base_chunks()
         xp = get_array_module(waves.array)
 
         if gpts is None:
@@ -1573,15 +1675,16 @@ class Waves(BaseWaves, ArrayObject):
                 else np.finfo(self.array.dtype).dtype
             )
 
+            array = self.no_base_chunks()._lazy_array
             pattern = da.map_blocks(
                 self._diffraction_pattern,
-                self.array,
+                array,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
                 reciprocal_space=self.reciprocal_space,
-                chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
         else:
@@ -2557,7 +2660,8 @@ class PlaneWave(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2581,6 +2685,8 @@ class PlaneWave(WavesBuilder):
         potential = validate_potential(potential)
 
         self.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(self, potential, detectors, max_batch)
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
@@ -2986,7 +3092,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -3004,6 +3111,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -3064,7 +3173,9 @@ class Probe(WavesBuilder):
         max_batch : int or str, optional
             The number of probe wave functions in each chunk of the Dask array. If
             'auto' (default), the batch size is chosen from the abtem configuration
-            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``), and divided so that the
+            output of a block, one for every exit plane of the potential, fits the
+            chunk size.
         lazy : bool, optional
             If True, build measurements lazily; otherwise compute eagerly. Defaults to
             the value set in the user configuration file.
@@ -3092,6 +3203,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -3196,7 +3309,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.

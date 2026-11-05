@@ -429,11 +429,24 @@ class TestBackscattering:
         # relative between the two routes; another detector or the backscattered
         # waves would differ by order 1.
         for detector, measurement in zip(detectors, measurements):
+            actual = to_host_array(measurement.array)
+            expected = to_host_array(detector.detect(transmitted).array)
+            atol = 1e-12
+            if test_system["device"] != "cpu":
+                # The two routes Fourier transform the exit wave separately, and
+                # float32 rounding of an FFT is an error relative to the
+                # strongest amplitude, not to each pixel: a pixel of intensity
+                # 1e-6 in a pattern reaching down to 1e-19 can differ by 1e-5
+                # relative (Metal, 3 of 31768 pixels). Its intensity error is at
+                # most 2 sqrt(I) * eps * sqrt(max I) <= 2 eps max I, so scale
+                # atol to the peak, with a margin of 10 for the FFT's error growth.
+                eps = np.finfo(np.float32).eps
+                atol = max(atol, 20 * eps * np.abs(expected).max())
             np.testing.assert_allclose(
-                to_host_array(measurement.array),
-                to_host_array(detector.detect(transmitted).array),
+                actual,
+                expected,
                 rtol=1e-5,
-                atol=1e-12,
+                atol=atol,
                 err_msg=type(detector).__name__,
             )
 

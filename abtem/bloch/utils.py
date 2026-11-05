@@ -474,16 +474,32 @@ def all_positions_have_relative_periodic_pair(
     if not np.isclose(basis_size, np.round(basis_size), atol=1e-6):
         return False
 
-    num_match_total = 0
+    # Every translate of every position must be one of the positions. Counting
+    # matches instead lets a position that matches several others (coincident
+    # atoms) stand in for a translate that is missing.
     for position in positions:
         shifted_position = (position + relative_positions) % 1.0
         position_is_close = wrapped_is_close(shifted_position, positions)
-        num_match_total += position_is_close.all(axis=2).sum()
+        if not position_is_close.all(axis=2).any(axis=0).all():
+            return False
 
-    if num_match_total >= len(relative_positions) * len(positions):
-        return True
-    else:
-        return False
+    return True
+
+
+def _sites_with_multiplicity(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Merge coincident scaled positions (periodically) into sites, returning the
+    distinct sites and the number of positions on each."""
+    is_close = wrapped_is_close(positions, positions).all(axis=2)
+    assigned = np.zeros(len(positions), dtype=bool)
+    sites, multiplicities = [], []
+    for i in range(len(positions)):
+        if assigned[i]:
+            continue
+        on_site = is_close[i] & ~assigned
+        assigned |= on_site
+        sites.append(positions[i])
+        multiplicities.append(int(on_site.sum()))
+    return np.array(sites).reshape((-1, 3)), np.array(multiplicities, dtype=int)
 
 
 def auto_detect_centering(
@@ -495,7 +511,9 @@ def auto_detect_centering(
     A centering is detected when every atom has a periodic image of the same species
     at each of its lattice translations (see `relative_positions_for_centering`). The
     reflection conditions these translations imply depend only on the fractional
-    translations, not on the cell metric, so any cell can be centered.
+    translations, not on the cell metric, so any cell can be centered. Coincident
+    atoms of the same species count as one site with a multiple occupancy, which the
+    translations must preserve.
 
     A cell can have the translations of several centerings: a 2x2x2 supercell has
     those of both F and I, for example. All of them are then returned together, here
@@ -526,15 +544,25 @@ def auto_detect_centering(
 
     positions = atoms.get_scaled_positions()
 
+    # Coincident atoms of one species are one site with a multiple occupancy. A
+    # centering translation must map each site onto a site of the same species
+    # and the same occupancy, so the sites are grouped by both.
+    groups = []
+    for number in np.unique(atoms.numbers):
+        sites, multiplicities = _sites_with_multiplicity(
+            positions[atoms.numbers == number]
+        )
+        groups.extend(sites[multiplicities == m] for m in np.unique(multiplicities))
+
     detected = [
         centering
         for centering in "FIABC"
         if centering in centerings_to_check
         and all(
             all_positions_have_relative_periodic_pair(
-                positions[atoms.numbers == number], relative_positions[centering]
+                group, relative_positions[centering]
             )
-            for number in np.unique(atoms.numbers)
+            for group in groups
         )
     ]
 

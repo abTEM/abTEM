@@ -19,10 +19,18 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     IonizationDetector,
     PixelatedDetector,
+    RadialSensitivity,
     SegmentedDetector,
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
+)
+from abtem.ebsd import (
+    EBSD,
+    BackscatterDetector,
+    EBSDPatternImages,
+    EBSDReferencePattern,
+    ReferencePatternImages,
 )
 from abtem.inelastic.core_loss import (
     EnergyIntegral,
@@ -92,6 +100,7 @@ __all__ = [
     "XrayDetector",
     "SDDEfficiency",
     "TabulatedEfficiency",
+    "RadialSensitivity",
     "Images",
     "DiffractionPatterns",
     "RealSpaceLineProfiles",
@@ -130,5 +139,10 @@ __all__ = [
     "transfer",
     "BlochWaves",
     "StructureFactor",
+    "EBSD",
+    "EBSDReferencePattern",
+    "BackscatterDetector",
+    "EBSDPatternImages",
+    "ReferencePatternImages",
     "StructureFactorArray",
 ]

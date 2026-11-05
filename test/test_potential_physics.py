@@ -463,11 +463,10 @@ def test_gaussian_projection_single_slice_matches_analytic(Z, device):
 
     Tolerances: the band error is the same band-limit error as the FFT
     integrator (1 %, see the Task 1 test). The total is exact up to the
-    documented Gaussian-form residual, _GAUSSIAN_FORM_TOLERANCE = 1e-4 of the
-    peak of F (in practice 1.8e-7 for Peng), plus round-off and parameter
-    storage as in the sum rule of the Task 1 test. Both bounds are far above
-    float32 round-off, so the test runs at the configured precision only
-    (float32 by default, the harder case).
+    Gaussian-form residual of Peng (1.8e-7 of the peak of F), plus round-off
+    and parameter storage as in the sum rule of the Task 1 test. Both bounds
+    are far above float32 round-off, so the test runs at the configured
+    precision only (float32 by default, the harder case).
     """
     lobato = LobatoParametrization()
     precision = config.get("precision")

@@ -74,18 +74,14 @@ def _poisson_sample_block(block, block_info=None, **kwargs):
 
 def _map_whole_base_arrays(array_object: ArrayObject, func, **kwargs) -> ArrayObject:
     """
-    Apply `func(block, block_info=..., **kwargs)` to a lazy array object, with
-    every base array (image, diffraction pattern, ...) held whole in one block.
+    Apply `func(block, block_info=..., **kwargs)` to a lazy array object whose
+    base arrays (images, diffraction patterns, ...) are each whole in one block, as
+    the output of `ArrayObject.apply_transform` is.
 
     A block inside `apply_transform` does not know its global position, which
     the chunk-independent noise draws need; dask's `map_blocks` provides it.
     """
     array = array_object.array
-    ensemble_dims = array.ndim - len(array_object.base_shape)
-    array = array.rechunk(
-        array.chunks[:ensemble_dims]
-        + tuple((n,) for n in array.shape[ensemble_dims:])
-    )
     xp = get_array_module(array)
     dtype = kwargs.pop("dtype", array.dtype)
     array = array.map_blocks(
@@ -396,18 +392,21 @@ def _apply_displacement_field(
         Displacement field along the y-axis.
     """
 
-    x = np.arange(0, image.shape[0])
-    y = np.arange(0, image.shape[1])
+    # The image is periodic with period n along each axis: positions wrap
+    # modulo n, and the grid carries one wrapped row and column (nodes 0 ... n)
+    # so that a position in [n - 1, n) interpolates between the last and the
+    # first pixel.
+    n_x, n_y = image.shape
+    nodes = [np.arange(n_x + 1), np.arange(n_y + 1)]
+    padded = np.pad(image, ((0, 1), (0, 1)), mode="wrap")
 
-    interpolating_function = RegularGridInterpolator([x, y], image, fill_value=None)
+    interpolating_function = RegularGridInterpolator(nodes, padded)
 
-    y, x = np.meshgrid(y, x)
+    y, x = np.meshgrid(np.arange(n_y), np.arange(n_x))
     p = np.array([(x + distortion_x).ravel(), (y + distortion_y).ravel()]).T
 
-    # p[:, 0] = np.clip(p[:, 0], 0, x.max())
-    p[:, 0] = p[:, 0] % x.max()
-    # p[:, 1] = np.clip(p[:, 1], 0, y.max())
-    p[:, 1] = p[:, 1] % y.max()
+    p[:, 0] = p[:, 0] % n_x
+    p[:, 1] = p[:, 1] % n_y
 
     warped = interpolating_function(p)
     return warped.reshape(image.shape)

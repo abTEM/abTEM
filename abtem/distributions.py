@@ -397,8 +397,8 @@ def _distribution_from_kernel(
         x = values - center[i]
         weights = kernel(i, x)
 
-        if normalize != "probability":
-            raise RuntimeError(f"Unknown normalization method: {normalize}")
+        # every caller passes normalize through _validate_normalize
+        assert normalize == "probability"
         weights /= weights.sum()
 
         distributions.append(

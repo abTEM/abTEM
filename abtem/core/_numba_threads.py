@@ -2,8 +2,8 @@
 own first import anywhere in this package.
 
 Kept as its own module, imported as the very first statement in
-``abtem/__init__.py``, rather than inlined there or placed alongside the
-fallback in ``abtem/core/backend.py``: it must run -- and this module must
+``abtem/__init__.py``, rather than inlined there or placed in
+``abtem/core/backend.py``: it must run -- and this module must
 not itself import numba -- before anything else in this package does,
 including the first import that pulls numba in (``abtem.core.backend``,
 reached transitively via ``abtem.distributions``).
@@ -61,9 +61,7 @@ def _seed_numba_num_threads_from_omp() -> None:
     own config rather than deferring to ``OMP_NUM_THREADS`` at the libomp
     level), not just the thread that happened to trigger the import. That
     is a stronger guarantee than
-    ``numba.set_num_threads()`` (see ``abtem/core/backend.py``'s own call,
-    kept as a fallback for a caller that imports numba before abtem, when
-    this env var can no longer take effect): ``set_num_threads`` only
+    ``numba.set_num_threads()``: ``set_num_threads`` only
     rebinds the *calling* thread's own active count. A CPU-side lazy
     abTEM computation, which dask's threaded scheduler executes on
     spawned worker threads rather than the caller's own thread, is

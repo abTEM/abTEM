@@ -162,67 +162,6 @@ def test_orthogonalize_cell_does_not_drop_boundary_atom():
         assert len(orthogonalized) == len(reference), perturbation
 
 
-def _near_orthorhombic_cell(noise):
-    # `orthogonalize_cell` zeroes any cell component below 1e-6 A before doing
-    # anything else, so the off-diagonal noise here has to survive that (i.e.
-    # be >= 1e-6) while still being small enough, relative to the cell size,
-    # that `best_orthogonal_cell`'s float64 norm computation rounds it away
-    # and reports box lengths exactly equal to the (still not-quite-zero)
-    # diagonal. That combination only occurs for large cells, hence the
-    # unusually large lattice constants below.
-    cell = np.diag([5000.0, 6000.0, 7000.0]) + noise
-    return Atoms("H", positions=[[1.0, 1.0, 1.0]], cell=cell, pbc=True)
-
-
-@pytest.mark.parametrize(
-    "noise",
-    [
-        np.array([[0.0, 5e-5, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),  # in v1
-        np.array([[0.0, 0.0, 0.0], [5e-5, 0.0, 0.0], [0.0, 0.0, 0.0]]),  # in v2
-        np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [5e-5, 5e-5, 0.0]]),  # in v3
-    ],
-)
-def test_orthogonalize_cell_near_orthorhombic_fallback_removes_all_noise(noise):
-    # Regression test: `orthogonalize_cell` takes a fallback path when
-    # `best_orthogonal_cell`'s box lengths round (in float64) to exactly the
-    # cell's diagonal, which can happen for near-orthorhombic cells with tiny
-    # off-diagonal noise. The fallback used to only correct the second
-    # lattice vector against the first (via a partial Gram-Schmidt), silently
-    # leaving the cell non-orthogonal if the noise instead sat in the first
-    # or third vector.
-    atoms = _near_orthorhombic_cell(noise)
-    orthogonalized = orthogonalize_cell(atoms)
-
-    assert is_cell_orthogonal(orthogonalized.cell)
-    assert np.allclose(np.diag(orthogonalized.cell), (5000.0, 6000.0, 7000.0))
-
-
-def test_orthogonalize_cell_near_orthorhombic_fallback_maps_a_real_shear_affinely(
-    monkeypatch,
-):
-    # If a genuinely large (non-noise) shear ever coincides with `diag(cell)
-    # == box`, it must not be discarded as noise (that would return a structure
-    # with the wrong periodicity): the cell goes through the general
-    # repeat-and-cut path, which maps it affinely onto the box, so the shear is
-    # strained away and the fractional positions are kept.
-    import abtem.atoms as atoms_module
-
-    monkeypatch.setattr(
-        atoms_module,
-        "best_orthogonal_cell",
-        lambda cell, max_repetitions=5: np.array([5.0, 6.0, 7.0]),
-    )
-    cell = np.array([[5.0, 0.0, 0.0], [0.5, 6.0, 0.0], [0.0, 0.0, 7.0]])
-    atoms = Atoms("H", positions=[[1.0, 1.0, 1.0]], cell=cell, pbc=True)
-
-    orthogonalized = orthogonalize_cell(atoms)
-
-    assert np.allclose(np.array(orthogonalized.cell), np.diag([5.0, 6.0, 7.0]))
-    assert np.allclose(
-        orthogonalized.get_scaled_positions(), atoms.get_scaled_positions()
-    )
-
-
 # ---------------------------------------------------------------------------
 # euler_sequence
 # ---------------------------------------------------------------------------

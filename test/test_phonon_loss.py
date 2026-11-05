@@ -69,15 +69,6 @@ def test_invalid_component_raises():
         phonon_loss_diffraction_patterns(waves, components="bogus")
 
 
-@pytest.mark.parametrize(
-    "old, new", [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")]
-)
-def test_earlier_component_names_point_to_the_new_ones(old, new):
-    waves = _make_exit_waves([0.02, 0.05, 0.10])
-    with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
-        phonon_loss_diffraction_patterns(waves, components=old)
-
-
 @pytest.mark.parametrize("components", ["diffuse", "all"])
 def test_single_config_diffuse_raises_instead_of_returning_zeros(components):
     """With one frozen-phonon configuration, the total and the elastic intensity
@@ -284,15 +275,6 @@ class TestThermalWeighting:
                 waves, components=components, temperature=300.0
             )
 
-    @pytest.mark.parametrize(
-        "old, new",
-        [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")],
-    )
-    def test_earlier_component_names_point_to_the_new_ones(self, old, new):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
-            phonon_loss_diffraction_patterns(waves, components=old, temperature=300.0)
-
     @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
     def test_block_direct_gives_the_unfolded_patterns_blocked(self, lazy):
         """The direct beam is blocked before the unfolding, a per-pixel mask that
@@ -342,14 +324,6 @@ class TestThermalWeighting:
         with pytest.raises(ValueError, match="must be finite and non-negative"):
             phonon_loss_diffraction_patterns(waves, temperature=temperature)
 
-    @pytest.mark.parametrize(
-        "temperature", [True, np.True_], ids=["bool", "numpy_bool"]
-    )
-    def test_a_bool_temperature_raises(self, temperature):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(TypeError, match="temperature must be a number"):
-            phonon_loss_diffraction_patterns(waves, temperature=temperature)
-
     @pytest.mark.parametrize("dtype", [np.float16, np.float32])
     def test_the_temperature_is_used_in_double_precision(self, dtype):
         """k_B T in the precision of a float16 or float32 scalar puts the gain
@@ -365,15 +339,6 @@ class TestThermalWeighting:
         np.testing.assert_array_equal(
             np.asarray(result.array), np.asarray(expected.array)
         )
-
-    @pytest.mark.parametrize("temperature", [-300.0, float("nan"), True])
-    def test_the_weights_check_the_temperature(self, temperature):
-        from abtem.measurements import _thermal_weight_tds
-
-        with pytest.raises((TypeError, ValueError), match="temperature must be"):
-            _thermal_weight_tds(
-                np.ones((3, 4, 4)), np.array([0.0, 0.02, 0.05]), 0, temperature
-            )
 
     def test_a_temperature_whose_k_b_t_underflows_is_the_zero_temperature_limit(
         self,

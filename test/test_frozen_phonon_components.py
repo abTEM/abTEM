@@ -551,9 +551,6 @@ def test_component_names_are_recorded_as_plain_str():
         (("all", "all"), ValueError, "'all' more than once"),
         (("total", 1), TypeError, "must be strings"),
         ("bogus", ValueError, "components must be one of"),
-        ("tds", ValueError, "'tds' is now 'diffuse'"),
-        (("coherent",), ValueError, "'coherent' is now 'elastic'"),
-        ("incoherent", ValueError, "'incoherent' is now 'total'"),
         (None, TypeError, "components must be one of"),
     ],
 )

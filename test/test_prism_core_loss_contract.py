@@ -7,6 +7,7 @@ import pytest
 from utils import devices, synthetic_transition_potential, to_host_array
 
 import abtem
+from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 
 GPTS = (48, 56)
 ENERGY = 100e3
@@ -27,6 +28,24 @@ def _potential(device, num_configs=None, ensemble_mean=True):
             ensemble_mean=ensemble_mean,
         )
     return abtem.Potential(atoms, gpts=GPTS, slice_thickness=2, device=device)
+
+
+def _energy_resolved_potential(device, ensemble_mean):
+    # 2 energy losses x 4 configurations: two potential ensemble axes of
+    # different sizes, every member displaced differently
+    rng = np.random.default_rng(3)
+    snapshots = []
+    for _ in range(2):
+        row = []
+        for _ in range(4):
+            atoms = ATOMS.copy()
+            atoms.positions += rng.normal(scale=0.1, size=atoms.positions.shape)
+            row.append(atoms)
+        snapshots.append(row)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, energies=[10.0, 20.0], ensemble_mean=ensemble_mean
+    )
+    return abtem.Potential(ensemble, gpts=GPTS, slice_thickness=2, device=device)
 
 
 def _scan(potential):
@@ -151,3 +170,18 @@ def test_results_carry_the_probe_metadata_of_multislice(device, num_configs, laz
     for key in ("semiangle_cutoff", "base_tilt_x", "base_tilt_y"):
         assert measured.metadata[key] == expected.metadata[key]
     _assert_close(measured.block_direct(), expected.block_direct())
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("ensemble_mean", [False, True])
+def test_core_loss_of_an_energy_resolved_ensemble_matches_multislice(
+    device, ensemble_mean, lazy
+):
+    potential = _energy_resolved_potential(device, ensemble_mean)
+    measured = _prism(potential, _detector("annular"), lazy)
+    expected = _multislice(potential, _detector("annular"))
+
+    assert measured.shape == expected.shape
+    assert measured.shape == ((2, 3, 5) if ensemble_mean else (2, 4, 3, 5))
+    _assert_close(measured, expected)

@@ -85,6 +85,19 @@ def test_scalar_keeps_zero_dimensions():
     assert xp.asarray([20.0]).shape == (1,)
 
 
+@pytest.mark.parametrize("reps", [(2, 3), (2, 1, 3), 2])
+def test_tile_of_a_complex_array(reps):
+    # Metal cannot repeat a complex tensor, which the tilt transform needs.
+    xp = get_array_module("mps")
+    rng = np.random.RandomState(0)
+    array = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype(np.complex64)
+
+    tiled = xp.tile(copy_to_device(array, "mps"), reps)
+
+    assert tiled.dtype == np.complex64
+    assert np.array_equal(asnumpy(tiled), np.tile(array, reps))
+
+
 def test_read_only_array_is_copied():
     # A read-only array, such as the shared cache of polar detector bins, must
     # not be shared with the tensor: on torch's CPU device a write to the tensor

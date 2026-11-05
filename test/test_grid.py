@@ -238,3 +238,121 @@ def test_adjusted_gpts_of_a_target_far_above_the_sampling_is_one():
     sampling, gpts = adjusted_gpts((1.0, 1.0), (1e-9, 1e-9), (1, 1))
     assert gpts == (1, 1)
     assert sampling == pytest.approx((1e-9, 1e-9))
+
+
+# ── default gpts yield to an explicit grid ───────────────────────────────────
+def _default_grid():
+    return Grid(
+        extent=(8.0, 8.0), gpts=(160, 160), lock_extent=True, gpts_is_default=True
+    )
+
+
+def test_a_grid_with_no_gpts_adopts_default_gpts():
+    waves = Grid()
+    default = _default_grid()
+
+    waves.match(default)
+
+    assert waves.gpts == (160, 160)
+    assert default.gpts == (160, 160)
+    assert default.gpts_is_default
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected_gpts",
+    [({"gpts": (100, 100)}, (100, 100)), ({"sampling": 0.1}, (80, 80))],
+)
+def test_explicit_gpts_or_sampling_override_default_gpts(kwargs, expected_gpts):
+    waves = Grid(**kwargs)
+    default = _default_grid()
+
+    waves.match(default)
+
+    assert waves.gpts == expected_gpts
+    assert default.gpts == expected_gpts
+    assert not default.gpts_is_default
+    assert default.extent == (8.0, 8.0)
+
+
+def test_locked_gpts_override_default_gpts_instead_of_raising():
+    built = Grid(extent=(8.0, 8.0), gpts=(100, 100), lock_extent=True, lock_gpts=True)
+    default = _default_grid()
+
+    built.match(default)
+
+    assert default.gpts == (100, 100)
+
+
+def test_gpts_that_are_not_a_default_still_win_over_explicit_gpts():
+    waves = Grid(gpts=(100, 100))
+    explicit = Grid(extent=(8.0, 8.0), gpts=(160, 160), lock_extent=True)
+
+    waves.match(explicit)
+
+    assert waves.gpts == (160, 160)
+    assert explicit.gpts == (160, 160)
+
+
+def test_setting_gpts_or_sampling_clears_the_default_flag():
+    grid = _default_grid()
+    grid.gpts = (100, 100)
+    assert not grid.gpts_is_default
+
+    grid = _default_grid()
+    grid.sampling = 0.1
+    assert not grid.gpts_is_default
+
+
+def test_whether_gpts_are_a_default_does_not_affect_equality():
+    default = _default_grid()
+    explicit = Grid(extent=(8.0, 8.0), gpts=(160, 160), lock_extent=True)
+
+    assert default == explicit
+
+
+# ── auto gpts are kept, but an explicit grid meeting them is warned about ────
+def _auto_grid():
+    return Grid(
+        extent=(8.0, 8.0), gpts=(160, 160), lock_extent=True, gpts_are_auto=True
+    )
+
+
+def test_explicit_gpts_do_not_override_auto_gpts_but_warn():
+    waves = Grid(gpts=(100, 100))
+    auto = _auto_grid()
+
+    with pytest.warns(UserWarning, match="sampling='auto'"):
+        waves.match(auto)
+
+    assert waves.gpts == (160, 160)
+    assert auto.gpts == (160, 160)
+
+
+def test_a_grid_without_explicit_gpts_adopts_auto_gpts_quietly(recwarn):
+    waves = Grid()
+
+    waves.match(_auto_grid())
+
+    assert waves.gpts == (160, 160)
+    assert len(recwarn) == 0
+
+
+def test_a_grid_that_adopted_its_gpts_is_not_explicit_when_matched_again(recwarn):
+    waves = Grid()
+    waves.match(Grid(extent=(8.0, 8.0), gpts=(100, 100), lock_extent=True))
+
+    waves.match(_auto_grid())
+
+    assert waves.gpts == (160, 160)
+    assert len(recwarn) == 0
+
+
+def test_setting_gpts_clears_the_auto_flag_and_the_adoption():
+    grid = _auto_grid()
+    grid.gpts = (100, 100)
+    assert not grid.gpts_are_auto
+
+    waves = Grid()
+    waves.match(Grid(extent=(8.0, 8.0), gpts=(100, 100), lock_extent=True))
+    waves.gpts = (50, 50)
+    assert not waves._gpts_adopted
