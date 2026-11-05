@@ -13,6 +13,14 @@ from abtem.inelastic.core_loss import (
 from abtem.prism import _bipartite as bip
 
 
+def _disk_setup(**kwargs):
+    """``_prism_eels_setup`` with a detector inside the 25 mrad collection disk
+    these tests use. The default FlexibleAnnularDetector collects up to the
+    antialias cutoff, beyond the disk, which the driver refuses."""
+    sm, tp, scan, _, atoms = _prism_eels_setup(**kwargs)
+    return sm, tp, scan, abtem.AnnularDetector(inner=0, outer=25), atoms
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize(
@@ -35,14 +43,15 @@ def test_reuse_images_and_call_count(monkeypatch, device, precision, legs, doubl
 
     monkeypatch.setattr(bip, "windowed_reconstruct", record)
     with abtem.config.set({"precision": precision}):
-        sm, tp, scan, det, atoms = _prism_eels_setup(
+        sm, tp, scan, det, atoms = _disk_setup(
             gpts=(24, 32), reps=(1, 1, 2), device=device
         )
         options = dict(
             partitions_s1=legs[0],
             partitions_s2=legs[1],
             double_channel=double_channel,
-            collection_angle=25,
+            # collection_angle applies only to the double-channel S2 matrix.
+            collection_angle=25 if double_channel else None,
         )
         monkeypatch.setattr(bip, "_EELS_RECONSTRUCTION_BYTES", 0, raising=False)
         reference = _run(driver, sm, tp, scan, det, atoms, **options)
@@ -248,7 +257,7 @@ def test_cache_lifetime_and_joint_budget(monkeypatch, device):
     with abtem.config.set({"precision": "float32"}):
         _run(
             driver,
-            *_prism_eels_setup(gpts=(24, 32), reps=(1, 1, 3), device=device),
+            *_disk_setup(gpts=(24, 32), reps=(1, 1, 3), device=device),
             partitions_s1=2,
             partitions_s2=2,
             double_channel=True,
@@ -295,7 +304,7 @@ def test_joint_budget_falls_back_for_second_leg(monkeypatch, device):
 
     monkeypatch.setattr(bip, "_reconstruct_slice", record)
     with abtem.config.set({"precision": "float32"}):
-        setup = _prism_eels_setup(gpts=(24, 32), device=device)
+        setup = _disk_setup(gpts=(24, 32), device=device)
         # Full S2 disk is larger than S1; select a budget from actual geometry
         # so S1 fits while S2 fails after subtracting retained S1 output.
         weights = bip.natural_neighbor_weights

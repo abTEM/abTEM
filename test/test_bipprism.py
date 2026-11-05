@@ -429,20 +429,19 @@ def test_bipprism_focal_backprop_reduces_s1_error():
     assert err_fb < 0.5 * err_no + 1e-6  # ... substantially (paper: 2-3x)
 
 
-def test_bipprism_focal_backprop_noop_without_s1_partition():
-    """focal_backprop only touches the S1 partition; with partitions_s1=None it is
-    a no-op (S2's parallel detector beams have no crossover plane)."""
+def test_bipprism_focal_backprop_requires_s1_partition():
+    """focal_backprop only touches the S1 partition (S2's parallel detector beams
+    have no crossover plane), so without partitions_s1 it would do nothing. It
+    raises instead, so that a user cannot believe it was applied."""
     from abtem.inelastic.core_loss import (
         prism_transition_potential_scan_beam_basis as drv,
     )
 
     sm, tp, scan, _, atoms = _prism_eels_setup()
     ann = abtem.AnnularDetector(inner=0, outer=30)
-    base = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
-                collection_angle=35, partitions_s2=4)
-    with_fb = _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
-                   collection_angle=35, partitions_s2=4, focal_backprop="centroid")
-    np.testing.assert_allclose(with_fb, base, rtol=1e-6, atol=1e-10)
+    with pytest.raises(ValueError, match="focal_backprop applies only"):
+        _run(drv, sm, tp, scan, ann, atoms, double_channel=True,
+             collection_angle=35, partitions_s2=4, focal_backprop="centroid")
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
@@ -535,8 +534,14 @@ def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, device):
             case = f"mag_preserve={mag_preserve}, partitions_s2={partitions_s2}"
             reconstructed.clear()
             with abtem.config.set({"precision": "float64"}):
-                setup = _vacuum_eels_setup(thicknesses=thicknesses, device=device)
-                _run(prism_transition_potential_scan_beam_basis, *setup,
+                sm, tp, scan, _, atoms = _vacuum_eels_setup(
+                    thicknesses=thicknesses, device=device
+                )
+                # A detector within the 6 mrad collection disk: a wider one
+                # would read zero outside the disk, which the driver refuses.
+                detector = abtem.AnnularDetector(inner=0, outer=6)
+                _run(prism_transition_potential_scan_beam_basis,
+                     sm, tp, scan, detector, atoms,
                      double_channel=True, collection_angle=6,
                      partitions_s2=partitions_s2, mag_preserve=mag_preserve)
             assert reconstructed, case
@@ -594,7 +599,10 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel, device):
         assert len(select_parent_beams(sm.wave_vectors, 20)) == len(sm.wave_vectors)
         scan = abtem.CustomScan(np.unique(atoms.positions[:, :2], axis=0))
         detector = abtem.AnnularDetector(inner=0, outer=25)
-        options = dict(double_channel=double_channel, collection_angle=30)
+        # collection_angle applies only to the double-channel S2 matrix.
+        options = dict(double_channel=double_channel)
+        if double_channel:
+            options["collection_angle"] = 30
         exact = _run(driver, sm, tp, scan, detector, atoms, **options)
         focal = _run(driver, sm, tp, scan, detector, atoms,
                      partitions_s1=20, focal_backprop="centroid", **options)

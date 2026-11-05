@@ -1848,9 +1848,12 @@ def _resolve_scattering_sites(potential, sites):
     return _SitesPerConfiguration(per_configuration)
 
 
-def _prism_eels_detected_waves(s_matrix, scan):
+def _prism_eels_detected_waves(s_matrix, scan, native=False):
     """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
     the downsampled grid of ``s_matrix`` divided by its interpolation factor.
+    With ``native``, the full downsampled grid instead: the double-channel
+    beam-basis reduction detects there (see
+    :func:`prism_transition_potential_scan_beam_basis`).
     They carry the probe metadata of the elastic dummy probes (semiangle cutoff
     and base tilt), which the detectors of the results read, but not their
     ``adjusted_antialias_cutoff_gpts``. They only describe the grid; the array
@@ -1860,9 +1863,8 @@ def _prism_eels_detected_waves(s_matrix, scan):
 
     xp = get_array_module(s_matrix.device)
     ds_gpts = s_matrix.downsampled_gpts
-    gpts = tuple(
-        safe_ceiling_int(n / f) for n, f in zip(ds_gpts, s_matrix.interpolation)
-    )
+    interpolation = (1, 1) if native else s_matrix.interpolation
+    gpts = tuple(safe_ceiling_int(n / f) for n, f in zip(ds_gpts, interpolation))
     extent = tuple(
         g * length / n for g, length, n in zip(gpts, s_matrix.extent, ds_gpts)
     )
@@ -1878,8 +1880,16 @@ def _prism_eels_detected_waves(s_matrix, scan):
     )
 
 
-def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, sites):
-    """Shared setup for the real-space and beam-basis PRISM-EELS drivers."""
+def _prism_eels_common_setup(
+    s_matrix, transition_potentials, scan, detectors, sites, s1_wave_vectors=None
+):
+    """Shared setup for the real-space and beam-basis PRISM-EELS drivers.
+
+    ``ctx.s_waves`` holds the S1 plane waves of ``s1_wave_vectors`` (the BiP-PRISM
+    parent beams), or of every beam of ``s_matrix`` if it is None. Only these
+    columns are allocated: a full stack kept next to the parents would cancel
+    the S1 memory saving of the partition.
+    """
     import types as _types
 
     from abtem.antialias import AntialiasAperture
@@ -1918,9 +1928,8 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     )
     n_k = len(wave_vectors_np)
 
-    s_array = plane_waves(
-        xp.asarray(wave_vectors_np, dtype=get_dtype()), extent, gpts
-    )
+    s1_k = wave_vectors_np if s1_wave_vectors is None else s1_wave_vectors
+    s_array = plane_waves(xp.asarray(s1_k, dtype=get_dtype()), extent, gpts)
     s_array = s_array * (
         float(np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:]))
     )
@@ -1929,7 +1938,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         s_array,
         energy=energy,
         extent=extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_k)))],
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(len(s1_k))))],
     )
 
     antialias_aperture = AntialiasAperture()
@@ -2636,6 +2645,155 @@ def prism_transition_potential_scan(
     return measurements
 
 
+def _check_beam_basis_options(
+    double_channel,
+    partitions_s1=None,
+    partitions_s2=None,
+    n_angular=6,
+    collection_angle=None,
+    focal_backprop=None,
+):
+    """Refuse BiP-PRISM options that would have no effect.
+
+    An ignored option lets a user believe they ran BiP-PRISM when they did not,
+    so each one raises instead.
+    """
+    from abtem.prism._bipartite import focal_backprop_distance
+
+    for name, value in (("partitions_s1", partitions_s1),
+                        ("partitions_s2", partitions_s2)):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, np.integer))
+            or value < 1
+        ):
+            raise ValueError(
+                f"{name} must be None or an integer >= 1, got {value!r}"
+            )
+    if (
+        isinstance(n_angular, bool)
+        or not isinstance(n_angular, (int, np.integer))
+        or n_angular < 1
+    ):
+        raise ValueError(f"n_angular must be an integer >= 1, got {n_angular!r}")
+    if not double_channel:
+        for name, value in (("partitions_s2", partitions_s2),
+                            ("collection_angle", collection_angle)):
+            if value is not None:
+                raise ValueError(
+                    f"{name} applies only to the double-channel S2 matrix; "
+                    "set double_channel=True, or leave it None."
+                )
+    if focal_backprop is not None:
+        if partitions_s1 is None:
+            raise ValueError(
+                "focal_backprop applies only to the S1 partition; set "
+                "partitions_s1, or leave focal_backprop None."
+            )
+        focal_backprop_distance(1.0, focal_backprop)  # validates the value
+    if collection_angle is not None and not collection_angle > 0:
+        raise ValueError(
+            f"collection_angle must be positive, got {collection_angle!r}"
+        )
+
+
+def _check_collection_angle(s_matrix, detectors, collection_angle):
+    """Refuse a ``collection_angle`` that drops beams a detector collects.
+
+    S2 is built only on the beams within the collection disk, so a detector
+    that collects beams outside it reads zero there and the map comes out too
+    low. The final ionization slice has no subsequent antialiasing propagation,
+    so transition potentials can populate every beam of the native grid.
+    """
+    from abtem.core.energy import energy2wavelength
+    from abtem.core.fft import fft_crop
+    from abtem.detectors import (
+        AnnularDetector,
+        PixelatedDetector,
+        WavesDetector,
+        _AbstractRadialDetector,
+    )
+    from abtem.measurements import _annular_detector_mask
+    from abtem.waves import Waves
+
+    if collection_angle is None:
+        return
+    gpts = tuple(s_matrix.gpts)
+    sampling = tuple(e / n for e, n in zip(s_matrix.extent, gpts))
+    wavelength = energy2wavelength(s_matrix.energy)
+    # Scattering angles [mrad] of the grid beams, in the same units as the
+    # collection disk |k| <= collection_angle / 1e3 / wavelength of the driver.
+    alpha_y, alpha_x = np.meshgrid(
+        np.fft.fftfreq(gpts[0], d=sampling[0]) * wavelength * 1e3,
+        np.fft.fftfreq(gpts[1], d=sampling[1]) * wavelength * 1e3,
+        indexing="ij",
+    )
+    alpha = np.hypot(alpha_y, alpha_x)
+    outside = alpha > collection_angle
+    if not outside.any():
+        return
+
+    waves = Waves(
+        np.zeros(gpts, dtype=get_dtype(complex=True)),
+        energy=s_matrix.energy,
+        extent=s_matrix.extent,
+        metadata=s_matrix.dummy_probes().metadata,
+    )
+    for detector in detectors:
+        if isinstance(detector, AnnularDetector):
+            inner, outer = detector.angular_limits(waves)
+            collected = _annular_detector_mask(
+                gpts=gpts,
+                sampling=waves.angular_sampling,
+                inner=inner,
+                outer=outer,
+                offset=detector.offset,
+                sensitivity=detector.sensitivity,
+            ) != 0
+        elif isinstance(detector, _AbstractRadialDetector):
+            # Use the detector's binned outer edge and nearest-pixel offset,
+            # including clipping at the grid boundary without wrapping.
+            inner, outer = detector.angular_limits(waves)
+            collected = _polar_detector_bins(
+                gpts=gpts,
+                sampling=waves.angular_sampling,
+                inner=inner,
+                outer=outer,
+                nbins_radial=1,
+                nbins_azimuthal=1,
+                offset=detector.offset,
+                fftshift=False,
+            ) >= 0
+        elif (
+            isinstance(detector, PixelatedDetector) and detector.reciprocal_space
+        ) or isinstance(detector, WavesDetector):
+            crop_gpts = (
+                detector._crop_gpts(waves)
+                if isinstance(detector, PixelatedDetector)
+                else detector.gpts or gpts
+            )
+            # Numeric angles round outwards to pixels; string angles also crop
+            # rectangles, whose corners extend beyond the nominal angle.
+            crop_gpts = tuple(min(n, m) for n, m in zip(gpts, crop_gpts))
+            collected = fft_crop(
+                np.ones(crop_gpts, dtype=bool), new_shape=gpts
+            )
+        else:
+            # Real-space intensity and unknown detector transforms may depend
+            # on every Fourier beam.
+            collected = np.ones_like(outside)
+        if (outside & collected).any():
+            needed = float(alpha[collected].max())
+            raise ValueError(
+                f"collection_angle={collection_angle} mrad is smaller than the "
+                f"angles {type(detector).__name__} collects (up to {needed:.4g} "
+                "mrad). S2 is built only within the collection disk, so the "
+                "detector would read zero outside it and the map would be too "
+                f"low. Set collection_angle >= {needed:.4g}, limit the outer "
+                "angle of the detector, or leave collection_angle None."
+            )
+
+
 def prism_transition_potential_scan_beam_basis(
     s_matrix: "SMatrix",
     transition_potentials,
@@ -2704,7 +2862,8 @@ def prism_transition_potential_scan_beam_basis(
       (``prod(gpts)`` beams). Memory and compute scale as ``O(prod(gpts)^2)``
       per scattering site per slice — only practical for small grids.
     - Single exit plane only (``len(potential.exit_planes) == 1``).
-    - No frozen-phonon ensemble (``potential.ensemble_shape == ()``).
+    - One potential configuration per call. ``SMatrix.transition_potential_scan``
+      iterates the frozen-phonon configurations and averages them.
     - No ``downsample`` support (``s_matrix.downsampled_gpts == s_matrix.gpts``).
     - Eager only; no Dask laziness.
 
@@ -2741,6 +2900,7 @@ def prism_transition_potential_scan_beam_basis(
         full (unpartitioned) matrices — the exact beam-basis path. The
         full-parent limit is exact (paper eq-part-exact); at finite parent counts
         the on-atom reconstruction error governs the total error (locality result).
+        ``partitions_s2`` requires ``double_channel=True``.
     n_angular : int, optional
         Base azimuthal parent sampling; hex ring ``i`` carries ``n_angular*(1+i)``
         samples (default 6). Shared by the ``S1`` and ``S2`` partitions.
@@ -2757,6 +2917,8 @@ def prism_transition_potential_scan_beam_basis(
         computes ``I = sum_q |a_q|^2``), while making ``partitions_s2`` far more
         accurate at low parent counts (the S2 columns are smooth over the small
         disk) and cheaper to build. ``None`` (default) uses the full grid.
+        Requires ``double_channel=True``. A ``ValueError`` is raised if the disk
+        is smaller than the angles a detector collects.
     focal_backprop : {"centroid"}, float or None, optional
         S1-only accuracy lever (paper Sec. 3.3.6, "Fix 2"). When set, the S1 parent
         columns are Fresnel back-propagated to the scattering-centroid plane before
@@ -2766,8 +2928,8 @@ def prism_transition_potential_scan_beam_basis(
         retained, preserving the exact full-parent limit.
         ``"centroid"`` back-propagates half the traversed depth; a float ``f`` uses
         ``f * depth``. Applies only to ``partitions_s1`` (the detector-side ``S2``
-        parents have no crossover plane, so it is a no-op for them). ``None``
-        (default) disables it.
+        parents have no crossover plane), and raises ``ValueError`` without it.
+        ``None`` (default) disables it.
 
     Returns
     -------
@@ -2792,12 +2954,31 @@ def prism_transition_potential_scan_beam_basis(
         select_parent_beams,
         windowed_reconstruct,
     )
-    from abtem.prism.utils import plane_waves, wrapped_crop_2d
+    from abtem.prism.utils import wrapped_crop_2d
     from abtem.waves import Waves
 
-    ctx = _prism_eels_common_setup(
-        s_matrix, transition_potentials, scan, detectors, sites
+    _check_beam_basis_options(
+        double_channel, partitions_s1, partitions_s2, n_angular,
+        collection_angle, focal_backprop,
     )
+
+    # Select the S1 parents first, so that the setup builds only their columns.
+    p1_idx = k_par1 = None
+    if partitions_s1 is not None:
+        all_wave_vectors = s_matrix.wave_vectors
+        all_wave_vectors = np.array(
+            all_wave_vectors.get()
+            if hasattr(all_wave_vectors, "get")
+            else all_wave_vectors
+        )
+        p1_idx = select_parent_beams(all_wave_vectors, partitions_s1, n_angular)
+        k_par1 = all_wave_vectors[p1_idx]
+
+    ctx = _prism_eels_common_setup(
+        s_matrix, transition_potentials, scan, detectors, sites,
+        s1_wave_vectors=k_par1,
+    )
+    _check_collection_angle(s_matrix, ctx.detectors, collection_angle)
     transition_potential = ctx.transition_potential
     Z = ctx.Z
     potential = ctx.potential
@@ -2824,10 +3005,16 @@ def prism_transition_potential_scan_beam_basis(
             "(s_matrix.downsampled_gpts != s_matrix.gpts)."
         )
 
-    if potential.ensemble_shape:
+    # One configuration per call: SMatrix.transition_potential_scan hands each
+    # configuration over as a sub-potential with length-1 ensemble axes. A
+    # multi-configuration potential would give 1/num_configurations of the
+    # right answer, so refuse it, as prism_transition_potential_scan does.
+    if any(n > 1 for n in potential.ensemble_shape):
         raise NotImplementedError(
-            "PRISM-EELS beam-basis does not yet support frozen-phonon "
-            "ensembles (potential.ensemble_shape is non-empty)."
+            "prism_transition_potential_scan_beam_basis processes one potential "
+            f"configuration per call, got ensemble shape "
+            f"{potential.ensemble_shape!r}. Iterate the configurations and "
+            "average the results, as SMatrix.transition_potential_scan does."
         )
 
     exit_planes = potential.exit_planes
@@ -2892,21 +3079,12 @@ def prism_transition_potential_scan_beam_basis(
     # --- Beam partitioning setup (BiP-PRISM, paper Alg. 5) ---------------------
     # Build S1 / S2 on sparse hex-ring parent beams and reconstruct the full beam
     # set locally at each atom (windowed NNW). ``None`` = exact unpartitioned path.
-    wave_vectors_np = ctx.wave_vectors_np  # (n_k, 2) aperture beams [1/Å]
-    w1 = k_par1 = None
+    # (n_k, 2) aperture beams [1/Å]. With partitions_s1, ctx.s_waves already
+    # holds only the Bp1 parent columns.
+    wave_vectors_np = ctx.wave_vectors_np
+    w1 = None
     if partitions_s1 is not None:
-        p1_idx = select_parent_beams(wave_vectors_np, partitions_s1, n_angular)
-        k_par1 = wave_vectors_np[p1_idx]
-        w1 = natural_neighbor_weights(k_par1, wave_vectors_np)  # (n_k, Bp1)
-        s1_par_array = plane_waves(
-            xp.asarray(k_par1, dtype=get_dtype()), extent, gpts
-        ) * float(np.prod(interpolation) / np.prod(gpts))
-        s_waves = Waves(
-            s1_par_array,
-            energy=energy,
-            extent=extent,
-            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(len(p1_idx))))],
-        )
+        w1 = natural_neighbor_weights(k_par1, wave_vectors_np, sparse=True)
 
     # Focal back-propagation (S1 only, paper Sec. 3.3.6): static prep. The per-slice
     # back-propagation distance (centroid = half the traversed depth) is computed in
@@ -2952,7 +3130,7 @@ def prism_transition_potential_scan_beam_basis(
         if partitions_s2 is not None:
             p2_idx = select_parent_beams(k_s2, partitions_s2, n_angular)
             k_par2 = k_s2[p2_idx]
-            w2 = natural_neighbor_weights(k_par2, k_s2)  # (n_s2, Bp2)
+            w2 = natural_neighbor_weights(k_par2, k_s2, sparse=True)
             s2_build_rows = s2_rows[p2_idx]
             s2_build_cols = s2_cols[p2_idx]
         else:
@@ -2984,17 +3162,22 @@ def prism_transition_potential_scan_beam_basis(
         detect_gpts[1] * full_sampling[1],
     )
 
-    scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
-    dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + tuple(detect_gpts), dtype=complex_dtype),
-        energy=energy,
-        extent=detect_extent,
-        ensemble_axes_metadata=scan_axes_metadata,
+    # The same grid and metadata that the SMatrix entry point declares for its
+    # lazy measurements, so that eager and lazy results agree.
+    detected_waves = _prism_eels_detected_waves(
+        s_matrix, scan, native=double_channel
     )
+    assert tuple(detected_waves.gpts) == tuple(detect_gpts)
+    # Length-1 axes for the ensemble axes of the potential (one configuration
+    # per call), as in the real-space driver.
     measurements = allocate_multislice_measurements(
-        dummy_scan_waves, detectors, (), []
+        detected_waves,
+        detectors,
+        potential.ensemble_shape,
+        potential.ensemble_axes_metadata,
     )
+    ensemble_index = (0,) * len(potential.ensemble_shape)
 
     def _detect_and_accumulate(recip_full, mask):
         # recip_full: (n_T, n_masked, *detect_gpts) reciprocal-space.
@@ -3021,8 +3204,8 @@ def prism_transition_potential_scan_beam_basis(
                 full_partial = copy_to_device(
                     full_partial, measurements[det_idx].array
                 )
-                measurements[det_idx].array += full_partial.reshape(
-                    scan_shape + m.array.shape[1:]
+                measurements[det_idx].array[ensemble_index] += (
+                    full_partial.reshape(scan_shape + m.array.shape[1:])
                 )
 
     def _site_mask(site_xy):
@@ -3093,6 +3276,19 @@ def prism_transition_potential_scan_beam_basis(
                     s_matrix.device,
                 )
                 s1_bp = ifft2(fft2(s_waves.array) * back_kernel)  # (Bp1, *gpts)
+                # The padded window size and its forward propagator depend only
+                # on the slice, not on the atom.
+                fb_margin = fresnel_margin(
+                    back_distance, fb_wavelength, fb_kmax, full_sampling, gpts
+                )
+                fb_pad_gpts = tuple(
+                    len(pad_window(0, w, fb_margin, n)[0])
+                    for w, n in zip(window_gpts, gpts)
+                )
+                fwd_kernel = _fresnel_propagator_array(
+                    back_distance, fb_pad_gpts, full_sampling, energy,
+                    s_matrix.device,
+                )
 
         s2_full = None
         if double_channel:
@@ -3189,11 +3385,12 @@ def prism_transition_potential_scan_beam_basis(
                 # Focal back-prop path: reconstruct at the centroid plane on a
                 # window padded by the Fresnel reach, then forward-propagate the
                 # reconstruction to the ionization plane and crop to the window.
-                m = fresnel_margin(
-                    back_distance, fb_wavelength, fb_kmax, full_sampling, gpts
+                py, iny = pad_window(
+                    crop_corner[0], window_gpts[0], fb_margin, gpts[0]
                 )
-                py, iny = pad_window(crop_corner[0], window_gpts[0], m, gpts[0])
-                px, inx = pad_window(crop_corner[1], window_gpts[1], m, gpts[1])
+                px, inx = pad_window(
+                    crop_corner[1], window_gpts[1], fb_margin, gpts[1]
+                )
                 s1_par_pad = wrapped_crop_2d(
                     s1_bp, (int(py[0]), int(px[0])), (len(py), len(px))
                 )
@@ -3201,10 +3398,6 @@ def prism_transition_potential_scan_beam_basis(
                     s1_par_pad, w1, k_par1, wave_vectors_np, py, px,
                     extent, gpts, mag_preserve=mag_preserve, geometry=geometry1,
                 )  # (n_k, Py, Px) at the centroid plane
-                fwd_kernel = _fresnel_propagator_array(
-                    back_distance, (len(py), len(px)), full_sampling, energy,
-                    s_matrix.device,
-                )
                 recon_pad = ifft2(fft2(recon_pad) * fwd_kernel)
                 s1_crop = recon_pad[:, iny][:, :, inx]  # (n_k, wh, ww)
             elif partitions_s1 is not None:
@@ -3265,8 +3458,9 @@ def prism_transition_potential_scan_beam_basis(
                 SHn0 = fft2(field)  # (n_T, n_k, *cell_gpts)
                 recip_full = xp.tensordot(
                     coeff_masked, SHn0, axes=[1, 1]
-                )  # (n_masked, n_T, *window_gpts)
-                recip_full = xp.moveaxis(recip_full, 0, 1)  # (n_T, n_masked, *window_gpts)
+                )  # (n_masked, n_T, *cell_gpts)
+                # (n_T, n_masked, *cell_gpts)
+                recip_full = xp.moveaxis(recip_full, 0, 1)
 
             _detect_and_accumulate(recip_full, mask)
 

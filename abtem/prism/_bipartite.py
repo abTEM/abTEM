@@ -25,7 +25,7 @@ expressed in abTEM's ``plane_waves`` phase convention:
 from __future__ import annotations
 
 import numpy as np
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, cKDTree
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
@@ -36,6 +36,22 @@ def _to_numpy(array) -> np.ndarray:
     if hasattr(array, "get"):  # cupy
         array = array.get()
     return np.asarray(array)
+
+
+def _nearest_indices(points: np.ndarray, queries: np.ndarray) -> np.ndarray:
+    """Index of the point nearest to each query, lowest index on exact ties.
+
+    A KD-tree proposes candidates, so no ``(n_queries, n_points)`` distance
+    array is formed. The distances to the candidates are then computed as
+    ``np.linalg.norm`` of the difference, and ties go to the lowest index,
+    which is what ``argmin`` over the full distance array gives.
+    """
+    k = min(16, len(points))
+    _, candidates = cKDTree(points).query(queries, k=k)
+    candidates = np.asarray(candidates).reshape(len(queries), k)
+    d = np.linalg.norm(queries[:, None, :] - points[candidates], axis=2)
+    nearest = d <= d.min(axis=1, keepdims=True)
+    return np.where(nearest, candidates, len(points)).min(axis=1)
 
 
 def select_parent_beams(
@@ -66,6 +82,8 @@ def select_parent_beams(
     wv = _to_numpy(wave_vectors).astype(np.float64)
     if n_radial < 1:
         raise ValueError("n_radial must be >= 1")
+    if n_angular < 1:
+        raise ValueError("n_angular must be >= 1")
 
     radius = float(np.linalg.norm(wv, axis=1).max())
     a_off = np.pi / n_angular
@@ -76,36 +94,42 @@ def select_parent_beams(
             samples.append([r * np.sin(a + a_off * i), r * np.cos(a + a_off * i)])
     samples = np.asarray(samples, dtype=np.float64)
 
-    d = np.linalg.norm(samples[:, None, :] - wv[None, :, :], axis=2)
-    return np.unique(np.argmin(d, axis=1))
+    return np.unique(_nearest_indices(wv, samples))
 
 
 def _linear_barycentric_weights(
     parents: np.ndarray, queries: np.ndarray, minimum_weight_cutoff: float = 1e-2
-) -> np.ndarray:
-    """Vectorised piecewise-linear (Delaunay barycentric) weights ``(B, Bp)``.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorised piecewise-linear (Delaunay barycentric) weights, sparse.
 
     Each query's weights are the barycentric coordinates of the Delaunay triangle
     it falls in (3 parents); queries outside the convex hull fall back to the
     nearest parent (weight 1). Partition of unity, exact at parents. Port of
     scatterem ``_linear_barycentric_weights``.
+
+    Returns ``(indices, values)``, both ``(B, 3)``: query ``b`` is
+    ``sum_j values[b, j] * parent[indices[b, j]]``. Unused entries have weight 0
+    and index 0.
     """
     known = np.asarray(parents, dtype=float)
     interp = np.asarray(queries, dtype=float)
     B, Bs = interp.shape[0], known.shape[0]
-    weights = np.zeros((B, Bs))
+    indices = np.zeros((B, 3), dtype=np.intp)
+    values = np.zeros((B, 3))
 
-    def _nearest_all():
-        d = np.linalg.norm(known[None, :, :] - interp[:, None, :], axis=2)
-        weights[np.arange(B), d.argmin(axis=1)] = 1.0
-        return weights
+    def _nearest(rows):
+        indices[rows, 0] = _nearest_indices(known, interp[rows])
+        values[rows, 0] = 1.0
 
-    if Bs < 3:
-        return _nearest_all()
-    try:
-        tri = Delaunay(known)
-    except Exception:
-        return _nearest_all()
+    tri = None
+    if Bs >= 3:
+        try:
+            tri = Delaunay(known)
+        except Exception:
+            tri = None
+    if tri is None:
+        _nearest(np.arange(B))
+        return indices, values
 
     simplex = tri.find_simplex(interp)  # (B,), -1 outside the convex hull
     inside = simplex >= 0
@@ -115,18 +139,38 @@ def _linear_barycentric_weights(
         r = interp[inside] - transform[:, 2, :]
         bary2 = np.einsum("bij,bj->bi", transform[:, :2, :], r)
         bary = np.concatenate([bary2, 1.0 - bary2.sum(1, keepdims=True)], axis=1)
-        verts = tri.simplices[sx]  # (Bin, 3)
-        rows = np.repeat(np.nonzero(inside)[0], 3)
-        weights[rows, verts.reshape(-1)] = bary.reshape(-1)
+        indices[inside] = tri.simplices[sx]  # (Bin, 3)
+        values[inside] = bary
     out = np.nonzero(~inside)[0]
     if out.size:
-        d = np.linalg.norm(known[None, :, :] - interp[out][:, None, :], axis=2)
-        weights[out, d.argmin(axis=1)] = 1.0
+        _nearest(out)
 
-    weights[weights < minimum_weight_cutoff] = 0.0
-    row_sum = weights.sum(axis=1, keepdims=True)
+    values[values < minimum_weight_cutoff] = 0.0
+    row_sum = values.sum(axis=1, keepdims=True)
     row_sum[row_sum == 0] = 1.0
-    return weights / row_sum
+    return indices, values / row_sum
+
+
+def _dense_weights(indices: np.ndarray, values: np.ndarray, n_parents: int):
+    """The ``(B, Bp)`` matrix of sparse ``(indices, values)`` weights."""
+    weights = np.zeros((len(indices), n_parents))
+    np.add.at(weights, (np.arange(len(indices))[:, None], indices), values)
+    return weights
+
+
+def _sparse_weights(weights):
+    """``(indices, values)`` of weights given sparse or as a ``(B, Bp)`` matrix.
+
+    A matrix keeps the largest entries of each row, as many as the densest row
+    has nonzeros, so a matrix from :func:`natural_neighbor_weights` loses
+    nothing.
+    """
+    if isinstance(weights, tuple):
+        return weights
+    dense = _to_numpy(weights)
+    k = max(int(np.count_nonzero(dense, axis=1).max(initial=0)), 1)
+    indices = np.argsort(-np.abs(dense), axis=1, kind="stable")[:, :k]
+    return indices, np.take_along_axis(dense, indices, axis=1)
 
 
 def natural_neighbor_weights(
@@ -134,7 +178,8 @@ def natural_neighbor_weights(
     queries,
     method: str = "linear",
     minimum_weight_cutoff: float = 1e-2,
-) -> np.ndarray:
+    sparse: bool = False,
+):
     """Interpolation weights expressing each query beam as a convex blend of parents.
 
     Parameters
@@ -152,6 +197,12 @@ def natural_neighbor_weights(
         but raise ``QhullError`` on degenerate circumcenter polygons, so they are
         not exposed here.
 
+    sparse : bool, optional
+        If True, return the weights as ``(indices, values)``, both ``(B, 3)``
+        (see :func:`_linear_barycentric_weights`), instead of a dense matrix.
+        Each row has at most 3 nonzeros, so this is the form the
+        reconstruction uses.
+
     Returns
     -------
     weights : (B, Bp) ndarray
@@ -161,9 +212,14 @@ def natural_neighbor_weights(
     parents = _to_numpy(parents).astype(np.float64)
     queries = _to_numpy(queries).astype(np.float64)
 
-    if method == "linear":
-        return _linear_barycentric_weights(parents, queries, minimum_weight_cutoff)
-    raise ValueError(f"unknown method {method!r} (only 'linear' is supported)")
+    if method != "linear":
+        raise ValueError(f"unknown method {method!r} (only 'linear' is supported)")
+    indices, values = _linear_barycentric_weights(
+        parents, queries, minimum_weight_cutoff
+    )
+    if sparse:
+        return indices, values
+    return _dense_weights(indices, values, len(parents))
 
 
 def focal_backprop_distance(traversed_depth, focal_backprop):
@@ -230,11 +286,12 @@ def _window_tilt(k, iy, ix, extent, gpts, sign, xp, cdtype):
     real_dtype = get_dtype(complex=False)
     dy = real_dtype(extent[0] / gpts[0])
     dx = real_dtype(extent[1] / gpts[1])
-    x = xp.asarray(iy, dtype=real_dtype) * dy  # (wy,)
-    y = xp.asarray(ix, dtype=real_dtype) * dx  # (wx,)
+    ry = xp.asarray(iy, dtype=real_dtype) * dy  # (wy,) row coordinates
+    rx = xp.asarray(ix, dtype=real_dtype) * dx  # (wx,) column coordinates
     k = xp.asarray(k, dtype=real_dtype)  # (M, 2)
     phase = real_dtype(sign * 2.0 * np.pi) * (
-        k[:, 0, None, None] * x[None, :, None] + k[:, 1, None, None] * y[None, None, :]
+        k[:, 0, None, None] * ry[None, :, None]
+        + k[:, 1, None, None] * rx[None, None, :]
     )
     return complex_exponential(phase).astype(cdtype)
 
@@ -244,13 +301,33 @@ _EELS_RECONSTRUCTION_BYTES = 1 << 31
 
 
 def _prepare_reconstruction_geometry(weights, parents, targets, xp, cdtype):
-    """Keep invariant interpolation data on the array backend for one scan."""
+    """Keep invariant interpolation data on the array backend for one scan.
+
+    ``weights`` is sparse ``(indices, values)`` or a ``(B, Bp)`` matrix (see
+    :func:`_sparse_weights`). The values are kept real: the weights are real,
+    and the magnitude term contracts them with the real ``|parent|``.
+    """
     real_dtype = get_dtype(complex=False)
-    if xp is np and hasattr(weights, "get"):
-        weights = _to_numpy(weights)
-    return (xp.asarray(weights, dtype=cdtype),
+    indices, values = _sparse_weights(weights)
+    indices = _to_numpy(indices).astype(np.int64)
+    # The real dtype of the columns, so that the weights do not promote them.
+    values = _to_numpy(values).real.astype(np.empty(0, cdtype).real.dtype)
+    return (xp.asarray(indices),
+            xp.asarray(values),
             xp.asarray(parents, dtype=real_dtype),
             xp.asarray(targets, dtype=real_dtype))
+
+
+def _combine(values, indices, columns):
+    """``sum_j values[b, j] * columns[indices[b, j]]``, shape ``(B, wy, wx)``.
+
+    One gather per weight slot (at most 3), so the work and the temporaries
+    scale with the number of targets, not with targets times parents.
+    """
+    result = values[:, 0, None, None] * columns[indices[:, 0]]
+    for j in range(1, indices.shape[1]):
+        result = result + values[:, j, None, None] * columns[indices[:, j]]
+    return result
 
 
 def _reconstruct_slice(
@@ -317,8 +394,9 @@ def windowed_reconstruct(
     ----------
     parent_cols : (Bp, wy, wx) array
         Parent scattering-matrix columns cropped to the window (backend-native).
-    weights : (B, Bp) array_like
-        Natural-neighbor weights (from :func:`natural_neighbor_weights`).
+    weights : (B, Bp) array_like or tuple
+        Natural-neighbor weights (from :func:`natural_neighbor_weights`), as a
+        matrix or as sparse ``(indices, values)``.
     k_parents : (Bp, 2) array_like
         Parent-beam wave vectors (1/Å).
     k_targets : (B, 2) array_like
@@ -345,15 +423,15 @@ def windowed_reconstruct(
         geometry = _prepare_reconstruction_geometry(
             weights, k_parents, k_targets, xp, cdtype
         )
-    w, k_parents, k_targets = geometry
+    indices, values, k_parents, k_targets = geometry
 
     detilt = _window_tilt(k_parents, iy, ix, extent, gpts, -1.0, xp, cdtype)
     Sd = parent_cols * detilt  # (Bp, wy, wx)
 
-    recon = xp.einsum("bp,pwv->bwv", w, Sd)  # (B, wy, wx)
+    recon = _combine(values, indices, Sd)  # (B, wy, wx)
     if mag_preserve:
-        mag = xp.einsum("bp,pwv->bwv", w.real.astype(cdtype), xp.abs(Sd).astype(cdtype))
-        mag = mag.real
+        # Real weights on the real |Sd|: no complex arithmetic is needed.
+        mag = _combine(values, indices, xp.abs(Sd))
         denom = xp.abs(recon)
         denom = xp.where(denom > 1e-20, denom, xp.asarray(1e-20, dtype=denom.dtype))
         recon = mag * (recon / denom)

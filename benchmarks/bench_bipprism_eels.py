@@ -322,7 +322,7 @@ def timed_beam_basis(S, tp, scan, atoms, double_channel):
             sites=atoms,
             double_channel=double_channel,
             reduction="beam_basis",
-            collection_angle=collection_angle,
+            collection_angle=collection_angle if double_channel else None,
             lazy=False,
         )
 
@@ -339,9 +339,9 @@ def timed_bipartite(S, tp, scan, atoms, double_channel):
             sites=atoms,
             double_channel=double_channel,
             reduction="bipartite",
-            collection_angle=collection_angle,
+            collection_angle=collection_angle if double_channel else None,
             partitions_s1=partitions_s1,
-            partitions_s2=partitions_s2,
+            partitions_s2=partitions_s2 if double_channel else None,
             lazy=False,
         )
 
@@ -711,7 +711,7 @@ def plot(sweep_results, out_path, double_channel):
 # ---------------------------------------------------------------------------
 def validate_interp1():
     """Sanity check at interpolation=1: real_space, beam_basis, and bipartite
-    (with NO partitioning, i.e. the exact full-parent limit) must all match
+    (with every S1 beam selected as a parent) must all match
     conventional multislice, for both single- and double-channel."""
     potential, tp, atoms = make_potential_and_tp(nz=2, sc_local=1)
 
@@ -727,6 +727,12 @@ def validate_interp1():
     S1 = abtem.SMatrix(
         potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
         interpolation=1, downsample=False, device=device,
+    )
+    from abtem.prism._bipartite import select_parent_beams
+
+    full_parent_rings = len(S1.wave_vectors)
+    assert len(select_parent_beams(S1.wave_vectors, full_parent_rings)) == len(
+        S1.wave_vectors
     )
 
     for dc in [False, True]:
@@ -750,11 +756,11 @@ def validate_interp1():
         res_bip = S1.transition_potential_scan(
             tp, scan=scan, detectors=detector, sites=atoms, double_channel=dc,
             reduction="bipartite", collection_angle=None,
-            partitions_s1=None, partitions_s2=None, lazy=False,
+            partitions_s1=full_parent_rings, partitions_s2=None, lazy=False,
         )
 
         for name, res in [("real_space", res_real), ("beam_basis", res_bb),
-                          ("bipartite (no partitions)", res_bip)]:
+                          ("bipartite (full S1 parents)", res_bip)]:
             arr = np.asarray(res.array)
             assert arr.shape == arr_ms.shape, (
                 f"{name}: shape mismatch {arr.shape} vs {arr_ms.shape}"
