@@ -2656,7 +2656,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         row_bytes = scan_shape[1] * int(np.prod(window)) * 8
         num_rows = max(1, int(budget // max(row_bytes, 1)))
         num_rows = min(num_rows, scan_shape[0])
-        detect_rows = max(1, int(self._REDUCE_BATCH_BYTES // max(row_bytes, 1)))
+        detect_gpts = self._detection_gpts(detectors)
+        detect_row_bytes = scan_shape[1] * int(np.prod(detect_gpts)) * 8
+        detect_rows = max(1, int(self._REDUCE_BATCH_BYTES // max(detect_row_bytes, 1)))
         detect_rows = min(detect_rows, num_rows)
 
         keep_interpolated, keep_plane_wave = self._blend_branches(
@@ -3525,7 +3527,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         from abtem.core.chunks import validate_chunks
 
-        shape = (len(scan),) + self.window_gpts
+        shape = (len(scan),) + self._detection_gpts(detectors)
         chunks = (max_batch_reduction, -1, -1)
         validated_max_batch_reduction = validate_chunks(
             shape, chunks, dtype=np.dtype(self._complex_dtype)
@@ -3574,6 +3576,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 )
 
         return _wrap_measurements(measurements)
+
+    def _detection_gpts(self, detectors) -> tuple[int, int]:
+        """The grid a batch of reduced wave functions is detected on: the full grid
+        when a pattern detector pads the window to it (see
+        `_FullGridPixelatedDetector`), the window otherwise."""
+        if any(isinstance(d, _FullGridPixelatedDetector) for d in detectors):
+            return tuple(self.gpts)
+        return tuple(self.window_gpts)
 
     @property
     def _offset_rounding_margin(self) -> float:

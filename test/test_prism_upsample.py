@@ -18,6 +18,7 @@ from abtem import (
 from abtem.core.backend import get_array_module
 from abtem.distributions import uniform
 from abtem.prism.s_matrix import SMatrixArray
+from abtem.waves import Waves
 
 # Every test that runs array code is parametrized over the device: the
 # compression (``eigh`` on the Gram matrix), the mode contractions and the
@@ -1863,3 +1864,74 @@ def test_compressed_reduce_averages_a_ctf_ensemble_by_every_method(kwargs, devic
     np.testing.assert_allclose(
         measured, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
+
+
+# The patterns of a cropped window are detected on the downsampled grid (40, 40),
+# every other detector reads the window (24, 32); the batch size of a reduction
+# follows the grid its detectors read, and the tests below record it.
+_DETECTED_GRIDS = [
+    pytest.param(abtem.PixelatedDetector(max_angle="cutoff"), (40, 40), id="pattern"),
+    pytest.param(abtem.AnnularDetector(inner=40, outer=100), (24, 32), id="annular"),
+]
+
+
+@devices
+@pytest.mark.parametrize(
+    "detector, grid, blend_angle",
+    [
+        # an annular detector is reduced on the window by an unblended reduction
+        # only: the default blend reduces it on the one-period window as well
+        (abtem.PixelatedDetector(max_angle="cutoff"), (40, 40), "auto"),
+        (abtem.PixelatedDetector(max_angle="cutoff"), (40, 40), 0),
+        (abtem.AnnularDetector(inner=40, outer=100), (24, 32), 0),
+    ],
+    ids=["pattern-blended", "pattern", "annular"],
+)
+def test_cropped_window_batch_size_counts_the_grid_the_detector_reads(
+    detector, grid, blend_angle, device, monkeypatch
+):
+    import abtem.core.chunks as chunks
+
+    sized = []
+    validate_chunks = chunks.validate_chunks
+
+    def record(shape, *args, **kwargs):
+        sized.append(tuple(shape))
+        return validate_chunks(shape, *args, **kwargs)
+
+    monkeypatch.setattr(chunks, "validate_chunks", record)
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    built = _window_s_matrix(potential, device).build(lazy=False)
+    assert built.gpts == (40, 40) and built.window_gpts == (24, 32)
+    scan = CustomScan([[1.0, 1.5], [2.5, 3.0], [4.0, 0.5]])
+
+    built.reduce(scan=scan, detectors=detector, blend_angle=blend_angle)
+
+    other = ({(40, 40), (24, 32)} - {grid}).pop()
+    assert (len(scan),) + grid in sized
+    assert (len(scan),) + other not in sized
+
+
+@devices
+@pytest.mark.parametrize("detector, grid", _DETECTED_GRIDS)
+def test_cropped_window_lattice_batches_count_the_grid_the_detector_reads(
+    detector, grid, device, monkeypatch
+):
+    # a budget of 50000 bytes holds 2 rows of the 4 scan columns on the window
+    # (4 * 24 * 32 * 8 = 24576 bytes per row) but only 1 on the full grid
+    # (4 * 40 * 40 * 8 = 51200 bytes per row)
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    built = _window_s_matrix(potential, device).build(lazy=False)
+    monkeypatch.setattr(CompressedSMatrixArray, "_REDUCE_BATCH_BYTES", 50000)
+    rows = []
+    share = Waves._share_diffraction_pattern_fft
+
+    def record(self, *args, **kwargs):
+        rows.append(self.array.shape[-4])
+        return share(self, *args, **kwargs)
+
+    monkeypatch.setattr(Waves, "_share_diffraction_pattern_fft", record)
+
+    built.reduce(scan=_window_scan(potential), detectors=detector, blend_angle=0)
+
+    assert max(rows) == max(1, 50000 // (4 * int(np.prod(grid)) * 8))
