@@ -804,6 +804,31 @@ def test_prism_upsample_with_a_cropped_window_refuses_components(
 ENERGIES = [100e3, 200e3]
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_upsample_with_a_cropped_window_refuses_components_for_energies(device):
+    # the same refusal for the scan of several energies, which takes the cropped
+    # window to the detection one energy at a time
+    s_matrix = abtem.SMatrix(
+        energy=ENERGIES,
+        semiangle_cutoff=20,
+        potential=abtem.Potential(
+            _potential(True).frozen_phonons.atoms, gpts=48, slice_thickness=2.0
+        ),
+        interpolation=2,
+        upsample=True,
+        window_gpts=(16, 20),
+        device=device,
+    )
+    assert s_matrix.window_gpts != s_matrix.downsampled_gpts
+
+    with pytest.raises(NotImplementedError, match="upsample"):
+        s_matrix.scan(
+            scan=abtem.GridScan((1, 1), (3, 4), gpts=(2, 3)),
+            detectors=PixelatedDetector(MAX_ANGLE, components="all"),
+            lazy=False,
+        )
+
+
 def _prism_scan_energies(device, lazy, detector, ensemble_mean=True):
     s_matrix = abtem.SMatrix(
         energy=ENERGIES,
