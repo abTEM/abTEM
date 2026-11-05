@@ -156,10 +156,14 @@ Bugfixes:
 - `SMatrix`, `Waves.downsample` and `WavesDetector(gpts)` record the band limit of their downsampled waves in the
   metadata key `antialias_sampling`, the sampling of the grid whose antialias aperture band-limited the waves,
   instead of the pixel count `adjusted_antialias_cutoff_gpts`, which holds only at the extent it was counted on.
-  Waves stored with the old key read as before. **Behaviour change:** the cutoff angles of resampled waves
+  `Waves.downsample` and `WavesDetector(gpts)` also record the sampling of the coarsest grid the waves were
+  resampled onto in `coarsest_sampling`, where their content ends. Waves stored with the old key read as before.
+  **Behaviour change:** the cutoff angles of waves resampled by `Waves.downsample` or `WavesDetector(gpts)`
   survive `Waves.tile`; the waves of `Probe(energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12))`
-  downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad. The
-  cutoff of resampled waves that are not tiled is unchanged
+  downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad.
+  The cutoff angles, the `"cutoff"` and `"valid"` patterns and the bins of a `FlexibleAnnularDetector` of such
+  waves that are not tiled are those of before, however often they are resampled; the changes to `SMatrix` are
+  the ones in the neighbouring entries
 - The batches of the compressed reduction of a C-PRISM window smaller than the downsampled grid are sized for the
   grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
   followed the window, so a batch of patterns held as many times the budget as the downsampled grid has pixels per
