@@ -879,6 +879,51 @@ class TestPrismEffectiveIonization:
         )
         assert np.all(np.asarray(got.compute().array) >= 0.0)
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_two_potential_ensemble_axes_match_one_axis_runs(self, lazy):
+        # An EnergyResolvedAtomsEnsemble has two ensemble axes (energy loss x
+        # configuration); each energy loss, run as an AtomsEnsemble, is the oracle.
+        from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
+
+        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+        rng = np.random.default_rng(2)
+        rows = [[atoms.copy() for _ in range(3)] for _ in range(2)]
+        for row in rows:
+            for member in row:
+                member.positions += rng.normal(scale=0.05, size=(len(member), 3))
+
+        def ionization_scan(ensemble, lazy):
+            potential = abtem.Potential(ensemble, gpts=64, slice_thickness=2)
+            s_matrix = abtem.SMatrix(
+                potential=potential,
+                energy=ENERGY,
+                semiangle_cutoff=20.0,
+                interpolation=1,
+                downsample=False,
+            )
+            measurement = s_matrix.ionization_scan(
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=np.array([[0.0, 0.0], [1.3, 2.1]]),
+                sites=atoms,
+                lazy=lazy,
+            )
+            return np.asarray(measurement.compute().array if lazy else measurement.array)
+
+        got = ionization_scan(
+            EnergyResolvedAtomsEnsemble(rows, energies=[10.0, 20.0], ensemble_mean=True),
+            lazy,
+        )
+        expected = np.stack(
+            [
+                ionization_scan(ase_row, lazy=False).squeeze()
+                for ase_row in (abtem.AtomsEnsemble(row, ensemble_mean=True) for row in rows)
+            ]
+        )
+        assert got.shape == expected.shape == (2, 2)
+        np.testing.assert_allclose(got, expected, rtol=1e-5)
+
 
 @requires_xraydb
 class TestXrayDetectorAsDetector:
