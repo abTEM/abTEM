@@ -504,6 +504,64 @@ def test_lazy_detect_matches_eager_detect(detector):
 @pytest.mark.parametrize(
     "detector",
     [
+        abtem.AnnularDetector(inner=30, outer=100),
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        abtem.SegmentedDetector(inner=10, outer=80, nbins_radial=2, nbins_azimuthal=4),
+        abtem.PixelatedDetector(max_angle=None),
+        abtem.PixelatedDetector(max_angle=60),
+        abtem.WavesDetector(),
+    ],
+    ids=lambda detector: type(detector).__name__
+    + str(getattr(detector, "max_angle", "")),
+)
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 32, 32),
+        (3, 16, 32),
+        (3, 32, 11),
+        (1, (20, 12), (8, 8, 16)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_detect_of_waves_split_along_the_grid_matches_eager(
+    device, chunks, detector
+):
+    """A detector sees the whole grid of lazy waves that are split into several
+    dask chunks along the grid."""
+    import dask.array as da
+
+    from abtem.core.axes import UnknownAxis
+    from abtem.core.backend import asnumpy, copy_to_device
+
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    array = array.astype(np.complex64)
+    kwargs = dict(energy=100e3, sampling=0.1, ensemble_axes_metadata=[UnknownAxis()])
+    eager = abtem.Waves(copy_to_device(array, device), **kwargs)
+    lazy = abtem.Waves(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = detector.detect(eager)
+        result = detector.detect(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
         abtem.AnnularDetector(inner=10, outer=40),
         abtem.FlexibleAnnularDetector(outer=40),
         abtem.SegmentedDetector(

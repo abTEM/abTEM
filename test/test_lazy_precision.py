@@ -25,7 +25,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy, copy_to_device
 from abtem.core.fft import fft2, fft2_convolve
 from abtem.core.utils import get_dtype
-from abtem.measurements import DiffractionPatterns, Images
+from abtem.measurements import DiffractionPatterns, Images, PolarMeasurements
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
 from abtem.tilt import BeamTilt
@@ -261,6 +261,52 @@ def test_lazy_measurements_declare_their_block_precision(name, device):
         eager = method(make_eager().copy_to_device(device))
         assert lazy.is_lazy and not eager.is_lazy
         _check(lazy, eager, member_offset_free=name.startswith("integrate_gradient"))
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize(
+    "config, input_dtype, expected_dtype",
+    [
+        ("float64", np.float64, np.float64),
+        ("float32", np.float64, np.float64),
+        ("float64", np.float32, np.float32),
+        # counts get the configured precision, which holds the NaN outside the bins
+        ("float64", np.uint16, np.float64),
+    ],
+)
+def test_polar_to_diffraction_patterns_keeps_the_precision_of_the_bins(
+    config, input_dtype, expected_dtype, device
+):
+    nbins_radial, nbins_azimuthal, members = 4, 6, 3
+    rng = np.random.default_rng(5)
+    shape = (members, nbins_radial, nbins_azimuthal)
+    # values not representable in float32, so a narrowing gather is seen
+    data = (100 * rng.random(shape) + 1e-9).astype(input_dtype)
+
+    def polar(lazy):
+        array = da.from_array(data, chunks=(1, -1, -1)) if lazy else data
+        return PolarMeasurements(
+            array,
+            radial_sampling=5.0,
+            azimuthal_sampling=2 * np.pi / nbins_azimuthal,
+            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(members)))],
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+
+    with abtem.config.set({"precision": config}):
+        lazy = polar(True).to_diffraction_patterns(gpts=(40, 33))
+        eager = polar(False).to_diffraction_patterns(gpts=(40, 33))
+
+    declared = lazy.array.dtype
+    computed = asnumpy(lazy.copy().compute().array)
+    assert declared == computed.dtype == eager.array.dtype == expected_dtype
+    eager_values = asnumpy(eager.array)
+    np.testing.assert_array_equal(computed, eager_values)
+    inside = ~np.isnan(eager_values)
+    assert inside.any() and (~inside).any()
+    # a pixel takes the value of its bin unchanged
+    for member in range(members):
+        assert np.isin(eager_values[member][inside[member]], data[member]).all()
 
 
 @cuda_and_cpu

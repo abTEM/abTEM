@@ -16,8 +16,10 @@ from utils import assert_array_objects_equal, devices
 import abtem
 from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 from abtem.potentials.iam import PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.prism.utils import window_crop
 from abtem.scan import validate_scan
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
@@ -42,6 +44,26 @@ def _potential(
         )
     return abtem.Potential(
         atoms, gpts=gpts, slice_thickness=2, exit_planes=exit_planes, device=device
+    )
+
+
+def _energy_resolved_potential(ensemble_mean, device="cpu", exit_planes=None):
+    # 2 energy losses x 4 configurations: two potential ensemble axes of
+    # different sizes, every member displaced differently
+    rng = np.random.default_rng(2)
+    snapshots = []
+    for _ in range(2):
+        row = []
+        for _ in range(4):
+            atoms = ATOMS.copy()
+            atoms.positions += rng.normal(scale=0.05, size=atoms.positions.shape)
+            row.append(atoms)
+        snapshots.append(row)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, energies=[10.0, 20.0], ensemble_mean=ensemble_mean
+    )
+    return abtem.Potential(
+        ensemble, gpts=64, slice_thickness=2, exit_planes=exit_planes, device=device
     )
 
 
@@ -487,3 +509,142 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def test_auto_reduction_batch_follows_the_chunk_size_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    # the window is the 48 x 48 grid (interpolation 1), 18432 bytes per position
+    potential = _potential(gpts=48)
+    s_matrix_array = _s_matrix(potential).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "1 MB", "dask.chunk-size-gpu": "180 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+        monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert cpu == 1_000_000 // 18432
+    assert gpu == 180_000 // 18432
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_auto_reduction_batch_holds_the_crop_box(monkeypatch, lazy):
+    """CPU only: the automatic batch follows dask.chunk-size, not chunk-size-gpu."""
+    # window 32 x 32 on the 64 x 64 grid; a batch of positions is contracted over
+    # a box that spans the batch and one window
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=lazy)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    detector = abtem.AnnularDetector(30, 90)
+    expected = s_matrix_array.reduce(
+        scan=scan, detectors=detector, max_batch_reduction=len(scan)
+    ).compute()
+
+    # the contraction forms an array of one box per position, see _reduce_to_waves
+    contracted = []
+    reduce_to_waves = SMatrixArray._reduce_to_waves
+
+    def spy(self, array, positions, coefficients):
+        pixel_positions = positions / np.array(self.waves.sampling) - np.asarray(
+            self.window_offset
+        )
+        _, box, _ = window_crop(pixel_positions, self.window_gpts, self.gpts)
+        contracted.append(positions.size // 2 * int(np.prod(box)) * 8)
+        return reduce_to_waves(self, array, positions, coefficients)
+
+    monkeypatch.setattr(SMatrixArray, "_reduce_to_waves", spy)
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        measured = s_matrix_array.reduce(scan=scan, detectors=detector).compute()
+
+    assert max(contracted) <= 400_000
+    assert len(contracted) > 1
+    _assert_matches(measured, expected)
+
+
+def test_auto_reduction_batch_holds_the_crop_box_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+    # the 32 x 32 windows alone would allow 400000 // 8192 positions
+    assert cpu < 400_000 // 8192
+
+    monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+    with abtem.config.set(
+        {"dask.chunk-size": "100 MB", "dask.chunk-size-gpu": "400 kB"}
+    ):
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert gpu == cpu
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("ensemble_mean", [False, True])
+@devices
+def test_prism_of_an_energy_resolved_ensemble_matches_multislice(
+    path, ensemble_mean, device
+):
+    # two potential ensemble axes (energy loss x configuration); the
+    # configuration axis is averaged by ensemble_mean, the energy-loss axis never
+    potential = _energy_resolved_potential(ensemble_mean, device=device)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        # the elastic and diffuse components need the configurations averaged
+        components = ("elastic", "diffuse") if ensemble_mean else None
+        return [
+            abtem.AnnularDetector(30, 90),
+            abtem.WavesDetector(),
+            abtem.PixelatedDetector(max_angle=100, components=components),
+        ]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=scan, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), **_PATHS[path])
+    measured = measured.compute()
+
+    assert measured[0].shape == ((2, 3, 5) if ensemble_mean else (2, 4, 3, 5))
+    assert measured[1].shape == (2, 4, 3, 5, 64, 64)
+    _assert_matches(list(measured), list(expected))
+
+
+@devices
+def test_lazy_build_of_an_energy_resolved_ensemble_matches_the_eager_build(device):
+    # exit_planes=3 gives 3 planes, a third size next to the 2 x 4 ensemble, so a
+    # misplaced plane symbol changes the shape
+    potential = _energy_resolved_potential(False, device=device, exit_planes=3)
+    s_matrix = _s_matrix(potential, device=device)
+
+    lazy = s_matrix.build(lazy=True)
+    eager = s_matrix.build(lazy=False)
+
+    # one block per member of every ensemble axis, as multislice partitions them
+    assert lazy.array.chunks[:2] == ((1, 1), (1, 1, 1, 1))
+    assert lazy.array.shape[:3] == (2, 4, 3)
+    _assert_matches(lazy.waves.compute(), eager.waves)
