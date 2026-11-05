@@ -1788,6 +1788,9 @@ class _FullGridPixelatedDetector(PixelatedDetector):
             reciprocal_space=detector.reciprocal_space,
             to_cpu=detector.to_cpu,
             url=detector.url,
+            components=detector.components,
+            unbiased=detector.unbiased,
+            reduction_dtype=detector.reduction_dtype,
             _ensemble_gpts=detector._ensemble_gpts,
         )
 
