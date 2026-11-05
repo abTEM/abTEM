@@ -186,8 +186,8 @@ Bugfixes:
   grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
   followed the window, so a batch of patterns held as many times the budget as the downsampled grid has pixels per
   window pixel: 2.08 times for a (24, 32) window in a (40, 40) grid (1600 / 768 pixels) and 64 times for a
-  128 x 128 window in a 1024 x 1024 grid. The budget is `dask.chunk-size` for the batches of an arbitrary list of
-  positions, and 1 GiB for the lattice reduction of a `GridScan`. Every other detector reads the window, and the
+  128 x 128 window in a 1024 x 1024 grid. The budget is `dask.chunk-size` (`dask.chunk-size-gpu` on a GPU) for the batches of an
+  arbitrary list of positions, and 1 GiB for the lattice reduction of a `GridScan`. Every other detector reads the window, and the
   values do not change
 - C-PRISM (`upsample=True`) with a window smaller than the downsampled grid, an explicit `window_gpts` or the
   automatic window of a large cell, detects the diffraction patterns of a `PixelatedDetector` on the downsampled
