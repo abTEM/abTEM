@@ -1935,3 +1935,17 @@ def test_cropped_window_lattice_batches_count_the_grid_the_detector_reads(
     built.reduce(scan=_window_scan(potential), detectors=detector, blend_angle=0)
 
     assert max(rows) == max(1, 50000 // (4 * int(np.prod(grid)) * 8))
+
+
+@devices
+def test_dummy_probes_keep_the_built_band_limit_with_supplied_metadata(device):
+    # the metadata of the matched ensemble of a multi-energy reduction is supplied
+    # by the caller: the private seam, as no public output depends on it
+    s_matrix = _window_s_matrix(_window_potential(_WINDOW_ATOMS, device), device)
+    assert s_matrix._built_metadata
+
+    probes = s_matrix.dummy_probes(metadata={"label": "supplied"})
+
+    assert probes.metadata["label"] == "supplied"
+    assert probes.metadata["antialias_sampling"] == s_matrix.sampling
+    assert probes.cutoff_angles == pytest.approx(s_matrix.dummy_probes().cutoff_angles)

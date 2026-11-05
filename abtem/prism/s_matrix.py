@@ -5626,8 +5626,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         downsample: bool = True,
         **kwargs,
     ) -> Probe:
-        # the probes of the built S-matrix carry the band limit that build records
-        kwargs.setdefault("metadata", {**self.metadata, **self._built_metadata})
+        # the probes of the built S-matrix carry the band limit that build records,
+        # also when the caller supplies the rest of the metadata
+        kwargs["metadata"] = {
+            **kwargs.get("metadata", self.metadata),
+            **self._built_metadata,
+        }
         return super().dummy_probes(scan, ctf, plane, downsample, **kwargs)
 
     @property
