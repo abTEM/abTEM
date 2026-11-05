@@ -11,8 +11,10 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 ``gpu`` is a ``pytest.param`` defined in ``test/utils.py`` that skips when
 CuPy isn't present.
 """
+import builtins
 import sys
 import warnings
+import weakref
 
 import ase
 import numpy as np
@@ -1229,6 +1231,45 @@ def test_double_channel_transmissions_belong_to_their_slices(monkeypatch, seeds)
 
     np.testing.assert_array_equal(first, second)
     np.testing.assert_array_equal(first, expected)
+
+
+class _ReusedIds:
+    """``id`` as an allocator that gives each freed object's number to the next new
+    object, as CPython often does, so that a cache keyed on the number alone meets a
+    reused one at every step."""
+
+    def __init__(self):
+        self._live = {}
+        self._free = []
+
+    def __call__(self, obj):
+        key = builtins.id(obj)
+        if key not in self._live:
+            self._live[key] = self._free.pop() if self._free else len(self._live)
+            weakref.finalize(obj, self._release, key)
+        return self._live[key]
+
+    def _release(self, key):
+        self._free.append(self._live.pop(key))
+
+
+def test_double_channel_transmissions_do_not_follow_a_reused_id(monkeypatch):
+    """A potential without frozen phonons also yields a new slice every time. When
+    each slice takes the id of the one before, as here, every slice still gets its
+    own transmission function: the result equals that under the real ids. Whether
+    freed ids are reused in a run depends on the interpreter, so the ids are
+    replaced by an allocator that always reuses them. The cache is independent of
+    the device, and `_double_channel_scan` runs on the CPU."""
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 4
+    )
+    expected = _double_channel_scan(potential)
+
+    monkeypatch.setattr(abtem.multislice, "id", _ReusedIds(), raising=False)
+    result = _double_channel_scan(potential)
+
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_double_channel_shares_the_transmissions_of_shared_slices(monkeypatch):

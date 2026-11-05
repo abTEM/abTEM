@@ -173,6 +173,141 @@ def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
     assert np.allclose(lazy_result.array, eager.array)
 
 
+_GRID_SPLIT_OPERATIONS = {
+    "apply_ctf": lambda waves, kernel, potential: waves.apply_ctf(
+        defocus=50, semiangle_cutoff=30
+    ),
+    "normalize": lambda waves, kernel, potential: waves.normalize(),
+    "ensure_reciprocal_space": lambda waves, kernel, potential: (
+        waves.ensure_reciprocal_space()
+    ),
+    "ensure_real_space": lambda waves, kernel, potential: waves.ensure_real_space(),
+    "convolve": lambda waves, kernel, potential: waves.convolve(kernel),
+    "downsample": lambda waves, kernel, potential: waves.downsample(max_angle=20),
+    "diffraction_patterns": lambda waves, kernel, potential: (
+        waves.diffraction_patterns(max_angle=None)
+    ),
+    "diffraction_patterns_block_direct": lambda waves, kernel, potential: (
+        waves.diffraction_patterns(block_direct=True)
+    ),
+    "multislice": lambda waves, kernel, potential: waves.multislice(potential),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_OPERATIONS))
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 16, 20),
+        (3, 8, 20),
+        (3, 16, 7),
+        (1, (10, 6), (5, 5, 10)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_waves_split_along_the_grid_match_eager(
+    device, chunks, reciprocal_space, operation
+):
+    """A lazy operation on waves whose grid is in several dask chunks gives the
+    eager result: the grid is gathered into one chunk before the operation."""
+    from ase import Atoms
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.potentials.iam import Potential
+
+    rng = np.random.default_rng(0)
+    shape = (3, 16, 20)
+    array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
+    kernel = (rng.normal(size=shape[1:]) + 1j * rng.normal(size=shape[1:])).astype(
+        np.complex64
+    )
+    potential = Potential(
+        Atoms("C", positions=[(0.8, 1.0, 1.0)], cell=(1.6, 2.0, 2.0)),
+        gpts=(16, 20),
+        slice_thickness=1,
+        device=device,
+    )
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        reciprocal_space=reciprocal_space,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = Waves(copy_to_device(array, device), **kwargs)
+    lazy = Waves(copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs)
+    apply = _GRID_SPLIT_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager, kernel, potential)
+        result = apply(lazy, kernel, potential)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    assert computed.array.shape == expected.array.shape
+    expected_array = asnumpy(expected.array)
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@pytest.mark.parametrize(
+    "operation", ["apply_ctf", "diffraction_patterns"], ids=lambda name: name
+)
+@devices
+def test_lazy_waves_split_along_the_grid_by_auto_chunks_keep_several_blocks(
+    device, operation
+):
+    """Gathering the grid of a stack that dask chunked automatically leaves the
+    ensemble axes in several blocks, so the result is not one block that holds
+    the whole stack."""
+    import dask
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.backend import copy_to_device
+
+    rng = np.random.default_rng(0)
+    shape = (4, 3, 256, 256)
+    array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1, 2, 3)),
+            OrdinalAxis(values=(0, 1, 2)),
+        ],
+    )
+    apply = {
+        "apply_ctf": lambda waves: waves.apply_ctf(defocus=50, semiangle_cutoff=30),
+        "diffraction_patterns": lambda waves: waves.diffraction_patterns(
+            max_angle=None
+        ),
+    }[operation]
+    eager = Waves(copy_to_device(array, device), **kwargs)
+
+    with dask.config.set({"array.chunk-size": "1MiB"}):
+        lazy = Waves(
+            copy_to_device(da.from_array(array, chunks="auto"), device), **kwargs
+        )
+        assert lazy.array.numblocks[:2] == (1, 1)
+        assert lazy.array.numblocks[2:] != (1, 1)
+        result = apply(lazy)
+
+    assert result.array.numblocks[2:] == (1, 1)
+    assert all(n > 1 for n in result.array.numblocks[:2])
+    with abtem.config.set({"fft": "numpy"}):
+        expected = asnumpy(apply(eager).array)
+        computed = asnumpy(result.copy().compute(progress_bar=False).array)
+    np.testing.assert_allclose(
+        computed, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
 @given(data=st.data(), potential=abtem_st.potential())
 @pytest.mark.parametrize(
     "waves_builder",
