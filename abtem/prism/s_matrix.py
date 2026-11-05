@@ -1782,17 +1782,7 @@ class _FullGridPixelatedDetector(PixelatedDetector):
             )
         self._pad_gpts = tuple(int(n) for n in gpts)
         self._unpadded = detector
-        super().__init__(
-            max_angle=detector.max_angle,
-            resample=detector.resample,
-            reciprocal_space=detector.reciprocal_space,
-            to_cpu=detector.to_cpu,
-            url=detector.url,
-            components=detector.components,
-            unbiased=detector.unbiased,
-            reduction_dtype=detector.reduction_dtype,
-            _ensemble_gpts=detector._ensemble_gpts,
-        )
+        super().__init__(**detector._copy_kwargs(cls=PixelatedDetector))
 
     def _crop_gpts(self, waves):
         if not isinstance(waves, Waves):
