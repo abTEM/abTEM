@@ -209,6 +209,19 @@ def validate_chunks(
     return validated_chunks
 
 
+def _chunk_bytes(device: str) -> int:
+    """The size in bytes that an automatically sized chunk on the device may reach."""
+    if device == "gpu":
+        return parse_bytes(config.get("dask.chunk-size-gpu"))
+    elif device in ("cpu", "mps"):
+        # Metal shares the machine's memory with the host instead of having
+        # its own VRAM, so the host chunk size is what actually bounds a
+        # chunk there -- 'chunk-size-gpu' is sized for a discrete card.
+        return parse_bytes(config.get("dask.chunk-size"))
+    else:
+        raise RuntimeError(f"Unknown device: {device}")
+
+
 def _auto_chunks(
     shape: tuple[int, ...],
     chunks: ChunksTuple,
@@ -246,15 +259,7 @@ def _auto_chunks(
     check_chunks_match_shape_length(shape, chunks)
 
     if max_elements == "auto":
-        if device == "gpu":
-            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu"))
-        elif device in ("cpu", "mps"):
-            # Metal shares the machine's memory with the host instead of having
-            # its own VRAM, so the host chunk size is what actually bounds a
-            # chunk there -- 'chunk-size-gpu' is sized for a discrete card.
-            chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
-        else:
-            raise RuntimeError(f"Unknown device: {device}")
+        chunk_bytes = _chunk_bytes(device)
 
         if dtype is None:
             raise ValueError("auto selecting chunk sizes requires dtype")
@@ -669,8 +674,8 @@ def estimate_scan_batch_size(
             n_probes = max(1, probe_budget // per_probe_effective)
             return _nearest_power_of_two(n_probes)
         except Exception:  # noqa: BLE001 -- no CUDA memory probe available
-            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+            chunk_bytes = _chunk_bytes("gpu")
     else:
-        chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
+        chunk_bytes = _chunk_bytes("cpu")
 
     return max(1, chunk_bytes // max(1, per_probe_bytes))

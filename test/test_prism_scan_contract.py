@@ -19,6 +19,7 @@ from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 from abtem.potentials.iam import PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.prism.utils import window_crop
 from abtem.scan import validate_scan
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
@@ -508,6 +509,97 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def test_auto_reduction_batch_follows_the_chunk_size_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    # the window is the 48 x 48 grid (interpolation 1), 18432 bytes per position
+    potential = _potential(gpts=48)
+    s_matrix_array = _s_matrix(potential).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "1 MB", "dask.chunk-size-gpu": "180 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+        monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert cpu == 1_000_000 // 18432
+    assert gpu == 180_000 // 18432
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_auto_reduction_batch_holds_the_crop_box(monkeypatch, lazy):
+    """CPU only: the automatic batch follows dask.chunk-size, not chunk-size-gpu."""
+    # window 32 x 32 on the 64 x 64 grid; a batch of positions is contracted over
+    # a box that spans the batch and one window
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=lazy)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    detector = abtem.AnnularDetector(30, 90)
+    expected = s_matrix_array.reduce(
+        scan=scan, detectors=detector, max_batch_reduction=len(scan)
+    ).compute()
+
+    # the contraction forms an array of one box per position, see _reduce_to_waves
+    contracted = []
+    reduce_to_waves = SMatrixArray._reduce_to_waves
+
+    def spy(self, array, positions, coefficients):
+        pixel_positions = positions / np.array(self.waves.sampling) - np.asarray(
+            self.window_offset
+        )
+        _, box, _ = window_crop(pixel_positions, self.window_gpts, self.gpts)
+        contracted.append(positions.size // 2 * int(np.prod(box)) * 8)
+        return reduce_to_waves(self, array, positions, coefficients)
+
+    monkeypatch.setattr(SMatrixArray, "_reduce_to_waves", spy)
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        measured = s_matrix_array.reduce(scan=scan, detectors=detector).compute()
+
+    assert max(contracted) <= 400_000
+    assert len(contracted) > 1
+    _assert_matches(measured, expected)
+
+
+def test_auto_reduction_batch_holds_the_crop_box_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+    # the 32 x 32 windows alone would allow 400000 // 8192 positions
+    assert cpu < 400_000 // 8192
+
+    monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+    with abtem.config.set(
+        {"dask.chunk-size": "100 MB", "dask.chunk-size-gpu": "400 kB"}
+    ):
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert gpu == cpu
 
 
 @pytest.mark.parametrize("path", list(_PATHS))

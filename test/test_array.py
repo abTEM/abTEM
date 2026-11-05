@@ -179,6 +179,9 @@ def test_from_zarr_legacy_format(data, has_array, url):
     has_array_from_zarr = from_zarr(url).compute()
     assert_array_objects_equal(has_array_from_zarr, has_array)
 
+    has_array_from_zarr = from_zarr(url, chunks="auto").compute()
+    assert_array_objects_equal(has_array_from_zarr, has_array)
+
 
 # ---- large-array zarr chunking (regression: whole-array single chunk hit a
 # codec's 2**31-1 byte buffer limit, and a write that failed partway left a
