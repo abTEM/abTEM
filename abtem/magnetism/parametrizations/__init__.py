@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from abtem.core.utils import get_data_path
+from abtem.core.utils import EqualityMixin, get_data_path
 
 
 def get_parameters():
@@ -14,7 +14,7 @@ def get_parameters():
     return parameters
 
 
-class LyonParametrization:
+class LyonParametrization(EqualityMixin):
     def __init__(self):
         self._parameters = get_parameters()
 

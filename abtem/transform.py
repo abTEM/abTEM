@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, Optional, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Mapping,
+    Optional,
+    Self,
+    TypeVar,
+)
 
 import numpy as np
 
@@ -17,7 +26,12 @@ from abtem.core.ensemble import (
     _wrap_with_array,
 )
 from abtem.core.fft import ifft2
-from abtem.core.utils import CopyMixin, EqualityMixin, expand_dims_to_broadcast
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    expand_dims_to_broadcast,
+    get_dtype,
+)
 from abtem.distributions import (
     BaseDistribution,
     EnsembleFromDistributions,
@@ -49,10 +63,21 @@ class ArrayObjectTransform(
     metaclass=ABCMeta,
 ):
     _allow_base_chunks: bool = False
+    # Whether the output depends on the wavelength, so that a multi-energy
+    # ensemble must be transformed one energy at a time (see
+    # abtem.array._calculate_new_array_per_energy).
+    _splits_energy_ensembles: bool = False
 
     @property
     def _num_outputs(self) -> int:
         return 1
+
+    def _match_ensemble(self, array_object: ArrayObjectType) -> Self:
+        """This transform, with anything that depends on the whole ensemble of
+        `array_object` fixed, before the ensemble is split into its energies or
+        into lazy blocks. The default has nothing to fix and returns the
+        transform itself."""
+        return self
 
     @property
     def metadata(self) -> dict:
@@ -159,6 +184,24 @@ class ArrayObjectTransform(
         """
         return (array_object.base_shape,)
 
+    def _out_ensemble_source(
+        self, array_object: ArrayObjectType
+    ) -> tuple[tuple[int, ...], ...]:
+        """
+        For each output, the permutation from the natural order of its
+        leading ensemble axes, the one `_calculate_new_array` returns (this
+        transform's own ensemble axes, then `array_object`'s), to the order
+        its declared shape and metadata use. Entry `k` is the natural
+        position of the axis declared at position `k`; axes past the end of
+        the tuple keep their place, so the identity may be shorter than the
+        output's ensemble axes. `AnnularDetector` and `SpectralSlitDetector`
+        move the scan axes to the end, and `MultisliceTransform` shifts its
+        detectors' permutations past the potential's ensemble axes, which it
+        prepends. `ArrayObject.apply_transform` applies the permutation once
+        to every output, eager or lazy.
+        """
+        return (tuple(range(len(array_object.ensemble_shape))),)
+
     def _out_shape(self, array_object: ArrayObjectType) -> tuple[tuple[int, ...], ...]:
         ensemble_shapes = self._out_ensemble_shape(array_object)
 
@@ -257,11 +300,7 @@ class EnsembleTransform(
             distribution = getattr(self, name)
             if isinstance(distribution, BaseDistribution):
                 ensemble_axes_metadata += [
-                    ParameterAxis(
-                        values=tuple(distribution),
-                        _ensemble_mean=distribution.ensemble_mean,
-                        **value,
-                    )
+                    ParameterAxis.from_distribution(distribution, **value)
                 ]
 
         return ensemble_axes_metadata
@@ -425,3 +464,10 @@ class ReciprocalSpaceMultiplication(WavesToWavesTransform):
             new_array = ifft2(new_array, overwrite_x=self.in_place)
 
         return new_array
+
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
+        # The waves' dtype promoted with the configured complex precision, which is
+        # the kernel's. A kernel evaluated in float64 under float32 (SpatialEnvelope,
+        # and so CTF with an angular spread, Bullseye, RadialPhasePlate) makes the
+        # blocks of complex64 waves complex128, which this does not declare.
+        return (np.result_type(waves.dtype, get_dtype(complex=True)),)

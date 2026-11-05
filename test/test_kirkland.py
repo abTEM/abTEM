@@ -6,9 +6,11 @@ from abtem.potentials.iam import Potential
 from abtem.waves import PlaneWave
 
 
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+# Eager only: lazy and eager multislice are compared elsewhere (e.g.
+# test_simulate.py::test_frozen_phonon_lazy_vs_eager), and repeating this
+# 512 x 512 run lazily added nothing to the published-figure check.
 @pytest.mark.parametrize("projection", ["infinite", "finite"])
-def test_fig_5_12(projection, lazy):
+def test_fig_5_12(projection):
     atoms = Atoms(
         "CSiCuAuU",
         positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)],
@@ -20,7 +22,7 @@ def test_fig_5_12(projection, lazy):
     )
     waves = PlaneWave(energy=200e3)
 
-    exit_wave = waves.multislice(potential, lazy=lazy)
+    exit_wave = waves.multislice(potential, lazy=False)
 
     exit_wave = exit_wave.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37)
 

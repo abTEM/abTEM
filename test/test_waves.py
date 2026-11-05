@@ -1,3 +1,6 @@
+import warnings
+
+import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -7,33 +10,21 @@ from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
     assert_array_matches_laziness,
+    devices,
     gpu,
 )
 
-# @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
-# @given(grid_data=grid_data())
-# def test_grid_raises(grid_data, builder):
-#     probe = builder(**grid_data)
-#     try:
-#         probe.grid.check_is_defined()
-#     except GridUndefinedError:
-#         with pytest.raises(GridUndefinedError):
-#             probe.build()
-#
-#
-# @given(grid_data=grid_data(), energy=core_st.energy(allow_none=True))
-# @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
-# def test_energy_raises(grid_data, energy, builder):
-#     probe = builder(energy=energy, **grid_data)
-#     assume(energy is None)
-#     with pytest.raises(EnergyUndefinedError):
-#         probe.build()
+import abtem
+from abtem.core.backend import asnumpy
+from abtem.core.energy import energy2wavelength
+from abtem.prism.s_matrix import BaseSMatrix
+from abtem.waves import Waves
 
 
 @pytest.mark.parametrize(
     "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
 )
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 @pytest.mark.parametrize("lazy", [False, True])
 @given(data=st.data())
 def test_can_build(data, waves_builder, device, lazy):
@@ -41,6 +32,7 @@ def test_can_build(data, waves_builder, device, lazy):
 
     waves = waves_builder.build(lazy=lazy)
 
+    assert_array_matches_laziness(waves.array, lazy=lazy)
     assert_array_matches_device(waves.array, device)
 
     assert waves.gpts == waves_builder.gpts
@@ -54,24 +46,11 @@ def test_can_build(data, waves_builder, device, lazy):
 
     assert np.isclose(waves.energy, waves_builder.accelerator.energy)
 
-
-@given(data=st.data())
-@pytest.mark.parametrize(
-    "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
-)
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("lazy", [True, False])
-def test_can_compute(data, waves_builder, device, lazy):
-    waves_builder = data.draw(waves_builder(device=device))
-    waves = waves_builder.build(lazy=lazy)
-
-    assert_array_matches_laziness(waves.array, lazy=lazy)
+    # Computing a lazy build must deliver the array its graph promised.
     waves.compute()
-
     assert_array_matches_laziness(waves.array, lazy=False)
-    assert waves.array.shape[-2:] == waves_builder.gpts
-    assert waves_builder.shape == waves.shape
-    assert waves.array.shape[: -len(waves.base_shape)] == waves.ensemble_shape
+    assert_array_matches_device(waves.array, device)
+    assert waves_builder.shape == waves.shape == waves.array.shape
     assert waves.array.dtype == np.complex64
 
 
@@ -85,7 +64,7 @@ def test_can_compute(data, waves_builder, device, lazy):
     ],
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_can_multislice(data, potential, waves_builder, lazy, device):
     waves_builder = data.draw(waves_builder(device=device))
     waves_builder.grid.match(potential)
@@ -106,6 +85,29 @@ def assert_is_normalized(waves):
     )
 
 
+def _draw_normalized_builder(data, waves_builder):
+    # Only the plane-wave strategy takes `normalize` (probes and S-matrices
+    # are always normalized); say so instead of catching a TypeError, which
+    # would also swallow real errors raised while drawing.
+    if waves_builder is abtem_st.plane_wave:
+        return data.draw(waves_builder(normalize=True))
+    return data.draw(waves_builder())
+
+
+def _to_waves(waves):
+    # An S-matrix must be reduced to probe waves; plain Waves have no reduce.
+    if isinstance(waves, BaseSMatrix):
+        return waves.reduce()
+    assert isinstance(waves, Waves)
+    return waves
+
+
+def _total_intensity(waves):
+    return asnumpy(
+        waves.diffraction_patterns(max_angle=None).compute().array.sum(axis=(-2, -1))
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize(
     "waves_builder",
@@ -117,16 +119,8 @@ def assert_is_normalized(waves):
 )
 @pytest.mark.parametrize("lazy", [False])
 def test_normalized(data, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
-
-    waves = waves_builder.build(lazy=lazy)
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
+    waves_builder = _draw_normalized_builder(data, waves_builder)
+    waves = _to_waves(waves_builder.build(lazy=lazy))
     waves.compute()
     assert_is_normalized(waves)
 
@@ -140,26 +134,42 @@ def test_normalized(data, waves_builder, lazy):
         abtem_st.s_matrix,
     ],
 )
-@pytest.mark.parametrize("lazy", [True, False])
-def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
+def test_empty_multislice_normalized(data, atoms, waves_builder):
+    waves_builder = _draw_normalized_builder(data, waves_builder)
+    lazy = data.draw(st.booleans(), label="lazy")
 
     atoms = atoms[:0]
 
-    waves = waves_builder.multislice(atoms, lazy=lazy)
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
+    waves = _to_waves(waves_builder.multislice(atoms, lazy=lazy))
     waves.compute()
     assert_is_normalized(waves)
 
 
+@pytest.mark.parametrize(
+    "chunks", [(1, 16, 20), (2, 16, 20), (3, 8, 10), (2, (10, 6), 20)]
+)
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
+    from abtem.core.axes import OrdinalAxis
+
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        reciprocal_space=reciprocal_space,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = Waves(array, **kwargs).normalize()
+    lazy = Waves(da.from_array(array, chunks=chunks), **kwargs).normalize()
+
+    assert lazy.is_lazy
+    lazy_result = lazy.copy().compute()
+    assert lazy_result.reciprocal_space == reciprocal_space
+    assert np.allclose(lazy_result.array, eager.array)
+
+
 @given(data=st.data(), potential=abtem_st.potential())
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
     "waves_builder",
     [
@@ -168,36 +178,42 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
         abtem_st.s_matrix,
     ],
 )
-def test_multislice_scatter(data, potential, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
+def test_multislice_scatter(data, potential, waves_builder):
+    """Multislice with a real potential is a product of unitary operators --
+    a phase-object transmission function (|t| = 1) and the Fresnel
+    propagator (|P| = 1) -- so it conserves the total intensity exactly once
+    the antialiasing aperture removes nothing.
 
+    test_propagation_physics checks the same unitarity for eager float64
+    builds against a round-off bound; this one also runs lazily and on drawn
+    frozen-phonon potentials. There is no bound to check with the default
+    aperture: band-limiting |t| = 1 makes the transmission function slightly
+    non-unitary, so the intensity can rise as well as fall (+0.13 % was
+    observed on an anisotropic grid)."""
+    waves_builder = _draw_normalized_builder(data, waves_builder)
+    lazy = data.draw(st.booleans(), label="lazy")
     waves_builder.grid.match(potential)
 
-    waves = waves_builder.build().compute()
-
-    # old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
-
-    waves = waves.multislice(potential).compute()
-
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
-
-    # new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
-
-    # print(old_sum, new_sum, old_sum > new_sum, potential.array)
-    # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
-
-    assert np.all(
-        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0005
+    # With the aperture opened far beyond the corners of the Fourier grid
+    # (cutoff / max(sampling) / 2 must exceed |k|max, which for anisotropic
+    # sampling can be several times the Nyquist frequency of the coarser axis)
+    # and no taper, nothing is removed and the intensity must be conserved to
+    # single precision (observed <= 1e-6). Any per-slice loss, e.g. |t| = 0.99
+    # (2 % intensity per slice), is far larger. This needs every grid
+    # frequency to propagate: components with lambda |k| > 1 are evanescent and
+    # (correctly) decay in the exact propagator.
+    k_max = np.hypot(*(1 / (2 * d) for d in potential.sampling))
+    assume(energy2wavelength(waves_builder.energy) * k_max < 1)
+    with abtem.config.set({"antialias.cutoff": 100.0, "antialias.taper": 0.0}):
+        initial = _total_intensity(_to_waves(waves_builder.build(lazy=lazy)))
+        scattered = _total_intensity(
+            _to_waves(waves_builder.multislice(potential, lazy=lazy))
+        )
+    np.testing.assert_allclose(
+        scattered, np.broadcast_to(initial, scattered.shape), rtol=1e-5
     )
 
 
-@settings(max_examples=5)
 @given(data=st.data(), potential=abtem_st.potential())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize(
@@ -207,19 +223,23 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
         abtem_st.plane_wave,
     ],
 )
-@pytest.mark.parametrize(
-    "detectors",
-    [
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.segmented_detector,
-        None,
-    ],
-)
-def test_build_then_multislice(data, waves_builder, detectors, potential, lazy):
+def test_build_then_multislice(data, waves_builder, potential, lazy):
     waves_builder = data.draw(waves_builder())
     waves_builder.grid.match(potential)
 
+    # The two routes differ before the detectors, not in them, so one drawn
+    # detector per example covers each of them across the run.
+    detectors = data.draw(
+        st.sampled_from(
+            [
+                abtem_st.pixelated_detector,
+                abtem_st.waves_detector,
+                abtem_st.segmented_detector,
+                None,
+            ]
+        ),
+        label="detectors",
+    )
     if detectors is not None:
         detectors = data.draw(detectors())
 
@@ -273,10 +293,13 @@ def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
     ],
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_apply_transform(data, transform, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     transform = data.draw(transform())
+    if getattr(transform, "energy", None) is not None:
+        # A fixed energy must be that of the wave functions.
+        transform.energy = waves.energy
     assume(len(transform.ensemble_shape + waves.shape) < 6)
     transformed_waves = waves.apply_transform(transform)
     assert transformed_waves.shape == transform.ensemble_shape + waves.shape
@@ -284,7 +307,7 @@ def test_apply_transform(data, transform, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_intensity(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     images = waves.intensity()
@@ -294,7 +317,7 @@ def test_intensity(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_images(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     images = waves.to_images()
@@ -310,14 +333,16 @@ def test_images(data, lazy, device):
     normalization=st.sampled_from(["intensity", "values"]),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_downsample(data, max_angle, normalization, lazy, device):
     probe = data.draw(abtem_st.probe(device=device, allow_distribution=False))
     waves = probe.build(lazy=lazy)
     old_gpts = waves.gpts
     valid_gpts = waves.antialias_valid_gpts
     cutoff_gpts = waves.antialias_cutoff_gpts
-    old_max = waves.intensity().array.max(axis=(-2, -1))
+    old_mean_intensity = asnumpy(
+        waves.intensity().compute().array.mean(axis=(-2, -1))
+    )
 
     downsampled_waves = waves.downsample(
         max_angle=max_angle, normalization=normalization
@@ -347,7 +372,14 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     if normalization == "intensity":
         assert_is_normalized(downsampled_waves)
     elif normalization == "values":
-        np.allclose(old_max, waves.intensity().array.max(axis=(-2, -1)))
+        # 'values' keeps the wave function's point values. The probe is band
+        # limited well inside the kept frequencies (assumed above), so by
+        # Parseval the cell-averaged intensity mean(|psi|^2) is independent of
+        # the sampling and must be unchanged.
+        new_mean_intensity = asnumpy(
+            downsampled_waves.intensity().compute().array.mean(axis=(-2, -1))
+        )
+        np.testing.assert_allclose(new_mean_intensity, old_mean_intensity, rtol=1e-4)
 
 
 @given(
@@ -359,7 +391,7 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     ),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
 
@@ -371,6 +403,140 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     assert diffraction_patterns.array.dtype == np.float32
 
 
+@pytest.mark.parametrize("block_direct", [True, np.True_], ids=["bool", "numpy_bool"])
+def test_diffraction_patterns_block_direct_true_blocks_up_to_the_semiangle_cutoff(
+    block_direct,
+):
+    """block_direct=True blocks what DiffractionPatterns.block_direct() blocks: the
+    bright-field disk of a 20 mrad probe and a margin, not a radius of 1 mrad."""
+    import abtem
+
+    probe = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=(4.8, 6.0), gpts=(48, 60)
+    )
+    waves = probe.build(lazy=False)
+    patterns = waves.diffraction_patterns()
+    expected = patterns.block_direct()
+    one_mrad = patterns.block_direct(radius=1.0)
+    assert np.abs(expected.array).max() < 1e-6 * np.abs(one_mrad.array).max()
+
+    blocked = waves.diffraction_patterns(block_direct=block_direct)
+
+    np.testing.assert_array_equal(blocked.array, expected.array)
+
+
+@pytest.mark.parametrize(
+    "semiangle_cutoff", [None, np.inf], ids=["plane_wave", "infinite"]
+)
+def test_diffraction_patterns_block_direct_true_of_a_plane_wave_blocks_one_pixel(
+    semiangle_cutoff,
+):
+    """Without a semiangle cutoff (a plane wave), or with an infinite one (a CTF
+    without an aperture), block_direct=True blocks the zero-angle pixel alone. In
+    a one-unit-cell SrTiO3 pattern the pixels next to it are the (100) and (010)
+    reflections, which are kept. Cutoffs below half the angular sampling take the
+    same branch; the synthetic zero-frequency-pixel test below covers them."""
+    from ase import Atoms
+
+    import abtem
+
+    a = 3.905
+    atoms = Atoms(
+        "SrTiO3",
+        scaled_positions=[
+            (0, 0, 0),
+            (0.5, 0.5, 0.5),
+            (0.5, 0.5, 0),
+            (0.5, 0, 0.5),
+            (0, 0.5, 0.5),
+        ],
+        cell=[a, a, a],
+        pbc=True,
+    ) * (1, 1, 4)
+    with abtem.config.set({"device": "cpu"}):
+        potential = abtem.Potential(atoms, gpts=(48, 48), slice_thickness=a / 2)
+        waves = abtem.PlaneWave(energy=200e3).multislice(potential, lazy=False)
+    if semiangle_cutoff == np.inf:
+        # A CTF without an aperture records an infinite semiangle cutoff.
+        waves = waves.apply_ctf(abtem.CTF())
+        assert waves.metadata["semiangle_cutoff"] == np.inf
+    patterns = waves.diffraction_patterns()
+    center = tuple(n // 2 for n in patterns.shape[-2:])
+    unblocked = np.asarray(patterns.array)
+    assert unblocked[center[0] + 1, center[1]] > 0
+    assert unblocked[center[0], center[1] + 1] > 0
+
+    blocked = np.asarray(waves.diffraction_patterns(block_direct=True).array)
+
+    assert blocked[center] == 0
+    keep = np.ones(unblocked.shape, dtype=bool)
+    keep[center] = False
+    np.testing.assert_array_equal(blocked[keep], unblocked[keep])
+
+
+def _zero_frequency_pixel(shape, fftshift):
+    """The index of the zero frequency, from NumPy's FFT conventions alone."""
+    index = []
+    for n in shape:
+        frequencies = np.fft.fftfreq(n)
+        if fftshift:
+            frequencies = np.fft.fftshift(frequencies)
+        index.append(int(np.flatnonzero(frequencies == 0)[0]))
+    return tuple(index)
+
+
+@devices
+@pytest.mark.parametrize("fftshift", [True, False], ids=["shifted", "unshifted"])
+@pytest.mark.parametrize(
+    "gpts, extent",
+    [
+        ((45, 64), (20.0, 26.0)),
+        ((64, 45), (26.0, 20.0)),
+        ((45, 51), (20.0, 23.0)),
+        ((64, 80), (26.0, 32.0)),
+    ],
+    ids=["odd_even", "even_odd", "odd_odd", "even_even"],
+)
+def test_diffraction_patterns_block_direct_true_blocks_the_zero_frequency_pixel(
+    gpts, extent, fftshift, device
+):
+    """Without a scalar semiangle cutoff larger than half the angular sampling,
+    block_direct=True zeroes the zero-frequency pixel and nothing else, for every
+    pattern shape, with and without fftshift.
+
+    Only the shape parity and fftshift choose the pixel; every cutoff below
+    takes the same branch of ``_apply_block_direct``, and laziness only wraps
+    it, so they are looped over rather than parametrized."""
+    from abtem.waves import Waves
+
+    rng = np.random.default_rng(0)
+    array = (5 + rng.normal(size=gpts) + 1j * rng.normal(size=gpts)).astype(
+        np.complex64
+    )
+    pixel = _zero_frequency_pixel(gpts, fftshift)
+    keep = np.ones(gpts, dtype=bool)
+    keep[pixel] = False
+    kwargs = dict(max_angle="full", parity="same", fftshift=fftshift)
+    for semiangle_cutoff in [None, 0.0, 1e-3, np.inf, np.array([10.0, 20.0])]:
+        metadata = (
+            {} if semiangle_cutoff is None else {"semiangle_cutoff": semiangle_cutoff}
+        )
+        for lazy in (False, True):
+            case = f"semiangle_cutoff={semiangle_cutoff}, lazy={lazy}"
+            waves = Waves(array, energy=200e3, extent=extent, metadata=metadata)
+            waves = waves.copy_to_device(device)
+            if lazy:
+                waves = waves.ensure_lazy()
+            unblocked = waves.diffraction_patterns(**kwargs).compute().to_cpu().array
+            assert unblocked.shape == gpts and np.all(unblocked > 0), case
+
+            blocked = waves.diffraction_patterns(block_direct=True, **kwargs).compute()
+
+            blocked = blocked.to_cpu().array
+            assert blocked[pixel] == 0, case
+            np.testing.assert_array_equal(blocked[keep], unblocked[keep], case)
+
+
 @given(
     data=st.data(),
     repetitions=st.tuples(
@@ -379,7 +545,7 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     renormalize=st.booleans(),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
@@ -404,9 +570,7 @@ def test_tile(data, repetitions, renormalize, lazy, device):
         assert np.allclose(old_sum, new_sum)
 
 
-@pytest.fixture
-def exit_plane_waves():
-    """Create Waves with a ThicknessAxis for depth_profile tests."""
+def _build_exit_plane_waves(device="cpu", exit_planes=1):
     import abtem
     import ase
 
@@ -415,9 +579,13 @@ def exit_plane_waves():
     atoms.center(axis=2)
 
     potential = abtem.Potential(
-        atoms, slice_thickness=2.0, gpts=(32, 32), exit_planes=1
+        atoms,
+        slice_thickness=2.0,
+        gpts=(32, 32),
+        exit_planes=exit_planes,
+        device=device,
     )
-    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10, device=device)
     probe.match_grid(potential)
 
     pos = atoms.positions[0][:2]
@@ -425,40 +593,103 @@ def exit_plane_waves():
     return probe.multislice(potential, scan).compute()
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_shape(exit_plane_waves, device):
+@pytest.fixture
+def exit_plane_waves(request):
+    """Create Waves with a ThicknessAxis for depth_profile tests.
+
+    Indirectly parametrized over ``device`` (see the consuming tests below)
+    so that a "gpu" run actually builds on the GPU instead of silently
+    reusing the CPU build -- following the pattern ``test_system`` uses in
+    test_realspace_multislice.py.
+    """
+    device = getattr(request, "param", "cpu")
+    return _build_exit_plane_waves(device)
+
+
+def _thickness_values(waves):
+    from abtem.core.axes import ThicknessAxis
+
+    (thickness_axis,) = [
+        ax for ax in waves.ensemble_axes_metadata if isinstance(ax, ThicknessAxis)
+    ]
+    return np.array(thickness_axis.values)
+
+
+@pytest.mark.parametrize("exit_plane_waves", [gpu, "cpu"], indirect=True)
+def test_depth_profile_shape(exit_plane_waves):
     profile = exit_plane_waves.depth_profile()
     n_z = exit_plane_waves.shape[0]
     n_x = exit_plane_waves.shape[-1]
     assert profile.shape == (1, n_x, n_z)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_projection_axis_x(exit_plane_waves, device):
+@pytest.mark.parametrize("exit_plane_waves", [gpu, "cpu"], indirect=True)
+def test_depth_profile_projection_axis_x(exit_plane_waves):
     profile = exit_plane_waves.depth_profile(projection_axis="x")
     n_z = exit_plane_waves.shape[0]
     n_y = exit_plane_waves.shape[-2]
     assert profile.shape == (1, n_y, n_z)
 
 
+# The Si cell is 5 * 5.43 = 27.15 Å thick, cut into 14 slices of 1.939 Å.
+# exit_planes=1 and 2 give evenly spaced planes from the entrance surface
+# (15 and 8 planes). (3, 5, 7) gives evenly spaced planes that start below
+# the entrance surface, at 4 slice thicknesses.
+@pytest.mark.parametrize("exit_planes", [1, 2, (3, 5, 7)])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_sampling(exit_plane_waves, device):
-    from abtem.core.axes import ThicknessAxis
+def test_depth_profile_sampling(device, exit_planes):
+    waves = _build_exit_plane_waves(device, exit_planes)
+    thickness = _thickness_values(waves)
 
-    profile = exit_plane_waves.depth_profile()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        profile = waves.depth_profile()
 
-    thickness_ax = None
-    for ax in exit_plane_waves.ensemble_axes_metadata:
-        if isinstance(ax, ThicknessAxis):
-            thickness_ax = ax
-            break
+    assert np.isclose(profile.sampling[0], waves.sampling[0])
 
-    z_extent = max(thickness_ax.values)
-    n_z = len(thickness_ax.values)
-    expected_z_sampling = z_extent / n_z
+    # Oracle: row i of the depth profile is the wave at exit plane i, so the
+    # z coordinates must be the exit-plane thicknesses. Images carry no
+    # offset, so z is measured from the first exit plane.
+    z = np.array(profile.base_axes_metadata[1].coordinates(profile.base_shape[1]))
+    assert len(z) == len(thickness)
+    assert np.allclose(z + thickness[0], thickness)
 
-    assert np.isclose(profile.sampling[0], exit_plane_waves.sampling[0])
-    assert np.isclose(profile.sampling[1], expected_z_sampling)
+
+@pytest.mark.parametrize("exit_planes", [1, (3, 5, 7)])
+def test_show_depth_profile_rows_at_exit_plane_thicknesses(exit_planes):
+    import matplotlib.pyplot as plt
+
+    waves = _build_exit_plane_waves("cpu", exit_planes)
+    thickness = _thickness_values(waves)
+
+    visualization = waves.show_depth_profile()
+    (image,) = visualization.axes[0, 0].get_images()
+    _, _, z_min, z_max = image.get_extent()
+    plt.close("all")
+
+    # imshow spreads n rows evenly over the extent, so the centre of row i is
+    # at z_min + (i + 1/2) * (z_max - z_min) / n. Each row must be centred on
+    # the thickness of its exit plane (absolute, including the offset).
+    n = len(thickness)
+    centres = z_min + (np.arange(n) + 0.5) * (z_max - z_min) / n
+    assert np.allclose(centres, thickness)
+
+
+def test_depth_profile_nonuniform_exit_planes_warns():
+    # 14 slices with exit_planes=3: planes at 0, 3, 6, 9, 12 and 14 slices,
+    # so the last spacing (2 slices) differs from the others (3 slices).
+    waves = _build_exit_plane_waves("cpu", 3)
+    thickness = _thickness_values(waves)
+
+    with pytest.warns(UserWarning, match="not uniformly spaced"):
+        profile = waves.depth_profile()
+
+    # A uniform axis cannot hit every plane; the first and last rows must
+    # still be at the entrance and exit surfaces.
+    z = np.array(profile.base_axes_metadata[1].coordinates(profile.base_shape[1]))
+    assert len(z) == len(thickness)
+    assert np.isclose(z[0], thickness[0])
+    assert np.isclose(z[-1], thickness[-1])
 
 
 def test_depth_profile_no_thickness_axis_raises():
@@ -486,3 +717,48 @@ def test_depth_profile_finite_depth(exit_plane_waves):
 def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
     profile = exit_plane_waves.depth_profile(convert_complex=convert_complex)
     assert profile.array.shape[-2:] == (exit_plane_waves.shape[-1], exit_plane_waves.shape[0])
+
+
+@devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+def test_phase_shift_keeps_the_space_of_the_waves(
+    reciprocal_space, precision, device
+):
+    import dask.array as da
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.utils import get_dtype
+
+    amount = 0.3
+    with abtem.config.set({"precision": precision}):
+        dtype = get_dtype(complex=True)
+        rng = np.random.default_rng(0)
+        psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+        psi = psi.astype(dtype)
+        array = np.fft.fft2(psi).astype(dtype) if reciprocal_space else psi
+        results = {}
+        for lazy in (False, True):
+            waves = Waves(
+                da.from_array(array, chunks=(1, -1, -1)) if lazy else array,
+                energy=100e3,
+                sampling=0.1,
+                reciprocal_space=reciprocal_space,
+                ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            ).copy_to_device(device)
+
+            shifted = waves.phase_shift(amount)
+
+            assert shifted.reciprocal_space == reciprocal_space, f"lazy={lazy}"
+            assert shifted.is_lazy == lazy
+            # The phase factor must not widen the waves: a NumPy complex128
+            # scalar promotes complex64 waves to complex128 under NEP 50.
+            assert shifted.array.dtype == dtype, f"lazy={lazy}"
+            result = shifted.ensure_real_space().compute()
+            assert result.array.dtype == dtype, f"lazy={lazy}"
+            results[lazy] = asnumpy(result.array)
+
+    expected = np.exp(1j * amount) * psi
+    atol = 100 * np.finfo(dtype).eps * np.abs(psi).max()
+    for lazy, result in results.items():
+        assert np.allclose(result, expected, rtol=0, atol=atol), f"lazy={lazy}"

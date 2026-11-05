@@ -248,7 +248,10 @@ def _auto_chunks(
     if max_elements == "auto":
         if device == "gpu":
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu"))
-        elif device == "cpu":
+        elif device in ("cpu", "mps"):
+            # Metal shares the machine's memory with the host instead of having
+            # its own VRAM, so the host chunk size is what actually bounds a
+            # chunk there -- 'chunk-size-gpu' is sized for a discrete card.
             chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
         else:
             raise RuntimeError(f"Unknown device: {device}")
@@ -412,7 +415,7 @@ def generate_chunks(
 
 
 def estimate_potential_chunk_size(
-    gpts: tuple[int, int],
+    slice_shape: tuple[int, ...],
     device: str = "cpu",
     dtype: np.dtype = None,
 ) -> int:
@@ -445,8 +448,11 @@ def estimate_potential_chunk_size(
 
     Parameters
     ----------
-    gpts : tuple of int
-        The number of grid points (y, x).
+    slice_shape : tuple of int
+        The shape of what one slice allocates: the number of grid points
+        (y, x), preceded by the length of a component axis for a field with
+        components, and by the shape of the ensemble axes when a chunk holds
+        every member of an ensemble.
     device : str
         The device ('cpu' or 'gpu').
     dtype : numpy.dtype, optional
@@ -468,7 +474,7 @@ def estimate_potential_chunk_size(
     if chunk_size_setting != "auto":
         return int(chunk_size_setting)
 
-    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
+    slice_bytes = int(np.prod(slice_shape)) * dtype.itemsize
 
     if device == "gpu":
         # Deliberately no Bluestein-overhead factor here, unlike the sibling
@@ -562,6 +568,20 @@ def _nearest_power_of_two(n: int) -> int:
     if ceil_pot <= int(n * 1.25):
         return ceil_pot
     return floor_pot
+
+
+def _ceil_to_multiple(n: int, multiple: int) -> int:
+    """Round n UP to the next multiple of ``multiple``.
+
+    Not `_nearest_power_of_two`: that one rounds *down* when the next power
+    of two would overshoot by more than 25 %, which is safe for a VRAM
+    budget (its only current caller) but would silently drop items for a
+    batch bucket, where every item must be kept. This one never rounds
+    down, so bucketing a real batch this way pads, never truncates.
+    """
+    if n <= 0:
+        return 0
+    return -(-n // multiple) * multiple
 
 
 def estimate_scan_batch_size(

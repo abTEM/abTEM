@@ -12,6 +12,8 @@ from unittest import mock
 
 import pytest
 
+from utils import requires_gpu
+
 import abtem
 import abtem.array
 from abtem.core import backend
@@ -189,11 +191,11 @@ def _no_client(*args, **kwargs):
     raise ValueError("no global client")
 
 
-def _build_lazy_gpu():
+def _build_lazy_probe():
     return abtem.Probe(energy=100e3, semiangle_cutoff=20, gpts=32, extent=5).build(lazy=True)
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_gpu_no_client_forces_synchronous(monkeypatch):
     import distributed
@@ -207,13 +209,13 @@ def test_gpu_no_client_forces_synchronous(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": False}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert captured.get("scheduler") == "synchronous"
     # the removed dead kwargs must not reappear
     assert "num_workers" not in captured and "threads_per_worker" not in captured
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_multigpu_config_starts_cluster(monkeypatch):
     import distributed
@@ -229,11 +231,11 @@ def test_multigpu_config_starts_cluster(monkeypatch):
     monkeypatch.setattr(abtem.array.dask, "compute", lambda *a, **k: ([None],))
 
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert started == [1]
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_single_gpu_multigpu_config_no_cluster(monkeypatch):
     import distributed
@@ -250,12 +252,12 @@ def test_single_gpu_multigpu_config_no_cluster(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert started == []  # only one GPU -> no cluster
     assert captured.get("scheduler") == "synchronous"
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_explicit_scheduler_skips_cluster(monkeypatch):
     import distributed
@@ -272,7 +274,7 @@ def test_explicit_scheduler_skips_cluster(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False, scheduler="synchronous")
+        _build_lazy_probe().compute(progress_bar=False, scheduler="synchronous")
     assert started == []  # user asked for a scheduler -> no cluster spun up
     assert captured.get("scheduler") == "synchronous"
 
@@ -399,12 +401,6 @@ def test_get_cuda_cluster_client_none_when_absent_or_dead(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def _build_lazy_cpu():
-    return abtem.Probe(energy=100e3, semiangle_cutoff=20, gpts=32, extent=5).build(
-        lazy=True
-    )
-
-
 @pytest.mark.filterwarnings("ignore")
 def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
     import distributed
@@ -424,7 +420,7 @@ def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
     fake_cp.cuda.runtime.getDeviceCount.return_value = 2
     monkeypatch.setattr(abtem.array, "cp", fake_cp)
 
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
         waves.to_zarr(str(tmp_path / "waves.zarr"), progress_bar=False)
     assert started == [1]
@@ -432,7 +428,7 @@ def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
 
 
 def test_to_zarr_roundtrip_cpu(tmp_path):
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     url = str(tmp_path / "waves.zarr")
     waves.to_zarr(url, progress_bar=False)
     loaded = abtem.from_zarr(url)
@@ -446,7 +442,7 @@ def test_to_zarr_roundtrip_cpu(tmp_path):
 def test_to_zarr_compute_false_returns_delayed(tmp_path):
     from dask.delayed import Delayed
 
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     delayed = waves.to_zarr(str(tmp_path / "waves.zarr"), compute=False)
     assert isinstance(delayed, Delayed)
     delayed.compute()
@@ -459,28 +455,6 @@ def _worker_precision():
     return config.get("precision")
 
 
-def test_push_config_to_workers():
-    distributed = pytest.importorskip("distributed")
-
-    from abtem.core import config
-    from abtem.core import backend
-
-    backend._pushed_config_token = None
-    with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
-        assert set(client.run(_worker_precision).values()) == {"float32"}
-
-        with config.set({"precision": "float64"}):
-            backend.push_config_to_workers(client)
-            assert set(client.run(_worker_precision).values()) == {"float64"}
-
-            # An unchanged configuration is not pushed again.
-            token = backend._pushed_config_token
-            backend.push_config_to_workers(client)
-            assert backend._pushed_config_token is token
-
-
 def _worker_config_snapshot():
     import copy
 
@@ -489,16 +463,39 @@ def _worker_config_snapshot():
     return copy.deepcopy(config_dict)
 
 
-def test_workers_see_identical_config():
+@pytest.fixture(scope="module")
+def _shared_process_cluster():
+    # Each worker process cold-imports abtem (seconds each), so the two
+    # config-push tests share one cluster per xdist worker. The client is not
+    # made the default, so the other tests in this module keep dask's local
+    # schedulers; tests enter it with ``client.as_current()``.
     distributed = pytest.importorskip("distributed")
-
-    from abtem.core import backend, config
-    from abtem.core.config import config as client_config_dict
-
-    backend._pushed_config_token = None
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
+    ) as cluster, distributed.Client(cluster, set_as_default=False) as client:
+        yield client
+
+
+@pytest.fixture
+def process_client(_shared_process_cluster):
+    """The shared process-cluster client, with its workers on the default config
+    and the push token cleared, however the previous test left them."""
+    client = _shared_process_cluster
+    backend._pushed_config_token = None
+    backend.push_config_to_workers(client)
+    backend._pushed_config_token = None
+    yield client
+    backend._pushed_config_token = None
+
+
+def test_workers_see_identical_config(process_client):
+    from abtem.core import config
+    from abtem.core.config import config as client_config_dict
+
+    client = process_client
+    with client.as_current():
+        assert set(client.run(_worker_precision).values()) == {"float32"}
+
         with config.set(
             {
                 "precision": "float64",
@@ -507,6 +504,12 @@ def test_workers_see_identical_config():
             }
         ):
             backend.push_config_to_workers(client)
+            assert set(client.run(_worker_precision).values()) == {"float64"}
+
+            # An unchanged configuration is not pushed again.
+            token = backend._pushed_config_token
+            backend.push_config_to_workers(client)
+            assert backend._pushed_config_token is token
 
             # Every worker must hold a config identical to the client's merged
             # configuration -- not just the keys we changed.
@@ -517,11 +520,6 @@ def test_workers_see_identical_config():
             # join later (or are restarted by a Nanny) also receive it.
             plugins = client.run(lambda dask_worker: list(dask_worker.plugins))
             assert all("abtem-config" in names for names in plugins.values())
-
-            cluster.scale(2)
-            client.wait_for_workers(2)
-            for snapshot in client.run(_worker_config_snapshot).values():
-                assert snapshot == client_config_dict
 
             # A subsequent change must invalidate the push token and
             # propagate on the next dispatch.
@@ -560,20 +558,130 @@ def test_forced_synchronous_scheduler_extends_to_nested_computes():
     assert seen and all(s != "synchronous" for s in seen)
 
 
-def test_cpu_distributed_compute_pushes_config():
-    distributed = pytest.importorskip("distributed")
+def test_cpu_distributed_compute_pushes_config(process_client):
     import numpy as np
 
-    from abtem.core import backend, config
+    from abtem.core import config
+
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    with client.as_current(), config.set({"precision": "float64"}):
+        images = abtem.Images(
+            np.ones((8, 8), dtype=np.float32), sampling=1.0
+        ).ensure_lazy()
+        images.compute(progress_bar=False)
+
+        assert set(client.run(_worker_precision).values()) == {"float64"}
+
+
+def test_config_plugin_does_not_overwrite_the_clients_own_config():
+    # In-process workers (LocalCluster(processes=False)) share the client's
+    # config dict. A worker that joins later runs the plugin's setup, which must
+    # not replay the old snapshot over configuration changed after the push.
+    pytest.importorskip("distributed")
+    import copy
+
+    from abtem.core import config
+    from abtem.core.config import config as config_dict
+
+    snapshot = copy.deepcopy(config_dict)
+    snapshot["precision"] = "float64"
+    plugin = backend._make_config_plugin(snapshot)
+
+    with config.set({"precision": "float32"}):
+        plugin.setup()
+        assert config.get("precision") == "float32"
+
+        # A worker in another process still receives the snapshot.
+        plugin._origin_pid = -1
+        plugin.setup()
+        assert config.get("precision") == "float64"
+
+
+def test_adding_an_in_process_worker_keeps_the_clients_config():
+    distributed = pytest.importorskip("distributed")
+    from abtem.core import config
 
     backend._pushed_config_token = None
-    with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
-        with config.set({"precision": "float64"}):
-            images = abtem.Images(
-                np.ones((8, 8), dtype=np.float32), sampling=1.0
-            ).ensure_lazy()
-            images.compute(progress_bar=False)
+    try:
+        with distributed.LocalCluster(
+            n_workers=1, processes=False, threads_per_worker=1, dashboard_address=":0"
+        ) as cluster, distributed.Client(cluster, set_as_default=False) as client:
+            with config.set({"precision": "float64"}):
+                backend.push_config_to_workers(client)
+            assert config.get("precision") == "float32"
 
-            assert set(client.run(_worker_precision).values()) == {"float64"}
+            cluster.scale(2)
+            client.wait_for_workers(2, timeout=60)
+            assert config.get("precision") == "float32"
+    finally:
+        backend._pushed_config_token = None
+        config.set({"precision": "float32"})
+
+
+class _RecordingTifffile:
+    """Stands in for tifffile, which abTEM does not install, and records what
+    ``imwrite`` is given."""
+
+    def __init__(self):
+        self.written = {}
+
+    def imwrite(self, filename, data, **kwargs):
+        self.written[filename] = data
+
+    def imread(self, filename):
+        return self.written[filename]
+
+
+@pytest.fixture(params=["recorded", "tifffile"])
+def tifffile_module(request, monkeypatch):
+    if request.param == "tifffile":
+        return pytest.importorskip("tifffile")
+
+    recorder = _RecordingTifffile()
+    monkeypatch.setattr(abtem.array, "_optional_module", lambda *a, **k: recorder)
+    return recorder
+
+
+def test_cpu_distributed_to_tiff_uses_the_clients_config(
+    process_client, tmp_path, tifffile_module
+):
+    import numpy as np
+
+    from abtem.core import config
+
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    path = str(tmp_path / "intensity.tiff")
+    with client.as_current(), config.set({"precision": "float64"}):
+        intensity = (
+            abtem.PlaneWave(energy=100e3, extent=5, gpts=16)
+            .build(lazy=True)
+            .intensity()
+        )
+        with pytest.warns(UserWarning, match="computed in memory"):
+            intensity.to_tiff(path)
+
+    assert tifffile_module.imread(path).dtype == np.float64
+
+
+def test_cpu_distributed_to_zarr_compute_false_uses_the_clients_config(
+    process_client, tmp_path
+):
+    import numpy as np
+
+    from abtem.core import config
+
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    path = str(tmp_path / "waves.zarr")
+    with client.as_current(), config.set({"precision": "float64"}):
+        waves = abtem.PlaneWave(energy=100e3, extent=5, gpts=16).build(lazy=True)
+        delayed = waves.to_zarr(path, compute=False)
+
+        # The workers hold the configuration of the call, not of whenever the
+        # delayed object happens to be computed.
+        assert set(client.run(_worker_precision).values()) == {"float64"}
+        delayed.compute()
+
+    assert abtem.from_zarr(path).array.dtype == np.complex128

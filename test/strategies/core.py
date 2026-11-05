@@ -1,4 +1,6 @@
+import atexit
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -69,11 +71,15 @@ def energy(draw, min_value=80e3, max_value=300e3, allow_none=False):
     return energy
 
 
+# The stores written to the paths below are never removed by the tests that
+# write them, so they go in one directory per test process, removed at exit.
+_TEMPORARY_DIRECTORY = tempfile.mkdtemp(prefix="abtem-test-")
+atexit.register(shutil.rmtree, _TEMPORARY_DIRECTORY, ignore_errors=True)
+
+
 @st.composite
 def temporary_path(draw, allow_none=True):
-    path = st.just(
-        os.path.join(tempfile.gettempdir(), f"abtem-test-{str(uuid.uuid4())}.zarr")
-    )
+    path = st.just(os.path.join(_TEMPORARY_DIRECTORY, f"{uuid.uuid4()}.zarr"))
     if allow_none:
         path = st.one_of(st.just(path), st.none())
     return draw(path)
@@ -81,9 +87,7 @@ def temporary_path(draw, allow_none=True):
 
 @st.composite
 def temporary_path_zip(draw, allow_none=True):
-    path = st.just(
-        os.path.join(tempfile.gettempdir(), f"abtem-test-{str(uuid.uuid4())}.zarr.zip")
-    )
+    path = st.just(os.path.join(_TEMPORARY_DIRECTORY, f"{uuid.uuid4()}.zarr.zip"))
     if allow_none:
         path = st.one_of(st.just(path), st.none())
     return draw(path)

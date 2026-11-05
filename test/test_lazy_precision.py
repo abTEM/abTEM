@@ -1,0 +1,658 @@
+"""A lazy result declares the dtype its blocks return, and the eager result has.
+
+A dask reduction accumulates in the declared dtype, so a declaration below the
+blocks loses precision, and one above them makes ``.dtype`` misreport the data.
+Every case compares the declared dtype, the dtype of the computed blocks and the
+dtype of the eager result of the same call.
+"""
+
+import dask.array as da
+import numpy as np
+import pytest
+
+import abtem
+from abtem import (
+    AnnularDetector,
+    Aperture,
+    FlexibleAnnularDetector,
+    PixelatedDetector,
+    Probe,
+    SegmentedDetector,
+    SpectralSlitDetector,
+    WavesDetector,
+)
+from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy, copy_to_device
+from abtem.core.fft import fft2, fft2_convolve
+from abtem.core.utils import get_dtype
+from abtem.measurements import DiffractionPatterns, Images
+from abtem.multislice import MultisliceTransform
+from abtem.potentials.iam import PotentialArray
+from abtem.tilt import BeamTilt
+from abtem.transfer import Bullseye, RadialPhasePlate, SpatialEnvelope
+from abtem.waves import Waves
+from utils import requires_gpu, synthetic_transition_potential
+
+CONFIG_AND_INPUT = [
+    ("float32", np.complex128),
+    ("float64", np.complex64),
+]
+
+# CuPy and NumPy; Metal stores float32 only, and every case here has a 64-bit side.
+cuda_and_cpu = pytest.mark.parametrize(
+    "device", [pytest.param("gpu", marks=requires_gpu.marks), "cpu"]
+)
+
+GRID = (16, 20)
+MEMBERS = 3
+
+
+def _complex_data(dtype):
+    rng = np.random.default_rng(7)
+    shape = (MEMBERS,) + GRID
+    data = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    return data.astype(dtype)
+
+
+def _real_data(dtype):
+    rng = np.random.default_rng(11)
+    return (10 * rng.standard_normal((MEMBERS,) + GRID)).astype(dtype)
+
+
+def _members():
+    return [OrdinalAxis(values=tuple(range(MEMBERS)))]
+
+
+def _waves(dtype, lazy):
+    array = _complex_data(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return Waves(array, energy=100e3, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+def _images(dtype, lazy):
+    array = _real_data(dtype) if not np.iscomplexobj(dtype(0)) else _complex_data(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return Images(array, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+def _patterns(dtype, lazy):
+    array = np.abs(_real_data(dtype)) + 1
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return DiffractionPatterns(array, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+def _check(lazy, eager, member_offset_free=False):
+    """The lazy result declares the dtype of its computed blocks and of the eager
+    result. Values are compared up to each member's additive constant when
+    `member_offset_free` is set."""
+    declared = lazy.array.dtype
+    computed = lazy.copy().compute().array
+    assert declared == computed.dtype == eager.array.dtype
+    computed = asnumpy(computed)
+    expected = asnumpy(eager.array)
+    if member_offset_free:
+        computed = computed - computed.min(axis=(-2, -1), keepdims=True)
+        expected = expected - expected.min(axis=(-2, -1), keepdims=True)
+    scale = np.abs(expected).max()
+    np.testing.assert_allclose(
+        computed,
+        expected,
+        rtol=0,
+        atol=64 * np.finfo(expected.dtype).eps * scale,
+    )
+
+
+WAVES_ENTRY_POINTS = {
+    "ensure_reciprocal_space": lambda w: w.ensure_reciprocal_space(),
+    "apply_ctf": lambda w: w.apply_ctf(defocus=20),
+    "aperture": lambda w: w.apply_transform(Aperture(20)),
+    "beam_tilt": lambda w: w.apply_transform(BeamTilt((1.0, 2.0))),
+    "annular": lambda w: AnnularDetector(0, 30).detect(w),
+    "flexible_annular": lambda w: FlexibleAnnularDetector().detect(w),
+    "segmented": lambda w: SegmentedDetector(2, 4, 0, 30).detect(w),
+    "pixelated": lambda w: PixelatedDetector().detect(w),
+    "pixelated_max_angle": lambda w: PixelatedDetector(max_angle=30).detect(w),
+    "pixelated_resample": lambda w: PixelatedDetector(resample=0.5).detect(w),
+    "spectral_slit": lambda w: SpectralSlitDetector(width=10.0, q_max=40.0).detect(w),
+    "waves": lambda w: WavesDetector().detect(w),
+    "diffraction_patterns": lambda w: w.diffraction_patterns(),
+    "diffraction_patterns_complex": lambda w: w.diffraction_patterns(
+        return_complex=True
+    ),
+    "diffraction_patterns_cropped_blocked": lambda w: w.diffraction_patterns(
+        max_angle=30, block_direct=True
+    ),
+    # consistent on the base: fft_interpolate works in the configured precision
+    "waves_gpts": lambda w: WavesDetector(gpts=GRID).detect(w),
+    "pixelated_real_space_resample": lambda w: PixelatedDetector(
+        reciprocal_space=False, resample=0.05
+    ).detect(w),
+}
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
+@pytest.mark.parametrize("name", WAVES_ENTRY_POINTS)
+def test_lazy_waves_results_declare_their_block_precision(
+    name, config, input_dtype, device
+):
+    entry_point = WAVES_ENTRY_POINTS[name]
+    with abtem.config.set({"precision": config, "fft": "numpy"}):
+        lazy = entry_point(_waves(input_dtype, lazy=True).copy_to_device(device))
+        eager = entry_point(_waves(input_dtype, lazy=False).copy_to_device(device))
+        assert lazy.is_lazy and not eager.is_lazy
+        _check(lazy, eager)
+
+
+def test_a_lazy_sum_of_detected_float64_intensities_accumulates_in_float64():
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        detector = AnnularDetector(0, 30)
+        lazy = detector.detect(_waves(np.complex128, lazy=True))
+        eager = detector.detect(_waves(np.complex128, lazy=False))
+        np.testing.assert_allclose(
+            lazy.array.sum(axis=0).compute(), eager.array.sum(axis=0), rtol=1e-12
+        )
+
+
+def _potential_array(dtype, lazy):
+    array = np.abs(_real_data(dtype))[:, :, :]
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return PotentialArray(array, slice_thickness=1.0, sampling=0.1)
+
+
+MEASUREMENTS = {
+    "diffractograms_float64": (
+        lambda: _images(np.float64, True),
+        lambda: _images(np.float64, False),
+        lambda m: m.diffractograms(),
+    ),
+    "diffractograms_int64": (
+        lambda: _int_images(np.int64, True),
+        lambda: _int_images(np.int64, False),
+        lambda m: m.diffractograms(),
+    ),
+    # 16-bit detector images: the FFT of any integer is complex128
+    "diffractograms_uint16": (
+        lambda: _int_images(np.uint16, True),
+        lambda: _int_images(np.uint16, False),
+        lambda m: m.diffractograms(),
+    ),
+    "integrate_gradient_complex64": (
+        lambda: _images(np.complex64, True),
+        lambda: _images(np.complex64, False),
+        lambda m: m.integrate_gradient(),
+    ),
+    "integrate_gradient_complex128": (
+        lambda: _images(np.complex128, True),
+        lambda: _images(np.complex128, False),
+        lambda m: m.integrate_gradient(),
+    ),
+    "diffraction_patterns_interpolate": (
+        lambda: _patterns(np.float64, True),
+        lambda: _patterns(np.float64, False),
+        lambda m: m.interpolate(sampling=0.25),
+    ),
+    # counts are interpolated in the configured precision
+    "diffraction_patterns_interpolate_uint16": (
+        lambda: _int_patterns(np.uint16, True),
+        lambda: _int_patterns(np.uint16, False),
+        lambda m: m.interpolate(sampling=0.25),
+    ),
+    "center_of_mass_float32": (
+        lambda: _patterns(np.float32, True),
+        lambda: _patterns(np.float32, False),
+        lambda m: m.center_of_mass(),
+    ),
+    "center_of_mass_float64": (
+        lambda: _patterns(np.float64, True),
+        lambda: _patterns(np.float64, False),
+        lambda m: m.center_of_mass(),
+    ),
+    "images_interpolate_fft_float64": (
+        lambda: _images(np.float64, True),
+        lambda: _images(np.float64, False),
+        lambda m: m.interpolate(0.05),
+    ),
+    "images_interpolate_fft_float32": (
+        lambda: _images(np.float32, True),
+        lambda: _images(np.float32, False),
+        lambda m: m.interpolate(0.05),
+    ),
+    # consistent on the base
+    "images_interpolate_spline": (
+        lambda: _images(np.float64, True),
+        lambda: _images(np.float64, False),
+        lambda m: m.interpolate(0.05, method="spline"),
+    ),
+}
+
+
+def _int_images(dtype, lazy):
+    array = np.abs(10 * _real_data(np.float64)).astype(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return Images(array, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+def _int_patterns(dtype, lazy):
+    array = np.abs(10 * _real_data(np.float64)).astype(dtype) + 1
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return DiffractionPatterns(array, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+MEASUREMENT_PRECISION = {
+    "images_interpolate_fft_float64": "float32",
+    "images_interpolate_fft_float32": "float64",
+}
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("name", MEASUREMENTS)
+def test_lazy_measurements_declare_their_block_precision(name, device):
+    make_lazy, make_eager, method = MEASUREMENTS[name]
+    config = MEASUREMENT_PRECISION.get(name, "float32")
+    with abtem.config.set({"precision": config, "fft": "numpy"}):
+        lazy = method(make_lazy().copy_to_device(device))
+        eager = method(make_eager().copy_to_device(device))
+        assert lazy.is_lazy and not eager.is_lazy
+        _check(lazy, eager, member_offset_free=name.startswith("integrate_gradient"))
+
+
+@cuda_and_cpu
+def test_lazy_potential_array_transmission_function_declares_its_block_precision(
+    device,
+):
+    with abtem.config.set({"precision": "float32"}):
+        lazy = _potential_array(np.float64, True).copy_to_device(device)
+        eager = _potential_array(np.float64, False).copy_to_device(device)
+        lazy = lazy.transmission_function(100e3)
+        eager = eager.transmission_function(100e3)
+        assert lazy.is_lazy and not eager.is_lazy
+        _check(lazy, eager)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("dtype", [np.complex128, np.uint16])
+def test_lazy_fft2_declares_the_dtype_of_its_blocks(dtype, device):
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        if dtype == np.complex128:
+            data = _complex_data(dtype)
+        else:
+            data = _int_images(dtype, False).array
+        data = copy_to_device(data, device)
+        result = fft2(da.from_array(data, chunks=(1,) + GRID))
+        assert result.dtype == result.compute().dtype == np.complex128
+
+
+@cuda_and_cpu
+# A real and a complex kernel; complex128 is the one that would promote a
+# complex64 input if the product were not taken in place.
+@pytest.mark.parametrize("kernel_dtype", [np.float32, np.complex128])
+@pytest.mark.parametrize("x_dtype", [np.complex64, np.complex128, np.float32])
+def test_lazy_fft2_convolve_declares_the_dtype_of_its_blocks(
+    x_dtype, kernel_dtype, device
+):
+    # The product is taken in place, so the kernel's dtype does not matter.
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        if np.issubdtype(x_dtype, np.complexfloating):
+            data = _complex_data(x_dtype)
+        else:
+            data = _real_data(x_dtype)
+        data = copy_to_device(data, device)
+        kernel = copy_to_device(np.ones(GRID, dtype=kernel_dtype), device)
+        lazy = fft2_convolve(da.from_array(data, chunks=(1,) + GRID), kernel)
+        eager = fft2_convolve(data, kernel)
+        assert lazy.dtype == lazy.compute().dtype == eager.dtype
+
+
+MULTISLICE_CASES = ["fp", "fp_member", "single", "single_annular"]
+
+
+MULTISLICE_ROUTES = {
+    "multislice": lambda waves, potential, detectors: waves.multislice(
+        potential, detectors=detectors
+    ),
+    "transform_apply": lambda waves, potential, detectors: MultisliceTransform(
+        potential, detectors
+    ).apply(waves),
+    "apply_transform": lambda waves, potential, detectors: waves.apply_transform(
+        MultisliceTransform(potential, detectors)
+    ),
+}
+
+
+def _multislice(case, dtype, lazy, route="multislice", device="cpu"):
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (1, 1, 2)
+    atoms.rattle(0.01, seed=3)
+    extent = atoms.cell[0, 0]
+    if case.startswith("fp"):
+        atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=5)
+    potential = abtem.Potential(atoms, gpts=(32, 40), slice_thickness=2, device=device)
+    rng = np.random.default_rng(3)
+    shape = (2, 32, 40)
+    array = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(dtype)
+    array = copy_to_device(array, device)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 32, 40))
+    waves = Waves(
+        array,
+        energy=100e3,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    if case == "fp_member":
+        waves = waves[0]
+    detectors = AnnularDetector(0, 40) if case == "single_annular" else None
+    return MULTISLICE_ROUTES[route](waves, potential, detectors)
+
+
+# Waves.multislice, MultisliceTransform.apply and Waves.apply_transform reach the
+# same MultisliceTransform; only Waves.multislice reduces the frozen-phonon
+# ensemble afterwards. So every case runs through Waves.multislice, and the two
+# other routes with the frozen-phonon case.
+MULTISLICE_CASES_AND_ROUTES = [(case, "multislice") for case in MULTISLICE_CASES] + [
+    ("fp", route) for route in MULTISLICE_ROUTES if route != "multislice"
+]
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
+@pytest.mark.parametrize("case, route", MULTISLICE_CASES_AND_ROUTES)
+def test_multislice_of_waves_runs_in_the_configured_precision(
+    case, config, input_dtype, route, device
+):
+    with abtem.config.set({"precision": config, "fft": "numpy"}):
+        lazy = _multislice(case, input_dtype, lazy=True, route=route, device=device)
+        eager = _multislice(case, input_dtype, lazy=False, route=route, device=device)
+        assert lazy.is_lazy and not eager.is_lazy
+        expected = np.dtype(config)
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager)
+
+
+def test_waves_dtype_is_the_array_dtype():
+    with abtem.config.set({"precision": "float32"}):
+        assert _waves(np.complex128, lazy=False).dtype == np.complex128
+        assert _waves(np.complex128, lazy=True).dtype == np.complex128
+        assert Probe(energy=100e3, semiangle_cutoff=20).dtype == np.complex64
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_transition_potential_multislice_of_waves_runs_in_the_configured_precision(
+    lazy,
+):
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=1.4)
+    transition_potential = synthetic_transition_potential(
+        gpts=potential.gpts, extent=potential.extent, n_transitions=3
+    )
+    probe = Probe(energy=100e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    built = probe.build(lazy=False)
+
+    def run(dtype):
+        array = built.array.astype(dtype)
+        if lazy:
+            array = da.from_array(array, chunks=array.shape)
+        waves = Waves(array, **built._copy_kwargs(exclude=("array",)))
+        return waves.transition_potential_multislice(
+            potential,
+            transition_potential,
+            detectors=FlexibleAnnularDetector(),
+            double_channel=False,
+            sites=atoms,
+        ).compute()
+
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        in_configured_precision = run(np.complex64)
+        in_double_precision = run(np.complex128)
+    np.testing.assert_array_equal(
+        in_double_precision.array, in_configured_precision.array
+    )
+
+
+def _prism_atoms():
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True)
+    atoms.rattle(0.02, seed=1)
+    return atoms
+
+
+def _prism_scan(potential):
+    return abtem.GridScan(
+        (0, 0), (1, 1), gpts=(2, 3), fractional=True, endpoint=False,
+        potential=potential,
+    )
+
+
+def _prism_reduce(detector):
+    def reduce(s_matrix, potential, lazy):
+        built = s_matrix.build(lazy=lazy)
+        return built.reduce(scan=_prism_scan(potential), detectors=detector)
+
+    return reduce
+
+
+def _prism_transition_potential_scan(s_matrix, potential, lazy):
+    transition_potential = synthetic_transition_potential(
+        gpts=potential.gpts, extent=potential.extent, device=potential.device
+    )
+    return s_matrix.transition_potential_scan(
+        transition_potential,
+        scan=_prism_scan(potential),
+        detectors=FlexibleAnnularDetector(),
+        sites=_prism_atoms(),
+        lazy=lazy,
+        double_channel=False,
+    )
+
+
+PRISM_ENTRY_POINTS = {
+    "build": lambda s_matrix, potential, lazy: s_matrix.build(lazy=lazy),
+    "reduce_annular": _prism_reduce(AnnularDetector(0, 20)),
+    "reduce_flexible_annular": _prism_reduce(FlexibleAnnularDetector()),
+    "reduce_segmented": _prism_reduce(SegmentedDetector(2, 4, 0, 30)),
+    "reduce_pixelated": _prism_reduce(PixelatedDetector()),
+    "reduce_waves": _prism_reduce(WavesDetector()),
+    "scan": lambda s_matrix, potential, lazy: s_matrix.scan(
+        scan=_prism_scan(potential), detectors=AnnularDetector(0, 20), lazy=lazy
+    ),
+    "transition_potential_scan": _prism_transition_potential_scan,
+}
+
+
+# Without a potential (and without downsampling) the S-matrix is the bare
+# plane-wave expansion, whose dtype no multislice step promotes. Core-loss PRISM
+# needs a potential, so it has no vacuum case.
+PRISM_CASES = [
+    pytest.param(name, vacuum, id=f"{name}-{'vacuum' if vacuum else 'potential'}")
+    for name in PRISM_ENTRY_POINTS
+    for vacuum in (False, True)
+    if not (vacuum and name == "transition_potential_scan")
+]
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("interpolation", [1, 2])
+@pytest.mark.parametrize("config", ["float32", "float64"])
+@pytest.mark.parametrize("name, vacuum", PRISM_CASES)
+def test_lazy_prism_results_declare_their_block_precision(
+    name, vacuum, config, interpolation, device
+):
+    entry_point = PRISM_ENTRY_POINTS[name]
+    with abtem.config.set({"precision": config, "fft": "numpy"}):
+        potential = abtem.Potential(
+            _prism_atoms(), gpts=(32, 40), slice_thickness=1.4, device=device
+        )
+        s_matrix = abtem.SMatrix(
+            potential=None if vacuum else potential,
+            extent=potential.extent if vacuum else None,
+            gpts=potential.gpts if vacuum else None,
+            energy=100e3,
+            semiangle_cutoff=20,
+            interpolation=interpolation,
+            downsample=False,
+            device=device,
+        )
+        lazy = entry_point(s_matrix, potential, lazy=True)
+        eager = entry_point(s_matrix, potential, lazy=False)
+        assert lazy.is_lazy and not eager.is_lazy
+        expected = np.dtype(config)
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager)
+
+
+SAME_PRECISION_IN_AND_OUT = {
+    "phase_shift": (
+        "waves",
+        lambda m: m.phase_shift(0.5),
+    ),
+    "integrate_gradient": (
+        "complex_images",
+        lambda m: m.integrate_gradient(),
+    ),
+    "center_of_mass": (
+        "patterns",
+        lambda m: m.center_of_mass(),
+    ),
+    "center_of_mass_mrad": (
+        "patterns",
+        lambda m: m.center_of_mass(units="mrad"),
+    ),
+    "ctf_with_angular_spread": (
+        "waves",
+        lambda m: m.apply_ctf(defocus=20, Cs=1e4, angular_spread=2),
+    ),
+    "spatial_envelope": (
+        "waves",
+        lambda m: m.apply_transform(SpatialEnvelope(angular_spread=2, C30=1e4)),
+    ),
+    "bullseye": (
+        "waves",
+        lambda m: m.apply_transform(Bullseye(4, 3.0, 3, 0.5, 20)),
+    ),
+    "radial_phase_plate": (
+        "waves",
+        lambda m: m.apply_transform(RadialPhasePlate(2, 30.0)),
+    ),
+}
+
+
+def _single_precision_input(kind, lazy):
+    """Input data in the dtype of the configured precision."""
+    if kind == "waves":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = dict(energy=100e3)
+        cls = Waves
+    elif kind == "complex_images":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = {}
+        cls = Images
+    else:
+        array = np.abs(_real_data(get_dtype(complex=False))) + 1
+        cls_kwargs = dict(metadata={"energy": 100e3})
+        cls = DiffractionPatterns
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return cls(array, sampling=0.1, ensemble_axes_metadata=_members(), **cls_kwargs)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("name", SAME_PRECISION_IN_AND_OUT)
+def test_methods_and_transforms_keep_the_precision_of_their_input(name, device):
+    """Single-precision data comes out in single precision: a float64 factor, such
+    as a NumPy scalar or a frequency grid, must not widen it. Only float32 is
+    tested: nothing is wider than float64 to promote it to."""
+    kind, method = SAME_PRECISION_IN_AND_OUT[name]
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        lazy = method(_single_precision_input(kind, True).copy_to_device(device))
+        eager = method(_single_precision_input(kind, False).copy_to_device(device))
+        expected = np.dtype("float32")
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager, member_offset_free=name == "integrate_gradient")
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_center_of_mass_of_integer_counts_follows_the_configured_precision(
+    precision, lazy, device
+):
+    counts = np.random.default_rng(3).integers(0, 50, size=(MEMBERS,) + GRID)
+    assert not np.issubdtype(counts.dtype, np.floating)
+    with abtem.config.set({"precision": precision, "fft": "numpy"}):
+        array = da.from_array(counts, chunks=(1,) + GRID) if lazy else counts
+        patterns = DiffractionPatterns(
+            array,
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        com = patterns.center_of_mass()
+        expected = np.result_type(np.dtype(precision), np.complex64)
+        assert com.array.dtype == expected
+        assert com.copy().compute().array.dtype == expected
+
+        reference = DiffractionPatterns(
+            counts.astype(np.float64),
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        with abtem.config.set({"precision": "float64"}):
+            reference = reference.center_of_mass().compute().array
+        rtol = 1e-5 if precision == "float32" else 1e-12
+        computed = asnumpy(com.copy().compute().array)
+        np.testing.assert_allclose(computed, asnumpy(reference), rtol=rtol, atol=1e-6)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize(
+    "transform",
+    [
+        Bullseye(4, 3.0, 3, 0.5, 20),
+        RadialPhasePlate(2, 30.0),
+        SpatialEnvelope(angular_spread=2, C30=1e4),
+    ],
+    ids=["bullseye", "radial_phase_plate", "spatial_envelope"],
+)
+def test_single_precision_transforms_agree_with_double_precision(transform, device):
+    """Waves transformed in single precision equal those transformed in double
+    precision to rounding: in particular the phase plate's flips must not depend
+    on the precision. Measured on this input, relative to the largest amplitude:
+    3e-8 (bullseye), 1.1e-7 (phase plate), 1.3e-7 (envelope), so the 1e-5
+    tolerance has a margin of about 75; a flipped phase or a misplaced ring
+    changes the waves by order one."""
+    result = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision, "fft": "numpy"}):
+            waves = Waves(
+                _complex_data(get_dtype(complex=True)),
+                energy=100e3,
+                sampling=0.1,
+                ensemble_axes_metadata=_members(),
+            ).copy_to_device(device)
+            result[precision] = asnumpy(waves.apply_transform(transform).array)
+    assert result["float32"].dtype == np.complex64
+    np.testing.assert_allclose(
+        result["float32"],
+        result["float64"],
+        rtol=0,
+        atol=1e-5 * np.abs(result["float64"]).max(),
+    )

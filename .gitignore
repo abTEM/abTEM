@@ -17,3 +17,6 @@ dist
 # uv (no lock file: abTEM is a library, CI resolves fresh)
 uv.lock
 .venv/
+
+# tools/gpu/run_gpu_tests.sh in-place mode logs
+.gpu-test-logs/

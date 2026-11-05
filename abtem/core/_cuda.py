@@ -8,11 +8,19 @@ _SUM_RLE_KERNEL = r"""
 // Segmented reduction: for each bin x, sum array[i, separators[x] : separators[x+1]]
 // into result[i, x] for every batch element i.
 //
-// Grid: 1-D, one thread per bin (x-axis).  Thread guard ensures safety when
-// n_bins is not a multiple of blockDim.x.
+// Grid: 1-D, one BLOCK per (bin, batch) pair -- blockIdx.x = i * n_bins + x,
+// decoded below. This gives every batch row's contribution to every bin its
+// own block (recruits n_bins * n_batch blocks instead of just n_bins
+// threads), and within a block, blockDim.x threads cooperatively sum the
+// bin's pixel segment via a strided read + shared-memory tree reduction,
+// instead of one thread walking the whole segment serially. Both axes that
+// actually scale with problem size (batch count and pixels-per-bin) get
+// real parallelism; only n_bins, a small fixed detector-resolution
+// parameter, does not need its own dimension.
 //
 // Template parameter T is the floating-point type (float or double).
-// Both array and result must have the same type T.
+// Both array and result must have the same type T. Dynamic shared memory
+// must be sized to blockDim.x * sizeof(T) bytes by the launcher.
 template<typename T>
 __device__ __forceinline__ void sum_rle_impl(
     T* __restrict__ result,
@@ -22,19 +30,33 @@ __device__ __forceinline__ void sum_rle_impl(
     const int n_batch,
     const long long n_selected   // second dimension of array (total selected pixels)
 ) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    if (x >= n_bins) return;
+    extern __shared__ unsigned char smem_raw[];
+    T* smem = reinterpret_cast<T*>(smem_raw);
+
+    const int x = blockIdx.x % n_bins;
+    const int i = blockIdx.x / n_bins;
+    if (i >= n_batch) return;
 
     const long long start = separators[x];
     const long long stop  = separators[x + 1];
+    const T* row = array + (long long)i * n_selected;
 
-    for (int i = 0; i < n_batch; i++) {
-        T s = (T)0;
-        const T* row = array + (long long)i * n_selected;
-        for (long long j = start; j < stop; j++) {
-            s += row[j];
+    T s = (T)0;
+    for (long long j = start + threadIdx.x; j < stop; j += blockDim.x) {
+        s += row[j];
+    }
+    smem[threadIdx.x] = s;
+    __syncthreads();
+
+    for (unsigned int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) {
+            smem[threadIdx.x] += smem[threadIdx.x + offset];
         }
-        result[(long long)i * n_bins + x] = s;
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        result[(long long)i * n_bins + x] = smem[0];
     }
 }
 
@@ -60,7 +82,9 @@ _sum_rle_f64 = None
 def _init_sum_rle_kernels():
     global _sum_rle_f32, _sum_rle_f64
     if _sum_rle_f32 is None:
-        mod = cp.RawModule(code=_SUM_RLE_KERNEL, options=("--std=c++14",))
+        # no --std option: rely on each backend's default dialect, which tracks
+        # CuPy's bundled headers (see finite_difference._init_laplace_stencil_kernels)
+        mod = cp.RawModule(code=_SUM_RLE_KERNEL)
         _sum_rle_f32 = mod.get_function("sum_rle_f32")
         _sum_rle_f64 = mod.get_function("sum_rle_f64")
 
@@ -85,7 +109,7 @@ def sum_run_length_encoded(array, result, separators):
     n_batch, n_selected = array.shape
     n_bins = result.shape[1]
 
-    if n_bins == 0:
+    if n_bins == 0 or n_batch == 0:
         return
 
     _init_sum_rle_kernels()
@@ -93,21 +117,35 @@ def sum_run_length_encoded(array, result, separators):
     dtype = array.dtype
     if dtype == cp.float64:
         kernel = _sum_rle_f64
+        itemsize = 8
     else:
         kernel = _sum_rle_f32
+        itemsize = 4
 
     array_c = cp.ascontiguousarray(array)
     result_c = cp.ascontiguousarray(result)
     sep_c = cp.ascontiguousarray(separators.astype(cp.int64, copy=False))
 
+    # One block per (bin, batch) pair -- see _SUM_RLE_KERNEL's own comment
+    # for why this replaces the former one-thread-per-bin design. `threads`
+    # is the number of threads cooperating on a single bin's pixel sum via
+    # the block-level shared-memory reduction in the kernel. Must stay a
+    # power of two: the kernel's reduction halves the active thread count
+    # each step (offset >>= 1) and only sums pairs at that stride, which is
+    # only exhaustive when blockDim.x is a power of two.
     threads = 256
-    grid = (math.ceil(n_bins / threads), 1, 1)
+    assert threads & (threads - 1) == 0, (
+        "the kernel's tree reduction requires a power-of-two block size"
+    )
+    grid = (n_bins * n_batch, 1, 1)
     block = (threads, 1, 1)
+    shared_mem = threads * itemsize
 
     kernel(
         grid, block,
         (result_c, array_c, sep_c,
          np.int32(n_bins), np.int32(n_batch), np.int64(n_selected)),
+        shared_mem=shared_mem,
     )
 
     # Copy back if ascontiguousarray made a fresh copy
@@ -227,7 +265,7 @@ _interpolate_radial_f64 = None
 def _init_interpolate_radial_kernels():
     global _interpolate_radial_f32, _interpolate_radial_f64
     if _interpolate_radial_f32 is None:
-        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL, options=("--std=c++14",))
+        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL)
         _interpolate_radial_f32 = mod.get_function("interpolate_radial_f32")
         _interpolate_radial_f64 = mod.get_function("interpolate_radial_f64")
 

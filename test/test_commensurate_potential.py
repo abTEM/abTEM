@@ -15,7 +15,7 @@ into real, parametrized pytest coverage. Combined they span:
   hexagonal; FCC/BCC/rock-salt/fluorite/zinc-blende/diamond/wurtzite/
   perovskite/rutile/brookite), including non-orthogonal input cells that
   exercise the orthogonalize_cell transform path
-- translation invariance (centering, arbitrary shifts)
+- translation invariance of the grid (centering, arbitrary shifts)
 - slab geometry with vacuum (non-periodic z)
 - varying input supercell size
 - infinite and finite projection
@@ -293,8 +293,40 @@ def _max_relative_spread(
 
 
 # ── lattice-type sweep ───────────────────────────────────────────────────────
-@pytest.mark.parametrize("name", list(LATTICE_STRUCTURES))
-@pytest.mark.parametrize("device", ["cpu", gpu])
+# One structure per branch of commensurate_gpts/commensurate_slice_thickness:
+# rational planes at quarters (diamond Si) and halves (perovskite), irrational
+# internal parameters that take the fast-FFT fallback (rutile, brookite), a
+# hexagonal input cell that is orthogonalized first (wurtzite, MoS2), and
+# off-centre z planes (tetragonal BaTiO3). The other cubic lattices of
+# LATTICE_STRUCTURES differ from these only in lattice constant and basis,
+# which change the numbers but not the branch; all 19 still go through the
+# gpts invariance test below. The device only matters for the build, so the
+# accelerator runs one structure per kind of grid search.
+_SPREAD_SWEEP = {
+    "Si cubic": True,
+    "SrTiO3 perovskite": False,
+    "TiO2 rutile": True,
+    "GaN wurtzite": True,
+    "MoS2": False,
+    "BaTiO3 tetragonal": False,
+    "TiO2 brookite": False,
+}
+
+
+@pytest.mark.parametrize(
+    "name, device",
+    [pytest.param(name, "cpu", id=f"{name}-cpu") for name in _SPREAD_SWEEP]
+    + [
+        pytest.param(
+            name,
+            gpu.values[0],
+            marks=gpu.marks,
+            id=f"{name}-{gpu.id or gpu.values[0]}",
+        )
+        for name, on_accelerator in _SPREAD_SWEEP.items()
+        if on_accelerator
+    ],
+)
 def test_symmetry_equivalent_atoms_get_identical_potential(name, device):
     atoms = LATTICE_STRUCTURES[name]()
     spread, _ = _max_relative_spread(atoms, device=device)
@@ -309,45 +341,42 @@ def test_symmetry_equivalent_atoms_get_identical_potential_finite_projection(nam
 
 
 # ── translation invariance (centering / arbitrary shift) ────────────────────
-@pytest.mark.parametrize(
-    "name", ["Si cubic", "SrTiO3 perovskite", "TiO2 rutile", "Fe BCC", "GaN wurtzite"]
-)
-@pytest.mark.parametrize("transform", ["standard", "centered", "shifted"])
-def test_translation_invariance(name, transform):
-    atoms = LATTICE_STRUCTURES[name]()
-    if transform == "centered":
-        atoms = _centered(atoms)
-    elif transform == "shifted":
-        atoms = _shifted(atoms)
-    spread, _ = _max_relative_spread(atoms)
-    assert spread < THRESHOLD
-
-
-@pytest.mark.parametrize("name", list(LATTICE_STRUCTURES))
-def test_gpts_is_translation_invariant(name):
+def test_gpts_is_translation_invariant():
     """commensurate_gpts must give the same grid regardless of how the
     structure is centered or shifted within the cell -- this is the property
     the GCD-based (as opposed to absolute-position-based) algorithm exists
     to guarantee, and is cheap to check for every lattice type since it
-    doesn't require building the potential."""
-    atoms = LATTICE_STRUCTURES[name]()
+    doesn't require building the potential. The slabs are included: a
+    centred slab is their shifted case.
+
+    It is also what makes the symmetry spread translation invariant, so the
+    spread is not measured again on centred or shifted structures: the spread
+    compares atoms related by a lattice translation, and on a grid commensurate
+    with the lattice those sit at the same sub-pixel offset however the whole
+    structure is shifted."""
 
     def gpts_for(a):
         return abtem.Potential(a, sampling="auto", slice_thickness="auto").gpts
 
-    g_standard = gpts_for(atoms)
-    g_centered = gpts_for(_centered(atoms))
-    g_shifted = gpts_for(_shifted(atoms))
-    assert g_standard == g_centered == g_shifted
+    for name, build in {**LATTICE_STRUCTURES, **SLAB_STRUCTURES}.items():
+        atoms = build()
+        g_standard = gpts_for(atoms)
+        g_centered = gpts_for(_centered(atoms))
+        g_shifted = gpts_for(_shifted(atoms))
+        assert g_standard == g_centered == g_shifted, (
+            name,
+            g_standard,
+            g_centered,
+            g_shifted,
+        )
 
 
 # ── slab geometry with vacuum (non-periodic z) ───────────────────────────────
 @pytest.mark.parametrize("name", list(SLAB_STRUCTURES))
-@pytest.mark.parametrize("transform", ["standard", "centered"])
-def test_slab_with_vacuum(name, transform):
+def test_slab_with_vacuum(name):
+    # Not repeated for a centred slab: centring is a rigid shift, which leaves
+    # the spread unchanged (see test_gpts_is_translation_invariant).
     atoms = SLAB_STRUCTURES[name]()
-    if transform == "centered":
-        atoms = _centered(atoms)
     spread, _ = _max_relative_spread(atoms)
     assert spread < THRESHOLD
 
@@ -360,31 +389,30 @@ def test_slab_with_vacuum_finite_projection(name):
 
 
 # ── varying input supercell size ─────────────────────────────────────────────
+# A centred supercell is a rigid shift (see test_gpts_is_translation_invariant),
+# and a (4, 4, 1) Si supercell takes the same GCD search as (2, 2, 2) on a
+# grid four times larger, so neither is repeated here.
 @pytest.mark.parametrize(
     "name, tile",
     [
         ("Si cubic", (2, 2, 2)),
-        ("Si cubic", (4, 4, 1)),
         ("Al FCC", (2, 2, 2)),
         ("SrTiO3 perovskite", (2, 2, 1)),
         ("TiO2 rutile", (2, 2, 1)),
     ],
 )
-@pytest.mark.parametrize("transform", ["standard", "centered"])
-def test_input_supercell_size_invariance(name, tile, transform):
+def test_input_supercell_size_invariance(name, tile):
     atoms = LATTICE_STRUCTURES[name]().repeat(tile)
-    if transform == "centered":
-        atoms = _centered(atoms)
     spread, _ = _max_relative_spread(atoms)
     assert spread < THRESHOLD
 
 
 # ── parametrization consistency ──────────────────────────────────────────────
-@pytest.mark.parametrize("name", ["Si cubic", "Al FCC", "Au FCC", "MgO rock-salt"])
-def test_parametrization_consistency(name):
+def test_parametrization_consistency():
     """gpts is purely geometric and must not depend on which scattering-
-    factor parametrization is used."""
-    atoms = LATTICE_STRUCTURES[name]()
+    factor parametrization is used. One structure proves it; two elements make
+    each parametrization's values differ between the atoms."""
+    atoms = LATTICE_STRUCTURES["MgO rock-salt"]()
     gpts_by_parametrization = {}
     for parametrization in ("kirkland", "peng", "lobato"):
         spread, pot = _max_relative_spread(atoms, parametrization=parametrization)
@@ -431,6 +459,18 @@ def test_slice_thickness_no_degenerate_trailing_slice():
 
     assert min(result) >= 0.5
     assert result == pytest.approx((1.0, 1.0, 1.15))
+
+
+def test_slice_thickness_splits_gaps_thicker_than_target():
+    """Planes further apart than the target (cubic fcc has them 0.5 a apart)
+    must be split into equal slices near the target, not left as one thick slice."""
+    atoms = bulk("Au", cubic=True)
+
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+
+    assert result == pytest.approx((atoms.cell[2, 2] / 4,) * 4)
+    potential = abtem.Potential(atoms, slice_thickness="auto", sampling="auto")
+    assert potential.slice_thickness == pytest.approx(result)
 
 
 def test_slice_thickness_merges_planes_closer_than_tolerance():
@@ -519,3 +559,133 @@ def test_atoms_ensemble_single_config_still_uses_commensurate_search():
 
     assert ensemble_pot.gpts == plain_pot.gpts
     assert ensemble_pot.slice_thickness == plain_pot.slice_thickness
+
+
+# ── the defaults are 'auto' ──────────────────────────────────────────────────
+def _gold():
+    return bulk("Au", cubic=True).repeat((2, 2, 2))
+
+
+def test_default_slice_thickness_and_sampling_are_auto():
+    default = abtem.Potential(_gold())
+    auto = abtem.Potential(_gold(), slice_thickness="auto", sampling="auto")
+
+    assert default.slice_thickness == pytest.approx(auto.slice_thickness)
+    assert default.slice_thickness == pytest.approx((1.02,) * 8)
+    assert default.gpts == auto.gpts
+    assert default.grid.gpts_is_default
+    assert not auto.grid.gpts_is_default
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_waves_without_a_grid_adopt_the_default_potential_grid(device):
+    potential = abtem.Potential(_gold(), device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device).multislice(potential)
+
+    assert waves.gpts == potential.gpts == (168, 168)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "grid_kwargs, expected_gpts",
+    [({"gpts": 100}, (100, 100)), ({"sampling": 0.1}, (82, 82))],
+)
+def test_explicit_waves_grid_overrides_the_default_potential_grid(
+    device, grid_kwargs, expected_gpts
+):
+    potential = abtem.Potential(_gold(), device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device, **grid_kwargs).multislice(
+        potential
+    )
+
+    assert waves.gpts == potential.gpts == expected_gpts
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("grid_kwargs", [{"gpts": 100}, {"sampling": 0.1}])
+def test_explicit_auto_sampling_is_not_overridden_by_the_waves_but_warns(
+    device, grid_kwargs
+):
+    potential = abtem.Potential(_gold(), sampling="auto", device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device, **grid_kwargs)
+
+    with pytest.warns(UserWarning, match="sampling='auto'"):
+        exit_waves = waves.multislice(potential)
+
+    assert exit_waves.gpts == (168, 168)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "make_potential, make_waves",
+    [
+        # nothing explicit on the waves: they adopt the 'auto' grid
+        (
+            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, device=d),
+        ),
+        # an explicit grid on the waves agreeing with the 'auto' one
+        (
+            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=168, device=d),
+        ),
+        # the default grid yields to the waves without comment
+        (
+            lambda d: abtem.Potential(_gold(), device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
+        ),
+        # a numeric sampling on the potential is not an 'auto' one
+        (
+            lambda d: abtem.Potential(_gold(), sampling=0.05, device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
+        ),
+    ],
+)
+def test_no_warning_unless_an_explicit_waves_grid_meets_an_explicit_auto_one(
+    device, make_potential, make_waves, recwarn
+):
+    make_waves(device).multislice(make_potential(device))
+
+    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_waves_that_adopted_a_grid_do_not_count_as_explicit(device, recwarn):
+    """A probe reused with a second potential has a grid only because it took one
+    from the first; that is not an explicit request to warn about, or to override
+    the grid of a default potential."""
+    first = abtem.Potential(_gold(), device=device)
+    second = abtem.Potential(bulk("Au", cubic=True).repeat((3, 3, 1)), device=device)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+
+    probe.grid.match(first)
+    probe.grid.match(second)
+
+    assert probe.gpts == second.gpts
+    assert second.grid.gpts_is_default
+    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_matched_to_a_default_potential_adopts_its_grid(device):
+    potential = abtem.Potential(_gold(), device=device)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+
+    probe.grid.match(potential)
+    measurement = probe.scan(
+        potential,
+        scan=abtem.GridScan((0, 0), (4, 4), sampling=2.0),
+        detectors=abtem.AnnularDetector(50, 200),
+    )
+
+    assert probe.gpts == potential.gpts == (168, 168)
+    assert measurement.shape == (2, 2)
+
+
+def test_auto_slicing_and_grid_of_a_structure_without_atoms():
+    empty = _gold()[:0]
+
+    potential = abtem.Potential(empty, slice_thickness="auto", sampling="auto")
+
+    assert sum(potential.slice_thickness) == pytest.approx(empty.cell[2, 2])
+    assert potential.gpts is not None
