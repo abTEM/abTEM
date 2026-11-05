@@ -20,7 +20,7 @@ Features:
   which conserves the projected potential of the slab. The crystal itself is unchanged: its slices, `box`,
   `thickness` and `exit_planes` are as without, so nothing shifts and the exit wave is not propagated further. The
   tails are at the depth of the outermost slice rather than their own; the diffraction intensity of the exit wave is
-  3-10 times closer to that of a slab with vacuum than that of the periodic stack. The slicing of the atoms is
+  2-7 times closer to that of a slab with vacuum than that of the periodic stack. The slicing of the atoms is
   that of the unit, so `slice_thickness='auto'` is unchanged. **Behaviour change:** the first and last slices of a
   `CrystalPotential` of a finite-projection unit differ from those of the periodic stack; pass
   `correct_surfaces=False` for the previous ones. An infinite projection has no surfaces to correct, and a unit
