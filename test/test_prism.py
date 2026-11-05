@@ -608,3 +608,29 @@ class TestBatchCrop2D:
             assert np.array_equal(
                 to_host_array(got)[i], array[i, cx : cx + 3, cy : cy + 2]
             )
+
+
+@pytest.mark.filterwarnings("ignore:The interpolation factor does not exactly divide")
+@devices
+def test_prism_cutoff_angles_are_equal_along_x_and_y_on_an_odd_grid(device):
+    # a cubic cell on a (57, 63) grid, interpolated by 2: the extent of the
+    # waves in units of the full sampling is 28.5 along x and 31.5 along y, which
+    # floating point rounds to either neighbour, so the angles within the antialias
+    # cutoff must not follow that rounding
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(57, 63), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        device=device,
+    )
+
+    cutoff_angles = s_matrix.dummy_probes().cutoff_angles
+
+    assert cutoff_angles[0] == pytest.approx(cutoff_angles[1])

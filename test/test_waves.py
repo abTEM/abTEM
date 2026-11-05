@@ -386,9 +386,8 @@ def test_downsample(data, max_angle, normalization, lazy, device):
 @devices
 def test_downsample_keeps_the_antialias_cutoff(gpts, device):
     # a grid sampled differently along x and y: the pixel count within the
-    # antialias cutoff of the resampled waves still means the same angles, up to
-    # the pixel that the parity of the new grid adds or removes, when the new grid
-    # holds them, and is capped at its own grid otherwise
+    # antialias cutoff of the resampled waves still means the same angles when
+    # the new grid holds them, and is capped at its own grid otherwise
     waves = abtem.Probe(
         energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
     ).build(lazy=False)
@@ -403,9 +402,25 @@ def test_downsample_keeps_the_antialias_cutoff(gpts, device):
             np.array(downsampled.gpts) // 2 * downsampled.angular_sampling,
         )
     ]
-    assert downsampled.cutoff_angles == pytest.approx(
-        expected, abs=max(downsampled.angular_sampling)
-    )
+    assert downsampled.cutoff_angles == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("gpts", [(45, 45), (45, 50)])
+@devices
+def test_downsample_to_gpts_of_the_other_parity_keeps_the_cutoff_count(gpts, device):
+    # the pixel count within the antialias cutoff takes the parity of the grid
+    # the waves come from; (45, 45) and (45, 50) are not the parity of the (56, 64)
+    # grid, and the angles, the "cutoff" pattern and the bins of a
+    # FlexibleAnnularDetector keep the values that these calls have always given
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample(gpts=gpts)
+
+    assert downsampled.cutoff_angles == pytest.approx([66.62585871, 64.77514041])
+    assert downsampled.diffraction_patterns("cutoff").shape[-2:] == (37, 43)
+    assert abtem.FlexibleAnnularDetector().detect(downsampled).shape == (64, 1)
 
 
 @devices

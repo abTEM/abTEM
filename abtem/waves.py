@@ -125,12 +125,20 @@ def _antialias_cutoff_gpts(
 ) -> tuple[int, int]:
     """The number of points within the antialias cutoff of a grid of the given
     ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
-    grid of ``gpts`` points at ``sampling``)."""
+    grid of ``gpts`` points at ``sampling``).
+
+    The count takes the parity of the number of points of the grid at ``sampling``
+    that spans ``extent`` when that number is an integer, as it is for downsampled or
+    tiled waves, and the parity of ``gpts`` otherwise."""
     kcut = 2.0 / 3.0 / max(sampling)
     if extent is None:
         extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+    ratio = extent[0] / sampling[0], extent[1] / sampling[1]
+    parity_gpts = tuple(
+        round(r) if abs(r - round(r)) < 1e-6 else n for r, n in zip(ratio, gpts)
+    )
+    return _ensure_parity_of_gpts(new_gpts, parity_gpts, parity="same")
 
 
 def _prebuild_reused_potential(
