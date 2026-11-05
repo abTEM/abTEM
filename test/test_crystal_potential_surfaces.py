@@ -64,6 +64,17 @@ def _folded_slab(atoms, repetitions, vacuum, slice_thickness, gpts):
     return crystal
 
 
+def _assert_same(actual, expected, device):
+    """Equal on the cpu. A pool built twice on an accelerator can differ in the last
+    bit of float32, as the order of the sums of its kernels is not fixed."""
+    if device == "cpu":
+        np.testing.assert_array_equal(actual, expected)
+    else:
+        np.testing.assert_allclose(
+            actual, expected, rtol=1e-5, atol=1e-5 * np.abs(expected).max()
+        )
+
+
 def test_default_follows_the_projection(silicon):
     assert CrystalPotential(_unit(silicon), (1, 1, 2)).correct_surfaces
     assert not CrystalPotential(
@@ -206,20 +217,21 @@ def test_builds_agree(silicon, repetitions, device):
     eager = crystal.build(lazy=False)
     expected = asnumpy(eager.array)
 
-    np.testing.assert_array_equal(
-        asnumpy(crystal.build(lazy=True).array.compute()), expected
-    )
+    _assert_same(asnumpy(crystal.build(lazy=True).array.compute()), expected, device)
     last = crystal.num_slices - 1
     window = crystal.build(first_slice=1, last_slice=last, lazy=False).array
-    np.testing.assert_array_equal(asnumpy(window), expected[1:last])
-    np.testing.assert_array_equal(
+    _assert_same(asnumpy(window), expected[1:last], device)
+    _assert_same(
         np.concatenate(
             [asnumpy(c.array) for c in crystal.generate_chunked_slices(chunk_size=4)]
         ),
         expected,
+        device,
     )
-    np.testing.assert_array_equal(
-        np.stack([asnumpy(s.array[0]) for s in crystal.generate_slices()]), expected
+    _assert_same(
+        np.stack([asnumpy(s.array[0]) for s in crystal.generate_slices()]),
+        expected,
+        device,
     )
     assert len(eager.exit_planes) == len(crystal.exit_planes)
 
@@ -276,12 +288,12 @@ def test_frozen_phonon_pool_at_the_surfaces(silicon, device):
             [asnumpy(c.array) for c in crystal.generate_chunked_slices(chunk_size=5)]
         )
 
-    np.testing.assert_array_equal(eager, lazy)
-    np.testing.assert_array_equal(chunked, eager[0])
+    _assert_same(lazy, eager, device)
+    _assert_same(chunked, eager[0], device)
     # the slices at the surfaces are the ones that differ
     assert not np.allclose(eager[:, 0], plain[:, 0], rtol=0.01)
     assert not np.allclose(eager[:, -1], plain[:, -1], rtol=0.01)
-    np.testing.assert_array_equal(eager[:, 6:-6], plain[:, 6:-6])
+    _assert_same(eager[:, 6:-6], plain[:, 6:-6], device)
 
 
 def test_surface_correction_moves_the_exit_wave_towards_the_slab(silicon):
