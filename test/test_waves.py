@@ -1,5 +1,6 @@
 import warnings
 
+import ase.build
 import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
@@ -15,8 +16,11 @@ from utils import (
 )
 
 import abtem
+from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy
 from abtem.core.energy import energy2wavelength
+from abtem.distributions import uniform
+from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.prism.s_matrix import BaseSMatrix
 from abtem.waves import Waves
 
@@ -167,6 +171,141 @@ def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
     lazy_result = lazy.copy().compute()
     assert lazy_result.reciprocal_space == reciprocal_space
     assert np.allclose(lazy_result.array, eager.array)
+
+
+_GRID_SPLIT_OPERATIONS = {
+    "apply_ctf": lambda waves, kernel, potential: waves.apply_ctf(
+        defocus=50, semiangle_cutoff=30
+    ),
+    "normalize": lambda waves, kernel, potential: waves.normalize(),
+    "ensure_reciprocal_space": lambda waves, kernel, potential: (
+        waves.ensure_reciprocal_space()
+    ),
+    "ensure_real_space": lambda waves, kernel, potential: waves.ensure_real_space(),
+    "convolve": lambda waves, kernel, potential: waves.convolve(kernel),
+    "downsample": lambda waves, kernel, potential: waves.downsample(max_angle=20),
+    "diffraction_patterns": lambda waves, kernel, potential: (
+        waves.diffraction_patterns(max_angle=None)
+    ),
+    "diffraction_patterns_block_direct": lambda waves, kernel, potential: (
+        waves.diffraction_patterns(block_direct=True)
+    ),
+    "multislice": lambda waves, kernel, potential: waves.multislice(potential),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_OPERATIONS))
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 16, 20),
+        (3, 8, 20),
+        (3, 16, 7),
+        (1, (10, 6), (5, 5, 10)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_waves_split_along_the_grid_match_eager(
+    device, chunks, reciprocal_space, operation
+):
+    """A lazy operation on waves whose grid is in several dask chunks gives the
+    eager result: the grid is gathered into one chunk before the operation."""
+    from ase import Atoms
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.potentials.iam import Potential
+
+    rng = np.random.default_rng(0)
+    shape = (3, 16, 20)
+    array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
+    kernel = (rng.normal(size=shape[1:]) + 1j * rng.normal(size=shape[1:])).astype(
+        np.complex64
+    )
+    potential = Potential(
+        Atoms("C", positions=[(0.8, 1.0, 1.0)], cell=(1.6, 2.0, 2.0)),
+        gpts=(16, 20),
+        slice_thickness=1,
+        device=device,
+    )
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        reciprocal_space=reciprocal_space,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = Waves(copy_to_device(array, device), **kwargs)
+    lazy = Waves(copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs)
+    apply = _GRID_SPLIT_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager, kernel, potential)
+        result = apply(lazy, kernel, potential)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    assert computed.array.shape == expected.array.shape
+    expected_array = asnumpy(expected.array)
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@pytest.mark.parametrize(
+    "operation", ["apply_ctf", "diffraction_patterns"], ids=lambda name: name
+)
+@devices
+def test_lazy_waves_split_along_the_grid_by_auto_chunks_keep_several_blocks(
+    device, operation
+):
+    """Gathering the grid of a stack that dask chunked automatically leaves the
+    ensemble axes in several blocks, so the result is not one block that holds
+    the whole stack."""
+    import dask
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.backend import copy_to_device
+
+    rng = np.random.default_rng(0)
+    shape = (4, 3, 256, 256)
+    array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1, 2, 3)),
+            OrdinalAxis(values=(0, 1, 2)),
+        ],
+    )
+    apply = {
+        "apply_ctf": lambda waves: waves.apply_ctf(defocus=50, semiangle_cutoff=30),
+        "diffraction_patterns": lambda waves: waves.diffraction_patterns(
+            max_angle=None
+        ),
+    }[operation]
+    eager = Waves(copy_to_device(array, device), **kwargs)
+
+    with dask.config.set({"array.chunk-size": "1MiB"}):
+        lazy = Waves(
+            copy_to_device(da.from_array(array, chunks="auto"), device), **kwargs
+        )
+        assert lazy.array.numblocks[:2] == (1, 1)
+        assert lazy.array.numblocks[2:] != (1, 1)
+        result = apply(lazy)
+
+    assert result.array.numblocks[2:] == (1, 1)
+    assert all(n > 1 for n in result.array.numblocks[:2])
+    with abtem.config.set({"fft": "numpy"}):
+        expected = asnumpy(apply(eager).array)
+        computed = asnumpy(result.copy().compute(progress_bar=False).array)
+    np.testing.assert_allclose(
+        computed, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
 
 
 @given(data=st.data(), potential=abtem_st.potential())
@@ -906,3 +1045,213 @@ def test_phase_shift_keeps_the_space_of_the_waves(
     atol = 100 * np.finfo(dtype).eps * np.abs(psi).max()
     for lazy, result in results.items():
         assert np.allclose(result, expected, rtol=0, atol=atol), f"lazy={lazy}"
+
+
+# automatic batches are sized by the chunk size; with 48 x 48 probes (18432 bytes
+# each), 6 slices and exit_planes=2 (the entrance and 3 more planes), a 12 x 20
+# scan and 4 planes: every axis of the output has a different length
+_BATCH_CHUNK_SIZE = 400_000
+_BATCH_SCAN = dict(gpts=(12, 20), start=(0, 0), end=(1, 1), fractional=True)
+
+
+_BATCH_ATOMS = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+
+
+def _batch_probe_and_potential(exit_planes):
+    potential = abtem.Potential(
+        _BATCH_ATOMS, gpts=48, slice_thickness=2, exit_planes=exit_planes
+    )
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    return probe, potential
+
+
+def _largest_chunk_bytes(measurement):
+    chunk = tuple(max(c) for c in measurement.array.chunks)
+    return int(np.prod(chunk)) * measurement.array.dtype.itemsize
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [abtem.WavesDetector(), abtem.PixelatedDetector(max_angle="full")],
+    ids=["waves", "pixelated"],
+)
+def test_auto_multislice_batch_holds_every_exit_plane(detector):
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size."""
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    assert potential.num_exit_planes == 4
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=True)
+
+    assert measurement.array.shape[0] == 4
+    assert _largest_chunk_bytes(measurement) <= _BATCH_CHUNK_SIZE
+
+
+def test_auto_multislice_batch_holds_the_summed_output_of_several_detectors():
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size.
+
+    With a single exit plane, detectors whose outputs together exceed one wave
+    (here 1.5 waves per position) also shrink the automatic batch.
+    """
+    probe, potential = _batch_probe_and_potential(exit_planes=None)
+    assert potential.num_exit_planes == 1
+    detectors = [abtem.WavesDetector(), abtem.PixelatedDetector(max_angle="full")]
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        measurements = probe.scan(potential, scan=scan, detectors=detectors, lazy=True)
+
+    assert sum(_largest_chunk_bytes(m) for m in measurements) <= _BATCH_CHUNK_SIZE
+
+
+def test_auto_multislice_batch_holds_every_exit_plane_of_every_energy():
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size.
+
+    The pixels of a multi-energy ensemble are those of its highest energy.
+    """
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    probe.energy = [80e3, 200e3]
+    assert potential.num_exit_planes == 4
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        measurement = probe.scan(
+            potential,
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=200),
+            lazy=True,
+        )
+
+    assert measurement.array.shape[:3] == (4, 12, 20)
+    assert _largest_chunk_bytes(measurement) <= _BATCH_CHUNK_SIZE
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [abtem.WavesDetector(), abtem.AnnularDetector(30, 90)],
+    ids=["waves", "annular"],
+)
+def test_auto_multislice_batch_does_not_change_the_values(detector):
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+
+    expected = probe.scan(
+        potential, scan=scan, detectors=detector, max_batch=len(scan), lazy=True
+    )
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        measured = probe.scan(potential, scan=scan, detectors=detector, lazy=True)
+
+    assert measured.array.numblocks != expected.array.numblocks
+    np.testing.assert_allclose(
+        asnumpy(measured.compute().array),
+        asnumpy(expected.compute().array),
+        rtol=1e-5,
+        atol=1e-5 * float(np.abs(asnumpy(expected.array)).max()),
+    )
+
+
+@pytest.mark.parametrize("exit_planes, max_batch", [(2, 5), (None, 5), (None, "auto")])
+def test_multislice_batch_without_the_auto_exit_plane_rule_is_unchanged(
+    exit_planes, max_batch
+):
+    """The output blocks follow the probe blocks of the same ``max_batch`` when it
+    is explicit or when there is a single exit plane.
+
+    CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size.
+    """
+    probe, potential = _batch_probe_and_potential(exit_planes=exit_planes)
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        probes = probe.build(scan=scan, lazy=True, max_batch=max_batch)
+        measurement = probe.scan(
+            potential,
+            scan=scan,
+            detectors=abtem.WavesDetector(),
+            max_batch=max_batch,
+            lazy=True,
+        )
+
+    assert measurement.array.chunks[-4:-2] == probes.array.chunks[:2]
+
+
+def _synthetic_transition_potential(potential, num_transitions=1):
+    # a synthetic transition potential stands in for GPAW
+    rng = np.random.default_rng(0)
+    shape = (num_transitions,) + potential.gpts
+    array = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    return TransitionPotentialArray(
+        Z=14,
+        array=array.astype(np.complex64),
+        energy=100e3,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(num_transitions)))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+
+def test_auto_transition_potential_scan_batch_holds_every_exit_plane():
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size."""
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    assert potential.num_exit_planes == 4
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        measurement = probe.transition_potential_scan(
+            potential,
+            _synthetic_transition_potential(potential),
+            scan=scan,
+            detectors=abtem.WavesDetector(),
+            sites=_BATCH_ATOMS[:2],
+            lazy=True,
+        )
+
+    assert 4 in measurement.array.shape
+    assert _largest_chunk_bytes(measurement) <= _BATCH_CHUNK_SIZE
+
+
+def test_auto_plane_wave_ensemble_batch_holds_every_exit_plane():
+    """CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size."""
+    _, potential = _batch_probe_and_potential(exit_planes=2)
+    # 7 tilts, the exit planes and the 48 x 48 grid differ in length
+    plane_wave = abtem.PlaneWave(energy=100e3, tilt=(uniform(0, 5, 7), 0))
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        measurement = plane_wave.multislice(potential, lazy=True)
+
+    assert measurement.array.shape[:2] == (4, 7)
+    assert _largest_chunk_bytes(measurement) <= _BATCH_CHUNK_SIZE
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [abtem.AnnularDetector(30, 90), abtem.FlexibleAnnularDetector()],
+    ids=["annular", "flexible"],
+)
+def test_auto_multislice_batch_of_an_integrating_detector_ignores_the_exit_planes(
+    detector,
+):
+    """The output of an integrating detector is a few numbers per plane, so the
+    probe blocks are those of a potential without exit planes.
+
+    CPU only: the automatic GPU batch is sized from the free memory, not from
+    dask.chunk-size.
+    """
+    probe, potential = _batch_probe_and_potential(exit_planes=2)
+    assert potential.num_exit_planes == 4
+
+    with abtem.config.set({"dask.chunk-size": f"{_BATCH_CHUNK_SIZE} B"}):
+        scan = abtem.GridScan(**_BATCH_SCAN, potential=potential)
+        probes = probe.build(scan=scan, lazy=True)
+        measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=True)
+
+    assert measurement.array.shape[0] == 4
+    assert measurement.array.chunks[1:3] == probes.array.chunks[:2]

@@ -1949,3 +1949,35 @@ def test_dummy_probes_keep_the_built_band_limit_with_supplied_metadata(device):
     assert probes.metadata["label"] == "supplied"
     assert probes.metadata["antialias_sampling"] == s_matrix.sampling
     assert probes.cutoff_angles == pytest.approx(s_matrix.dummy_probes().cutoff_angles)
+
+
+def test_compressed_auto_reduction_batch_follows_the_chunk_size_of_the_device(
+    monkeypatch,
+):
+    """CPU only: the device label is set by hand and the reduction stops once the
+    batch size is chosen."""
+    s_matrix_array = SMatrix(
+        **_VACUUM_KWARGS, interpolation=(2, 2), upsample=True
+    ).build(lazy=False)
+    monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+    scan = CustomScan(np.random.default_rng(0).uniform(2, 18, (200, 2)))
+
+    class BatchSizeChosen(Exception):
+        pass
+
+    batches = []
+    validate_chunks = abtem.core.chunks.validate_chunks
+
+    def spy(*args, **kwargs):
+        batches.append(validate_chunks(*args, **kwargs)[0][0])
+        raise BatchSizeChosen
+
+    monkeypatch.setattr("abtem.core.chunks.validate_chunks", spy)
+    window_bytes = 8 * int(np.prod(s_matrix_array.window_gpts))
+    with abtem.config.set(
+        {"dask.chunk-size": "100 MB", "dask.chunk-size-gpu": f"{7 * window_bytes} B"}
+    ):
+        with pytest.raises(BatchSizeChosen):
+            s_matrix_array.reduce(scan=scan)
+
+    assert batches == [7]
