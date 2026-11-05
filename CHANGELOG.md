@@ -145,9 +145,29 @@ Bugfixes:
   multislice. The automatic outer angle of `AnnularDetector` and `FlexibleAnnularDetector` follows the full
   grid's cutoff at every interpolation, for a window that spans the downsampled grid. Results with
   `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged
-- `SMatrix` records the band limit of its downsampled waves in the metadata key `antialias_sampling`, the
-  sampling of the full grid, instead of `adjusted_antialias_cutoff_gpts`. Waves stored with the old key read as
-  before, and `Waves.downsample` and `WavesDetector(gpts)` still record the old key
+- A numeric `downsample` below the full grid's antialias cutoff caps the cutoff of the downsampled S-matrix at
+  the edge of the downsampled grid. **Behaviour change:** for the cubic Si cell (5.43 Å) on a 56 x 64 grid at
+  100 keV with `downsample=60`, a 20 x 20 grid with an edge at 68.2 mrad, and `interpolation=1` (or
+  `upsample=True`), `PixelatedDetector("cutoff")` gives (20, 20) pixels instead of (14, 12), and `"valid"` (14, 14)
+  instead of (10, 8). The cutoff angles of the dummy probes are 68.2 mrad instead of 47.7 mrad, and
+  `AnnularDetector(inner=30)`, with its automatic outer angle, collects out to 68.2 mrad instead of 47.7 mrad and
+  returns 2.03 times the signal
+- `SMatrix`, `Waves.downsample` and `WavesDetector(gpts)` record the band limit of their downsampled waves in the
+  metadata key `antialias_sampling`, the sampling of the grid whose antialias aperture band-limited the waves,
+  instead of the pixel count `adjusted_antialias_cutoff_gpts`, which holds only at the extent it was counted on.
+  Waves stored with the old key read as before. **Behaviour change:** the cutoff angles of resampled waves
+  survive `Waves.tile`; the waves of `Probe(energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12))`
+  downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad. The
+  pixel count within the cutoff has the parity of the grid the waves are on, as for any other waves, so a
+  downsample to a grid of the other parity than its source has a count one pixel larger or smaller than before:
+  from 56 x 64 to 20 x 45 pixels, the count along y is 43 instead of 42, and the `"valid"` pattern is
+  (15, 31) instead of (15, 29)
+- The batches of the compressed reduction of a C-PRISM window smaller than the downsampled grid are sized for the
+  grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
+  followed the window, so a batch of patterns held the ratio of the two grids' pixel counts times
+  `dask.chunk-size`, 2.08 times for the window of the example above ((24, 32) pixels in a (40, 40) grid) and
+  64 times for a 128 x 128 window in a 1024 x 1024 grid. Every other detector reads the window, and the values do
+  not change
 - C-PRISM (`upsample=True`) with a window smaller than the downsampled grid, an explicit `window_gpts` or the
   automatic window of a large cell, detects the diffraction patterns of a `PixelatedDetector` on the downsampled
   grid, at the angular sampling of the cell, as multislice does, on the same grid whichever other detectors share
