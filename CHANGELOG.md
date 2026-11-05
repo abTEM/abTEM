@@ -162,8 +162,8 @@ Bugfixes:
   survive `Waves.tile`; the waves of `Probe(energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12))`
   downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad.
   The cutoff angles, the `"cutoff"` and `"valid"` patterns and the bins of a `FlexibleAnnularDetector` of such
-  waves that are not tiled are those of before, however often they are resampled; the changes to `SMatrix` are
-  the ones in the neighbouring entries
+  waves that are neither tiled nor given another extent are those of before, however often they are resampled;
+  the changes to `SMatrix` are the ones in the neighbouring entries
 - The batches of the compressed reduction of a C-PRISM window smaller than the downsampled grid are sized for the
   grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
   followed the window, so a batch of patterns held as many times the budget as the downsampled grid has pixels per
