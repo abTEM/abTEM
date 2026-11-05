@@ -446,6 +446,20 @@ def test_resampling_onto_a_finer_grid_keeps_the_cap_of_the_coarser_grid(route, d
 
 
 @devices
+def test_resampled_waves_with_a_changed_extent_are_capped_at_their_grid(device):
+    # the pixels stay when the extent changes, and the cutoff stays within them
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+    fine = waves.downsample(gpts=(30, 40)).downsample(gpts=(45, 50))
+
+    fine.extent = (20, 24)
+
+    assert fine.antialias_cutoff_gpts == (45, 50)
+    assert fine.diffraction_patterns("cutoff").shape[-2:] == (45, 51)
+
+
+@devices
 def test_downsample_twice_keeps_the_antialias_cutoff(device):
     waves = abtem.Probe(
         energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device

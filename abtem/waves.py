@@ -287,8 +287,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
             for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
         ]
         return (
-            min(cutoff_gpts[0], content_gpts[0]),
-            min(cutoff_gpts[1], content_gpts[1]),
+            min(cutoff_gpts[0], content_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1], self._valid_gpts[1]),
         )
 
     @property
