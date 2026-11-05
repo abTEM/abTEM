@@ -126,9 +126,9 @@ def test_collection_angle_must_cover_detector():
                                rtol=1e-5, atol=1e-12)
 
 
-def test_collection_angle_ignores_beams_outside_antialias_aperture():
-    # A detector that collects the whole grid is fine with a disk that covers
-    # every beam the antialias aperture passes: the others carry nothing.
+def test_collection_angle_covers_auto_sized_radial_detector():
+    # This detector stops at its automatically chosen radial cutoff. A disk
+    # larger than that cutoff covers its bins; it does not collect the full grid.
     sm, tp, scan, _, atoms = _prism_eels_setup()
     cutoff = max(sm.dummy_probes().cutoff_angles)
     result = _run_driver(sm, tp, scan, abtem.FlexibleAnnularDetector(), atoms,

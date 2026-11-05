@@ -5827,6 +5827,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ``partitions_s1``, ``partitions_s2``, ``collection_angle`` or
             ``focal_backprop`` being set auto-selects the beam-basis backend.
             ``"bipartite"`` requires ``partitions_s1`` and/or ``partitions_s2``.
+            The detection grid depends on the backend. Double-channel beam-basis
+            detects on the native grid, like multislice. The other combinations
+            detect on the coarser PRISM-cell grid. At ``interpolation > 1`` the
+            two grids quantize detector edges differently. Results can then
+            differ by a few percent when an edge lies on the bright-field disk edge.
         partitions_s1, partitions_s2 : int or None, optional
             BiP-PRISM (paper Alg. 5) beam partitioning: build ``S1`` (aperture) and
             ``S2`` (detector) on sparse hex-ring parent beams with this many radial
