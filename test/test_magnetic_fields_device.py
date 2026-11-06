@@ -71,8 +71,10 @@ def test_build_on_device_matches_cpu(cls, device, precision):
             case = f"{symbols}, lazy={lazy}"
             with abtem.config.set({"precision": precision}):
                 field = _build(cls, _atoms(symbols=symbols), device, lazy=lazy)
+                # In double precision the device 'mps' is NumPy's, with Metal kernels.
+                expected_module = get_array_module(device)
 
-            assert get_array_module(field.array) is get_array_module(device), case
+            assert get_array_module(field.array) is expected_module, case
             assert field.array.dtype == np.dtype(precision), case
             assert field.array.shape == reference.array.shape, case
 

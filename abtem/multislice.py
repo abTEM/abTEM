@@ -6,6 +6,7 @@ import copy
 import warnings
 import weakref
 from bisect import bisect_left
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeGuard, cast
@@ -16,7 +17,7 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
-from abtem.core.backend import get_array_module
+from abtem.core.backend import emulates_float64, get_array_module
 from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -552,6 +553,192 @@ def allocate_multislice_measurements(
     return measurements
 
 
+def _device_of(potential) -> str | None:
+    """The device a potential was made for, None when it does not say."""
+    try:
+        device = potential.device
+    except Exception:  # noqa: BLE001 -- a potential without a device is no error
+        return None
+    return device if isinstance(device, str) else None
+
+
+def _warn_multislice_stays_on_the_host(reason: str) -> None:
+    """Say, once per reason, that double precision on Metal runs a multislice on
+    the host: the result is the same float64, only not computed on the GPU."""
+    from abtem.core.fft import _warn_once
+
+    _warn_once(
+        ("host multislice", reason),
+        "Double precision on Metal runs this multislice on the host, not the GPU: "
+        f"{reason}.",
+    )
+
+
+class _EmulatedDoubleMultislice:
+    """The Fourier multislice of float64 waves on the Metal GPU, by double-float.
+
+    The waves live on the device for as long as they are stepped and come back to
+    the host only where something reads them (:meth:`sync`), so the host-to-device
+    copies are paid once per run of steps, not once per slice. The transmission
+    function is formed on the host in float64, and everything the slice loop adds
+    (the antialiasing aperture, the Fresnel propagator) is uploaded from float64
+    arrays, so the only approximation is the arithmetic of
+    :mod:`abtem.core._double_float`.
+
+    Waves that go through the same slices together, as the elastic wave and the
+    batches of waves scattered from it in the core-loss multislice, share what is
+    uploaded for the slices: :meth:`fork` makes the stepper of another batch.
+    """
+
+    # Device memory the transmission functions of the slices may take together.
+    _TRANSMISSION_BYTES = 256 * 2**20
+
+    def __init__(self, waves: Waves, propagator, antialias_aperture, order):
+        from abtem.core import _double_float as double_float
+
+        self._df = double_float
+        self._propagator = propagator
+        self._order = order
+        self._antialias_aperture = antialias_aperture
+        self._psi = double_float.from_numpy(waves._array)
+        self._aperture = double_float.from_numpy(
+            np.asarray(antialias_aperture.get_array(waves), dtype=np.float64)
+        )
+        self._propagators: dict = {}
+        # Slices seen again (the tiles of a crystal, the slices the scattered
+        # waves of every site batch revisit) keep their transmission function on
+        # the device. Entries go with their slice (weak references), and the
+        # oldest go when the device memory is spent.
+        # Shared by the forks, so a dict that holds the byte count with them.
+        self._cache: dict = {"entries": OrderedDict(), "bytes": 0}
+        self._stale = False
+
+    def fork(self, waves: Waves) -> "_EmulatedDoubleMultislice":
+        """A stepper of other waves through the same slices, sharing the uploads."""
+        other = object.__new__(_EmulatedDoubleMultislice)
+        other.__dict__.update(self.__dict__)
+        other._psi = self._df.from_numpy(waves._array)
+        other._stale = False
+        return other
+
+    @staticmethod
+    def unsupported_reason(
+        waves: Waves, algorithm, return_backscattered: bool = False
+    ) -> str | None:
+        """Why this class cannot run ``waves`` through ``algorithm``, or None if it
+        can. Then the multislice runs on the host, in the same float64."""
+        from abtem.core import _double_float as double_float
+
+        if not isinstance(algorithm, FourierMultislice):
+            return "only the Fourier multislice runs on the GPU"
+        if algorithm.conjugate or algorithm.transpose:
+            return "the conjugate and transpose multislice do not run on the GPU"
+        if return_backscattered:
+            return "backscattered waves are not calculated on the GPU"
+        if not (
+            isinstance(waves._array, np.ndarray) and waves._array.dtype == np.complex128
+        ):
+            return "the waves are not a complex128 NumPy array on the host"
+        try:
+            double_float.check_transform(waves._array.shape)
+        except ValueError:
+            gpts = tuple(waves._array.shape[-2:])
+            return (
+                f"the grid {gpts[0]} x {gpts[1]} has a side the GPU's FFT cannot do "
+                "(a prime factor above 7)"
+            )
+        return None
+
+    def _propagator_array(self, waves: Waves, thickness: float):
+        if thickness not in self._propagators:
+            array = np.asarray(
+                self._propagator.get_array(waves, thickness, order=self._order),
+                dtype=np.complex128,
+            )
+            # One propagator per image of the batch at most (a tilt axis has one
+            # for each tilt), and no more than the waves have.
+            if np.broadcast_shapes(array.shape, waves._array.shape) != tuple(
+                waves._array.shape
+            ):
+                raise NotImplementedError(
+                    "torch.emulate-float64 supports propagators that broadcast "
+                    f"over the waves, got shape {array.shape} for waves of shape "
+                    f"{waves._array.shape}."
+                )
+            self._propagators[thickness] = self._df.from_numpy(array)
+        return self._propagators[thickness]
+
+    def _transmission(self, waves: Waves, potential_slice):
+        """The transmission function of the slice on the device, as it multiplies
+        the waves, and the thickness of the slice."""
+        cache = self._cache
+        entries = cache["entries"]
+        key = (id(potential_slice), waves._valid_energy)
+        entry = entries.get(key)
+        if entry is not None and entry[0]() is potential_slice:
+            entries.move_to_end(key)
+            return entry[1], entry[2]
+
+        df = self._df
+        # As conventional_multislice_step: a transmission function is used as
+        # given, one made here from a potential slice is band-limited.
+        given = isinstance(potential_slice, TransmissionFunction)
+        if given:
+            transmission = potential_slice
+        else:
+            transmission = potential_slice.transmission_function(
+                energy=waves._valid_energy
+            )
+        array = np.asarray(transmission.array)
+        if array.shape != waves._array.shape[-2:] and array.shape[0] != 1:
+            raise NotImplementedError(
+                "torch.emulate-float64 supports a single potential configuration "
+                f"per slice, got a transmission function of shape {array.shape}."
+            )
+        t = df.from_numpy(array.reshape(waves._array.shape[-2:]).astype(np.complex128))
+        if not given:
+            # Band-limit on the device, the aperture riding on the transform.
+            t = df.fft2(df.fft2(t, post=self._aperture), inverse=True)
+        thickness = transmission.slice_thickness[0]
+
+        size = int(np.prod(t.shape)) * 16
+        if size <= self._TRANSMISSION_BYTES:
+
+            def forget(_, key=key):
+                entry = entries.pop(key, None)
+                if entry is not None:
+                    cache["bytes"] -= entry[3]
+
+            entries[key] = (weakref.ref(potential_slice, forget), t, thickness, size)
+            cache["bytes"] += size
+            while cache["bytes"] > self._TRANSMISSION_BYTES:
+                _, oldest = entries.popitem(last=False)
+                cache["bytes"] -= oldest[3]
+        return t, thickness
+
+    def step(self, waves: Waves, potential_slice) -> Waves:
+        """Transmit through and propagate across one slice; ``waves`` itself is
+        not updated until :meth:`sync`."""
+        df = self._df
+        t, thickness = self._transmission(waves, potential_slice)
+
+        # The product with the transmission function and with the propagator ride
+        # on the loads of the forward transform and on its stores.
+        self._psi = df.fft2(
+            self._psi, pre=t, post=self._propagator_array(waves, thickness)
+        )
+        self._psi = df.fft2(self._psi, inverse=True)
+        self._stale = True
+        return waves
+
+    def sync(self, waves: Waves) -> Waves:
+        """Bring the waves on the device back to the host."""
+        if self._stale:
+            waves._array = self._df.to_numpy(self._psi)
+            self._stale = False
+        return waves
+
+
 def conventional_multislice_step(
     waves: Waves,
     potential_slice: PotentialArray | TransmissionFunction,
@@ -913,6 +1100,15 @@ def multislice_and_detect(
     # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
     waves_input = waves
 
+    emulate_float64 = emulates_float64(_device_of(potential))
+    if emulate_float64:
+        reason = _EmulatedDoubleMultislice.unsupported_reason(
+            waves, algorithm, return_backscattered
+        )
+        if reason is not None:
+            _warn_multislice_stays_on_the_host(reason)
+            emulate_float64 = False
+
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
@@ -921,6 +1117,14 @@ def multislice_and_detect(
         # in-place multislice steps must operate on a copy.
         waves = waves_input.copy()
         exit_plane_index = 0
+
+        emulated = (
+            _EmulatedDoubleMultislice(
+                waves, propagator, antialias_aperture, algorithm.order
+            )
+            if emulate_float64
+            else None
+        )
 
         # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
@@ -950,7 +1154,9 @@ def multislice_and_detect(
         )
 
         for potential_slice, next_slice in lookahead(potential_slices):
-            if algorithm.expansion_scope == "full":
+            if emulated is not None:
+                waves = emulated.step(waves, potential_slice)
+            elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
@@ -971,6 +1177,9 @@ def multislice_and_detect(
                     potential_index, exit_plane_index, potential
                 )
 
+                if emulated is not None:
+                    emulated.sync(waves)
+
                 if measurements is not None:
                     if algorithm.expansion_scope == "full" and return_backscattered:
                         _update_measurements(
@@ -990,6 +1199,9 @@ def multislice_and_detect(
                             waves, detectors, measurements, measurement_index
                         )
                 exit_plane_index += 1
+
+        if emulated is not None:
+            emulated.sync(waves)
 
         if return_backscattered:
             _back_propagate_backscattered_waves(
@@ -1243,11 +1455,25 @@ def transition_potential_multislice_and_detect(
 
     waves_input = waves.copy()
 
+    emulate_float64 = emulates_float64(_device_of(potential))
+    if emulate_float64:
+        reason = _EmulatedDoubleMultislice.unsupported_reason(waves, algorithm)
+        if reason is not None:
+            _warn_multislice_stays_on_the_host(reason)
+            emulate_float64 = False
+
     for (
         potential_index,
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
+        emulated = (
+            _EmulatedDoubleMultislice(
+                waves, propagator, antialias_aperture, algorithm.order
+            )
+            if emulate_float64
+            else None
+        )
 
         if isinstance(sites, _SitesPerConfiguration):
             configuration_sites = sites.configuration(potential_index)
@@ -1317,10 +1543,13 @@ def transition_potential_multislice_and_detect(
 
         depth = 0.0
         for scatter_index, potential_slice in outer_iter:
-            waves = multislice_step(
-                waves,
-                potential_slice,
-            )
+            if emulated is not None:
+                waves = emulated.step(waves, potential_slice)
+            else:
+                waves = multislice_step(
+                    waves,
+                    potential_slice,
+                )
             depth += potential_slice.axes_metadata[0].values[0]
 
             _update_plasmon_axes(waves, depth)
@@ -1333,6 +1562,10 @@ def transition_potential_multislice_and_detect(
 
             if len(sites_slice) == 0:
                 continue
+
+            # The scattering reads the elastic wave on the host.
+            if emulated is not None:
+                emulated.sync(waves)
 
             # The overlap cut is ranked on the very waves the sites of this
             # slice scatter. A cut ranked once on the entrance wave and
@@ -1370,13 +1603,27 @@ def transition_potential_multislice_and_detect(
                     if scatter_index + 1 == n_outer:
                         continue
 
+                    # The batch goes through the remaining slices on the device,
+                    # and comes back to the host at the exit planes.
+                    inner = (
+                        emulated.fork(scattered_waves) if emulated is not None else None
+                    )
+
                     for inner_offset, inner_potential_slice in enumerate(
                         slice_cache[scatter_index + 1 :]
                     ):
-                        scattered_waves = multislice_step(
-                            scattered_waves,
-                            inner_potential_slice,
-                        )
+                        if inner is not None:
+                            scattered_waves = inner.step(
+                                scattered_waves, inner_potential_slice
+                            )
+                            slice_index = scatter_index + 1 + inner_offset
+                            if slice_index in potential.exit_planes:
+                                inner.sync(scattered_waves)
+                        else:
+                            scattered_waves = multislice_step(
+                                scattered_waves,
+                                inner_potential_slice,
+                            )
 
                         _update_plasmon_axes(waves, depth)
 
