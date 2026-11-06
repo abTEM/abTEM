@@ -1289,21 +1289,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return len(set(axis).intersection(base_axes)) > 0
 
     def apply_func(self, func: Callable, **kwargs) -> Self:
-        """Apply a function to the array object. The function must take an array as its
-        first argument, only the array is modified, the metadata is not changed. The
-        function is applied lazily if the array object is lazy.
+        """Apply a function to the array of the array object; the metadata is not
+        changed.
+
+        The function is called with the array object as its first argument and returns
+        the new array, of the same shape and dtype. For a lazy array object it is
+        applied lazily, block by block: each call then receives an eager array object
+        that holds one block, with the ensemble axes metadata of that block.
 
         Parameters
         ----------
         func : callable
-            Function to apply to the array object.
+            Function taking the array object as its first argument and returning the
+            new array.
         kwargs :
             Additional keyword arguments passed to the function.
 
         Returns
         -------
         array_object : ArrayObject or subclass of ArrayObject
-            The array object with the function applied.
+            The array object with the new array.
         """
         transform = TransformFromFunc(func, func_kwargs=kwargs)
         return transform.apply(self)
