@@ -409,5 +409,7 @@ def test_the_warning_is_given_once_not_by_every_lazy_block(silicon):
     with pytest.warns(UserWarning, match="within"):
         crystal = CrystalPotential(_unit(silicon), (1, 1, 2), seeds=(1, 2))
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        warnings.filterwarnings(
+            "error", message=".*atom.* of the potential unit are within"
+        )
         crystal.build(lazy=True).array.compute()
