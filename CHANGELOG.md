@@ -15,8 +15,9 @@ Features:
   periodic slab, as a reference for the multislice algorithms at low energies. It solves the relativistically corrected
   Helmholtz equation in a basis of beams (evanescent ones included) by the Numerov method and a block-tridiagonal solve, and
   returns the transmitted and the reflected wave. The basis is reduced by the translation and point symmetry of the structure.
-  Normal incidence, on the CPU, without absorption
-  ([PR #633](https://github.com/abTEM/abTEM/pull/633))
+  A plane wave of any direction, in single or double precision (the `precision` of the configuration), on the CPU and on CUDA
+  devices, without absorption
+  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
