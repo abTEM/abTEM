@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from copy import copy
-from functools import partial
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Type, TypeVar
 
 import numpy as np
@@ -2227,6 +2227,7 @@ def _crop_margin(waves: WavesType, margin: float | tuple[float, float]) -> Waves
     )
 
 
+@lru_cache(maxsize=8)
 def _window_power_gain(window: str | tuple, shape: tuple[int, int]) -> float:
     """`1 / mean(taper**2)` for the separable window `window` over `shape`.
 
