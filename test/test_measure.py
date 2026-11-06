@@ -2994,6 +2994,55 @@ def test_diffraction_patterns_interpolate_uniform(gpts, extent):
     )
 
 
+def _random_patterns(shape, sampling, dtype, lazy, device):
+    array = np.random.default_rng(1).random(shape).astype(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    return DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(shape[0])))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("gpts", [(32, 30), 32])
+def test_diffraction_patterns_interpolate_to_gpts_keeps_the_angular_extent(
+    gpts, lazy, device
+):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(gpts=gpts)
+
+    new_gpts = (gpts,) * 2 if np.isscalar(gpts) else gpts
+    assert interpolated.base_shape == new_gpts
+    np.testing.assert_allclose(
+        interpolated.sampling,
+        (0.01 * 64 / new_gpts[0], 0.0093 * 67 / new_gpts[1]),
+        rtol=1e-12,
+    )
+    computed = asnumpy(interpolated.copy().compute().array)
+    assert computed.shape == (2,) + new_gpts
+    # the grid of a requested sampling that has the same extent
+    by_sampling = patterns.interpolate(sampling=interpolated.sampling)
+    np.testing.assert_array_equal(computed, asnumpy(by_sampling.copy().compute().array))
+
+
+@lazy_params
+@devices
+def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(sampling=(0.0131, 0.012))
+
+    assert interpolated.sampling == (0.0131, 0.012)
+    assert interpolated.base_shape == (49, 52)
+    assert interpolated.copy().compute().array.shape == (2, 49, 52)
+
+
 _DISC_SIGMA = 1.0
 _DISC_SAMPLING = (0.02, 0.03)
 _DISC_GPTS = (500, 333)
