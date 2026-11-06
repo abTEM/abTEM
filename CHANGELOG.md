@@ -246,7 +246,7 @@ Bugfixes:
 - `PolarMeasurements.to_diffraction_patterns` returned float32 whatever the precision of the polar data, and
   `DiffractionPatterns.interpolate` computed its interpolation weights in float32, which limited float64
   interpolations to between $10^{-6}$ and $10^{-4}$ relative, growing with the pattern size. Both now keep the
-  precision of the data, and integer polar counts get the configured precision. Float32 results are unchanged ([PR #651](https://github.com/abTEM/abTEM/pull/651))
+  precision of the data, and integer polar counts get the configured precision ([PR #651](https://github.com/abTEM/abTEM/pull/651))
 - **Behaviour change:** `DiffractionPatterns.polar_binning` (and `radial_binning`) raises a `TypeError` for complex
   diffraction patterns, for example from `Waves.diffraction_patterns(return_complex=True)`, instead of returning
   complex polar measurements whose conversion to diffraction patterns kept only the real part. Bin the
@@ -514,6 +514,31 @@ Bugfixes:
       `FlexibleAnnularDetector` no longer fail to broadcast, the shape a lazy scan declares equals the
       computed one, and a `WavesDetector` no longer raises `AttributeError: 'Waves' object has no
       attribute 'reduce_ensemble'`
+- `DiffractionPatterns.interpolate` raised for `gpts=` (`TypeError`) and for two samplings
+  (`ValueError: Invalid sampling.`). Both forms now work, and `gpts=` keeps the angular extent of the
+  patterns. `PixelatedDetector(resample=(a, b))`, which raised the same `ValueError`, now downsamples to two
+  samplings ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
+- **Behaviour change:** `DiffractionPatterns.interpolate`, and so `PixelatedDetector(resample=...)`,
+  built the bilinear weights of float32 (and complex64) patterns from float32 frequencies, whose rounding
+  grows with the pattern size: the results deviated from linear interpolation by about $1.4 \times 10^{-4}$ of their
+  maximum at 2048 x 2048 pixels (random data; about $10^{-5}$ for a smooth probe pattern). The weights are now built in
+  float64 and cast to the precision of the patterns, so float32 results are linear interpolation to float32
+  rounding (about $2 \times 10^{-7}$) and change by up to that former deviation. Float64 results are
+  unchanged ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
+- `show()` of complex measurements (domain colouring) with a NaN pixel raised `ValueError: alpha must be
+  between 0 and 1`, also with `vmin` and `vmax` given, and so did moving a shown ensemble to a member with
+  a NaN. NaN pixels are now transparent and leave the scaling of the other pixels as it is ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
+- `generate_slices`, `generate_chunked_slices` and `build` of every potential raise a `ValueError` for a slice
+  range outside `0 <= first_slice <= last_slice <= len(potential)`; `CrystalPotential.generate_slices(first_slice=-1)`
+  returned every slice, `CrystalPotential.generate_chunked_slices` repeated the crystal past its last slice, and the
+  other potentials raised unrelated errors or returned no slices. A `last_slice` one past the end, which
+  `CrystalPotential.generate_slices` and `ChargeDensityPotential.generate_slices` clamped and
+  `PotentialArray.generate_chunked_slices` accepted, raises too ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
+- A lazy result of GPU or Metal work that is held on the CPU (the detectors' default `to_cpu=True`, or
+  `to_cpu()`) is computed with the synchronous scheduler, or on the dask-cuda client, also when the device
+  is given per object and the global `device` is `"cpu"`. Before, frozen-phonon and PRISM scans, lazy
+  `to_cpu()` waves and every result derived from such a result (`rechunk`, indexing, reductions,
+  arithmetic, filters, ...) ran on dask's threaded scheduler, which the GPU and Metal backends cannot use ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
 - Monte Carlo plasmons: `MonteCarloPlasmons.draw_events` runs again, where it raised `TypeError` because
   `PlasmonScatteringEvents` was abstract ([PR #617](https://github.com/abTEM/abTEM/pull/617))
     - **Behaviour change:** the combined deflection of several plasmon excitations is the 2D vector sum of
@@ -540,6 +565,9 @@ Documentation:
 - The multiple-GPUs section of the parallelization walkthrough is expanded to cover the multi-GPU
   hardening fixes above, and the FFT plan-cache documentation is corrected to match the shipped `auto`
   default (it previously described a stale `0 MB` default that was never shipped)
+- The `ArrayObject.apply_func` docstring states what the function receives: the array object (for a lazy
+  one, each block as an eager array object with that block's ensemble axes metadata), and returns the new
+  array; it said the function takes the array ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
 
 Planned for this release (not yet merged):
 
