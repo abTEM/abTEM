@@ -152,11 +152,13 @@ def _finalize_lazy_measurements(
 
     measurements = []
     for i, detector in enumerate(detectors):
+        # The blocks hold every ensemble axis of the waves, scan axes included.
+        # A detector that moves the scan axes into its base shape (see
+        # ArrayObjectTransform._out_ensemble_source) declares no base axes
+        # metadata for them, so only its base axes with metadata are new.
+        base_axes_metadata = detector._out_base_axes_metadata(waves)[0]
         base_shape = detector._out_base_shape(waves)[0]
-
-        if isinstance(detector, AnnularDetector):
-            # TODO
-            base_shape = ()
+        base_shape = base_shape[len(base_shape) - len(base_axes_metadata) :]
 
         meta = detector._out_meta(waves)[0]
 
@@ -174,8 +176,6 @@ def _finalize_lazy_measurements(
         )
 
         ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)[0]
-
-        base_axes_metadata = detector._out_base_axes_metadata(waves)[0]
 
         axes_metadata = ensemble_axes_metadata + base_axes_metadata
 
