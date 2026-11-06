@@ -22,6 +22,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+import scipy.linalg  # type: ignore
 from scipy.linalg import expm as expm_scipy  # type: ignore
 from scipy.spatial.transform import Rotation  # type: ignore
 
@@ -33,11 +34,12 @@ from abtem.bloch.utils import (
     cell_bounds,
     excitation_errors,
     filter_reciprocal_space_vectors,
+    find_inversion_center,
     get_reflection_condition,
     make_hkl_grid,
     reciprocal_cell,
     reciprocal_space_gpts,
-    retrieve_structure_factor_values,
+    structure_factor_coupling_matrix,
     validate_use_wave_eq,
 )
 from abtem.core import config
@@ -445,9 +447,13 @@ class BaseStructureFactor(metaclass=ABCMeta):
         g_max: float,
         centering: str,
         *args: Any,
+        inversion_center: Optional[Sequence[float] | np.ndarray] = None,
         **kwargs: Any,
     ):
         self._centering = centering
+        self._inversion_center = (
+            None if inversion_center is None else np.asarray(inversion_center, float)
+        )
         self._hkl = hkl
         self._g_max = g_max
         super().__init__(*args, **kwargs)
@@ -495,6 +501,13 @@ class BaseStructureFactor(metaclass=ABCMeta):
         """The lattice centering."""
         return self._centering
 
+    @property
+    def inversion_center(self) -> Optional[np.ndarray]:
+        """A center of inversion symmetry in scaled coordinates, or None. The
+        Bloch-wave eigenproblem of a crystal with one is solved as a real symmetric
+        one (see :func:`abtem.bloch.utils.find_inversion_center`)."""
+        return self._inversion_center
+
     @abstractmethod
     def get_potential_3d(self) -> np.ndarray:
         """Calculate the 3D potential from the structure factors."""
@@ -533,6 +546,12 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
         Lattice centering, or several combined, such as 'FI' (see
         `get_reflection_condition`). 'auto' detects it from the atoms.
+    inversion_center : 'auto', None or sequence of float
+        A center of inversion symmetry of the crystal in scaled coordinates. Its
+        Bloch-wave eigenproblem is then real symmetric, which is solved with half
+        the memory and several times faster than the complex one, with the same
+        result to rounding. 'auto' (default) detects it from the atoms (see
+        `find_inversion_center`); None solves the complex problem.
     """
 
     def __init__(
@@ -545,6 +564,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         cutoff: str = "taper",
         device: Optional[str] = None,
         centering: str = "auto",
+        inversion_center: Literal["auto"] | Sequence[float] | None = "auto",
     ):
         self._atoms = atoms
 
@@ -568,7 +588,23 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         self._parametrization = validate_parametrization(parametrization)
         self._device = validate_device(device)
 
-        super().__init__(hkl=hkl, g_max=g_max, centering=centering)
+        center: Optional[Sequence[float] | np.ndarray]
+        if isinstance(inversion_center, str):
+            if inversion_center != "auto":
+                raise ValueError(
+                    "inversion_center must be 'auto', None or a sequence of three "
+                    f"scaled coordinates, not {inversion_center!r}"
+                )
+            center = find_inversion_center(atoms, thermal_sigma, occupancy)
+        else:
+            center = inversion_center
+
+        super().__init__(
+            hkl=hkl,
+            g_max=g_max,
+            centering=centering,
+            inversion_center=center,
+        )
 
     @property
     def device(self) -> str:
@@ -650,7 +686,14 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
                 device=self._device,
             )
 
-        return StructureFactorArray(array, self.hkl, self.atoms.cell, self.g_max)
+        return StructureFactorArray(
+            array,
+            self.hkl,
+            self.atoms.cell,
+            self.g_max,
+            centering=self._centering,
+            inversion_center=self._inversion_center,
+        )
 
     def get_potential_3d(self, lazy: bool = True) -> np.ndarray:
         """Calculate the 3D potential from the structure factors.
@@ -713,6 +756,13 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         The unit cell.
     g_max : float
         Maximum scattering vector length [1/Å].
+    centering : str
+        The lattice centering.
+    inversion_center : sequence of float, optional
+        A center of inversion symmetry of the crystal in scaled coordinates, about
+        which the structure factors are real up to the phase exp(2 pi i g.t). If
+        given, the Bloch-wave eigenproblem is solved as a real symmetric one; it must
+        be a true center of these structure factors.
     ensemble_axes_metadata : list of AxisMetadata
         Metadata for the ensemble axes.
     metadata : dict
@@ -728,6 +778,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         cell: np.ndarray | Cell,
         g_max: float,
         centering: str = "P",
+        inversion_center: Optional[Sequence[float] | np.ndarray] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
@@ -746,6 +797,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             hkl=hkl,
             g_max=g_max,
             centering=centering,
+            inversion_center=inversion_center,
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
@@ -1018,6 +1070,7 @@ def calculate_structure_matrix(
     energy: float,
     gpts: tuple[int, int, int],
     use_wave_eq: bool | Literal["exact"] = "exact",
+    inversion_center: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Calculate the structure matrix for a given set of reciprocal space vectors.
 
@@ -1048,30 +1101,27 @@ def calculate_structure_matrix(
         z-derivative of the Bloch-wave amplitudes dropped, with excitation errors
         measured from the Ewald sphere. See
         :func:`abtem.bloch.utils.excitation_errors`.
+    inversion_center : numpy.ndarray, optional
+        A center of inversion symmetry of the crystal in scaled coordinates (see
+        :func:`abtem.bloch.utils.find_inversion_center`). If given, the structure
+        matrix is that of the crystal moved to put the center at the origin, which
+        is real symmetric: D A D^H, with D = diag(exp(2 pi i g.t)). It has the real
+        dtype, half the memory of the complex matrix.
 
     Returns
     -------
     numpy.ndarray
-        The structure matrix.
+        The structure matrix, Fortran-ordered.
     """
     xp = get_array_module(structure_factor)
 
     g = calculate_g_vec(hkl_selected, cell)
     Mii = _metric(hkl_selected, cell, energy, use_wave_eq)
 
-    hkl_selected = np.asarray(hkl_selected)
-
-    gmh = hkl_selected[None] - hkl_selected[:, None]
-    gmh = gmh.reshape(-1, 3)
-
-    A = retrieve_structure_factor_values(structure_factor, hkl, gmh, gpts)
-    A = xp.asarray(A.reshape((len(hkl_selected),) * 2), dtype=get_dtype(complex=True))
-
-    # structure_factor_dict = {
-    #     (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
-    # }
-    # A = np.array([structure_factor_dict[(h, k, l)] for h, k, l in gmh])
-    # A = A.reshape((len(hkl_selected),) * 2)
+    structure_factor = xp.asarray(structure_factor, dtype=get_dtype(complex=True))
+    A = structure_factor_coupling_matrix(
+        structure_factor, hkl, hkl_selected, gpts, inversion_center=inversion_center
+    )
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
@@ -1086,7 +1136,10 @@ def calculate_structure_matrix(
     )
     Mii = xp.asarray(Mii, dtype=get_dtype())
 
-    A = A * prefactor * Mii[None] * Mii[:, None]
+    # in place: no temporary copies of the matrix, and it stays Fortran-ordered
+    A *= prefactor
+    A *= Mii[None]
+    A *= Mii[:, None]
 
     xp.fill_diagonal(A, diag)
     return A
@@ -1098,6 +1151,36 @@ def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
     return array
 
 
+def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """The eigenvalues and eigenvectors of a Hermitian matrix, from its lower triangle.
+
+    With `overwrite_a`, a Fortran-ordered matrix is factorized in place, its memory
+    reused for the eigenvectors, where the backend allows: `numpy.linalg.eigh` and
+    `cupy.linalg.eigh` always copy the matrix first, which at the largest sizes is a
+    sixth of the peak memory on the GPU (the matrix, the copy and cuSOLVER's workspace,
+    which was about four matrices in the measurements of issue #632).
+
+    A single-precision matrix on the CPU is still copied: `numpy.linalg.eigh` solves
+    it in double precision, an order of magnitude more accurately than LAPACK's
+    single-precision solver, and the results do not change with this function.
+    """
+    xp = get_array_module(a)
+    double = xp is np and a.dtype in (np.float64, np.complex128)
+    if overwrite_a and double and a.flags.f_contiguous:
+        return scipy.linalg.eigh(
+            a, lower=True, overwrite_a=True, check_finite=False, driver="evd"
+        )
+    if overwrite_a and cp is not None and xp is cp and a.flags.f_contiguous:
+        try:
+            # the function behind cupy.linalg.eigh, which takes overwrite_a
+            from cupy.linalg._eigenvalue import _syevd  # type: ignore
+        except ImportError:
+            pass
+        else:
+            return _syevd(a, "L", True, overwrite_a=True)
+    return xp.linalg.eigh(a)
+
+
 def calculate_dynamical_scattering(
     structure_matrix: np.ndarray,
     hkl: np.ndarray,
@@ -1105,6 +1188,8 @@ def calculate_dynamical_scattering(
     energy: float,
     thicknesses: float | Iterable[float],
     use_wave_eq: bool | Literal["exact"] = "exact",
+    inversion_center: Optional[np.ndarray] = None,
+    overwrite_structure_matrix: bool = False,
 ) -> np.ndarray:
     """Calculate the dynamical scattering given a structure matrix.
 
@@ -1124,6 +1209,15 @@ def calculate_dynamical_scattering(
         The form of the Bloch-wave equation the structure matrix was built for
         (see :func:`calculate_structure_matrix`; default 'exact'); decides the
         metric used to map its eigenvectors back to beam amplitudes.
+    inversion_center : numpy.ndarray, optional
+        The inversion center the structure matrix was built for (see
+        :func:`calculate_structure_matrix`), whose phases D^H map the eigenvectors
+        of the real symmetric matrix back to the crystal. None if it was built
+        without one.
+    overwrite_structure_matrix : bool, optional
+        If True, the memory of a Fortran-ordered structure matrix, as
+        :func:`calculate_structure_matrix` returns, is reused for the eigenvectors
+        where the backend allows, destroying the matrix. Default is False.
 
     Returns
     -------
@@ -1136,31 +1230,84 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(_metric(hkl, cell, energy, use_wave_eq), dtype=get_dtype())
-
     # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
-    v, C = xp.linalg.eigh(structure_matrix)
+    v, C = _eigh(structure_matrix, overwrite_a=overwrite_structure_matrix)
+    del structure_matrix
 
     gamma = v * energy2wavelength(energy) / 2.0
 
     # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the
     # physical Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as
-    # M_00 = 1 (g_z = 0 for the direct beam).
-    initial = plane_wave_coefficients(hkl, xp)
-    alpha = xp.conjugate(C.T) @ initial
+    # M_00 = 1 (g_z = 0 for the direct beam), and D e_0 = e_0 for the same
+    # reason. C'^H e_0 is the conjugated row of the direct beam.
+    direct = np.flatnonzero(np.all(np.asarray(hkl) == 0, axis=1))
+    if len(direct):
+        alpha = xp.conjugate(C[int(direct[0])])
+    else:
+        alpha = xp.zeros(len(v), dtype=C.dtype)
 
-    C = Mii[:, None] * C
+    if not use_wave_eq:
+        C *= xp.asarray(_metric(hkl, cell, energy, use_wave_eq), dtype=v.dtype)[
+            :, None
+        ]
 
     z = np.atleast_1d(thicknesses)
     # thicknesses in gamma's precision: float64 would widen a single-precision
     # result to complex128 (NEP 50)
     z = xp.asarray(z, dtype=gamma.dtype)
     phases = xp.exp(2.0j * xp.pi * z[None] * gamma[:, None])
-    array = (C @ (phases * alpha[:, None])).T
+    weights = phases * alpha[:, None]
+    if xp.iscomplexobj(C):
+        array = C @ weights
+    else:
+        # two real products: a mixed one would first copy C to complex
+        array = C @ weights.real + 1j * (C @ weights.imag)
+
+    if inversion_center is not None:
+        # C = D^H C', with D = diag(exp(2 pi i g.t))
+        phase = np.exp(-2j * np.pi * (np.asarray(hkl) @ np.asarray(inversion_center)))
+        array *= xp.asarray(phase, dtype=array.dtype)[:, None]
+
+    array = array.T
 
     if not thicknesses.shape:
         return array[0]
     return array
+
+
+def _structure_factor_dynamical_scattering(
+    structure_factor: np.ndarray,
+    hkl_source: np.ndarray,
+    gpts: tuple[int, int, int],
+    hkl: np.ndarray,
+    cell: np.ndarray | Cell,
+    energy: float,
+    thicknesses: float | Iterable[float],
+    use_wave_eq: bool | Literal["exact"],
+    inversion_center: Optional[np.ndarray],
+) -> np.ndarray:
+    """The dynamical scattering from the structure factors: the structure matrix is
+    built and solved in one step, so that nothing else holds it and the solver can
+    reuse its memory for the eigenvectors."""
+    return calculate_dynamical_scattering(
+        calculate_structure_matrix(
+            structure_factor,
+            hkl=hkl_source,
+            hkl_selected=hkl,
+            cell=cell,
+            energy=energy,
+            gpts=gpts,
+            use_wave_eq=use_wave_eq,
+            inversion_center=inversion_center,
+        ),
+        hkl=hkl,
+        cell=cell,
+        energy=energy,
+        thicknesses=thicknesses,
+        use_wave_eq=use_wave_eq,
+        inversion_center=inversion_center,
+        overwrite_structure_matrix=True,
+    )
 
 
 def expm(A: np.ndarray) -> np.ndarray:
@@ -1290,8 +1437,10 @@ def validate_g_max(
 
     if structure_factor is not None and g_max > structure_factor.g_max / 2:
         warnings.warn(
-            "provided g_max exceed half the g_max of the scattering factors, "
-            "some couplings are not included"
+            f"g_max ({g_max:g} 1/Å) exceeds half the g_max of the structure factors "
+            f"({structure_factor.g_max:g} 1/Å): the couplings between beams more "
+            "than that g_max apart are not included (set to zero)",
+            stacklevel=3,
         )
 
     return g_max
@@ -1867,37 +2016,40 @@ class BlochWaves:
         _warn_if_single_precision(self._device)
         hkl = self.hkl
 
-        A = self.calculate_structure_matrix(lazy=lazy)
+        structure_factor = self._get_structure_factor_array(lazy=lazy)
+
+        kwargs: dict[str, Any] = dict(
+            hkl_source=structure_factor.hkl,
+            gpts=structure_factor.gpts,
+            hkl=hkl,
+            cell=self.cell,
+            energy=self.energy,
+            thicknesses=thicknesses,
+            use_wave_eq=self.use_wave_eq,
+            inversion_center=structure_factor.inversion_center,
+        )
 
         if lazy:
             xp = get_array_module(self._device)
 
+            new_axis: tuple[int, ...]
             chunks: tuple[int, ...]
             if not thicknesses.shape:
-                chunks = (len(hkl),)
+                new_axis, chunks = (), (len(hkl),)
             else:
-                chunks = (len(thicknesses), len(hkl))
+                new_axis, chunks = (0,), (len(thicknesses), len(hkl))
 
             array = da.map_blocks(
-                calculate_dynamical_scattering,
-                A,
-                hkl=hkl,
-                cell=self.cell,
-                energy=self.energy,
-                thicknesses=thicknesses,
-                use_wave_eq=self.use_wave_eq,
-                drop_axis=1,
+                _structure_factor_dynamical_scattering,
+                structure_factor._lazy_array,
+                **kwargs,
+                new_axis=new_axis,
                 chunks=chunks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
-            array = calculate_dynamical_scattering(
-                structure_matrix=A,
-                hkl=hkl,
-                cell=self.cell,
-                energy=self.energy,
-                thicknesses=thicknesses,
-                use_wave_eq=self.use_wave_eq,
+            array = _structure_factor_dynamical_scattering(
+                structure_factor._eager_array, **kwargs
             )
 
         return array
@@ -2462,6 +2614,23 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             )
         return mask
 
+    def _built_structure_factor(self) -> BaseStructureFactor:
+        """The structure factors, computed once for all the orientations: each
+        orientation's BlochWaves would otherwise compute them anew."""
+        if isinstance(self._structure_factor, StructureFactor):
+            return self._structure_factor.build(lazy=False)
+        return self._structure_factor
+
+    def _with_built_structure_factor(self) -> "BlochwaveEnsemble":
+        """A copy holding the computed structure factors, whose ensemble blocks then
+        share them instead of each computing them."""
+        pairs = zip(self._axes, self._rotations)
+        args: tuple[Any, ...] = tuple(itertools.chain(*pairs))
+        kwargs = self._copy_kwargs(exclude=("structure_factor",))
+        return self.__class__(
+            *args, structure_factor=self._built_structure_factor(), **kwargs
+        )
+
     def get_orientation_matrices(self) -> np.ndarray:
         """Get the orientation matrices for the ensemble.
 
@@ -2680,9 +2849,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         # lil_matrix((np.prod(shape[:-1]), shape[-1]))
 
+        structure_factor = self._built_structure_factor()
+
         for i in np.ndindex(orientation_matrices.shape[:-2]):
             bw = BlochWaves(
-                structure_factor=self._structure_factor,
+                structure_factor=structure_factor,
                 energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
@@ -2737,7 +2908,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return_complex: bool,
         pbar: bool,
     ) -> tuple[da.core.Array, np.ndarray]:
-        blocks = self.ensemble_blocks(1)
+        blocks = self._with_built_structure_factor().ensemble_blocks(1)
 
         hkl_mask = self.get_ensemble_hkl_mask()
 
@@ -2905,9 +3076,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         xp = get_array_module(self.device)
         array = xp.zeros(shape, dtype=get_dtype(complex=True))
 
+        structure_factor = self._built_structure_factor()
+
         for i in np.ndindex(orientation_matrices.shape[:-2]):
             bw = BlochWaves(
-                structure_factor=self._structure_factor,
+                structure_factor=structure_factor,
                 energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
@@ -2961,7 +3134,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: Optional[float],
         pbar: bool,
     ) -> da.core.Array:
-        blocks = self.ensemble_blocks(1)
+        blocks = self._with_built_structure_factor().ensemble_blocks(1)
 
         shape = self.ensemble_shape + self._energy_shape + (len(thicknesses),) + gpts
         out_ind = tuple(range(len(shape)))
