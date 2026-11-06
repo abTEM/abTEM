@@ -1,6 +1,7 @@
 import os
 from numbers import Number
 
+import ase
 import hypothesis.extra.numpy as numpy_st
 import numpy as np
 import hypothesis.strategies as st
@@ -12,10 +13,13 @@ from utils import (assert_array_matches_device, assert_array_matches_laziness,
                    assert_array_objects_equal, devices, gpu, lazy_params,
                    remove_dummy_dimensions, si_cubic_atoms)
 
+import abtem
+import abtem.array
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+from abtem.measurements import Images
 
 # The full set of `has_array` strategies exercised by most array-object tests.
 ALL_HAS_ARRAY = [
@@ -766,3 +770,73 @@ def test_to_data_array_does_not_share_nested_metadata_values():
     waves.to_data_array().attrs["components"].append("diffuse")
 
     assert waves.metadata["components"] == ["total", "elastic"]
+
+
+def _held_on_the_cpu(device):
+    """Lazy results of work on `device` that the detectors' default
+    `to_cpu=True` (or an explicit `to_cpu()`) holds on the CPU."""
+    atoms = ase.Atoms(
+        "C2", positions=[(2.0, 2.0, 1.0), (1.0, 3.0, 2.0)], cell=(4, 3, 3)
+    )
+    kwargs = dict(gpts=(32, 24), slice_thickness=1.0, device=device)
+    potential = abtem.Potential(atoms, **kwargs)
+    phonons = abtem.Potential(
+        abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1), **kwargs
+    )
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(3, 2), fractional=True, potential=potential
+    )
+    probe = abtem.Probe(semiangle_cutoff=20, energy=100e3, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, device=device
+    )
+    detector = abtem.PixelatedDetector(max_angle=30)
+    return {
+        "scan": lambda: probe.scan(potential, scan=scan, detectors=detector, lazy=True),
+        "frozen phonon scan": lambda: probe.scan(
+            phonons, scan=scan, detectors=detector, lazy=True
+        ),
+        "prism scan": lambda: s_matrix.scan(
+            scan=scan, detectors=abtem.PixelatedDetector(max_angle=20), lazy=True
+        ),
+        "waves to_cpu": lambda: probe.multislice(potential, scan=scan, lazy=True)
+        .to_cpu()
+        .diffraction_patterns(),
+    }
+
+
+_DERIVED = {
+    "itself": lambda m: m,
+    "rechunk": lambda m: m.rechunk(-1),
+    "index": lambda m: m[0],
+    "sum": lambda m: m.sum(0),
+    "multiply": lambda m: m * 2,
+    "gaussian_filter": lambda m: m.gaussian_filter(0.1),
+}
+
+
+@devices
+@pytest.mark.parametrize(
+    "pipeline", ["scan", "frozen phonon scan", "prism scan", "waves to_cpu"]
+)
+@pytest.mark.parametrize("derive", list(_DERIVED))
+def test_results_of_accelerator_work_held_on_the_cpu_compute_synchronously(
+    device, pipeline, derive, monkeypatch
+):
+    """Device work in a lazy result's graph selects the synchronous scheduler,
+    with the global device left at 'cpu', for the result and for anything
+    derived from it; a CPU result keeps dask's default scheduler."""
+    schedulers = []
+    compute = abtem.array.dask.compute
+
+    def spy(*args, **kwargs):
+        schedulers.append(kwargs.get("scheduler"))
+        return compute(*args, **kwargs)
+
+    with abtem.config.set({"device": "cpu"}):
+        result = _DERIVED[derive](_held_on_the_cpu(device)[pipeline]())
+        assert result.is_lazy
+        monkeypatch.setattr(abtem.array.dask, "compute", spy)
+        result.compute()
+
+    assert schedulers[0] == (None if device == "cpu" else "synchronous")

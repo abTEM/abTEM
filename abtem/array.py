@@ -812,20 +812,40 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
-def _is_gpu_array_object(obj) -> bool:
-    """Return True if obj's computation involves GPU (CuPy) arrays.
+def _graph_holds_chunks_of(obj, array_type) -> bool:
+    """Whether the graph of a lazy array object has a layer of `array_type` chunks.
 
-    Detects GPU even when the output array has numpy meta, e.g. when a detector
-    with to_cpu=True produces CPU-resident results from GPU wave computations.
-    ArrayObject.device checks _device first (set in apply_transform when the source
-    was GPU), so this correctly handles the to_cpu=True case.
+    dask records the chunk type of every array layer it creates in the layer's
+    ``collection_annotations``, and the graph of an array derived from another
+    keeps the other's layers. Device work upstream therefore stays visible in a
+    result held on the CPU (a detector's ``to_cpu=True``), whichever method
+    rebuilt that result.
     """
-    return hasattr(obj, "device") and obj.device == "gpu"
+    if array_type is None or not getattr(obj, "is_lazy", False):
+        return False
+    chunk_type = dask.utils.typename(array_type)
+    layers = getattr(obj.array.__dask_graph__(), "layers", {})
+    return any(
+        (getattr(layer, "collection_annotations", None) or {}).get("chunk_type")
+        == chunk_type
+        for layer in layers.values()
+    )
+
+
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays: obj is
+    labelled or stored on the GPU, or its graph has CuPy chunks."""
+    return (hasattr(obj, "device") and obj.device == "gpu") or _graph_holds_chunks_of(
+        obj, None if cp is None else cp.ndarray
+    )
 
 
 def _is_mps_array_object(obj) -> bool:
-    """Return True if obj's computation involves Metal (MPS) arrays."""
-    return hasattr(obj, "device") and obj.device == "mps"
+    """Return True if obj's computation involves Metal (MPS) arrays: obj is
+    labelled or stored on Metal, or its graph has Metal chunks."""
+    return (hasattr(obj, "device") and obj.device == "mps") or _graph_holds_chunks_of(
+        obj, backend.TorchNDArray
+    )
 
 
 def _resolve_mps_scheduler(kwargs: dict) -> dict:
