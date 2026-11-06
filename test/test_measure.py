@@ -3642,6 +3642,56 @@ def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
         np.testing.assert_allclose(line.get_ydata(), row)
 
 
+@pytest.mark.parametrize("cls", [DiffractionPatterns, Images])
+@pytest.mark.parametrize(
+    "limits", [dict(), dict(vmin=0.1, vmax=1.2), dict(logscale=True)]
+)
+def test_show_complex_measurements_with_nan(cls, limits):
+    """The pixel of NaN is transparent and the other pixels are drawn as without
+    it, when shown, when the power changes and when the visualization moves to
+    another member. Host matplotlib code, so the device is not a parameter."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(0)
+    shape = (2, 20, 27)
+    array = (rng.random(shape) + 1j * rng.random(shape)).astype(np.complex64)
+    finite = array.copy()
+    # a value inside the range of the others, which gives the same limits
+    finite[:, 2, 5] = array[:, 3, 3]
+    array[:, 2, 5] = np.nan
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
+    if cls is DiffractionPatterns:
+        kwargs.update(fftshift=True, metadata={"energy": 100e3})
+
+    def alpha(artist):
+        return np.ma.filled(np.ma.asarray(artist.phase_axes_image.get_alpha()), -1.0)
+
+    def alphas(data):
+        visualization = cls(data, **kwargs).show(**limits)
+        artist = visualization.artists[0, 0]
+        found = [alpha(artist)]
+        artist.set_power(0.5)
+        found.append(alpha(artist))
+        visualization.update_data_indices((1,))
+        found.append(alpha(artist))
+        return found
+
+    try:
+        expected, found = alphas(finite), alphas(array)
+    finally:
+        plt.close("all")
+
+    # the image is drawn transposed
+    keep = np.ones(expected[0].shape, dtype=bool)
+    keep[5, 2] = False
+    for e, f in zip(expected, found):
+        assert f[5, 2] == 0.0
+        np.testing.assert_array_equal(f[keep], e[keep])
+
+
 def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
     import matplotlib
 
