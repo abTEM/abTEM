@@ -156,6 +156,74 @@ Dependencies:
 
 Bugfixes:
 
+- PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
+  antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
+  `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
+  `SMatrix` report the full grid's cutoff angles. Before, the patterns were cropped to about two thirds of that
+  cutoff, and to a different size along x and y on a grid sampled differently along them. For the cubic Si cell
+  (5.43 Å) on a 56 x 64 grid at 100 keV, patterns of (26, 22) pixels become (38, 38), and the cutoff angles of
+  the dummy probes, 88.6 mrad unbuilt and 88.6 x 75.0 mrad for the built S-matrix, become 129.5 mrad. At a
+  larger interpolation factor the patterns lie on the coarser grid of the reduction and extend to the same
+  cutoff angle. At `interpolation=1` the same applies to core-loss PRISM
+  (`SMatrix.transition_potential_scan`): its pixelated and flexible annular outputs have the sizes of core-loss
+  multislice. The automatic outer angle of `AnnularDetector` and `FlexibleAnnularDetector` follows the full
+  grid's cutoff at every interpolation, for a window that spans the downsampled grid. Results with
+  `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged
+- A numeric `downsample` below the full grid's antialias cutoff caps the cutoff of the downsampled S-matrix at
+  the edge of the downsampled grid. **Behaviour change:** for the cubic Si cell (5.43 Å) on a 56 x 64 grid at
+  100 keV with `downsample=60`, a 20 x 20 grid with an edge at 68.2 mrad, and `interpolation=1` (or
+  `upsample=True`), `PixelatedDetector("cutoff")` gives (20, 20) pixels instead of (14, 12), and `"valid"` (14, 14)
+  instead of (10, 8). The cutoff angles of the dummy probes are 68.2 mrad instead of 47.7 mrad, and
+  `AnnularDetector(inner=30)`, with its automatic outer angle, collects out to 68.2 mrad instead of 47.7 mrad. Its
+  signal rises by a factor of 2.03 at the centre of the one-cell-thick cell and 2.01 at (1.0, 1.5) Å, and by 1.76
+  and 1.74 for a cell two cells thick
+- `SMatrix`, `Waves.downsample` and `WavesDetector(gpts)` record the band limit of their downsampled waves in the
+  metadata key `antialias_sampling`, the sampling of the grid whose antialias aperture band-limited the waves,
+  instead of the pixel count `adjusted_antialias_cutoff_gpts`, which holds only at the extent it was counted on.
+  `Waves.downsample` and `WavesDetector(gpts)` also record the sampling of the coarsest grid the waves were
+  resampled onto in `coarsest_sampling`, where their content ends. Waves stored with the old key read as before.
+  **Behaviour change:** the cutoff angles of waves resampled by `Waves.downsample` or `WavesDetector(gpts)`
+  survive `Waves.tile`; the waves of `Probe(energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12))`
+  downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad.
+  The cutoff angles, the `"cutoff"` and `"valid"` patterns and the bins of a `FlexibleAnnularDetector` of such
+  waves that are neither tiled nor given another extent are those of before, however often they are resampled;
+  the changes to `SMatrix` are the ones in the neighbouring entries
+- The batches of the compressed reduction of a C-PRISM window smaller than the downsampled grid are sized for the
+  grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
+  followed the window, so a batch of patterns held as many times the budget as the downsampled grid has pixels per
+  window pixel: 2.08 times for a (24, 32) window in a (40, 40) grid (1600 / 768 pixels) and 64 times for a
+  128 x 128 window in a 1024 x 1024 grid. The budget is `dask.chunk-size` (`dask.chunk-size-gpu` on a GPU) for the batches of an
+  arbitrary list of positions, and 1 GiB for the lattice reduction of a `GridScan`. Every other detector reads the window, and the
+  values do not change
+- C-PRISM (`upsample=True`) with a window smaller than the downsampled grid, an explicit `window_gpts` or the
+  automatic window of a large cell, detects the diffraction patterns of a `PixelatedDetector` on the downsampled
+  grid, at the angular sampling of the cell, as multislice does, on the same grid whichever other detectors share
+  the scan. Before, a lazy scan declared a different shape and angular sampling than it computed, a frozen-phonon
+  scan or a multi-energy scan with a numeric `max_angle` raised `ValueError`, and a pattern scanned together with
+  a `FlexibleAnnularDetector` or `WavesDetector` lay on the window's coarser grid. **Behaviour change:** for the
+  cubic Si cell (5.43 Å) on a 56 x 64 grid at 100 keV with `interpolation=2`, `window_gpts=(24, 32)` and
+  `downsample="cutoff"`, `PixelatedDetector("cutoff")` gives (38, 38) pixels at 6.82 mrad instead of (16, 18),
+  `"valid"` (26, 26) instead of (12, 12), and `resample="uniform"` (38, 38) at 6.82 mrad instead of (16, 14) at
+  11.4 mrad. The automatic `FlexibleAnnularDetector` has 124 bins instead of 76, and the cutoff angles of
+  `SMatrix.dummy_probes()` are 125.0 x 127.8 mrad instead of 90.9 x 93.7 mrad. The automatic outer angle of
+  `AnnularDetector` and `FlexibleAnnularDetector` follows these cutoffs (`AnnularDetector(inner=50)` collects out
+  to 125.0 mrad instead of 90.9 mrad). Core-loss PRISM with `interpolation=2` on an 8 x 6 Å cell has the sizes of
+  the full window, (16, 12) and (12, 8) pixels and 74 bins instead of (10, 8), (8, 6) and 46 bins. Plain PRISM and
+  C-PRISM with a window that spans the downsampled grid already detected their patterns on that grid
+- PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
+  `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
+  plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
+  and `reduce(lazy=True, disable_s_matrix_chunks=True)`, the lazy default on a GPU and with `upsample=True`,
+  averaged over a scan axis instead. `CompressedSMatrixArray.reduce` averages the ensemble with every `method`
+  and with `blend_angle`; it did so only with `method="expand"` and no `blend_angle`, the CPU default
+- The PRISM reductions `SMatrix.reduce` and `SMatrix.scan` leave the `CTF` they are given as it is. Before, a single-energy
+  reduction set its grid and energy in place, so `ctf.gpts`, `ctf.extent` and `ctf.energy` held the S-matrix's
+  afterwards, and the tasks of a lazy graph shared the one CTF. A lazy CPU scan of a frozen-phonon ensemble with a cropped C-PRISM
+  window and a `PixelatedDetector` reaching past the blend cut, whose two branches match the CTF to the window and
+  to the plane-wave period, could therefore sample the soft aperture of one configuration on the other grid
+  (15.91 x 13.63 mrad per pixel for a (24, 32) window of a (56, 64) grid, 13.63 x 13.63 mrad for its period). That
+  configuration's pattern was wrong by about 1 % at the edge of the aperture, 3e-3 of the maximum after the mean
+  over three configurations, intermittently in repeated runs of the test of this case
 - Double-channel core-loss multislice (`double_channel=True`, the default) could use the transmission function of
   another slice, so repeated runs differed, with or without frozen phonons
   ([#578](https://github.com/abTEM/abTEM/pull/578)). Double-channel core-loss results computed with 1.0.10 or

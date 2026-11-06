@@ -159,6 +159,38 @@ def test_lazy_declared_shape_matches_computed_and_eager(
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("num_configs", [None, 3])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible"])
+def test_downsampled_outputs_detect_to_the_cutoff_of_multislice(
+    device, detector, num_configs, lazy
+):
+    # downsample="cutoff" keeps the full grid's antialias cutoff, so the size of
+    # the pixelated patterns and of the flexible annular bins is multislice's
+    potential = _potential(device, num_configs)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=ENERGY,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample="cutoff",
+    )
+    declared = s_matrix.transition_potential_scan(
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=_detector(detector),
+        sites=ATOMS,
+        lazy=lazy,
+        double_channel=False,
+    )
+    measured = declared.copy().compute(progress_bar=False) if lazy else declared
+    expected = _multislice(potential, _detector(detector))
+
+    assert declared.shape == measured.shape == expected.shape
+    _assert_close(measured, expected)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("num_configs", [None, 3])
 def test_results_carry_the_probe_metadata_of_multislice(device, num_configs, lazy):
     # the semiangle cutoff and the base tilt of the probe are what
     # DiffractionPatterns.block_direct reads
@@ -170,6 +202,69 @@ def test_results_carry_the_probe_metadata_of_multislice(device, num_configs, laz
     for key in ("semiangle_cutoff", "base_tilt_x", "base_tilt_y"):
         assert measured.metadata[key] == expected.metadata[key]
     _assert_close(measured.block_direct(), expected.block_direct())
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_upsample_with_a_cropped_window_has_the_outputs_of_the_full_window(
+    device, lazy
+):
+    # a window smaller than the downsampled grid (32, 24) only crops the probe:
+    # the grids of the patterns and of the radial bins follow the cell. The scan
+    # takes whole pixels of the downsampled grid.
+    potential = _potential(device)
+    scan = abtem.GridScan(
+        (0, 0),
+        (1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    def s_matrix(window_gpts):
+        return abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20,
+            interpolation=2,
+            upsample=True,
+            window_gpts=window_gpts,
+        )
+
+    def scan_with(window_gpts):
+        result = s_matrix(window_gpts).transition_potential_scan(
+            _tp(potential),
+            scan=scan,
+            detectors=[
+                abtem.PixelatedDetector(max_angle="cutoff"),
+                abtem.PixelatedDetector(),
+                abtem.FlexibleAnnularDetector(),
+                abtem.AnnularDetector(5),
+            ],
+            sites=ATOMS,
+            lazy=lazy,
+            double_channel=False,
+        )
+        declared = [m.shape for m in result]
+        return declared, [
+            m.copy().compute(progress_bar=False) if lazy else m for m in result
+        ]
+
+    declared, cropped = scan_with((20, 24))
+    _, full = scan_with("full")
+
+    assert [m.shape[-2:] for m in cropped[:2]] == [(16, 12), (12, 8)]
+    assert cropped[2].shape == (2, 4, 74, 1)
+    assert declared == [m.shape for m in cropped]
+    assert [m.shape for m in cropped] == [m.shape for m in full]
+
+    plain = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=2
+    )
+    assert s_matrix((20, 24)).dummy_probes().cutoff_angles == pytest.approx(
+        plain.dummy_probes().cutoff_angles
+    )
 
 
 @devices
