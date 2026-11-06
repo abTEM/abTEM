@@ -2574,6 +2574,43 @@ def _surface_units(
     )
 
 
+# The distance from the entrance or exit plane of a crystal, in Å, within which the
+# potential of an atom is not corrected well by `correct_surfaces`.
+SURFACE_ATOM_WARNING_DISTANCE = 0.3
+
+
+def _warn_if_atoms_near_surfaces(unit, repetitions_z: int) -> None:
+    """Warn about the atoms of `unit` within `SURFACE_ATOM_WARNING_DISTANCE` of the
+    entrance or exit plane of a crystal that corrects its surfaces.
+
+    The potential that falls beyond a surface is added to the slice next to it, at
+    the depth of that slice rather than its own. For an atom on the plane that is
+    half of its potential, which doubles the potential of the slice at its column,
+    and a focused probe scatters from it much more than from the atom in a slab."""
+    if _surface_units(unit, True, repetitions_z) is None:
+        return
+
+    atoms = unit.get_transformed_atoms()
+    height = float(np.array(atoms.cell)[2, 2])
+    heights = np.mod(atoms.positions[:, 2], height)
+    distances = np.minimum(heights, height - heights)
+    near = distances < SURFACE_ATOM_WARNING_DISTANCE
+    if not near.any():
+        return
+
+    warnings.warn(
+        f"{int(near.sum())} atom(s) of the potential unit are within "
+        f"{SURFACE_ATOM_WARNING_DISTANCE} Å of its entrance or exit plane (the "
+        f"nearest {distances.min():.2g} Å away), where correct_surfaces, which is "
+        "the default for a finite projection, overestimates their scattering: for "
+        "a focused probe the intensity at the columns of atoms on the plane can be "
+        "off by 10 % or more. Center the atoms in the cell, e.g. with "
+        "`atoms.center(axis=2)`, to move them away from the plane, or pass "
+        "correct_surfaces=False.",
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 class CrystalPotential(_PotentialBuilder):
     """
     The crystal potential may be used to represent a potential consisting of a repeating
@@ -2647,15 +2684,19 @@ class CrystalPotential(_PotentialBuilder):
         `thickness` and `exit_planes` as without.
 
         The tails are at the depth of the outermost slice, not at their own, so the
-        exit wave is not that of a slab with vacuum. For a light crystal on four or
-        more slices per unit (Si, 100-300 kV, plane wave) the diffraction intensity is
-        about 3 times closer to the slab's than that of the periodic stack, and more
-        for finer slices. For a heavy crystal on coarse slices with atomic planes on
-        the slice boundaries (Au on slices of half a lattice constant, 100 kV) it can
-        be neutral or worse; pass ``correct_surfaces=False`` there. A
-        `CrystalPotential` that stacks a unit that is a `CrystalPotential` along z
-        cannot have a unit that corrects its surfaces, since every junction would
-        have the surfaces of a slab.
+        exit wave is not that of a slab with vacuum. Atoms at least 0.3 Å from the
+        entrance and exit plane of the unit are corrected well: the diffraction
+        intensity of a plane wave through Si (100-300 kV, four or more slices per
+        unit) is about 3 times closer to the slab's than that of the periodic stack,
+        and the intensity at the columns of a focused probe (ADF, 20 mrad, 100 kV) is
+        within about 1 % of it. For atoms on the plane the potential beyond it is
+        half of their own, and it is added at the focus of a probe at the entrance:
+        the ADF at their columns was 10-40 % too high in the same tests, against 20-30
+        % too low (or right by cancellation) for the periodic stack. A warning is
+        given for atoms within 0.3 Å of the plane, and suggests centering them in the
+        cell, with ``atoms.center(axis=2)``. A `CrystalPotential` that stacks a unit
+        that is a `CrystalPotential` along z cannot have a unit that corrects its
+        surfaces, since every junction would have the surfaces of a slab.
 
         The potential of ``1 + min(repetitions[2], 2 * ceil(cutoff / unit height))``
         units is held per configuration of the unit, for the calculation of which
@@ -2762,6 +2803,12 @@ class CrystalPotential(_PotentialBuilder):
         if correct_surfaces is None:
             correct_surfaces = _has_finite_projection(potential_unit)
         self._correct_surfaces = bool(correct_surfaces)
+        if (
+            self._correct_surfaces
+            and _has_finite_projection(potential_unit)
+            and not _box_strain_warning_suppressed.get()
+        ):
+            _warn_if_atoms_near_surfaces(potential_unit, repetitions[2])
         if (
             isinstance(potential_unit, CrystalPotential)
             and repetitions[2] > 1
@@ -3039,12 +3086,14 @@ class CrystalPotential(_PotentialBuilder):
         else:
             num_frozen_phonons = None
 
-        new = cls(
-            potential_unit=potential,
-            seeds=seed,
-            num_frozen_phonons=num_frozen_phonons,
-            **kwargs,
-        )
+        # the atoms near a surface were reported where the crystal was made
+        with _box_strain_warning_silenced():
+            new = cls(
+                potential_unit=potential,
+                seeds=seed,
+                num_frozen_phonons=num_frozen_phonons,
+                **kwargs,
+            )
         new._shared_pool = shared_pool
         new._member_pools = member_pools
         return _wrap_with_array(new)

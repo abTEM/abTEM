@@ -14,6 +14,12 @@ from abtem.core.backend import asnumpy
 A = 5.43
 SAMPLING = 0.2
 
+# Most of the tests use atoms on the entrance plane, the sensitive case, and the
+# warning about them is tested on its own.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:.*atom.* of the potential unit are within:UserWarning"
+)
+
 
 @pytest.fixture
 def silicon():
@@ -363,3 +369,45 @@ def test_a_unit_without_atoms_has_no_surfaces_to_correct():
     array = CrystalPotential(unit, (1, 1, 3)).build(lazy=False).array
     assert array.shape[0] == 6
     assert not array.any()
+
+
+def _near_surfaces(atoms, shift):
+    atoms = atoms.copy()
+    atoms.positions[:, 2] += shift
+    atoms.wrap()
+    return atoms
+
+
+@pytest.mark.filterwarnings("error:.*atom.* of the potential unit are within")
+def test_atoms_centered_in_the_cell_are_not_warned_about(silicon):
+    atoms = silicon.copy()
+    atoms.center(axis=2)
+    CrystalPotential(_unit(atoms), (1, 1, 2))
+
+
+@pytest.mark.parametrize("shift", [0.0, 0.1, -0.1, 0.29])
+def test_atoms_near_the_entrance_or_exit_plane_are_warned_about(silicon, shift):
+    atoms = _near_surfaces(silicon, shift)
+    with pytest.warns(UserWarning, match=r"atoms.center\(axis=2\)"):
+        CrystalPotential(_unit(atoms), (1, 1, 2))
+
+
+@pytest.mark.filterwarnings("error:.*atom.* of the potential unit are within")
+@pytest.mark.parametrize("shift", [0.31, 0.5, -0.31])
+def test_atoms_farther_than_the_distance_are_not_warned_about(silicon, shift):
+    CrystalPotential(_unit(_near_surfaces(silicon, shift)), (1, 1, 2))
+
+
+@pytest.mark.filterwarnings("error:.*atom.* of the potential unit are within")
+def test_no_warning_when_there_is_no_correction_to_be_poor(silicon):
+    CrystalPotential(_unit(silicon), (1, 1, 2), correct_surfaces=False)
+    CrystalPotential(_unit(silicon, projection="infinite"), (1, 1, 2))
+    CrystalPotential(_unit(silicon).build(lazy=False), (1, 1, 2))
+
+
+def test_the_warning_is_given_once_not_by_every_lazy_block(silicon):
+    with pytest.warns(UserWarning, match="within"):
+        crystal = CrystalPotential(_unit(silicon), (1, 1, 2), seeds=(1, 2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        crystal.build(lazy=True).array.compute()
