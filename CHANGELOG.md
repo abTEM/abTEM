@@ -520,6 +520,19 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
+- With `numba` imported before `abtem` and `OMP_NUM_THREADS` set but `NUMBA_NUM_THREADS` unset, `abtem` sets
+  `numba.config.NUMBA_NUM_THREADS` to the capped value (`OMP_NUM_THREADS`, at most the core count) when it is
+  imported. Numba's own pool for `parallel=True` kernels is sized when `numba` is imported, so with `numba`
+  imported first it keeps all cores. **Behaviour change:** the thread pool of the finite-projection potential
+  interpolation uses the capped count from the start. Before, the cap applied only at the next Numba
+  compilation: with `OMP_NUM_THREADS=4` on a 24-thread machine, the first potential slices were interpolated
+  on 24 threads and later ones on 4, so repeated builds of one potential differed in the last float32 bits (up
+  to 4e-8 of the maximum). That compilation also raised
+  `RuntimeError: Cannot set NUMBA_NUM_THREADS to a different value once the threads have been launched` when
+  a `parallel=True` kernel had already run. When Numba's threads already run at `import abtem` (a
+  `parallel=True` kernel, `numba.set_num_threads` or `numba.get_num_threads` ran first), `OMP_NUM_THREADS` is
+  not applied and the next compilation no longer raises: the interpolation pool uses every core (24 threads
+  with `OMP_NUM_THREADS=4` on a 24-thread machine), which changes the speed and not the results
 
 Documentation:
 
