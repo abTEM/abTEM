@@ -749,26 +749,90 @@ class RealSpaceMultislice:
 
     Parameters
     ----------
-    order : int, optional
-        Propagator and/or transmission operator order (default 1)
+    order : int or "exact", optional
+        Propagator and/or transmission operator order (default 1). ``"exact"`` (only
+        for ``expansion_scope="full"``) evaluates the one-way root of the full
+        operator, ``sqrt(k^2 + laplacian + 2 k sigma V) - k``, without a Taylor series,
+        by a Lanczos iteration with the finite-difference Laplacian, on the
+        propagating band (``|k| < propagating_cutoff / wavelength``, within the
+        antialiasing aperture). The series diverges where ``2 sigma V / k`` reaches 1,
+        which is the case at the nuclei of heavy atoms at any energy that the grid
+        resolves, and at low energies for the whole band, so that its result for
+        higher orders is not that of the root. It costs about 5 to 10 applications of
+        the operator per function of it, and four functions per slice with the
+        backscatter correction of the full scope. The potential must have finite
+        projection, as for the full scope.
+        A tilted wave is propagated in the frame of its direction, as in
+        ``FourierMultislice`` (the operator has the first derivative of the tilt in
+        it), not with the paraxial translation of the series.
+
     expansion_scope: str
         If "propagator" (default) only the propagator operator is expanded to order
-        If "full" both the propagator and transmission operators are expanded to order
+        If "full" both the propagator and transmission operators are expanded to order,
+        and the backscattered component of each slice, calculated from the next slice,
+        is subtracted from the forward wave (Eq. 10 in Micron 190 (2025) 103778), at
+        every ``order``. Against an exact two-way solution the correction brings the
+        beams at large angles to within a few percent between 1 and 5 keV, where they
+        are 30 to 40 % too weak without it.
     derivative_accuracy : int, optional
         Finite-difference accuracy for Laplace operator (default 6)
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
+    propagating_cutoff : float, optional
+        For ``order="exact"``: fraction of the wave number 1 / wavelength kept
+        (default 0.95). Beams beyond it, evanescent and grazing, are removed.
+    lanczos_tolerance : float, optional
+        For ``order="exact"``: change of the coefficients of the Lanczos iteration
+        below which a function of the operator is converged (default 1e-8). The three
+        functions of the backscattered component, itself a correction of a few
+        percent, are evaluated to at most 1e-5.
+    max_iterations : int, optional
+        For ``order="exact"``: maximum number of Lanczos iterations (default 60).
     tolerance: float, optional
         Amplitude below which the exponent Taylor series is truncated
         (default 1e-16). Raise it to stop the expansion early at the cost of
         accuracy; the series also stops at `max_terms` regardless.
     """
 
-    order: int = 1
+    order: int | Literal["exact"] = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
     tolerance: float = 1e-16
+    propagating_cutoff: float = 0.95
+    lanczos_tolerance: float = 1e-8
+    max_iterations: int = 60
+
+    def __post_init__(self):
+        if self.order == "exact":
+            if self.expansion_scope != "full":
+                raise ValueError('order="exact" requires expansion_scope="full"')
+        elif not isinstance(self.order, (int, np.integer)) or self.order < 1:
+            raise ValueError(
+                f'order must be a positive integer or "exact", got {self.order!r}'
+            )
+        if not 0.0 < self.propagating_cutoff < 1.0:
+            raise ValueError("propagating_cutoff must be between 0 and 1")
+        if self.lanczos_tolerance <= 0.0:
+            raise ValueError("lanczos_tolerance must be positive")
+        if self.max_iterations < 2:
+            raise ValueError("max_iterations must be at least 2")
+
+    def check_potential(self, potential) -> None:
+        """Warn about an infinite projection with ``expansion_scope="full"``."""
+        from abtem.integrals import ScatteringFactorProjectionIntegrals
+
+        if self.expansion_scope == "full" and isinstance(
+            getattr(potential, "integrator", None), ScatteringFactorProjectionIntegrals
+        ):
+            warnings.warn(
+                'expansion_scope="full" needs the potential per unit thickness, but '
+                "the infinite projection (the default) puts the whole projected "
+                "potential of an atom in the slice that holds it, which grows as "
+                "1 / thickness when the slices get thinner, so the result does not "
+                "converge. Build the potential with projection='finite'.",
+                UserWarning,
+            )
 
 
 def multislice_and_detect(
@@ -864,6 +928,7 @@ def multislice_and_detect(
             )
 
     else:
+        algorithm.check_potential(potential)
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
@@ -876,9 +941,15 @@ def multislice_and_detect(
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
+                propagating_cutoff=algorithm.propagating_cutoff,
+                lanczos_tolerance=algorithm.lanczos_tolerance,
+                max_iterations=algorithm.max_iterations,
             )
             # the stencil knows nothing of the tilt of the beams, which the Fourier
-            # propagator applies as a translation
+            # propagator applies as a translation; the exact root has it in its
+            # operator
+            if algorithm.order == "exact":
+                return result
             if isinstance(result, tuple):
                 _translate_tilted_waves(result[0], potential_slice.thickness)
             else:

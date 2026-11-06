@@ -864,6 +864,38 @@ class TestStencilNumericalAccuracy:
             err_msg=f"Stencil mismatch at accuracy={accuracy} on {device}",
         )
 
+    @devices
+    @pytest.mark.parametrize("shape", [(3, 20, 32), (2, 2, 25, 18), (8, 8), (7, 9)])
+    def test_laplace_stencil_wraps_around_non_square_and_batched_arrays(
+        self, shape, device
+    ):
+        """The periodic boundary of the stencil on arrays whose sides differ, with
+        several batch axes, and as small as the stencil allows (a side no larger than
+        the stencil's reach takes the padded path on the GPU)."""
+        from abtem.core.backend import get_array_module
+        from abtem.finite_difference import (
+            _laplace_operator_func_slow,
+            _laplace_operator_stencil,
+        )
+
+        accuracy = 6
+        prefactor = np.complex64(1.0 - 0.25j)
+        rng = np.random.default_rng(7)
+        a = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+            np.complex64
+        )
+        flat = a.reshape((-1,) + shape[-2:])
+        reference = np.stack(
+            [_laplace_operator_func_slow(accuracy, prefactor)(x) for x in flat]
+        ).reshape(shape)
+        xp = get_array_module(device)
+        result = _laplace_operator_stencil(
+            accuracy, prefactor, mode="wrap", dtype=np.complex64, device=device
+        )(xp.asarray(a))
+        np.testing.assert_allclose(
+            to_host_array(result), reference, rtol=1e-5, atol=1e-5
+        )
+
     @requires_gpu
     def test_gpu_stencil_rejects_non_complex_dtype(self):
         """The raw GPU kernel only ships complex specializations; a real array
