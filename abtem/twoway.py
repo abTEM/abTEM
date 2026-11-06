@@ -171,6 +171,48 @@ def structure_symmetry(atoms: Atoms, tolerance: float = 1e-4):
     return best_origin, best_operations, translations
 
 
+def structure_glides(
+    atoms: Atoms,
+    origin,
+    operations,
+    translations,
+    tolerance: float = 1e-4,
+):
+    """The point operations of the in-plane symmetry that need a translation.
+
+    A glide plane (a mirror with a translation along it, which is not a lattice vector
+    or a translation of the structure) or any other operation that maps the structure
+    onto itself only together with a translation, about the origin of
+    :func:`structure_symmetry`, which finds the operations that need none.
+
+    Returns
+    -------
+    glides : list of (str, numpy.ndarray, numpy.ndarray)
+        The name, the matrix and the translation [Å] of every operation
+        ``r -> matrix (r - origin) + origin + translation`` that maps the structure onto
+        itself and is not in ``operations``; one for each matrix.
+    """
+    cell = np.asarray(atoms.cell[:2, :2], dtype=float)
+    inverse_cell = np.linalg.inv(cell)
+    xy = atoms.positions[:, :2].astype(float)
+    classes = _atom_classes(atoms, tolerance)
+    smallest = min(classes, key=len)
+    origin = np.asarray(origin, dtype=float)
+    known = [matrix for _, matrix in operations]
+    glides = []
+    for name, matrix in _candidate_operations():
+        if any(np.allclose(matrix, other, atol=1e-9) for other in known):
+            continue
+        moved = matrix @ (xy[smallest[0]] - origin) + origin
+        for j in smallest:
+            translation = xy[j] - moved
+            new_xy = (xy - origin) @ matrix.T + origin + translation
+            if _maps_onto_itself(new_xy, xy, classes, cell, inverse_cell, tolerance):
+                glides.append((name, matrix, translation))
+                break
+    return glides
+
+
 class _BeamBasis:
     """The beams of the incident wave and their reduction by symmetry.
 
@@ -214,7 +256,7 @@ class _BeamBasis:
         coupling_range = (lattice & (np.hypot(gx, gy) < 2 * cutoff)).ravel()
         grid_g = np.stack([gx.ravel(), gy.ravel()], axis=1)
         usable = []
-        for name, matrix in operations:
+        for name, matrix, translation in operations:
             rotated = grid_g @ matrix.T
             ri = np.rint(rotated[:, 0] * lx).astype(int)
             rj = np.rint(rotated[:, 1] * ly).astype(int)
@@ -223,29 +265,51 @@ class _BeamBasis:
             )
             inside = (np.abs(ri) <= nx // 2 - 1) & (np.abs(rj) <= ny // 2 - 1)
             if (on_grid & inside)[coupling_range].all():
-                usable.append(matrix)
+                usable.append((matrix, np.asarray(translation, dtype=float)))
 
+        # The wave of the symmetric incident wave obeys psi(R r + t) = psi(r) for every
+        # operation (R, t), that is phi_h = exp(2 pi i (R h) . t) phi_{R h}: the beams
+        # of an orbit carry fixed phases, from the representative (phase 1) over the
+        # operations. An orbit that gives two phases to one beam (a systematic absence,
+        # for a glide plane) has no symmetric wave in it and is left out.
         orbit = -np.ones(len(self.indices), dtype=int)
+        phases = np.zeros(len(self.indices), dtype=complex)
         members = []
         for i in range(len(self.indices)):
-            if orbit[i] >= 0:
+            if orbit[i] != -1:
                 continue
-            orbit_members = {i}
-            for matrix in usable:
-                rotated = matrix @ np.array([self.gx[i], self.gy[i]])
-                j = index.get(
-                    (int(np.rint(rotated[0] * lx)), int(np.rint(rotated[1] * ly)))
-                )
-                if j is not None:
-                    orbit_members.add(j)
-            for j in orbit_members:
-                orbit[j] = len(members)
-            members.append(sorted(orbit_members))
+            found = {i: 1.0 + 0.0j}
+            queue, consistent = [i], True
+            while queue:
+                source = queue.pop()
+                g = np.array([self.gx[source], self.gy[source]])
+                for matrix, translation in usable:
+                    rotated = matrix @ g
+                    target = index.get(
+                        (int(np.rint(rotated[0] * lx)), int(np.rint(rotated[1] * ly)))
+                    )
+                    if target is None:
+                        continue
+                    phase = found[source] * np.exp(-2j * np.pi * rotated @ translation)
+                    if target in found:
+                        consistent &= abs(found[target] - phase) < 1e-6
+                    else:
+                        found[target] = phase
+                        queue.append(target)
+            if consistent:
+                for j, phase in found.items():
+                    orbit[j] = len(members)
+                    phases[j] = phase
+                members.append(sorted(found))
+            else:
+                for j in found:
+                    orbit[j] = -2
 
         self.orbit = orbit
+        self.phases = phases
         self.members = members
         self.number_of_orbits = len(members)
-        self.representatives = np.array([m[0] for m in members])
+        self.representatives = np.array([m[0] for m in members], dtype=int)
         self.sizes = np.array([len(m) for m in members], dtype=float)
         self.reduced = len(usable) > 1 and self.number_of_orbits < len(self.indices)
 
@@ -261,7 +325,8 @@ class _BeamBasis:
             di, dj = xp.asarray(di), xp.asarray(dj)
             return lambda n: u_k[n][di, dj]
 
-        order = np.argsort(self.orbit, kind="stable")
+        kept = np.flatnonzero(self.orbit >= 0)
+        order = kept[np.argsort(self.orbit[kept], kind="stable")]
         starts = np.searchsorted(self.orbit[order], np.arange(self.number_of_orbits))
         column_di = xp.asarray(di[:, self.representatives])
         column_dj = xp.asarray(dj[:, self.representatives])
@@ -269,18 +334,22 @@ class _BeamBasis:
         weights = xp.asarray(
             np.sqrt(self.sizes[None, :] / self.sizes[:, None]).astype(real_dtype)
         )
+        phases = np.conj(self.phases[order]).astype(u_k.dtype)
 
         if xp is np:
             order_indices = order
+            conjugate_phases = phases[:, None]
 
             def orbit_sum(columns):
-                return np.add.reduceat(columns[order_indices], starts, axis=0)
+                return np.add.reduceat(
+                    columns[order_indices] * conjugate_phases, starts, axis=0
+                )
 
         else:
             # no reduceat on the GPU: the sum over the members of every orbit is a
-            # product with the indicator matrix of the orbits
-            indicator = np.zeros((self.number_of_orbits, len(self.indices)), real_dtype)
-            indicator[self.orbit, np.arange(len(self.indices))] = 1.0
+            # product with the matrix of the (conjugate) phases of the orbits
+            indicator = np.zeros((self.number_of_orbits, len(self.indices)), u_k.dtype)
+            indicator[self.orbit[order], order] = phases
             indicator = xp.asarray(indicator)
 
             def orbit_sum(columns):
@@ -454,8 +523,8 @@ class TwoWaySolver:
         Beams above 1 / wavelength are evanescent. Pass ``0.95 / wavelength`` for the
         propagating beams only.
     symmetry : bool, optional
-        Reduce the basis by the translation and point symmetry of the structure, found
-        from the atoms of the potential (default True). A tilted wave keeps the
+        Reduce the basis by the translation, point and glide symmetry of the structure,
+        found from the atoms of the potential (default True). A tilted wave keeps the
         translations and the point operations that leave its in-plane wave vector
         unchanged. The results agree with the full
         basis to the asymmetry of the sampled potential; a distorted structure is not
@@ -554,7 +623,7 @@ class TwoWaySolver:
 
         origin, all_operations, translations = (
             (0.0, 0.0),
-            [("rot0", np.eye(2))],
+            [("rot0", np.eye(2), np.zeros(2))],
             [],
         )
         if self.symmetry:
@@ -563,8 +632,17 @@ class TwoWaySolver:
             except AttributeError:
                 atoms = None
             if atoms is not None and len(atoms) > 0:
-                origin, all_operations, translations = structure_symmetry(
+                origin, point_operations, translations = structure_symmetry(
                     atoms, self.symmetry_tolerance
+                )
+                all_operations = [
+                    (name, matrix, np.zeros(2)) for name, matrix in point_operations
+                ] + structure_glides(
+                    atoms,
+                    origin,
+                    point_operations,
+                    translations,
+                    self.symmetry_tolerance,
                 )
 
         wave_number = 2 * np.pi / wavelength
@@ -604,8 +682,8 @@ class TwoWaySolver:
             # operations that leave its in-plane wave vector unchanged, the mirror along
             # its direction, for example
             operations = [
-                (name, matrix)
-                for name, matrix in all_operations
+                (name, matrix, translation)
+                for name, matrix, translation in all_operations
                 if np.allclose(matrix @ np.array(in_plane), in_plane, atol=1e-6)
             ]
             basis = _BeamBasis(
@@ -656,7 +734,11 @@ class TwoWaySolver:
                 if basis.reduced:
                     beam_amplitudes = np.zeros(len(basis.indices), np.complex128)
                     for o, members in enumerate(basis.members):
-                        beam_amplitudes[members] = amplitudes[o] / np.sqrt(len(members))
+                        beam_amplitudes[members] = (
+                            amplitudes[o]
+                            * basis.phases[members]
+                            / np.sqrt(len(members))
+                        )
                 else:
                     beam_amplitudes = amplitudes
                 beam_amplitudes = beam_amplitudes * np.exp(
