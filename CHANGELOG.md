@@ -210,6 +210,14 @@ Bugfixes:
   and `reduce(lazy=True, disable_s_matrix_chunks=True)`, the lazy default on a GPU and with `upsample=True`,
   averaged over a scan axis instead. `CompressedSMatrixArray.reduce` averages the ensemble with every `method`
   and with `blend_angle`; it did so only with `method="expand"` and no `blend_angle`, the CPU default
+- The PRISM reductions `SMatrix.reduce` and `SMatrix.scan` leave the `CTF` they are given as it is. They set its
+  grid and energy in place, so `ctf.gpts`, `ctf.extent` and `ctf.energy` held the S-matrix's after a reduction, and
+  the tasks of a lazy graph shared the one CTF. A lazy CPU scan of a frozen-phonon ensemble with a cropped C-PRISM
+  window and a `PixelatedDetector` reaching past the blend cut, whose two branches match the CTF to the window and
+  to the plane-wave period, could therefore sample the soft aperture of one configuration on the other grid
+  (15.91 x 13.63 mrad per pixel for a (24, 32) window of a (56, 64) grid, 13.63 x 13.63 mrad for its period). That
+  configuration's pattern was wrong by about 1 % at the edge of the aperture, 3e-3 of the maximum after the mean
+  over three configurations, in 5 of 300 repeated runs of the test of this case
 - Double-channel core-loss multislice (`double_channel=True`, the default) could use the transmission function of
   another slice, so repeated runs differed, with or without frozen phonons
   ([#578](https://github.com/abTEM/abTEM/pull/578)). Double-channel core-loss results computed with 1.0.10 or
