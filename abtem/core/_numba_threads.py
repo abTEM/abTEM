@@ -17,11 +17,12 @@ touches Numba's thread pool), the non-collinear magnetism gradient kernels
 (``prism/_partitioned_s_matrix.py``).
 
 **HPC schedulers routinely export ``OMP_NUM_THREADS=1`` by default, and a
-single abTEM process now runs those three kernels single-threaded there
-instead of on every visible core, which is a real change for a
-single-process run.** Measured directly (10-core/20-thread Xeon and a
-24-core box, both memory-bandwidth-bound kernels): the cost of that is
-real but modest and does not scale with core count -- roughly 15-36%
+single abTEM process that imports abTEM before Numba now runs those three
+kernels single-threaded there instead of on every visible core, which is
+a real change for a single-process run.** Measured directly
+(10-core/20-thread Xeon and a 24-core box, both memory-bandwidth-bound
+kernels): the cost of that is real but modest and does not scale with
+core count -- roughly 15-36%
 slower than the best setting found (which peaked around 8-12 threads on
 the 24-core box and *degraded slightly* beyond that, never at the full
 core count) -- not a factor of how many cores are visible. Under many
@@ -45,13 +46,14 @@ unexpectedly slow under an inherited ``OMP_NUM_THREADS=1``: set
 """
 
 import os
+import sys
 
 
 def _seed_numba_num_threads_from_omp() -> None:
     """Set ``NUMBA_NUM_THREADS`` from ``OMP_NUM_THREADS``, if neither is
     already set.
 
-    ``NUMBA_NUM_THREADS`` is read once, by Numba itself, the first time it
+    ``NUMBA_NUM_THREADS`` is read by Numba itself the first time it
     is imported, and applies process-wide -- every thread Numba's parallel
     threading layer ever launches (whichever it selects: ``workqueue`` by
     default when neither TBB nor OpenMP is available, ``tbb`` or ``omp``
@@ -79,6 +81,18 @@ def _seed_numba_num_threads_from_omp() -> None:
     ``NUMBA_NUM_THREADS=99999`` dumps core on first use, not a catchable
     exception), rather than raising cleanly the way ``set_num_threads``
     does above its own launch ceiling.
+
+    When the application imported numba before abTEM, Numba has already read
+    its configuration and would apply a new value only at its next
+    compilation, in the middle of whatever abTEM is computing. The value is
+    therefore applied at once by reloading Numba's configuration. That sets
+    ``numba.config.NUMBA_NUM_THREADS``, which abTEM's interpolation pool
+    follows; the pool of the ``parallel=True`` kernels was sized when numba
+    was imported, and keeps that size. When Numba's threads already run, the
+    variable is left unset, because Numba raises at its next compilation when
+    it changes after that point, and the cap is not applied: abTEM's
+    interpolation pool then uses Numba's own thread count. The results do not
+    change, only the speed.
     """
     if "NUMBA_NUM_THREADS" in os.environ:
         return
@@ -92,8 +106,21 @@ def _seed_numba_num_threads_from_omp() -> None:
     except ValueError:
         return
 
-    if n > 0:
-        os.environ["NUMBA_NUM_THREADS"] = str(min(n, os.cpu_count() or 1))
+    if n <= 0:
+        return
+
+    numba = sys.modules.get("numba")
+    if numba is not None:
+        try:
+            numba.threading_layer()
+        except ValueError:  # the thread pool has not started
+            pass
+        else:
+            return
+
+    os.environ["NUMBA_NUM_THREADS"] = str(min(n, os.cpu_count() or 1))
+    if numba is not None:
+        numba.config.reload_config()
 
 
 _seed_numba_num_threads_from_omp()

@@ -993,7 +993,7 @@ _INTERPOLATION_BUFFER_BUDGET = 256 * 1024**2
 def _interpolation_threads() -> int:
     """The thread count of the interpolation pool.
 
-    Numba's launch-time thread count rather than ``os.cpu_count()``: abTEM
+    ``numba.config.NUMBA_NUM_THREADS`` rather than ``os.cpu_count()``: abTEM
     seeds it from ``OMP_NUM_THREADS`` (see abtem.core._numba_threads), so a
     job limited to a few cores, e.g. by an HPC scheduler or one pytest-xdist
     worker among many, is not oversubscribed by this pool.
