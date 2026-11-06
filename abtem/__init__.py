@@ -37,7 +37,13 @@ from abtem.inelastic.phonons import (
     EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
 )
-from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
+from abtem.magnetism.iam import (
+    MagneticField,
+    MagneticFieldArray,
+    VectorPotential,
+    VectorPotentialArray,
+)
+from abtem.magnetism.multislice import pauli_multislice
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -111,8 +117,11 @@ __all__ = [
     "PotentialArray",
     "TransmissionFunction",
     "TransitionPotentialArray",
-    "MagneticFieldArray",
+    "VectorPotential",
     "VectorPotentialArray",
+    "MagneticField",
+    "MagneticFieldArray",
+    "pauli_multislice",
     "CustomScan",
     "LineScan",
     "GridScan",
