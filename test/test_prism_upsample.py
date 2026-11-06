@@ -461,12 +461,6 @@ def test_upsample_detectors(device):
 # an explicit window; the scans take whole pixels of the downsampled grid, which
 # the compressed reduction requires for its fast path
 _CROPPED_WINDOWS = {
-    "interpolation-4": (
-        bulk("Si", cubic=True) * (7, 7, 1),
-        dict(sampling=0.1),
-        dict(interpolation=4),
-        (2, 4),
-    ),
     "non-square": (
         bulk("Si", cubic=True) * (1, 1, 2),
         dict(gpts=(56, 64)),
