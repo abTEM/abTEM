@@ -522,6 +522,64 @@ def test_the_glide_gives_the_waves_of_the_full_basis_and_the_systematic_absences
         assert np.abs(absent[: gpts[1] // 2 // 2]).max() < 1e-10
 
 
+@pytest.mark.float64
+def test_an_ensemble_of_energies_and_tilts_is_the_members_one_by_one():
+    # Oracle: each member is the solution of its energy and tilt alone, in the order of
+    # the axes of the ensemble (here the tilts first, then the energies).
+    tilts, energies = [0.0, 40.0], [500.0, 1000.0]
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    solver = TwoWaySolver(cutoff=1.5)
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = solver.scatter(
+            abtem.PlaneWave(energy=energies, tilt=(tilts, 0.0)), potential
+        )
+        assert transmitted.shape == (2, 2, 48, 84)
+        for i, tilt in enumerate(tilts):
+            for j, energy in enumerate(energies):
+                single_t, single_r = solver.scatter(
+                    abtem.PlaneWave(energy=energy, tilt=(tilt, 0.0)), potential
+                )
+                np.testing.assert_allclose(
+                    transmitted.array[i, j], single_t.array, atol=1e-9
+                )
+                np.testing.assert_allclose(
+                    reflected.array[i, j], single_r.array, atol=1e-9
+                )
+        # the energy matters: the members differ
+        assert np.abs(transmitted.array[0, 0] - transmitted.array[0, 1]).max() > 1e-3
+
+
+def test_an_ensemble_of_energies_follows_the_wavelength():
+    # Oracle: the reflection of graphene falls with the energy, 7 % at 200 eV and less
+    # than 1 % at 1 keV, and the flux of every member is conserved.
+    potential = abtem.Potential(
+        graphene_atoms(),
+        gpts=(48, 84),
+        slice_thickness=0.01,
+        projection="finite",
+        periodic=True,
+    )
+    energies = [200.0, 1000.0]
+    with abtem.config.set({"precision": "float64"}):
+        transmitted, reflected = TwoWaySolver(cutoff=3.0).scatter(
+            abtem.PlaneWave(energy=energies), potential
+        )
+    reflections = []
+    for index, energy in enumerate(energies):
+        weights = flux_weights(transmitted.array.shape[-2:], potential.extent, energy)
+        r = (np.abs(beam_amplitudes(reflected[index])) ** 2 * weights).sum()
+        t = (np.abs(beam_amplitudes(transmitted[index])) ** 2 * weights).sum()
+        assert abs(r + t - 1.0) < 1e-4
+        reflections.append(r)
+    assert reflections[0] > 0.02 and reflections[1] < 0.01
+
+
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
     # Oracle: the full beam basis. The reduced basis must reproduce its amplitudes,
     # including phase, on every beam.
@@ -566,12 +624,6 @@ def test_a_built_potential_gives_the_same_waves_as_the_potential():
 
 
 def test_the_solver_refuses_unsupported_input():
-    potential = abtem.Potential(
-        graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
-    )
-    with pytest.raises(NotImplementedError, match="ensembles of tilts only"):
-        TwoWaySolver().scatter(abtem.PlaneWave(energy=[1000.0, 2000.0]), potential)
-
     coarse = abtem.Potential(
         graphene_atoms(), gpts=(24, 42), slice_thickness=0.01, projection="finite"
     )
