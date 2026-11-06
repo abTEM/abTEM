@@ -96,6 +96,12 @@ warnings:
 potential:
   # Number of slices to build at once during multislice. "auto" = memory-budget-aware.
   slice-chunk-size: "auto"
+# How angles that you give (detector limits, apertures, crops) relate to spatial frequencies k:
+#   paraxial  the angle is wavelength * k, as in the small-angle relation
+#   exact     the angle is the scattering angle, arcsin(wavelength * k)
+# The two differ by less than 0.2 % up to 100 mrad. The axes of diffraction patterns are
+# always labelled wavelength * k.
+angles: paraxial
 antialias:
   # The antialias cutoff in reciprocal space
   cutoff: 0.6666666

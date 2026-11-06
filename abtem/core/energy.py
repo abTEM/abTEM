@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional, Sequence, TypeVar, cast
 
 import numpy as np
 from ase import units  # type: ignore
 
+from abtem.core import config
+from abtem.core.backend import get_array_module
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 
@@ -121,6 +124,140 @@ def reciprocal_space_sampling_to_angular_sampling(
     angular_sampling = tuple(d * 1e3 * wavelength for d in reciprocal_space_sampling)
     angular_sampling = cast(T, angular_sampling)
     return angular_sampling
+
+
+def angle_convention() -> str:
+    """The configured relation between angles and spatial frequencies,
+    ``"paraxial"`` or ``"exact"`` (the ``angles`` key of the configuration)."""
+    convention = config.get("angles")
+    if convention not in ("paraxial", "exact"):
+        raise ValueError(
+            f"config 'angles' must be 'paraxial' or 'exact', not {convention!r}"
+        )
+    return convention
+
+
+_LARGE_ANGLE = 250.0
+
+
+def warn_if_paraxial_angle_is_large(*angles) -> None:
+    """
+    Warn about a large angle that you give, which is a ``wavelength * k`` with the
+    paraxial convention. Values that are not numbers (None, strings) and infinite
+    ones are ignored.
+    """
+    if angle_convention() != "paraxial":
+        return
+
+    values = []
+    for angle in angles:
+        if isinstance(angle, (int, float, np.number, np.ndarray, tuple, list)):
+            values.extend(np.abs(np.asarray(angle, dtype=float)).ravel())
+
+    values = np.array(values)
+    values = values[np.isfinite(values)]
+    if values.size and values.max() > _LARGE_ANGLE:
+        warnings.warn(
+            f"An angle above {_LARGE_ANGLE:g} mrad is taken as wavelength * k, which "
+            "differs from the scattering angle by more than 1 % there. Set the "
+            "'angles' configuration to 'exact' to give scattering angles instead.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def to_grid_angle(angle, convention: Optional[str] = None):
+    """
+    The coordinate on the angular grid of a given angle.
+
+    The angular grid is uniform in ``1e3 * wavelength * k`` [mrad]. With the
+    ``paraxial`` convention an angle is that coordinate. With the ``exact``
+    convention an angle is a scattering angle, and the coordinate is
+    ``1e3 * sin(angle / 1e3)``, and angles beyond 90 degrees (or infinite) give the
+    coordinate of 90 degrees.
+
+    Parameters
+    ----------
+    angle : float or array
+        Angle [mrad] in the configured convention.
+    convention : {"paraxial", "exact"}, optional
+        The convention, if not the configured one.
+
+    Returns
+    -------
+    float or array
+        Coordinate on the angular grid [mrad].
+    """
+    if (convention or angle_convention()) == "paraxial":
+        return angle
+    xp = get_array_module(angle)
+    # beyond 90 degrees every propagating beam is within the angle
+    return 1e3 * xp.sin(xp.minimum(angle / 1e3, np.pi / 2))
+
+
+def to_scattering_angle(grid_angle, convention: Optional[str] = None):
+    """
+    The angle in the configured convention of a coordinate on the angular grid, the
+    inverse of :func:`to_grid_angle`.
+
+    With the ``exact`` convention the result is NaN beyond
+    ``1e3 * wavelength * k = 1e3``, where the beam is evanescent and has no scattering
+    angle.
+
+    Parameters
+    ----------
+    grid_angle : float or array
+        Coordinate on the angular grid [mrad].
+    convention : {"paraxial", "exact"}, optional
+        The convention, if not the configured one.
+
+    Returns
+    -------
+    float or array
+        Angle [mrad] in the configured convention.
+    """
+    if (convention or angle_convention()) == "paraxial":
+        return grid_angle
+    xp = get_array_module(grid_angle)
+    ratio = grid_angle / 1e3
+    with np.errstate(invalid="ignore"):
+        return 1e3 * xp.arcsin(xp.where(xp.abs(ratio) <= 1.0, ratio, xp.nan))
+
+
+def require_paraxial_angles(feature: str) -> None:
+    """Raise if the ``angles`` configuration is ``"exact"``, for a feature whose
+    angles are not converted yet."""
+    if angle_convention() != "paraxial":
+        raise NotImplementedError(
+            f"{feature} does not support the 'exact' angle convention yet; set the "
+            "'angles' configuration to 'paraxial'."
+        )
+
+
+def to_scattering_angle_limit(grid_angle, convention: Optional[str] = None):
+    """
+    The limit of the angular grid, as an angle in the configured convention.
+
+    The same as :func:`to_scattering_angle`, but beyond the largest scattering angle
+    (``1e3 * wavelength * k > 1e3``) the result is 90 degrees, so that a limit which
+    reaches into the evanescent region stays a limit that holds every propagating
+    beam.
+
+    Parameters
+    ----------
+    grid_angle : float
+        Coordinate on the angular grid [mrad].
+    convention : {"paraxial", "exact"}, optional
+        The convention, if not the configured one.
+
+    Returns
+    -------
+    float
+        Angle [mrad] in the configured convention.
+    """
+    if (convention or angle_convention()) == "paraxial":
+        return grid_angle
+    return float(1e3 * np.arcsin(min(grid_angle / 1e3, 1.0)))
 
 
 class EnergyUndefinedError(Exception):

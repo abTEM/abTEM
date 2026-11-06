@@ -20,7 +20,13 @@ from abtem.core.axes import (
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.complex import abs2
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import (
+    angle_convention,
+    energy2wavelength,
+    require_paraxial_angles,
+    to_grid_angle,
+    warn_if_paraxial_angle_is_large,
+)
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
 from abtem.core.utils import cos_sin_deg, get_dtype, safe_floor_int
@@ -464,6 +470,7 @@ class _AbstractRadialDetector(BaseDetector):
             raise ValueError(f"'inner' must be non-negative, got {inner}")
         if outer is not None and outer < 0.0:
             raise ValueError(f"'outer' must be non-negative, got {outer}")
+        warn_if_paraxial_angle_is_large(inner, outer, offset)
 
         self._inner = inner
         self._outer = outer
@@ -650,7 +657,10 @@ class _AbstractRadialDetector(BaseDetector):
                 outer + float(np.hypot(*self._offset)) + max(waves.angular_sampling)
             )
             gpts = waves._gpts_within_angle(max_angle, parity="same")
-            if any(g >= n for g, n in zip(gpts, waves._valid_gpts)):
+            # angles do not add with the exact convention: use the full pattern
+            if angle_convention() == "exact" or any(
+                g >= n for g, n in zip(gpts, waves._valid_gpts)
+            ):
                 max_angle = "full"
 
         measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")
@@ -872,7 +882,9 @@ class _AbstractRadialDetector(BaseDetector):
         if sampling is None:
             # the grid reaches 10 % beyond the outermost angle the region
             # covers, about its (possibly offset) centre
-            reach = 1.1 * (outer + float(np.hypot(*offset)))
+            reach = 1.1 * (
+                to_grid_angle(outer) + float(np.hypot(*to_grid_angle(np.array(offset))))
+            )
             angular_sampling = (2 * reach / gpts[0], 2 * reach / gpts[1])
             reciprocal_space_sampling = (
                 angular_sampling[0] / wavelength,
@@ -1639,6 +1651,7 @@ class SpectralSlitDetector(BaseDetector):
         return (_scanned_measurement_type(waves),)
 
     def _mask(self, gpts, sampling, fftshift: bool = False, xp=np) -> np.ndarray:
+        require_paraxial_angles("SpectralSlitDetector")
         return _slit_detector_mask(
             gpts=gpts,
             sampling=sampling,
@@ -1701,7 +1714,9 @@ class SpectralSlitDetector(BaseDetector):
             arr = np.fft.fftshift(arr)
         if power != 1.0:
             arr = np.abs(arr) ** power
-        mx, my = waves.max_angles
+        # the extent of the pattern, on the angular grid
+        mx = waves.shape[-2] // 2 * waves.angular_sampling[0]
+        my = waves.shape[-1] // 2 * waves.angular_sampling[1]
         from abtem.core import config
 
         cmap = config.get("visualize.cmap", "viridis")
@@ -1799,6 +1814,7 @@ class SpectralSlitDetector(BaseDetector):
         return ax
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
+        require_paraxial_angles("SpectralSlitDetector")
         xp = get_array_module(waves.array)
 
         diffraction_patterns = waves.diffraction_patterns(
@@ -2314,6 +2330,7 @@ class PixelatedDetector(BaseDetector):
             )
         if not isinstance(unbiased, (bool, np.bool_)):
             raise TypeError(f"unbiased must be a bool, got {type(unbiased).__name__}")
+        warn_if_paraxial_angle_is_large(max_angle)
         reduction_dtype = _validate_reduction_dtype(reduction_dtype)
         if components is None:
             if unbiased or reduction_dtype is not None:
