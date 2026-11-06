@@ -520,6 +520,28 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
+- With `OMP_NUM_THREADS` set to a positive integer and `NUMBA_NUM_THREADS` unset, Numba's thread count is
+  capped at `OMP_NUM_THREADS`, at most the number of CPUs available to the process (`os.sched_getaffinity`,
+  else `os.cpu_count()`). With `abtem` imported before `numba`, the cap sizes Numba's whole thread pool, so it
+  holds for every `parallel=True` kernel in the process, the application's own included, and for the thread
+  pool of the finite-projection potential interpolation. With `numba` imported first, the cap reaches the
+  interpolation pool and, set with `numba.set_num_threads` on the launching thread for the duration of each
+  launch, the real-space Laplacian stencil (`RealSpaceMultislice`) and the magnetism gradient operator
+  (`apply_A_xy_dot_nabla_xy`); the application's own kernels and thread counts are untouched. An explicit
+  `NUMBA_NUM_THREADS` is left alone.
+    - **Behaviour change:** with `numba` imported before `abtem`, the Laplacian stencil and the magnetism
+      gradient used every core and now use the cap.
+    - **Behaviour change:** the interpolation pool uses the cap in every import order. Before, with `numba`
+      imported first it used every core until Numba's next compilation applied the seeded variable. Potentials
+      built with different interpolation thread counts differ in the last float32 bits: for a silicon 3x3x3
+      cell with `gpts=128` and finite projection, two processes with 24 and with 4 interpolation threads
+      differed by up to 3.3e-7 of the maximum.
+    - **Behaviour change:** an `OMP_NUM_THREADS` above the number of usable CPUs is now clamped to it, where
+      it was clamped to `os.cpu_count()`: with `OMP_NUM_THREADS=8` under `taskset -c 0-3`, the interpolation pool
+      uses 4 threads, not 8, as does every `parallel=True` kernel with `abtem` imported first, and the float32
+      bits of a potential can change.
+    - The next Numba compilation no longer raises `RuntimeError: Cannot set NUMBA_NUM_THREADS to a different
+      value once the threads have been launched` when Numba's threads already ran at `import abtem`.
 
 Documentation:
 
