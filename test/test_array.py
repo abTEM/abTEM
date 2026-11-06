@@ -840,3 +840,34 @@ def test_results_of_accelerator_work_held_on_the_cpu_compute_synchronously(
         result.compute()
 
     assert schedulers[0] == (None if device == "cpu" else "synchronous")
+
+
+@devices
+@lazy_params
+def test_apply_func_calls_the_function_with_the_array_object(device, lazy):
+    """`apply_func` calls the function with the array object -- for a lazy
+    one, with each block as an eager array object carrying that block's
+    ensemble axis metadata -- and keeps the array it returns."""
+    array = np.arange(3 * 16 * 20, dtype=np.float32).reshape(3, 16, 20)
+    images = Images(
+        copy_to_device(array, device),
+        sampling=(0.5, 0.25),
+        ensemble_axes_metadata=[OrdinalAxis(values=(1.0, 2.0, 3.0))],
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(1, -1, -1))
+
+    def scale(images, factor):
+        assert not images.is_lazy
+        xp = get_array_module(images.array)
+        values = xp.asarray(images.ensemble_axes_metadata[0].values, dtype=np.float32)
+        return images.array * values[:, None, None] * images.sampling[1] * factor
+
+    result = images.apply_func(scale, factor=3.0)
+    result = result.compute() if lazy else result
+
+    assert isinstance(result, Images)
+    expected = array * np.float32([1.0, 2.0, 3.0])[:, None, None] * 0.25 * 3.0
+    np.testing.assert_allclose(
+        asnumpy(result.array), expected, rtol=1e-6, atol=1e-6 * expected.max()
+    )
