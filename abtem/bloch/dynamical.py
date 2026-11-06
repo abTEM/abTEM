@@ -28,6 +28,12 @@ from scipy.spatial.transform import Rotation  # type: ignore
 
 from abtem.array import ArrayObject
 from abtem.atoms import is_cell_orthogonal
+from abtem.bloch.band_chebyshev import (
+    band_is_faster,
+    chebyshev_degree,
+    gershgorin_bounds,
+    propagate_incident_beam,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
     calculate_g_vec,
@@ -1190,6 +1196,7 @@ def calculate_dynamical_scattering(
     use_wave_eq: bool | Literal["exact"] = "exact",
     inversion_center: Optional[np.ndarray] = None,
     overwrite_structure_matrix: bool = False,
+    solver: Optional[str] = None,
 ) -> np.ndarray:
     """Calculate the dynamical scattering given a structure matrix.
 
@@ -1218,6 +1225,14 @@ def calculate_dynamical_scattering(
         If True, the memory of a Fortran-ordered structure matrix, as
         :func:`calculate_structure_matrix` returns, is reused for the eigenvectors
         where the backend allows, destroying the matrix. Default is False.
+    solver : {'auto', 'eigh', 'band'}, optional
+        How the beam amplitudes are computed (default: the configuration key
+        ``bloch.solver``). 'eigh' diagonalizes the structure matrix. 'band' reduces it
+        to band form and expands the incident wave in Chebyshev polynomials of the
+        band matrix (see :mod:`abtem.bloch.band_chebyshev`): on a GPU, for thousands
+        of beams, it is several times faster, uses a quarter of the memory and is
+        more accurate in single precision; on the CPU it is slower. 'auto' uses
+        'band' on a GPU when it is estimated to be faster, and 'eigh' otherwise.
 
     Returns
     -------
@@ -1229,39 +1244,36 @@ def calculate_dynamical_scattering(
     xp = get_array_module(structure_matrix)
 
     thicknesses = np.asarray(thicknesses)
-
-    # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
-    v, C = _eigh(structure_matrix, overwrite_a=overwrite_structure_matrix)
-    del structure_matrix
-
-    gamma = v * energy2wavelength(energy) / 2.0
-
-    # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the
-    # physical Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as
-    # M_00 = 1 (g_z = 0 for the direct beam), and D e_0 = e_0 for the same
-    # reason. C'^H e_0 is the conjugated row of the direct beam.
-    direct = np.flatnonzero(np.all(np.asarray(hkl) == 0, axis=1))
-    if len(direct):
-        alpha = xp.conjugate(C[int(direct[0])])
-    else:
-        alpha = xp.zeros(len(v), dtype=C.dtype)
-
-    if not use_wave_eq:
-        C *= xp.asarray(_metric(hkl, cell, energy, use_wave_eq), dtype=v.dtype)[
-            :, None
-        ]
-
     z = np.atleast_1d(thicknesses)
-    # thicknesses in gamma's precision: float64 would widen a single-precision
-    # result to complex128 (NEP 50)
-    z = xp.asarray(z, dtype=gamma.dtype)
-    phases = xp.exp(2.0j * xp.pi * z[None] * gamma[:, None])
-    weights = phases * alpha[:, None]
-    if xp.iscomplexobj(C):
-        array = C @ weights
+    # exp(2 pi i z gamma), gamma = v lambda / 2: exp(i pi lambda z A) applied to e_0
+    scales = np.pi * energy2wavelength(energy) * z.astype(float)
+    direct = np.flatnonzero(np.all(np.asarray(hkl) == 0, axis=1))
+    solver, bounds = _select_solver(solver, structure_matrix, scales)
+
+    if solver == "band" and len(direct):
+        array = propagate_incident_beam(
+            structure_matrix,
+            scales,
+            direct=int(direct[0]),
+            bounds=bounds,
+            overwrite_a=overwrite_structure_matrix,
+        )
+        del structure_matrix
+        if not use_wave_eq:
+            array *= xp.asarray(
+                _metric(hkl, cell, energy, use_wave_eq), dtype=array.real.dtype
+            )[:, None]
     else:
-        # two real products: a mixed one would first copy C to complex
-        array = C @ weights.real + 1j * (C @ weights.imag)
+        array = _eigh_dynamical_scattering(
+            structure_matrix,
+            direct,
+            hkl,
+            cell,
+            energy,
+            z,
+            use_wave_eq,
+            overwrite_structure_matrix,
+        )
 
     if inversion_center is not None:
         # C = D^H C', with D = diag(exp(2 pi i g.t))
@@ -1273,6 +1285,75 @@ def calculate_dynamical_scattering(
     if not thicknesses.shape:
         return array[0]
     return array
+
+
+_SOLVERS = ("auto", "eigh", "band")
+
+
+def _select_solver(
+    solver: Optional[str], structure_matrix: np.ndarray, scales: np.ndarray
+) -> tuple[str, Optional[tuple[float, float]]]:
+    """The solver to use ('eigh' or 'band') and, when 'auto' has computed them for its
+    estimate, the bounds on the spectrum."""
+    if solver is None:
+        solver = config.get("bloch.solver", "auto")
+    if solver not in _SOLVERS:
+        raise ValueError(f"solver must be one of {_SOLVERS}, not {solver!r}")
+    if solver != "auto":
+        return solver, None
+    xp = get_array_module(structure_matrix)
+    if cp is None or xp is not cp:
+        return "eigh", None
+    bounds = gershgorin_bounds(structure_matrix)
+    degree = chebyshev_degree(scales, bounds, structure_matrix.real.dtype)
+    if band_is_faster(len(structure_matrix), degree):
+        return "band", bounds
+    return "eigh", None
+
+
+def _eigh_dynamical_scattering(
+    structure_matrix: np.ndarray,
+    direct: np.ndarray,
+    hkl: np.ndarray,
+    cell: np.ndarray | Cell,
+    energy: float,
+    z: np.ndarray,
+    use_wave_eq: bool | Literal["exact"],
+    overwrite_structure_matrix: bool,
+) -> np.ndarray:
+    """The (N, len(z)) beam amplitudes from the eigendecomposition of the structure
+    matrix, before the inversion-center phases."""
+    xp = get_array_module(structure_matrix)
+
+    # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
+    v, C = _eigh(structure_matrix, overwrite_a=overwrite_structure_matrix)
+    del structure_matrix
+
+    gamma = v * energy2wavelength(energy) / 2.0
+
+    # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the
+    # physical Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as
+    # M_00 = 1 (g_z = 0 for the direct beam), and D e_0 = e_0 for the same
+    # reason. C'^H e_0 is the conjugated row of the direct beam.
+    if len(direct):
+        alpha = xp.conjugate(C[int(direct[0])])
+    else:
+        alpha = xp.zeros(len(v), dtype=C.dtype)
+
+    if not use_wave_eq:
+        C *= xp.asarray(_metric(hkl, cell, energy, use_wave_eq), dtype=v.dtype)[
+            :, None
+        ]
+
+    # thicknesses in gamma's precision: float64 would widen a single-precision
+    # result to complex128 (NEP 50)
+    z = xp.asarray(z, dtype=gamma.dtype)
+    phases = xp.exp(2.0j * xp.pi * z[None] * gamma[:, None])
+    weights = phases * alpha[:, None]
+    if xp.iscomplexobj(C):
+        return C @ weights
+    # two real products: a mixed one would first copy C to complex
+    return C @ weights.real + 1j * (C @ weights.imag)
 
 
 def _structure_factor_dynamical_scattering(
