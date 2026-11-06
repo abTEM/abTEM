@@ -1,5 +1,7 @@
-"""Seed Numba's thread pool size from ``OMP_NUM_THREADS``, before Numba's
-own first import anywhere in this package.
+"""Cap Numba's thread count at ``OMP_NUM_THREADS``: seed Numba's thread pool
+size before Numba's own first import anywhere in this package, and scope the
+cap to each launch of the ``parallel=True`` kernels when the application
+imported Numba first.
 
 Kept as its own module, imported as the very first statement in
 ``abtem/__init__.py``, rather than inlined there or placed in
@@ -8,18 +10,33 @@ not itself import numba -- before anything else in this package does,
 including the first import that pulls numba in (``abtem.core.backend``,
 reached transitively via ``abtem.distributions``).
 
-Only three kernels in this package are compiled with ``parallel=True`` and
-therefore affected at all: the real-space Laplacian stencil
-(``finite_difference.py``, reached only through ``RealSpaceMultislice``,
-not the default Fourier multislice path, which is FFT-bound and never
-touches Numba's thread pool), the non-collinear magnetism gradient kernels
-(``magnetism/pauli.py``), and the partitioned S-matrix kernel
-(``prism/_partitioned_s_matrix.py``).
+The cap is ``OMP_NUM_THREADS``, at most the number of CPUs usable by the
+process, when ``NUMBA_NUM_THREADS`` is unset and ``OMP_NUM_THREADS`` is a
+positive integer; ``thread_cap`` holds it, or ``None``. With abTEM imported
+before Numba, the seeded ``NUMBA_NUM_THREADS`` sizes Numba's whole pool at the
+cap, for every ``parallel=True`` kernel in the process, and the interpolation
+pool of the potential has the cap's size. With Numba imported first its pool
+has its own size, and the cap reaches the interpolation pool and abTEM's
+kernels only: ``numba_thread_cap`` sets it on the launching thread for the
+duration of each launch, and other threads of the process keep Numba's count.
+
+Four kernels in this package are compiled with ``parallel=True``: the
+real-space Laplacian stencil (``finite_difference.py``, reached only through
+``RealSpaceMultislice``, not the default Fourier multislice path, which is
+FFT-bound and never touches Numba's thread pool), the two non-collinear
+magnetism gradient kernels (``magnetism/pauli.py``), and the partitioned
+S-matrix kernel (``prism/_partitioned_s_matrix.py``). Two of them have a call
+site in this package and use ``numba_thread_cap``: the stencil and
+``central_difference_gradient_pbc`` (through ``apply_A_xy_dot_nabla_xy``).
+``central_difference_gradient_cbc`` and
+``reduce_beamlets_nearest_no_interpolation`` have no caller in this package,
+so with Numba imported first they are not capped, nor is a kernel that a user
+calls directly.
 
 **HPC schedulers routinely export ``OMP_NUM_THREADS=1`` by default, and a
-single abTEM process that imports abTEM before Numba now runs those three
-kernels single-threaded there instead of on every visible core, which is
-a real change for a single-process run.** Measured directly
+single abTEM process then runs these kernels on that many threads
+instead of on every visible core, which is a real change for a
+single-process run.** Measured directly
 (10-core/20-thread Xeon and a 24-core box, both memory-bandwidth-bound
 kernels): the cost of that is real but modest and does not scale with
 core count -- roughly 15-36%
@@ -47,9 +64,10 @@ unexpectedly slow under an inherited ``OMP_NUM_THREADS=1``: set
 
 import os
 import sys
+from contextlib import contextmanager
 
 
-def _seed_numba_num_threads_from_omp() -> None:
+def _seed_numba_num_threads_from_omp() -> int | None:
     """Set ``NUMBA_NUM_THREADS`` from ``OMP_NUM_THREADS``, if neither is
     already set.
 
@@ -62,8 +80,8 @@ def _seed_numba_num_threads_from_omp() -> None:
     Numba still governs how many of them a given call may use through its
     own config rather than deferring to ``OMP_NUM_THREADS`` at the libomp
     level), not just the thread that happened to trigger the import. That
-    is a stronger guarantee than
-    ``numba.set_num_threads()``: ``set_num_threads`` only
+    is a stronger guarantee than a single call of
+    ``numba.set_num_threads()`` at import: ``set_num_threads`` only
     rebinds the *calling* thread's own active count. A CPU-side lazy
     abTEM computation, which dask's threaded scheduler executes on
     spawned worker threads rather than the caller's own thread, is
@@ -74,7 +92,8 @@ def _seed_numba_num_threads_from_omp() -> None:
 
     Left untouched when ``NUMBA_NUM_THREADS`` is already set explicitly,
     so a deliberate, Numba-specific choice is never overridden. Clamped
-    to ``os.cpu_count()``: Numba's own import-time handling of
+    to the number of CPUs usable by the process, which is also what Numba's
+    own default thread count is computed from: Numba's import-time handling of
     ``NUMBA_NUM_THREADS`` is not bounds-checked against the visible core
     count, and an implausibly large value segfaults the process outright
     the moment a parallel kernel first launches (verified directly:
@@ -85,29 +104,34 @@ def _seed_numba_num_threads_from_omp() -> None:
     When the application imported numba before abTEM, Numba has already read
     its configuration and would apply a new value only at its next
     compilation, in the middle of whatever abTEM is computing. The value is
-    therefore applied at once by reloading Numba's configuration. That sets
-    ``numba.config.NUMBA_NUM_THREADS``, which abTEM's interpolation pool
-    follows; the pool of the ``parallel=True`` kernels was sized when numba
-    was imported, and keeps that size. When Numba's threads already run, the
-    variable is left unset, because Numba raises at its next compilation when
-    it changes after that point, and the cap is not applied: abTEM's
-    interpolation pool then uses Numba's own thread count. The results do not
-    change, only the speed.
+    therefore applied at once by reloading Numba's configuration. When Numba's
+    threads already run, the variable is left unset, because Numba raises at
+    its next compilation when it changes after that point.
+
+    Returns the cap, also when Numba's pool already runs and the variable is
+    left unset, or ``None`` when no cap applies: ``NUMBA_NUM_THREADS`` is set,
+    or ``OMP_NUM_THREADS`` is unset, not an integer or not positive.
     """
     if "NUMBA_NUM_THREADS" in os.environ:
-        return
+        return None
 
     omp_num_threads = os.environ.get("OMP_NUM_THREADS")
     if omp_num_threads is None:
-        return
+        return None
 
     try:
         n = int(omp_num_threads)
     except ValueError:
-        return
+        return None
 
     if n <= 0:
-        return
+        return None
+
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    usable_cpus = (
+        len(sched_getaffinity(0)) if sched_getaffinity else os.cpu_count() or 1
+    )
+    cap = min(n, usable_cpus)
 
     numba = sys.modules.get("numba")
     if numba is not None:
@@ -116,11 +140,43 @@ def _seed_numba_num_threads_from_omp() -> None:
         except ValueError:  # the thread pool has not started
             pass
         else:
-            return
+            return cap
 
-    os.environ["NUMBA_NUM_THREADS"] = str(min(n, os.cpu_count() or 1))
+    os.environ["NUMBA_NUM_THREADS"] = str(cap)
     if numba is not None:
         numba.config.reload_config()
+    return cap
 
 
-_seed_numba_num_threads_from_omp()
+thread_cap = _seed_numba_num_threads_from_omp()
+
+# The cap is scoped to each launch only with Numba imported first: with abTEM
+# first, the pool the seeding sized is the cap.
+_numba_imported_first = "numba" in sys.modules
+
+
+@contextmanager
+def numba_thread_cap():
+    """Run a ``parallel=True`` kernel launch on at most ``thread_cap``
+    threads, when Numba was imported before abTEM and there is a cap.
+
+    Entered on the thread that launches the kernel, because
+    ``numba.set_num_threads`` applies to the calling thread only and dask runs
+    the kernels on worker threads. The thread's own count is restored on exit,
+    so a thread that also runs a kernel of the application keeps its count,
+    and nothing is set when that count is already within the cap.
+    """
+    if thread_cap is None or not _numba_imported_first:
+        yield
+        return
+    import numba
+
+    previous = numba.get_num_threads()
+    if previous <= thread_cap:
+        yield
+        return
+    numba.set_num_threads(thread_cap)
+    try:
+        yield
+    finally:
+        numba.set_num_threads(previous)

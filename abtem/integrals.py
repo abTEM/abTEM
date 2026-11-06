@@ -17,7 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
-from abtem.core import backend
+from abtem.core import _numba_threads, backend
 from abtem.core.backend import (
     asnumpy,
     cp,
@@ -993,11 +993,16 @@ _INTERPOLATION_BUFFER_BUDGET = 256 * 1024**2
 def _interpolation_threads() -> int:
     """The thread count of the interpolation pool.
 
-    ``numba.config.NUMBA_NUM_THREADS`` rather than ``os.cpu_count()``: abTEM
-    seeds it from ``OMP_NUM_THREADS`` (see abtem.core._numba_threads), so a
-    job limited to a few cores, e.g. by an HPC scheduler or one pytest-xdist
-    worker among many, is not oversubscribed by this pool.
+    The cap abTEM derives from ``OMP_NUM_THREADS`` (see
+    abtem.core._numba_threads) when there is one, so a job limited to a few
+    cores, e.g. by an HPC scheduler or one pytest-xdist worker among many, is
+    not oversubscribed by this pool, and the potential does not depend on
+    the order in which Numba and abTEM were imported. Otherwise
+    ``numba.config.NUMBA_NUM_THREADS``, rather than ``os.cpu_count()``.
     """
+    cap = _numba_threads.thread_cap
+    if cap is not None:
+        return cap
     return max(int(numba.config.NUMBA_NUM_THREADS), 1)
 
 
