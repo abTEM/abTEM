@@ -62,6 +62,12 @@ Features:
 - Linear-scaling PRISM-EELS for core-loss simulations: `SMatrix.transition_potential_scan`, with
   single- and double-channel scattering and an optional windowed inelastic crop
   ([PR #289](https://github.com/abTEM/abTEM/pull/289))
+    - BiP-PRISM beam partitioning for PRISM-EELS: `transition_potential_scan(reduction="beam_basis")`
+      uses a dual-scattering-matrix driver. `partitions_s1` and `partitions_s2` build `S1` and `S2` on
+      sparse hex-ring parent beams and reconstruct the full beam set at each atom by natural-neighbor
+      interpolation. `collection_angle` limits `S2` to the detector disk, and `focal_backprop` is an
+      optional accuracy lever for `S1`. Options that would have no effect raise a `ValueError`
+      ([PR #338](https://github.com/abTEM/abTEM/pull/338))
 - In addition to the Gaussian (G) distribution, now also implemented Lorentzian (L), Voigtian (convolution L * G) and
   pseudo-Voigtian (L + G) source-size distributions and filters ([PR #270](https://github.com/abTEM/abTEM/pull/270))
 - The exact free-space propagator is now the default for Fourier multislice,
@@ -139,6 +145,24 @@ Performance:
   9.2 GB to 1.3 GB; an integer `max_batch*`, and a potential with one exit plane and no ensemble, are
   batched as before. Where a batch changes, values move by float32 rounding of the reduction only
   ([PR #563](https://github.com/abTEM/abTEM/pull/563))
+- More automatic batch sizes stay within the configured chunk size. Where a batch changes, values move by
+  float32 rounding of the reduction only; an integer `max_batch` or `max_batch_reduction` is batched as before
+  ([PR #649](https://github.com/abTEM/abTEM/pull/649))
+    - `Probe.multislice`, `Probe.scan`, `Probe.transition_potential_scan` and `PlaneWave.multislice` size the
+      automatic `max_batch` for the output of a block, which holds one result per exit plane and detector for
+      each of its waves: a block of exit waves or diffraction patterns was that many times larger than
+      `dask.chunk-size` (18 times with 23 exit planes on a 128 x 128 grid). The batch is divided by the output
+      of the block in units of one wave when that exceeds one wave: detectors whose outputs together exceed
+      one wave per position also shrink the batch of a potential with a single exit plane, while for realistic
+      grid sizes and plane counts integrating detectors such as `AnnularDetector` and
+      `FlexibleAnnularDetector` are batched as before
+    - The automatic `max_batch_reduction` of `SMatrixArray.reduce`, `SMatrix.reduce`, `SMatrix.scan` and
+      `CompressedSMatrixArray.reduce` is sized with `dask.chunk-size-gpu` on a GPU, where it used
+      `dask.chunk-size` on every device
+    - The automatic `max_batch_reduction` of an interpolated PRISM reduction (a window smaller than the
+      S-matrix grid) also counts the box that the batch is contracted over, which spans the batch and one
+      window: the contracted array was 1.7 times the chunk size at `dask.chunk-size="1 MB"` and 5.8 times at
+      `"16 MB"` in a 44 x 44 scan, and is now below the chunk size
 - `BlochWaves.calculate_exit_waves` sums the plane-wave expansion as two matrix products, using that the
   beams are separable in x, y and z, instead of forming and reducing the (thickness, beam, x, y) array of
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
@@ -152,6 +176,39 @@ Dependencies:
 
 Bugfixes:
 
+- Double-channel core-loss multislice (`double_channel=True`, the default) could use the transmission function of
+  another slice, so repeated runs differed, with or without frozen phonons
+  ([#578](https://github.com/abTEM/abTEM/pull/578)). Double-channel core-loss results computed with 1.0.10 or
+  1.0.11 should be recomputed.
+- Lazy waves and diffraction patterns whose dask array is split along the grid (several chunks along `x` or `y`, as
+  `chunks="auto"`, a Zarr file or `rechunk` can give) are rechunked to one chunk along the grid before any operation
+  that needs the whole grid. Each block was transformed on its own: `apply_ctf` and the other transfer functions,
+  `PixelatedDetector` without `max_angle`, `ensure_reciprocal_space`, `ensure_real_space`, `convolve`,
+  `FresnelPropagator.propagate`, `abtem.core.fft.fft2`/`ifft2`/`fftn` on dask arrays, `Waves.downsample` and
+  `DiffractionPatterns.crop` gave wrong values or a wrong shape without a warning, and `diffraction_patterns`,
+  `multislice`, the annular detectors, `PixelatedDetector` with a `max_angle` and `DiffractionPatterns.bandlimit`,
+  `block_direct`, `interpolate` and `index_diffraction_spots` raised. The ensemble
+  chunks of such an array are chosen again by dask, so that a block holds the whole grid of as many members as fit
+  dask's `array.chunk-size`. Arrays whose grid is in one chunk are unchanged
+  ([PR #651](https://github.com/abTEM/abTEM/pull/651))
+- `to_hyperspy` listed the axes of the signal in an order other than the data's: with `transpose=False` the `x` and
+  `y` axes carried each other's size and calibration, and with two or more ensemble axes (such as the scan axes of a
+  4D-STEM export) the ensemble axes did, for either value of `transpose`. The axes now follow the order of the
+  exported array; the exported data are unchanged ([PR #651](https://github.com/abTEM/abTEM/pull/651))
+- `PolarMeasurements.to_diffraction_patterns` returned float32 whatever the precision of the polar data, and
+  `DiffractionPatterns.interpolate` computed its interpolation weights in float32, which limited float64
+  interpolations to between $10^{-6}$ and $10^{-4}$ relative, growing with the pattern size. Both now keep the
+  precision of the data, and integer polar counts get the configured precision. Float32 results are unchanged ([PR #651](https://github.com/abTEM/abTEM/pull/651))
+- **Behaviour change:** `DiffractionPatterns.polar_binning` (and `radial_binning`) raises a `TypeError` for complex
+  diffraction patterns, for example from `Waves.diffraction_patterns(return_complex=True)`, instead of returning
+  complex polar measurements whose conversion to diffraction patterns kept only the real part. Bin the
+  `.intensity()` instead ([PR #651](https://github.com/abTEM/abTEM/pull/651))
+- PRISM handles a potential with several ensemble axes, such as an `EnergyResolvedAtomsEnsemble` (energy loss
+  x configuration): `SMatrix.build`, `reduce`, `scan` and `transition_potential_scan`, eager and lazy, match
+  multislice. The lazy build failed with "Chunks and shape must be of the same length/dimension", which also
+  stopped the elastic `reduce` and `scan` without `upsample`, eager and lazy. With `ensemble_mean=True`, the eager
+  `upsample=True` reduction and the eager `transition_potential_scan` raised an `IndexError`. Results with at
+  most one potential ensemble axis are unchanged ([PR #650](https://github.com/abTEM/abTEM/pull/650))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice
