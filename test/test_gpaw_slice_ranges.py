@@ -166,3 +166,10 @@ def test_chunked_multislice_with_the_chunk_size_configuration(calculator, chunk_
     reference = _exit_wave(array, lazy=False)
 
     assert _relative_difference(exit_wave, reference) < 1e-10
+
+
+def test_a_slice_range_outside_the_potential_raises(calculator):
+    potential = _potential(calculator)
+    for first_slice, last_slice in ((-1, None), (0, len(potential) + 1)):
+        with pytest.raises(ValueError, match="slice range"):
+            list(potential.generate_slices(first_slice, last_slice))
