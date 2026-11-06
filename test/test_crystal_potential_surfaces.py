@@ -4,11 +4,12 @@ import warnings
 
 import numpy as np
 import pytest
+from ase import Atoms
 from ase.build import bulk
+from utils import devices
 
 from abtem import CrystalPotential, FrozenPhonons, PlaneWave, Potential, PotentialArray
 from abtem.core.backend import asnumpy
-from utils import devices
 
 A = 5.43
 SAMPLING = 0.2
@@ -323,3 +324,42 @@ def test_surface_correction_moves_the_exit_wave_towards_the_slab(silicon):
         return np.abs(intensity(potential) - reference).sum() / reference.sum()
 
     assert error(corrected.build(lazy=False)) < 0.5 * error(plain.build(lazy=False))
+
+
+def test_a_crystal_stacked_from_a_correcting_crystal_along_z_raises(silicon):
+    """Every junction between its repetitions would have the surfaces of a slab."""
+    inner = CrystalPotential(_unit(silicon), (2, 2, 1))
+    assert inner.correct_surfaces
+    with pytest.raises(ValueError, match="correct_surfaces=False"):
+        CrystalPotential(inner, (1, 1, 3))
+
+
+def test_a_nested_crystal_without_inner_correction_is_the_stack(silicon):
+    unit = _unit(silicon)
+    inner = CrystalPotential(unit, (2, 2, 1), correct_surfaces=False)
+    nested = CrystalPotential(inner, (1, 1, 6), correct_surfaces=False)
+    flat = CrystalPotential(unit, (2, 2, 6), correct_surfaces=False)
+    np.testing.assert_array_equal(
+        nested.build(lazy=False).array, flat.build(lazy=False).array
+    )
+
+
+def test_a_nested_crystal_tiled_laterally_keeps_the_correction(silicon):
+    """Tiling a crystal that is tall along z does not put surfaces inside it."""
+    unit = _unit(silicon)
+    inner = CrystalPotential(unit, (1, 1, 3))
+    nested = CrystalPotential(inner, (2, 2, 1))
+    flat = CrystalPotential(unit, (2, 2, 3))
+    np.testing.assert_allclose(
+        nested.build(lazy=False).array,
+        flat.build(lazy=False).array,
+        atol=1e-6 * flat.build(lazy=False).array.max(),
+    )
+
+
+def test_a_unit_without_atoms_has_no_surfaces_to_correct():
+    empty = Atoms(cell=[4, 4, 4], pbc=True)
+    unit = Potential(empty, sampling=SAMPLING, slice_thickness=2.0, projection="finite")
+    array = CrystalPotential(unit, (1, 1, 3)).build(lazy=False).array
+    assert array.shape[0] == 6
+    assert not array.any()

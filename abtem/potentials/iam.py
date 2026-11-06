@@ -2564,6 +2564,9 @@ def _surface_units(
     if not correct_surfaces or not _has_finite_projection(unit):
         return None
     reach = safe_ceiling_int(unit._margins()[2] / float(unit.box[2]))
+    if reach == 0:
+        # nothing reaches across a surface
+        return None
     return _SurfaceUnits(
         surface=min(reach, repetitions_z),
         stack=min(2 * reach, repetitions_z),
@@ -2641,15 +2644,27 @@ class CrystalPotential(_PotentialBuilder):
         are calculated without the images, and the tails beyond the surface are added
         to the slice next to it, so that the projected potential of the slab is
         conserved. The crystal itself is unchanged: it has the same slices, `box`,
-        `thickness` and `exit_planes` as without. The tails are at the depth of the
-        outermost slice, not at their own, which leaves an error of a smaller order
-        than that of the periodic images.
+        `thickness` and `exit_planes` as without.
 
-        This costs the potential of about ``4 * ceil(cutoff / unit height)`` units per
-        configuration of the unit, once. An infinite projection assigns each atom to
-        one slice, so it has no surface to correct. The potential of a unit that is not
-        a `Potential` (a precomputed `PotentialArray`, `GPAWPotential`) cannot be
-        recalculated, and its surface slices are left as they are.
+        The tails are at the depth of the outermost slice, not at their own, so the
+        exit wave is not that of a slab with vacuum. For a light crystal on four or
+        more slices per unit (Si, 100-300 kV, plane wave) the diffraction intensity is
+        about 3 times closer to the slab's than that of the periodic stack, and more
+        for finer slices. For a heavy crystal on coarse slices with atomic planes on
+        the slice boundaries (Au on slices of half a lattice constant, 100 kV) it can
+        be neutral or worse; pass ``correct_surfaces=False`` there. A
+        `CrystalPotential` that stacks a unit that is a `CrystalPotential` along z
+        cannot have a unit that corrects its surfaces, since every junction would
+        have the surfaces of a slab.
+
+        The potential of ``1 + min(repetitions[2], 2 * ceil(cutoff / unit height))``
+        units is held per configuration of the unit, for the calculation of which
+        about ``4 * ceil(cutoff / unit height)`` units are needed, once per pool (so
+        once per ensemble member that reseeds its own). An infinite projection assigns
+        each atom to one slice, so it has no surface to correct. The potential of a
+        unit that is not a `Potential` (a precomputed `PotentialArray`,
+        `GPAWPotential`) cannot be recalculated, and its surface slices are left as
+        they are.
     """
 
     # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
@@ -2747,6 +2762,22 @@ class CrystalPotential(_PotentialBuilder):
         if correct_surfaces is None:
             correct_surfaces = _has_finite_projection(potential_unit)
         self._correct_surfaces = bool(correct_surfaces)
+        if (
+            isinstance(potential_unit, CrystalPotential)
+            and repetitions[2] > 1
+            and _surface_units(
+                potential_unit.potential_unit,
+                potential_unit.correct_surfaces,
+                potential_unit.repetitions[2],
+            )
+            is not None
+        ):
+            raise ValueError(
+                "A CrystalPotential stacked along z from a CrystalPotential that "
+                "corrects its surfaces would have the surfaces of a slab at every "
+                "junction between its repetitions. Pass correct_surfaces=False to "
+                "the crystal that is the unit."
+            )
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._root_seed = root_seed
         self._shared_pool: Optional[PotentialArray] = None
@@ -3196,7 +3227,7 @@ class CrystalPotential(_PotentialBuilder):
 
     @classmethod
     def _build_shared_pool(
-        cls, unit: BasePotential, n_tiles: int, surface_repetitions: int | None = None
+        cls, unit: BasePotential, n_tiles: int, surface_repetitions: int | None
     ) -> PotentialArray:
         """The pool every member draws from, unless each reseeds its own."""
         return cls._build_pool_array(
@@ -3209,7 +3240,7 @@ class CrystalPotential(_PotentialBuilder):
         unit: BasePotential,
         n_tiles: int,
         member_seed: int,
-        surface_repetitions: int | None = None,
+        surface_repetitions: int | None,
     ) -> PotentialArray:
         """The pool of the member with seed `member_seed`, which reseeds its own."""
         return cls._build_pool_array(
@@ -3660,7 +3691,10 @@ class CrystalPotential(_PotentialBuilder):
         straight into its chunk. A frozen-phonon unit takes its slices from one
         ``generate_slices`` call (the pool is built and the mosaic drawn once
         for all chunks), and its pool, enlarged to the number of lateral tiles
-        when smaller, is held on top of the chunk budget for the whole call.
+        when smaller, is held on top of the chunk budget for the whole call. With
+        `correct_surfaces` the pool also holds the slices of the surface stack, so
+        it has ``1 + min(repetitions[2], 2 * ceil(cutoff / unit height))`` times the
+        slices of the unit.
 
         The dtype of the output follows the unit potential's array dtype,
         which is set by the abtem ``precision`` config key (float32 / float64).

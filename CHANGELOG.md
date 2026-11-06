@@ -14,17 +14,22 @@ Features:
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
-  (atoms a slab does not have; the exit slice was wrong by up to the potential of a whole atomic plane) and miss the
-  tails of the potential of the surface atoms beyond them. With it, the slices within the integration cutoff of a
+  (atoms a slab does not have; with an atomic plane on the slice boundary the last slice differed from a slab's by as
+  much as its largest slice potential) and
+  miss the tails of the potential of the surface atoms beyond them. With it, the slices within the integration cutoff of a
   surface are calculated without the images, and the tails beyond the surface are added to the slice next to it,
-  which conserves the projected potential of the slab. The crystal itself is unchanged: its slices, `box`,
-  `thickness` and `exit_planes` are as without, so nothing shifts and the exit wave is not propagated further. The
-  tails are at the depth of the outermost slice rather than their own; the diffraction intensity of the exit wave is
-  2-7 times closer to that of a slab with vacuum than that of the periodic stack. The slicing of the atoms is
-  that of the unit, so `slice_thickness='auto'` is unchanged. **Behaviour change:** the first and last slices of a
-  `CrystalPotential` of a finite-projection unit differ from those of the periodic stack; pass
-  `correct_surfaces=False` for the previous ones. An infinite projection has no surfaces to correct, and a unit
-  that is not a `Potential` is left as it is ([PR #648](https://github.com/abTEM/abTEM/pull/648))
+  which conserves the projected potential of the slab; the slices equal those of a slab with vacuum, with the vacuum
+  slices added to the adjacent ones. The crystal itself is unchanged: its slices, `box`, `thickness` and
+  `exit_planes` are as without, so nothing shifts and the exit wave is not propagated further. The tails are at the
+  depth of the outermost slice rather than their own, so the exit wave is not that of the slab: for Si on four or
+  more slices per unit (100-300 kV, plane wave) the diffraction intensity is about 3 times closer to the slab's than
+  that of the periodic stack, but for a heavy crystal on coarse slices with atomic planes on the slice boundaries
+  (Au on half-lattice slices, 100 kV) it can be neutral or worse, and `correct_surfaces=False` is then the better
+  choice. **Behaviour change:** the first and last slices of a `CrystalPotential` of a finite-projection unit differ
+  from those of the periodic stack; pass `correct_surfaces=False` for the previous ones. A `CrystalPotential` that
+  stacks a `CrystalPotential` along z raises if the inner one corrects its surfaces (pass `correct_surfaces=False`
+  to it). An infinite projection has no surfaces to correct, and a unit that is not a `Potential` is left as it is
+  ([PR #648](https://github.com/abTEM/abTEM/pull/648))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
