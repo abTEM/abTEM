@@ -634,3 +634,42 @@ def test_prism_cutoff_angles_are_equal_along_x_and_y_on_an_odd_grid(device):
     cutoff_angles = s_matrix.dummy_probes().cutoff_angles
 
     assert cutoff_angles[0] == pytest.approx(cutoff_angles[1])
+
+
+@pytest.mark.filterwarnings("ignore:The interpolation factor does not exactly divide")
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_reduces_without_changing_the_ctf_it_is_given(lazy, device):
+    # the CTF is matched to the (56, 64) grid at interpolation 2 on a copy
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(56, 64), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        device=device,
+    )
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=10)
+
+    result = s_matrix.reduce(
+        scan=abtem.GridScan(
+            (0, 0),
+            (1, 1),
+            gpts=(2, 4),
+            fractional=True,
+            endpoint=False,
+            potential=potential,
+        ),
+        ctf=ctf,
+        detectors=abtem.PixelatedDetector(max_angle="full"),
+        lazy=lazy,
+    )
+    if lazy:
+        result.compute()
+
+    assert (ctf.gpts, ctf.extent, ctf.energy) == (None, None, None)

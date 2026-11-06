@@ -323,6 +323,19 @@ class BaseSMatrix(BaseWaves):
             wave_axes_metadata[1],
         ]
 
+    def _matched_ctf(self, ctf: CTF | None) -> CTF:
+        """A copy of ``ctf`` matched to the grid and energy of this S-matrix, to
+        evaluate in a reduction. The CTF given is left as it is: the tasks of a lazy
+        graph share it, and the branches of a stitched or blended reduction match it
+        to different grids."""
+        ctf = CTF(semiangle_cutoff=self.semiangle_cutoff) if ctf is None else ctf.copy()
+        ctf.grid.match(self.dummy_probes())
+        ctf.accelerator.match(self)
+
+        if ctf.semiangle_cutoff == np.inf:
+            ctf.semiangle_cutoff = self.semiangle_cutoff
+        return ctf
+
     def dummy_probes(
         self,
         scan: BaseScan = None,
@@ -1568,11 +1581,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             )
         detectors = self._match_detectors_to_energies(detectors, energies)
 
-        # each energy matches the CTF to its own energy, so each gets its own copy
         results = [
             self._energy_member(axis, i, energy)._reduce(
                 scan=scan,
-                ctf=None if ctf is None else ctf.copy(),
+                ctf=ctf,
                 detectors=detectors,
                 max_batch_reduction=max_batch_reduction,
                 reduction_scheme=reduction_scheme,
@@ -1649,14 +1661,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         self.accelerator.check_is_defined()
 
-        if ctf is None:
-            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
-
-        ctf.grid.match(self.dummy_probes())
-        ctf.accelerator.match(self)
-
-        if ctf.semiangle_cutoff == np.inf:
-            ctf.semiangle_cutoff = self.semiangle_cutoff
+        ctf = self._matched_ctf(ctf)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -3537,14 +3542,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 _defer_frozen_phonon_reduction=True,
             )
 
-        if ctf is None:
-            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
-
-        ctf.grid.match(self.dummy_probes())
-        ctf.accelerator.match(self)
-
-        if ctf.semiangle_cutoff == np.inf:
-            ctf.semiangle_cutoff = self.semiangle_cutoff
+        ctf = self._matched_ctf(ctf)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -6116,10 +6114,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 self._with_energy(float(e)).reduce(
                     scan=scan,
                     detectors=detectors,
-                    # Each energy matches the CTF to its own energy in place; a
-                    # lazy graph shared one CTF and computed every energy with
-                    # the last energy's wavelength.
-                    ctf=None if ctf is None else ctf.copy(),
+                    ctf=ctf,
                     reduction_scheme=reduction_scheme,
                     max_batch_multislice=max_batch_multislice,
                     max_batch_reduction=max_batch_reduction,

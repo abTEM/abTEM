@@ -621,6 +621,85 @@ def test_upsample_with_a_cropped_window_detects_patterns_on_the_downsampled_grid
         _assert_close_to(eager.array, mean)
 
 
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_upsample_with_a_cropped_window_reduces_without_changing_the_ctf_it_is_given(
+    lazy, device
+):
+    # the window (24, 32) and the period (28, 32) of the plane-wave branch of the
+    # "full" pattern differ along x, on a (56, 64) grid, and the reduction matches
+    # a copy of the CTF to each of them
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=10)
+
+    result = _window_s_matrix(potential, device, downsample=False).reduce(
+        scan=_window_scan(potential),
+        ctf=ctf,
+        detectors=abtem.PixelatedDetector(max_angle="full"),
+        lazy=lazy,
+    )
+    if lazy:
+        result.compute()
+
+    assert (ctf.gpts, ctf.extent, ctf.energy) == (None, None, None)
+
+
+@pytest.mark.parametrize("window_gpts", [(24, 32), (16, 20)])
+def test_reductions_on_different_grids_share_a_ctf_without_mixing_their_grids(
+    window_gpts, monkeypatch
+):
+    # Two reductions of S-matrices with different windows are given one CTF, as the
+    # tasks of a lazy graph are. The barrier makes each wait, when it starts to
+    # evaluate the CTF, for the other to have matched it. Each then evaluates it on
+    # the grid of its own window.
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    potential = _window_potential(_WINDOW_ATOMS, "cpu")
+    built = [
+        SMatrix(
+            potential=potential,
+            energy=100e3,
+            semiangle_cutoff=20,
+            interpolation=2,
+            upsample=True,
+            window_gpts=window,
+        ).build(lazy=False)
+        for window in (window_gpts, (28, 32))
+    ]
+    expected = [b.dummy_probes().gpts for b in built]
+    assert expected[0] != expected[1]
+
+    barrier = threading.Barrier(2, timeout=60)
+    local = threading.local()
+    evaluated = {}
+    generate_blocks = abtem.CTF.generate_blocks
+
+    def wrapped(self, *args, **kwargs):
+        if not hasattr(local, "waited"):
+            local.waited = True
+            barrier.wait()
+        evaluated.setdefault(threading.get_ident(), []).append(self.gpts)
+        return generate_blocks(self, *args, **kwargs)
+
+    monkeypatch.setattr(abtem.CTF, "generate_blocks", wrapped)
+
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=10)
+    scan = _window_scan(potential)
+
+    def reduce(s_matrix):
+        s_matrix.reduce(
+            scan=scan, ctf=ctf, detectors=abtem.AnnularDetector(inner=0, outer=15)
+        )
+        return threading.get_ident()
+
+    with ThreadPoolExecutor(2) as pool:
+        idents = list(pool.map(reduce, built))
+
+    for ident, gpts in zip(idents, expected):
+        assert evaluated[ident][0] == gpts
+
+
 def _padded_waves_patterns(waves, s_matrix):
     """The diffraction patterns of window waves zero-padded to the downsampled grid,
     scaled to the power convention of that grid, as an oracle independent of the
