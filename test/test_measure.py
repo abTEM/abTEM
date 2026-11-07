@@ -30,7 +30,7 @@ from utils import (
 )
 
 import abtem
-from abtem.core.axes import OrdinalAxis, ScanAxis
+from abtem.core.axes import EnergyAxis, OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype, safe_ceiling_int
@@ -3319,9 +3319,9 @@ class TestDiffractionPatternsIndexOrientations:
     each member with its own matrix, eagerly and with any number of members
     per dask chunk: each member equals that member indexed on its own."""
 
-    # 4 x 3 patterns; the matrices vary on one ensemble axis and broadcast on
-    # the other
+    # 4 x 3 patterns, so no two ensemble axes have the same length
     SHAPE = (4, 3)
+    ENERGIES = (60e3, 100e3, 200e3, 300e3)
 
     @staticmethod
     def _matrices(n, seed):
@@ -3330,26 +3330,44 @@ class TestDiffractionPatternsIndexOrientations:
         return Rotation.random(n, random_state=seed).as_matrix()
 
     @devices
-    @pytest.mark.parametrize("varying_axis", [0, 1])
-    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 1), (1, 3), (2, 3), (4, 3)])
+    @pytest.mark.parametrize(
+        "matrices_shape, energy_axis",
+        [
+            # varying on one axis, broadcast on the other
+            ((4, 1), None),
+            ((1, 3), None),
+            # varying on both axes
+            ((4, 3), None),
+            # orientation and energy varying on the same axis, and on different axes
+            ((4, 1), 0),
+            ((4, 1), 1),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "chunks", [None, (1, 1), (4, 1), (1, 3), (2, 3), (3, 2), (4, 3)]
+    )
     def test_members_match_each_member_indexed_alone(
-        self, device, varying_axis, chunks
+        self, device, matrices_shape, energy_axis, chunks
     ):
         # float32 on every device (Metal stores float32), so the values compare
         # exactly: indexing without a radius only picks and masks pixels
         array = np.random.default_rng(0).random(self.SHAPE + (17, 21), np.float32)
-        n = self.SHAPE[varying_axis]
-        matrices = np.expand_dims(self._matrices(n, seed=1), 1 - varying_axis)
+        matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
+        energies = np.full(self.SHAPE, 100e3)
+        metadata = {"energy": 100e3}
+        if energy_axis is not None:
+            n = self.SHAPE[energy_axis]
+            axes[energy_axis] = EnergyAxis(values=self.ENERGIES[:n])
+            energies = np.take(self.ENERGIES[:n], np.indices(self.SHAPE)[energy_axis])
+            metadata = {}
         data = copy_to_device(array, device)
         if chunks is not None:
             data = da.from_array(data, chunks=chunks + (-1, -1))
         patterns = DiffractionPatterns(
-            data,
-            sampling=0.5,
-            metadata={"energy": 100e3},
-            ensemble_axes_metadata=[
-                OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE
-            ],
+            data, sampling=0.5, metadata=metadata, ensemble_axes_metadata=axes
         )
 
         indexed = patterns.index_diffraction_spots(
@@ -3361,11 +3379,11 @@ class TestDiffractionPatternsIndexOrientations:
         column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
         for index in np.ndindex(self.SHAPE):
             single = DiffractionPatterns(
-                array[index], sampling=0.5, metadata={"energy": 100e3}
+                array[index], sampling=0.5, metadata={"energy": energies[index]}
             ).index_diffraction_spots(
                 cell=4.0,
                 orientation_matrices=matrices[
-                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices.shape))
+                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices_shape))
                 ],
             )
             columns = [column[tuple(h)] for h in single.miller_indices]
