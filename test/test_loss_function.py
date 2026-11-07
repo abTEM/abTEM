@@ -265,7 +265,7 @@ def test_from_gpaw_errors(tmp_path):
     other = tmp_path / "other.csv"
     write_gpaw_csv(other, [0.0, 2.0], eels0=[0.0, 1.0], eels=[0.0, 1.0])
 
-    with pytest.raises(ValueError, match="either"):
+    with pytest.raises(ValueError, match="one of"):
         abtem.LossFunction.from_gpaw([path])
     with pytest.raises(ValueError, match="cell"):
         abtem.LossFunction.from_gpaw([path], q_points=[[0, 0, 0]])
@@ -305,3 +305,50 @@ def test_validation():
     values = np.ones(10)
     values[0] = -1e-5
     assert abtem.LossFunction(e, [0.0], values).values.min() == 0.0
+
+
+def write_gpaw_log(path, q_points, ecut):
+    """A response log with the lines of GPAW's chi0 calculation that are read."""
+    with open(path, "w") as fd:
+        print("Using integrator: PointIntegrator", file=fd)
+        for q_c in q_points:
+            print("Calculating chi0 body with:", file=fd)
+            print("    Ground state adapter containing:", file=fd)
+            print("    Linear response parametrization:", file=fd)
+            print(f"    q_c: {list(map(float, q_c))}", file=fd)
+            print("    Number of frequency points: 3", file=fd)
+            print(f"    Planewave cutoff: {ecut}", file=fd)
+            print("    Number of bands: 90", file=fd)
+            print("Finished calculating chi0", file=fd)
+
+
+def test_from_gpaw_log_and_response_cutoff(tmp_path):
+    omega = np.array([0.0, 10.0, 20.0])
+    files = []
+    for i in range(4):
+        path = tmp_path / f"eels_{i}.csv"
+        write_gpaw_csv(path, omega, eels0=[0, 1, 0], eels=[0, 1.0 / (i + 1), 0])
+        files.append(path)
+    a = 5.0
+    cell = np.diag([a, a, a])
+    q_points = [[0.0, 0, 0], [0.75, 0, 0], [0.25, 0, 0], [0.5, 0, 0]]
+    log = tmp_path / "df.txt"
+    write_gpaw_log(log, q_points, ecut=50.0)
+
+    loss_function = abtem.LossFunction.from_gpaw(files, log=log, cell=cell)
+    assert np.allclose(loss_function.momentum_transfers, [0, 0.05, 0.1, 0.15])
+    assert np.allclose(loss_function.values[:, 1], [1, 1 / 3, 1 / 4, 1 / 2])
+    assert loss_function.metadata["ecut"] == [50.0] * 4
+
+    # |q| = 0.15 1/Å needs a cutoff above hbar^2 (2 pi q)^2 / 2m = 3.38 eV
+    write_gpaw_log(log, q_points, ecut=3.3)
+    with pytest.raises(ValueError, match="eels_1.csv.*beyond the response cutoff"):
+        abtem.LossFunction.from_gpaw(files, log=log, cell=cell)
+    abtem.LossFunction.from_gpaw(files, q_points=q_points, cell=cell, ecut=3.5)
+    with pytest.raises(ValueError, match="beyond the response cutoff"):
+        abtem.LossFunction.from_gpaw(files, q_points=q_points, cell=cell, ecut=3.3)
+
+    with pytest.raises(ValueError, match="4 response calculations for 3 files"):
+        abtem.LossFunction.from_gpaw(files[:3], log=log, cell=cell)
+    with pytest.raises(ValueError, match="cell"):
+        abtem.LossFunction.from_gpaw(files, log=log)

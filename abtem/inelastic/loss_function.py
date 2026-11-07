@@ -20,6 +20,7 @@ from abtem.core.energy import energy2wavelength, relativistic_mass_correction
 
 _BOHR = 0.529177210903  # Bohr radius [Å]
 _ELECTRON_REST_ENERGY = 510998.95  # m0 c^2 [eV]
+_HBAR2_2M = 3.80998212  # hbar^2 / 2 m0 [eV Å^2]
 
 
 def _characteristic_angle(energy_losses, energy):
@@ -489,9 +490,11 @@ class LossFunction:
     def from_gpaw(
         cls,
         files: Sequence[str],
-        momentum_transfers: Sequence[float] = None,
-        q_points: Sequence[Sequence[float]] = None,
+        log: str = None,
         cell=None,
+        q_points: Sequence[Sequence[float]] = None,
+        momentum_transfers: Sequence[float] = None,
+        ecut: float = None,
         local_field_effects: bool = True,
     ) -> "LossFunction":
         """Read the loss function from the output files of a GPAW response calculation.
@@ -501,51 +504,99 @@ class LossFunction:
         :math:`-\\mathrm{Im}\\,1/\\varepsilon` without and with local-field effects,
         and ``get_dielectric_function(q_c, filename=...)`` :math:`\\omega` and the
         real and imaginary parts of :math:`\\varepsilon` without and with local-field
-        effects. Either kind can be read. The files do not record the momentum
-        transfer, so give it with ``momentum_transfers`` or with ``q_points`` and the
-        ``cell``.
+        effects. Either kind can be read.
 
-        Include the optical limit, ``q_c = [0, 0, 0]`` in GPAW: the plasmon cross
-        section is dominated by momentum transfers far below the k-point spacing.
-        Leave out ``q_c`` equal to a reciprocal lattice vector, where GPAW's spectrum
-        with local-field effects is NaN.
-        The frequency grid must reach the energy losses of the plasmon and of the
-        continuum at the largest momentum transfer, and every file must share it.
+        The files do not record the momentum transfer. GPAW's log (the ``txt`` of
+        ``DielectricFunction``) does: ``q_c`` and the plane-wave cutoff of every
+        calculation, in the order they ran. Give the ``log`` and the ``cell`` of the
+        ground state (for example the ``.gpw`` file), with the files in the order
+        they were calculated, one calculation each. Otherwise give ``q_points`` and
+        the ``cell``, or ``momentum_transfers``.
+
+        Some GPAW output is not the loss function at the momentum transfer
+        :math:`q`, and is rejected:
+
+        - **Momentum transfers beyond the response cutoff,**
+          :math:`\\hbar^2 (2\\pi q)^2 / 2m > E_\\mathrm{cut}`. GPAW's plane-wave basis
+          is the sphere :math:`|q + G|` within the cutoff, which then excludes
+          :math:`G = 0`, and the head it returns is that of another :math:`G`. The
+          cutoff is read from the log or given as ``ecut``; raise it to reach larger
+          momentum transfers.
+        - **q_c equal to a reciprocal lattice vector,** where the spectrum with
+          local-field effects is NaN.
+
+        Include the optical limit, ``q_c = [0, 0, 0]``: the plasmon cross section is
+        dominated by momentum transfers far below the k-point spacing. The frequency
+        grid must reach the energy losses of the plasmon and of the continuum at the
+        largest momentum transfer, and every file must share it.
 
         Parameters
         ----------
         files : sequence of str
             GPAW output files, one per momentum transfer, all along one direction;
             the loss function is taken as a function of :math:`|q|`.
-        momentum_transfers : array_like, optional
-            :math:`|q|` [1/Å] of each file, without a factor :math:`2\\pi`.
+        log : str, optional
+            GPAW's response log, for ``q_c`` and the cutoff of every file.
+        cell : ase.Atoms or str or np.ndarray, optional
+            Unit cell of the ground state for ``log`` or ``q_points``: an Atoms
+            object, a file ASE can read (such as the ground-state ``.gpw``) or a
+            (3, 3) array [Å].
         q_points : array_like, optional
             The ``q_c`` of each file, in units of the reciprocal lattice vectors,
-            shape ``(n_files, 3)``. Requires ``cell``.
-        cell : ase.Atoms or str or np.ndarray, optional
-            Unit cell of the ground state for ``q_points``: an Atoms object, a file
-            ASE can read (such as the ground-state ``.gpw``) or a (3, 3) array [Å].
+            shape ``(n_files, 3)``, in place of the log.
+        momentum_transfers : array_like, optional
+            :math:`|q|` [1/Å] of each file, without a factor :math:`2\\pi`, in place of
+            the log.
+        ecut : float, optional
+            Plane-wave cutoff [eV] of the response, to check the momentum transfers
+            when there is no log.
         local_field_effects : bool, optional
             Whether to take the spectrum with local-field effects (default) or in the
             independent-particle approximation.
         """
         if isinstance(files, str):
             files = [files]
-        files = list(files)
-        if (momentum_transfers is None) == (q_points is None):
-            raise ValueError("give either momentum_transfers or q_points")
+        files = [str(path) for path in files]
+        given = [x is not None for x in (log, q_points, momentum_transfers)]
+        if sum(given) != 1:
+            raise ValueError("give one of log, q_points and momentum_transfers")
 
+        if log is not None:
+            q_points, cutoffs = _read_gpaw_log(log)
+            if len(q_points) != len(files):
+                raise ValueError(
+                    f"{log} has {len(q_points)} response calculations for "
+                    f"{len(files)} files; give one file per calculation, in the "
+                    "order they ran, or give q_points"
+                )
+            if ecut is None:
+                ecut = cutoffs
         if q_points is not None:
             q_points = np.atleast_2d(np.asarray(q_points, dtype=float))
             if q_points.shape != (len(files), 3):
                 raise ValueError("q_points must have shape (number of files, 3)")
             if cell is None:
-                raise ValueError("q_points need the cell of the ground state")
+                raise ValueError("q_c needs the cell of the ground state")
             q = np.linalg.norm(q_points @ np.linalg.inv(_read_cell(cell)).T, axis=1)
         else:
             q = np.atleast_1d(np.asarray(momentum_transfers, dtype=float))
             if q.shape != (len(files),):
                 raise ValueError("give one momentum transfer per file")
+
+        if ecut is not None:
+            ecut = np.broadcast_to(np.asarray(ecut, dtype=float), q.shape)
+            beyond = _HBAR2_2M * (2 * np.pi * q) ** 2 >= ecut
+            if np.any(beyond):
+                listed = ", ".join(
+                    f"{files[i]} (|q| = {q[i]:.3g} 1/Å)" for i in np.flatnonzero(beyond)
+                )
+                raise ValueError(
+                    "the momentum transfer of "
+                    f"{listed} is beyond the response cutoff sphere "
+                    f"(|q| < {np.sqrt(ecut.min() / _HBAR2_2M) / (2 * np.pi):.3g} 1/Å "
+                    "for the smallest cutoff); GPAW's spectrum there is not that of "
+                    "q. Leave these files out or raise ecut"
+                )
 
         omega = None
         values = []
@@ -573,12 +624,36 @@ class LossFunction:
             )
         metadata = {
             "source": "gpaw.response.df.DielectricFunction",
-            "files": [str(files[i]) for i in order],
+            "files": [files[i] for i in order],
             "local_field_effects": bool(local_field_effects),
         }
         if q_points is not None:
             metadata["q_points"] = q_points[order].tolist()
+        if ecut is not None:
+            metadata["ecut"] = ecut[order].tolist()
         return cls(omega, q[order], np.array(values)[order], metadata)
+
+
+def _read_gpaw_log(path: str):
+    """``q_c`` and plane-wave cutoff [eV] of every response calculation in a GPAW
+    ``DielectricFunction`` log, in the order they ran."""
+    blocks = []
+    block = None
+    with open(path) as fd:
+        for line in fd:
+            text = line.strip()
+            if text.startswith("Calculating chi0 body"):
+                block = {}
+                blocks.append(block)
+            elif block is not None and text.startswith("q_c:"):
+                block["q_c"] = json.loads(text[len("q_c:") :])
+            elif block is not None and text.startswith("Planewave cutoff:"):
+                block["ecut"] = float(text.split(":")[1])
+    if not blocks:
+        raise ValueError(f"{path} has no GPAW response calculations")
+    if any(set(block) != {"q_c", "ecut"} for block in blocks):
+        raise ValueError(f"{path} has a response calculation without q_c or cutoff")
+    return [b["q_c"] for b in blocks], [b["ecut"] for b in blocks]
 
 
 def _read_cell(cell) -> np.ndarray:
