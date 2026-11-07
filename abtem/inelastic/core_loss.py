@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import itertools
 import os
 import warnings
@@ -431,6 +432,160 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
         radial_grid=r,
         radial_values=ur,
     )
+
+
+@functools.lru_cache(maxsize=None)
+def _threej_zero_squared(l1: int, l2: int, l3: int) -> float:
+    """Square of the Wigner 3j symbol (l1 l2 l3; 0 0 0)."""
+    from sympy.physics.wigner import wigner_3j
+
+    return float(wigner_3j(l1, l2, l3, 0, 0, 0)) ** 2
+
+
+def _riccati_bessel(l: int, x: float):
+    """Riccati-Bessel functions x j_l(x), x y_l(x) and their derivatives in x."""
+    from scipy.special import spherical_yn
+
+    j, y = spherical_jn(l, x), spherical_yn(l, x)
+    dj = spherical_jn(l, x, derivative=True)
+    dy = spherical_yn(l, x, derivative=True)
+    return x * j, j + x * dj, x * y, y + x * dy
+
+
+def _energy_normalized_continuum(r, rv, energy, lprime):
+    """Continuum radial function u(r) = r R(r) of energy ``energy`` [Ha] in the
+    potential ``rv`` = r V(r) [Ha Bohr], normalized to delta(E - E') in Hartree.
+
+    Integrated outward with Numerov on the uniform grid ``r`` (``r[0] = 0``) and
+    matched at the outer edge, where the potential of the neutral atom has
+    vanished, to ``A [x j_l(x) cos d - x y_l(x) sin d]`` with ``x = k r``; the
+    energy-normalized wave has the asymptotic amplitude ``sqrt(2 / (pi k))``.
+    """
+    rr = r.copy()
+    rr[0] = r[1]
+    f = lprime * (lprime + 1) / rr**2 + 2 * (rv / rr - energy)
+    f[0] = f[1]
+    u = numerov(f, 0.0, 1e-30, r[1] - r[0])
+    k = np.sqrt(2 * energy)
+    i = len(r) - 3
+    du = (u[i + 1] - u[i - 1]) / (2 * (r[1] - r[0]))
+    jh, djh, nh, dnh = _riccati_bessel(lprime, k * r[i])
+    c, s = np.linalg.solve(np.array([[jh, -nh], [k * djh, -k * dnh]]), [u[i], du])
+    return u * np.sqrt(2 / (np.pi * k)) / np.hypot(c, s)
+
+
+def subshell_oscillator_strength(
+    Z: int,
+    n: int,
+    l: int,
+    energies: np.ndarray,
+    momentum_transfers: np.ndarray,
+    xc: str = "PBE",
+    max_angular_momentum: int = 20,
+    radius: float = 20.0,
+) -> tuple[float, float, np.ndarray]:
+    """Generalized oscillator strength of ionizing an atomic subshell.
+
+    The density of generalized oscillator strength of a closed subshell ``nl``
+    with :math:`N` electrons (Inokuti, Rev. Mod. Phys. 43, 297 (1971); Manson,
+    Phys. Rev. A 6, 1013 (1972)), in Hartree atomic units,
+
+    .. math::
+        \\frac{df}{dE}(q, E) = \\frac{2E}{q^2} N \\sum_{l', \\lambda}
+            (2\\lambda + 1)(2l' + 1)
+            \\begin{pmatrix} l & \\lambda & l' \\\\ 0 & 0 & 0 \\end{pmatrix}^2
+            \\left| \\int u_{nl}(r)\\, j_\\lambda(qr)\\, u_{\\varepsilon l'}(r)\\,
+            dr \\right|^2,
+
+    with :math:`E` the energy loss and :math:`\\varepsilon` the energy of the
+    ejected electron above the continuum threshold. The bound orbital and the
+    self-consistent potential are those of GPAW's non-relativistic all-electron
+    atom; the continuum states are solved in that potential and normalized to
+    :math:`\\delta(\\varepsilon - \\varepsilon')`. Solid-state effects (the
+    near-edge structure) and relativistic effects on the orbitals are left out;
+    they change the near-edge shape but little the integrated cross section.
+    Needs the ``gpaw`` extra (GPAW and sympy).
+
+    Parameters
+    ----------
+    Z : int
+        Atomic number.
+    n, l : int
+        Principal and angular-momentum quantum numbers of the subshell.
+    energies : np.ndarray
+        Energies of the ejected electron above the continuum threshold [eV],
+        positive.
+    momentum_transfers : np.ndarray
+        Momentum transfers [1/Å], without a factor :math:`2\\pi`, positive.
+    xc : str, optional
+        Exchange-correlation functional of the atom. Default is "PBE".
+    max_angular_momentum : int, optional
+        Largest angular momentum :math:`l'` of the continuum. The default of 20
+        converges the subshells of light and medium atoms; check larger values for
+        momentum transfers much beyond the inverse radius of the orbital.
+    radius : float, optional
+        Radius [Bohr] at which the continuum is matched to free waves. Default is
+        20 Bohr, where the potential of the neutral atom is down to the constant
+        floor (about 1e-3 Ha) of the exchange-correlation potential in vacuum,
+        which only shifts the continuum within a few meV of the threshold.
+
+    Returns
+    -------
+    binding_energy : float
+        Binding energy of the subshell [eV], positive.
+    occupation : float
+        Number of electrons in the subshell.
+    oscillator_strength : np.ndarray
+        :math:`df/dE` [1/eV], shape ``(len(momentum_transfers), len(energies))``.
+    """
+    from gpaw.atom.all_electron import AllElectron
+
+    check_valid_quantum_number(Z, n, l)
+    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+        ae = AllElectron(chemical_symbols[Z], xcname=xc, scalarrel=False)
+        ae.run()
+    states = list(zip(ae.n_j, ae.l_j))
+    if (n, l) not in states:
+        raise ValueError(f"{chemical_symbols[Z]} has no occupied {n}{'spdf'[l]}")
+    index = states.index((n, l))
+    binding = -ae.e_j[index]  # Ha
+    occupation = float(ae.f_j[index])
+    if abs(ae.vr[np.searchsorted(ae.r, radius)] / radius) > 2e-3:
+        warnings.warn(
+            f"the potential of {chemical_symbols[Z]} is still above 2e-3 Ha at "
+            f"{radius} Bohr, which distorts the continuum near the threshold; "
+            "increase the matching radius",
+            stacklevel=2,
+        )
+
+    eps = np.asarray(energies, dtype=float) / units.Hartree
+    q = 2 * np.pi * np.asarray(momentum_transfers, dtype=float) * units.Bohr
+    if np.any(eps <= 0) or np.any(q <= 0):
+        raise ValueError("energies and momentum transfers must be positive")
+
+    step = min(0.002, 0.05 / Z)
+    r = np.arange(0.0, radius + step / 2, step)
+    rv = np.interp(r, ae.r, ae.vr)
+    bound = np.interp(r, ae.r, ae.u_j[index], right=0.0)
+    bound /= np.sqrt(np.trapezoid(bound**2, r))
+    inner = r <= min(radius, ae.r[np.flatnonzero(np.abs(ae.u_j[index]) > 1e-8)[-1]])
+
+    lambdas = range(max_angular_momentum + l + 1)
+    bessel = [spherical_jn(lam, np.outer(q, r[inner])) for lam in lambdas]
+    strength = np.zeros((len(q), len(eps)))
+    for i, epsilon in enumerate(eps):
+        total = np.zeros(len(q))
+        for lprime in range(max_angular_momentum + 1):
+            continuum = _energy_normalized_continuum(r, rv, epsilon, lprime)[inner]
+            product = bound[inner] * continuum
+            for lam in range(abs(l - lprime), l + lprime + 1, 2):
+                weight = (2 * lam + 1) * (2 * lprime + 1)
+                weight *= _threej_zero_squared(l, lam, lprime)
+                radial = np.trapezoid(bessel[lam] * product, r[inner], axis=1)
+                total += weight * radial**2
+        loss = epsilon + binding
+        strength[:, i] = 2 * loss / q**2 * occupation * total
+    return binding * units.Hartree, occupation, strength / units.Hartree
 
 
 class BaseTransitionCollection:

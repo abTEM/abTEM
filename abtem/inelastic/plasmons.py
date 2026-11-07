@@ -1915,8 +1915,8 @@ def estimate_plasmon_parameters(
 
       ``"egerton"`` (default)
           Egerton's free-electron expression
-          :math:`\\lambda_p = 2 a_0 / [\\gamma\\,\\theta_E \\ln(1 + \\theta_c^2/\\theta_E^2)]`.
-          This is a pure plasmon MFP derived from the Kramers-Kronig sum rule.
+          :math:`\\lambda_p = 2 a_0 / [\\gamma\\,\\theta_E \\ln(1 + \\theta_c^2/\\theta_E^2)]`,
+          a plasmon (valence) mean free path.
 
       ``"malis"``
           The semi-empirical parameterization of Malis *et al.* (1988), Eq. 7:
@@ -1924,32 +1924,46 @@ def estimate_plasmon_parameters(
           with :math:`F = (1+E_0/1022)/(1+E_0/511)^2`,
           :math:`E_m = 7.6\\,Z_{\\mathrm{eff}}^{0.36}` eV, and
           :math:`\\beta = \\theta_c` (the critical angle returned by this
-          function, in mrad). This is a *total* inelastic MFP fitted to
-          measurements on 11 materials; for free-electron-like metals where
-          plasmons dominate it gives values closer to experiment (~112 nm vs
-          105 nm for Si at 200 kV) than the Egerton formula (~171 nm).
+          function, in mrad). This is a *total* inelastic mean free path, core
+          losses included, fitted to measurements on 11 materials.
+
+    For Si at 200 kV the two give 171 nm (with :math:`\\theta_c` = 4.8 mrad) and
+    145 nm.
 
     .. warning::
 
-        Only :math:`E_p` is reliable. The returned :math:`\\theta_c` is the
-        *physical* plasmon dispersion cut-off (the Landau angle
-        :math:`q_c = \\omega_p / v_F`, :math:`q_c \\approx 1.2`
-        :math:`\\mathrm{\\AA^{-1}}` for Si, consistent with tabulated values),
-        which is ~5 mrad at 200 kV. In practice :math:`\\theta_c` is **not
-        computed from a formula**: in the Lorentzian model it is the upper
-        truncation of :math:`P(\\theta) \\propto \\theta/(\\theta^2+\\theta_E^2)`
-        and is **fitted to experiment**. Mendis (*Acta Cryst.* **A80**, 2024)
-        uses :math:`\\theta_c = 19.1` mrad for Si at 200 kV (fitted by Barthel
-        *et al.*, 2019, at 300 kV and scaled via :math:`q_c = K\\theta_c =`
-        const — see :func:`scale_critical_angle`), ~4x the free-electron value.
-        Likewise :math:`\\lambda_p` here is an order-of-magnitude estimate;
-        the value used in the literature, 105 nm, is **experimentally measured**
-        by EELS (Mendis, 2019), not computed. The ``"malis"`` method is closer
-        for light/medium-Z materials where plasmons dominate, but it is a
-        *total* inelastic MFP and will overestimate the plasmon scattering rate
-        for heavy elements with strong core-loss contributions. For
-        quantitative work, supply EELS-measured values via the override
-        arguments of :meth:`PhaseScramblePlasmons.from_atoms`.
+        Only :math:`E_p` is reliable; :math:`\\theta_c` and the mean free path are
+        estimates. For first-principles values, build the model from a
+        momentum-resolved loss function with ``from_loss_function`` (see
+        :class:`~abtem.inelastic.loss_function.LossFunction`), which makes the mean
+        free path and the critical angle consistent with each other and with the
+        small-angle strength of the material.
+
+        The returned :math:`\\theta_c` is the free-electron (Landau) cut-off
+        :math:`q_c = \\omega_p / v_F`. In the Lorentzian models it is the upper
+        truncation of :math:`P(\\theta) \\propto \\theta/(\\theta^2+\\theta_E^2)`,
+        and it is often fitted to experiment. Mendis (*Acta Cryst.* **A80**, 2024)
+        uses 19.1 mrad for Si at 200 kV, fitted by Barthel *et al.* (2019) at
+        300 kV and scaled with :func:`scale_critical_angle`; 27.6 mrad has also
+        been used. The value used with them, :math:`\\lambda_p` = 105 nm (Mendis,
+        2019), is short:
+
+        - measured *total* inelastic mean free paths of Si at large collection
+          angles are 150 nm at 200 kV and 179 nm at 300 kV (Potapov, 2014) and
+          145 ± 10 nm at 200 kV (Basha *et al.*, 2022);
+        - a GPAW (RPA) valence loss function gives 172 nm at 200 kV for the
+          valence excitations alone, :math:`E_p` = 16.6 eV and an effective
+          :math:`\\theta_c` of 8.8 mrad; adding the core shells
+          (:meth:`LossFunction.from_core_shells`) gives 149 nm, as measured;
+        - with the small-angle strength of that loss function, the Lorentzian
+          model reaches 105 nm only with :math:`\\theta_c` ≈ 250 mrad.
+
+        The fitted :math:`\\theta_c` of 19–28 mrad also put 31–35 % of the
+        scattering beyond 3 mrad, against 21 % for the first-principles
+        valence distribution. Parameters fitted to measured patterns may absorb
+        other scattering, such as the core losses, into the plasmon model; for
+        the valence excitations alone, :math:`\\lambda_p` ≈ 170 nm and
+        :math:`\\theta_c` ≈ 8–9 mrad apply to Si at 200 kV.
 
     Parameters
     ----------
@@ -2209,11 +2223,10 @@ class PhaseScramblePlasmons(_FromLossFunctionMixin):
         Convenience constructor that fills in ``excitation_energy``,
         ``critical_angle`` and ``mean_free_path`` from the atomic structure and
         beam energy via :func:`estimate_plasmon_parameters`. Any of the three may
-        be overridden by passing it explicitly — recommended for ``critical_angle``
-        and ``mean_free_path``, whose free-electron estimates are only
-        order-of-magnitude (see the warning in
-        :func:`estimate_plasmon_parameters`). Only ``excitation_energy`` is
-        reliably estimated.
+        be overridden by passing it explicitly. Only ``excitation_energy`` is
+        reliably estimated; for first-principles values of the other two, use
+        :meth:`from_loss_function` (see the warning in
+        :func:`estimate_plasmon_parameters`).
 
         Parameters
         ----------

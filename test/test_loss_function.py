@@ -384,3 +384,93 @@ def test_from_gpaw_cell_from_file_without_lattice(tmp_path):
         abtem.LossFunction.from_gpaw(
             [path], q_points=[[0, 0, 0]], cell=str(tmp_path / "plain.xyz")
         )
+
+
+def test_threej_zero_squared():
+    pytest.importorskip("sympy")
+    from abtem.inelastic.core_loss import _threej_zero_squared
+
+    assert np.isclose(_threej_zero_squared(1, 1, 0), 1 / 3)
+    assert np.isclose(_threej_zero_squared(1, 0, 1), 1 / 3)
+    assert np.isclose(_threej_zero_squared(1, 1, 2), 2 / 15)
+    assert np.isclose(_threej_zero_squared(2, 2, 2), 2 / 35)
+    assert _threej_zero_squared(1, 1, 1) == 0.0
+    assert _threej_zero_squared(1, 1, 3) == 0.0
+
+
+def test_sum_of_loss_functions_adds_the_rates():
+    e = np.linspace(0.1, 100, 2000)
+    q = np.linspace(0, 1.0, 21)
+    shape = np.exp(-q / 0.2)[:, None]
+    a = abtem.LossFunction(e, q, dispersive(q, e) * shape)
+    b = abtem.LossFunction(e[::3] + 50, q[::2], 0.1 * dispersive(q[::2], e[::3] + 50))
+    total = a + b
+    rate = 1 / total.mean_free_path(ENERGY, max_angle=50.0)
+    expected = 1 / a.mean_free_path(ENERGY, max_angle=50.0) + 1 / b.mean_free_path(
+        ENERGY, max_angle=50.0
+    )
+    assert np.isclose(rate, expected, rtol=5e-3)
+    # each term is zero outside its own energy range
+    assert np.allclose(total(10.0, 0.1), a(10.0, 0.1))
+
+
+def test_subshell_oscillator_strength_sum_rule_and_dipole_limit():
+    pytest.importorskip("gpaw.atom.all_electron")
+    pytest.importorskip("sympy")
+    from abtem.inelastic.core_loss import subshell_oscillator_strength
+
+    # the Bethe sum rule: at momentum transfers far beyond the inverse orbital
+    # radius, the continuum carries all N = 6 electrons of Si 2p
+    energies = np.geomspace(0.03, 5000, 120)
+    binding, occupation, strength = subshell_oscillator_strength(
+        14, 2, 1, energies, [3.6]
+    )
+    assert occupation == 6
+    assert 90 < binding < 100
+    assert np.isclose(np.trapezoid(strength[0], energies), 6.0, rtol=0.03)
+
+    # the dipole limit is independent of q
+    _, _, small = subshell_oscillator_strength(
+        14, 2, 1, [5.0, 50.0], [0.005, 0.01], max_angular_momentum=4
+    )
+    assert np.allclose(small[0], small[1], rtol=1e-3)
+
+
+def test_core_shells_of_silicon():
+    pytest.importorskip("gpaw.atom.all_electron")
+    pytest.importorskip("sympy")
+    import ase.build
+
+    atoms = ase.build.bulk("Si", "diamond", a=5.431, cubic=True)
+    core = abtem.LossFunction.from_core_shells(
+        atoms,
+        subshells={"Si": ["2p"]},
+        max_energy_loss=3000.0,
+        num_energies=40,
+        num_momentum_transfers=40,
+    )
+    # converged L2,3 value with 160 energies and 70 momentum transfers: 1262 nm
+    assert np.isclose(core.mean_free_path(ENERGY), 12618.0, rtol=0.03)
+    # the grid starts at the 2p edge, with no loss at the edge itself
+    assert 90 < core.energy_losses[0] < 100
+    assert core.values[:, 0].max() == 0.0
+
+    with pytest.raises(ValueError, match="no Ge"):
+        abtem.LossFunction.from_core_shells(atoms, subshells={"Ge": ["3d"]})
+
+
+def test_default_core_subshells():
+    pytest.importorskip("gpaw.atom.all_electron")
+    pytest.importorskip("sympy")
+    import ase.build
+
+    atoms = ase.build.bulk("Si", "diamond", a=5.431, cubic=True)
+    core = abtem.LossFunction.from_core_shells(
+        atoms,
+        max_energy_loss=2500.0,
+        num_energies=8,
+        num_momentum_transfers=8,
+        max_angular_momentum=4,
+    )
+    assert core.metadata["subshells"] == {"Si": ["1s", "2s", "2p"]}
+    assert set(core.metadata["binding_energies"]) == {"Si 1s", "Si 2s", "Si 2p"}
