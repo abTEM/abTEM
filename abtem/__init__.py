@@ -15,6 +15,7 @@ from abtem.detectors import (
     SpectralSlitDetector,
     WavesDetector,
 )
+from abtem.inelastic.loss_function import LossFunction
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     EnergyResolvedAtomsEnsemble,
@@ -83,6 +84,7 @@ __all__ = [
     "QuadraturePlasmons",
     "plasmon_loss_spectrum",
     "drude_loss_function",
+    "LossFunction",
     "EnergyResolvedAtomsEnsemble",
     "Potential",
     "CrystalPotential",

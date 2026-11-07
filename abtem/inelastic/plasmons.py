@@ -35,6 +35,7 @@ from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength, relativistic_mass_correction
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.utils import get_dtype, itemset
+from abtem.inelastic.loss_function import LossFunction
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
@@ -589,7 +590,64 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         return waves.apply_transform(self, max_batch=max_batch)
 
 
-class MonteCarloPlasmons:
+class _FromLossFunctionMixin:
+    """Constructor of the plasmon models from a :class:`LossFunction`."""
+
+    @classmethod
+    def from_loss_function(
+        cls,
+        loss_function: LossFunction,
+        energy: float,
+        excitation_energy: float = None,
+        critical_angle: float = None,
+        mean_free_path: float = None,
+        max_angle: float = None,
+        **kwargs,
+    ):
+        """Construct the model with parameters from a loss function.
+
+        Fills in ``excitation_energy``, ``critical_angle`` and ``mean_free_path``
+        from a momentum-resolved loss function, for example from a first-principles
+        response calculation read with :meth:`LossFunction.from_gpaw`, with
+        :meth:`LossFunction.plasmon_parameters`. Any of the three may be given
+        explicitly; the critical angle is then fitted to the mean free path and
+        plasmon energy in use, so a measured mean free path can be combined with a
+        calculated loss function. Pass the same loss function to
+        :func:`plasmon_loss_spectrum` for the energy axis.
+
+        Parameters
+        ----------
+        loss_function : LossFunction
+            The loss function :math:`\\mathrm{Im}[-1/\\varepsilon(q, E)]`.
+        energy : float
+            Electron energy [eV].
+        excitation_energy, critical_angle, mean_free_path : float, optional
+            Explicit values ([eV], [mrad], [Å]) in place of those of the loss
+            function.
+        max_angle : float, optional
+            Upper scattering angle [mrad] of the mean free path; see
+            :meth:`LossFunction.angle_integrated`.
+        kwargs
+            Forwarded to the model constructor.
+        """
+        excitation_energy, critical_angle, mean_free_path = (
+            loss_function.plasmon_parameters(
+                energy,
+                excitation_energy=excitation_energy,
+                critical_angle=critical_angle,
+                mean_free_path=mean_free_path,
+                max_angle=max_angle,
+            )
+        )
+        return cls(
+            mean_free_path=mean_free_path,
+            excitation_energy=excitation_energy,
+            critical_angle=critical_angle,
+            **kwargs,
+        )
+
+
+class MonteCarloPlasmons(_FromLossFunctionMixin):
     def __init__(
         self,
         mean_free_path: float,
@@ -783,7 +841,7 @@ class MonteCarloPlasmons:
 # ---------------------------------------------------------------------------
 
 
-class QuadraturePlasmons:
+class QuadraturePlasmons(_FromLossFunctionMixin):
     """
     Plasmon energy-loss scattering integrated by deterministic quadrature.
 
@@ -2022,7 +2080,7 @@ def scale_critical_angle(
     )
 
 
-class PhaseScramblePlasmons:
+class PhaseScramblePlasmons(_FromLossFunctionMixin):
     """Stochastic single-pass plasmon energy-loss model (phase scrambling).
 
     Implements the plasmon-scattering model of B.G. Mendis, *Ultramicroscopy*
@@ -2650,16 +2708,20 @@ def _single_loss_distribution(
 
     The loss function is weighted by its integral over the scattering angles of the
     plasmon models, :math:`\\ln(1 + \\theta_c^2 / \\theta_E(E)^2)` with
-    :math:`\\theta_E` proportional to the energy loss (Egerton Eq. 3.59), and the
-    energy is renormalized because the mean free path of the model already fixes the
-    total plasmon cross section.
+    :math:`\\theta_E` proportional to the energy loss (Egerton Eq. 3.59); a
+    momentum-resolved :class:`LossFunction` is integrated over all the momentum
+    transfers it tabulates instead. The energy is renormalized because the mean free
+    path of the model already fixes the total plasmon cross section.
     """
     e = np.arange(int(np.ceil(max_loss / step)) + 1) * step
     distribution = np.zeros_like(e)
-    theta_e = characteristic_angle(e[1:], energy)
-    distribution[1:] = np.asarray(loss_function(e[1:]), dtype=float) * np.log1p(
-        critical_angle**2 / theta_e**2
-    )
+    if isinstance(loss_function, LossFunction) and loss_function.is_momentum_resolved:
+        distribution[1:] = loss_function.angle_integrated(e[1:], energy)
+    else:
+        theta_e = characteristic_angle(e[1:], energy)
+        distribution[1:] = np.asarray(loss_function(e[1:]), dtype=float) * np.log1p(
+            critical_angle**2 / theta_e**2
+        )
     if np.any(distribution < 0) or not np.all(np.isfinite(distribution)):
         raise ValueError("the loss function must be finite and non-negative")
     total = distribution.sum() * step
@@ -2721,10 +2783,16 @@ def plasmon_loss_spectrum(
     energy_resolution : float, optional
         Full width at half maximum [eV] of the zero-loss peak. Default is 0.5 eV; 0
         puts the zero loss in the bin at 0 eV.
-    loss_function : callable, optional
-        Loss function :math:`\\mathrm{Im}[-1/\\varepsilon(E)]` evaluated at energy
-        losses [eV], for example interpolated from a measured or calculated dielectric
-        function, in place of the Drude function. Only its shape matters.
+    loss_function : LossFunction or callable, optional
+        Loss function in place of the Drude function: a :class:`LossFunction`, for
+        example from a first-principles response calculation
+        read with :meth:`LossFunction.from_gpaw`, or a callable returning
+        :math:`\\mathrm{Im}[-1/\\varepsilon(E)]` at energy losses [eV], for example
+        interpolated from a measured dielectric function. Only its shape matters. A
+        momentum-resolved :class:`LossFunction` is integrated over its momentum
+        transfers, which shifts the peak with the plasmon dispersion and adds the
+        continuum at large momentum transfers; otherwise it is weighted by the
+        angular integral up to the critical angle.
     plasmons : MonteCarloPlasmons or QuadraturePlasmons or PhaseScramblePlasmons
         The model that produced the measurement. Only needed when its loss-order axis
         does not carry the model parameters.

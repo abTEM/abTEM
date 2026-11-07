@@ -1,3 +1,4 @@
+from abtem.inelastic.loss_function import LossFunction
 from abtem.inelastic.phonons import AtomsEnsemble, FrozenPhonons
 from abtem.inelastic.plasmons import (
     MonteCarloPlasmons,
@@ -17,6 +18,7 @@ __all__ = [
     "QuadraturePlasmons",
     "estimate_plasmon_parameters",
     "plasmon_loss_spectrum",
+    "LossFunction",
     "drude_loss_function",
     "scale_critical_angle",
 ]
