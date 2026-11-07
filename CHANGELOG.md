@@ -294,6 +294,24 @@ Bugfixes:
   to 125.0 mrad instead of 90.9 mrad). Core-loss PRISM with `interpolation=2` on an 8 x 6 Å cell has the sizes of
   the full window, (16, 12) and (12, 8) pixels and 74 bins instead of (10, 8), (8, 6) and 46 bins. Plain PRISM and
   C-PRISM with a window that spans the downsampled grid already detected their patterns on that grid
+- C-PRISM (`upsample=True`) with a window smaller than the downsampled grid gives a `PixelatedDetector` the same
+  diffraction patterns below the blend angle whichever other detectors share the scan. Before, next to a
+  `WavesDetector` or a real-space `PixelatedDetector` the patterns were taken from the window propagated from the
+  reference depth to the exit surface on the window's own periodic grid, and differed by 2.3 % of their maximum
+  (cubic Si cell on a 56 x 64 grid at 100 keV, `interpolation=2`, `window_gpts=(24, 32)`, `downsample=False`).
+  Next to an `AnnularDetector` or `SegmentedDetector` the patterns were stitched to the plane-wave reduction at
+  that detector's band edge instead of at the blend angle. That moved them by 2.6e-4 of the maximum next to
+  `AnnularDetector(inner=50)` at the default blend and 2.6e-3 with `blend_angle=80`, by 0.81 (`GridScan`) to 0.91
+  (`CustomScan`) of the maximum next to a bright-field `AnnularDetector(inner=0, outer=15)`, and by 2.4 times the
+  maximum next to `SegmentedDetector(2, 4, 10, 50)` with `blend_angle="aperture"`. Above the blend angle a
+  pattern next to a `WavesDetector`, a real-space `PixelatedDetector` or a `FlexibleAnnularDetector` still differs
+  from its pattern alone, because a list with one of these detectors is reduced without the stitch at the blend
+  angle (next to a `WavesDetector`, same cell and window: 7.2e-4 of the maximum with `blend_angle=80`, 0.18 with
+  `blend_angle="aperture"`). The returned wave functions and real-space intensities are bitwise unchanged. Any
+  other detector next to one that reads the wave (a `WavesDetector` or a real-space `PixelatedDetector`) changes at
+  rounding level, about 1e-15 of its maximum in float64 and a few 1e-7 in float32 (at most 1.3e-15 and 4.4e-7
+  measured), in a cropped window and, with `method="modes"` (the default on a GPU) or a `max_batch_expansion`
+  number, on the full window
 - PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
   `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
   plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
