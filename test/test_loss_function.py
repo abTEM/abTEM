@@ -352,3 +352,35 @@ def test_from_gpaw_log_and_response_cutoff(tmp_path):
         abtem.LossFunction.from_gpaw(files[:3], log=log, cell=cell)
     with pytest.raises(ValueError, match="cell"):
         abtem.LossFunction.from_gpaw(files, log=log)
+
+
+@pytest.mark.parametrize(
+    "name, format", [("POSCAR", "vasp"), ("si.cif", "cif"), ("si.xyz", "extxyz")]
+)
+def test_from_gpaw_cell_from_structure_files(tmp_path, name, format):
+    import ase.build
+    import ase.io
+
+    atoms = ase.build.bulk("Si", "diamond", a=5.431)
+    ase.io.write(tmp_path / name, atoms, format=format)
+    path = tmp_path / "eels.csv"
+    write_gpaw_csv(path, [0.0, 10.0, 20.0], eels0=[0, 1, 0], eels=[0, 1, 0])
+
+    loss_function = abtem.LossFunction.from_gpaw(
+        [path, path], q_points=[[0, 0, 0], [0.25, 0, 0]], cell=tmp_path / name
+    )
+    b1 = np.linalg.norm(np.linalg.inv(atoms.cell).T[0])
+    assert np.isclose(loss_function.momentum_transfers[1], 0.25 * b1, rtol=1e-5)
+
+
+def test_from_gpaw_cell_from_file_without_lattice(tmp_path):
+    import ase.build
+    import ase.io
+
+    ase.io.write(tmp_path / "plain.xyz", ase.build.molecule("H2O"), format="xyz")
+    path = tmp_path / "eels.csv"
+    write_gpaw_csv(path, [0.0, 10.0], eels0=[0, 1], eels=[0, 1])
+    with pytest.raises(ValueError, match="plain.xyz has no unit cell"):
+        abtem.LossFunction.from_gpaw(
+            [path], q_points=[[0, 0, 0]], cell=str(tmp_path / "plain.xyz")
+        )

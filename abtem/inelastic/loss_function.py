@@ -11,6 +11,7 @@ with each other.
 from __future__ import annotations
 
 import json
+import os
 import warnings
 from typing import Optional, Sequence
 
@@ -537,10 +538,11 @@ class LossFunction:
             the loss function is taken as a function of :math:`|q|`.
         log : str, optional
             GPAW's response log, for ``q_c`` and the cutoff of every file.
-        cell : ase.Atoms or str or np.ndarray, optional
+        cell : ase.Atoms or str or os.PathLike or np.ndarray, optional
             Unit cell of the ground state for ``log`` or ``q_points``: an Atoms
-            object, a file ASE can read (such as the ground-state ``.gpw``) or a
-            (3, 3) array [Å].
+            object, a (3, 3) array [Å] or any structure file ASE reads with the
+            lattice in it, such as the ground-state ``.gpw``, a POSCAR, a CIF or an
+            extended XYZ (a plain ``.xyz`` has no cell).
         q_points : array_like, optional
             The ``q_c`` of each file, in units of the reciprocal lattice vectors,
             shape ``(n_files, 3)``, in place of the log.
@@ -658,15 +660,24 @@ def _read_gpaw_log(path: str):
 
 def _read_cell(cell) -> np.ndarray:
     """Unit cell [Å] of an Atoms object, a structure file or an array."""
-    if isinstance(cell, str):
+    source = None
+    if isinstance(cell, (str, os.PathLike)):
         from ase.io import read
 
-        cell = read(cell)
+        source = os.fspath(cell)
+        cell = read(source)
     if hasattr(cell, "get_cell"):
         cell = cell.get_cell()
     cell = np.asarray(cell, dtype=float)
     if cell.shape != (3, 3):
         raise ValueError("cell must be a (3, 3) array")
+    if abs(np.linalg.det(cell)) < 1e-6:
+        where = f"{source} has" if source is not None else "the cell is"
+        raise ValueError(
+            f"{where} no unit cell (a plain .xyz file stores none); use a file with "
+            "the lattice, such as the ground-state .gpw, a POSCAR, a CIF or an "
+            "extended XYZ with Lattice=, or give the Atoms or the (3, 3) array"
+        )
     return cell
 
 
