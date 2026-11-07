@@ -3314,6 +3314,83 @@ class TestDiffractionPatternsCrop:
         np.testing.assert_array_equal(cropped.array, expected)
 
 
+class TestDiffractionPatternsIndexOrientations:
+    """index_diffraction_spots with one orientation matrix per member indexes
+    each member with its own matrix, eagerly and with any number of members
+    per dask chunk: each member equals that member indexed on its own."""
+
+    # 4 x 3 patterns; the matrices vary on one ensemble axis and broadcast on
+    # the other
+    SHAPE = (4, 3)
+
+    @staticmethod
+    def _matrices(n, seed):
+        from scipy.spatial.transform import Rotation
+
+        return Rotation.random(n, random_state=seed).as_matrix()
+
+    @devices
+    @pytest.mark.parametrize("varying_axis", [0, 1])
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 1), (1, 3), (2, 3), (4, 3)])
+    def test_members_match_each_member_indexed_alone(
+        self, device, varying_axis, chunks
+    ):
+        # float32 on every device (Metal stores float32), so the values compare
+        # exactly: indexing without a radius only picks and masks pixels
+        array = np.random.default_rng(0).random(self.SHAPE + (17, 21), np.float32)
+        n = self.SHAPE[varying_axis]
+        matrices = np.expand_dims(self._matrices(n, seed=1), 1 - varying_axis)
+        data = copy_to_device(array, device)
+        if chunks is not None:
+            data = da.from_array(data, chunks=chunks + (-1, -1))
+        patterns = DiffractionPatterns(
+            data,
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE
+            ],
+        )
+
+        indexed = patterns.index_diffraction_spots(
+            cell=4.0, orientation_matrices=matrices
+        )
+        assert indexed.is_lazy == (chunks is not None)
+        values = asnumpy(indexed.compute().array)
+
+        column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        for index in np.ndindex(self.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": 100e3}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices.shape))
+                ],
+            )
+            columns = [column[tuple(h)] for h in single.miller_indices]
+            others = np.setdiff1d(np.arange(len(column)), columns)
+            np.testing.assert_array_equal(values[index][columns], single.array)
+            assert np.all(values[index][others] == 0)
+
+    @lazy_params
+    def test_more_matrices_than_patterns_raises(self, lazy):
+        """One pattern cannot be indexed with three matrices: the result has
+        one member per pattern."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random((1, 17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        with pytest.raises(ValueError, match="length 1 or the length"):
+            patterns.index_diffraction_spots(
+                cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
+
+
 # ---------------------------------------------------------------------------
 # RealSpaceLineProfiles
 # ---------------------------------------------------------------------------
