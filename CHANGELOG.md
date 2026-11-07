@@ -539,6 +539,7 @@ Bugfixes:
   is given per object and the global `device` is `"cpu"`. Before, frozen-phonon and PRISM scans, lazy
   `to_cpu()` waves and every result derived from such a result (`rechunk`, indexing, reductions,
   arithmetic, filters, ...) ran on dask's threaded scheduler, which the GPU and Metal backends cannot use ([PR #659](https://github.com/abTEM/abTEM/pull/659))
+    - **Behaviour change:** the default `SMatrix.scan` and `SMatrix.transition_potential_scan` on a CUDA device run one task per S-matrix ensemble member, and those tasks return host measurements, so no layer of the graph holds a device array. They computed on the threaded scheduler, which keeps every member's S-matrix on the GPU at once, and now use the synchronous scheduler (or the dask-cuda client). On one A100, with 4, 6 and 12 members of 0.09, 1.44 and 3.46 GB of S-matrix, the device memory peaked at 4.5, 23.6 and 71.8 GB with the threaded scheduler and at 1.6, 5.0 and 7.6 GB with the synchronous one, which was also 5-17 % faster; the results are bit-identical. A scheduler passed to `compute` is still used as given
 - Monte Carlo plasmons: `MonteCarloPlasmons.draw_events` runs again, where it raised `TypeError` because
   `PlasmonScatteringEvents` was abstract ([PR #617](https://github.com/abTEM/abTEM/pull/617))
     - **Behaviour change:** the combined deflection of several plasmon excitations is the 2D vector sum of
