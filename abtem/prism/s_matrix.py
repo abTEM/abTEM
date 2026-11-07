@@ -19,6 +19,7 @@ from abtem.array import (
     ArrayObject,
     ComputableList,
     _chunk_axes_metadata,
+    _mark_device_work,
     stack,
     validate_lazy,
 )
@@ -6127,6 +6128,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             focal_backprop=focal_backprop,
             meta=np.array((), dtype=object),
         )
+        _mark_device_work(arrays, self.device)
 
         # The grid the driver detects on: the native grid for the double-channel
         # beam-basis reduction, the PRISM cell otherwise.
@@ -6377,6 +6379,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 detectors=detectors,
                 meta=np.array((), dtype=object),
             )
+            _mark_device_work(arrays, self.device)
 
             waves = self._built_dummy_probes(scan)
 

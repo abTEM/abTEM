@@ -799,6 +799,19 @@ def _held_on_the_cpu(device):
         "prism scan": lambda: s_matrix.scan(
             scan=scan, detectors=abtem.PixelatedDetector(max_angle=20), lazy=True
         ),
+        "prism scan, chunked S-matrix": lambda: s_matrix.scan(
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=20),
+            disable_s_matrix_chunks=False,
+            lazy=True,
+        ),
+        # one task per S-matrix ensemble member, the branch CUDA takes by default
+        "prism scan, one task per member": lambda: s_matrix.scan(
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=20),
+            disable_s_matrix_chunks=True,
+            lazy=True,
+        ),
         "waves to_cpu": lambda: probe.multislice(potential, scan=scan, lazy=True)
         .to_cpu()
         .diffraction_patterns(),
@@ -815,9 +828,31 @@ _DERIVED = {
 }
 
 
+def scheduler_chosen_by_compute(result, monkeypatch):
+    """The `scheduler` abTEM passes to `dask.compute` when `result` is computed."""
+    schedulers = []
+    compute = abtem.array.dask.compute
+
+    def spy(*args, **kwargs):
+        schedulers.append(kwargs.get("scheduler"))
+        return compute(*args, **kwargs)
+
+    monkeypatch.setattr(abtem.array.dask, "compute", spy)
+    result.compute()
+    return schedulers[0]
+
+
 @devices
 @pytest.mark.parametrize(
-    "pipeline", ["scan", "frozen phonon scan", "prism scan", "waves to_cpu"]
+    "pipeline",
+    [
+        "scan",
+        "frozen phonon scan",
+        "prism scan",
+        "prism scan, chunked S-matrix",
+        "prism scan, one task per member",
+        "waves to_cpu",
+    ],
 )
 @pytest.mark.parametrize("derive", list(_DERIVED))
 def test_results_of_accelerator_work_held_on_the_cpu_compute_synchronously(
@@ -826,20 +861,12 @@ def test_results_of_accelerator_work_held_on_the_cpu_compute_synchronously(
     """Device work in a lazy result's graph selects the synchronous scheduler,
     with the global device left at 'cpu', for the result and for anything
     derived from it; a CPU result keeps dask's default scheduler."""
-    schedulers = []
-    compute = abtem.array.dask.compute
-
-    def spy(*args, **kwargs):
-        schedulers.append(kwargs.get("scheduler"))
-        return compute(*args, **kwargs)
-
     with abtem.config.set({"device": "cpu"}):
         result = _DERIVED[derive](_held_on_the_cpu(device)[pipeline]())
         assert result.is_lazy
-        monkeypatch.setattr(abtem.array.dask, "compute", spy)
-        result.compute()
+        scheduler = scheduler_chosen_by_compute(result, monkeypatch)
 
-    assert schedulers[0] == (None if device == "cpu" else "synchronous")
+    assert scheduler == (None if device == "cpu" else "synchronous")
 
 
 @devices

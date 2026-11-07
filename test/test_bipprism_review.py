@@ -9,8 +9,9 @@ interpolation weights, and per-atom focal propagators.
 import ase
 import numpy as np
 import pytest
+from test_array import scheduler_chosen_by_compute
 from test_bipprism import _prism_eels_setup, _synthetic_tp
-from utils import gpu
+from utils import devices, gpu
 
 import abtem
 from abtem.core.backend import asnumpy
@@ -214,3 +215,21 @@ def test_focal_propagators_are_built_once_per_slice(monkeypatch):
     forward = [d for d in distances if d > 0]
     assert backward
     assert forward == [-d for d in backward]
+
+
+@devices
+def test_lazy_transition_potential_scan_held_on_the_cpu_computes_synchronously(
+    device, monkeypatch
+):
+    """The tasks that run the scan on the device return host measurements, so the
+    graph has no device array; its scheduler is still the synchronous one, with
+    the global device left at 'cpu'. A CPU result keeps dask's default."""
+    sm, tp, scan, det, atoms = _prism_eels_setup(device=device)
+    with abtem.config.set({"device": "cpu"}):
+        result = sm.transition_potential_scan(
+            tp, scan=scan, sites=atoms, detectors=det, lazy=True
+        )
+        assert result.is_lazy
+        scheduler = scheduler_chosen_by_compute(result, monkeypatch)
+
+    assert scheduler == (None if device == "cpu" else "synchronous")
