@@ -625,6 +625,12 @@ Bugfixes:
 - `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
   more than that g_max apart set to zero as its warning says, where building the structure matrix raised
   `ValueError: invalid entry in coordinates array` ([PR #635](https://github.com/abTEM/abTEM/pull/635))
+- `DiffractionPatterns.index_diffraction_spots` with one orientation matrix per member (for example
+  `(n, 3, 3)` matrices for `n` patterns, or `(n, 1, 3, 3)` for a rotation series with a second ensemble
+  axis) raised a bare `AssertionError` for eager patterns, and for lazy patterns with more than one member
+  per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
+  also together with the energies of an energy ensemble. Matrices with more members than the patterns
+  along an axis, which also failed before, raise a `ValueError` ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
 
 Documentation:
 
