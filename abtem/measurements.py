@@ -3162,15 +3162,16 @@ def _fourier_space_bilinear_nodes_and_weight(
         1 / new_angular_sampling[1] / new_shape[1],
     )
 
+    # In float64 on the host whatever `dtype`: a frequency n / 2 steps from zero
+    # rounded to float32 is off by about eps * n / 2 steps, and so is its weight.
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(dtype))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(dtype))
-        distances = k_new[None] - k[:, None]
-        distances[distances < 0.0] = np.inf
-        w = distances.min(0) / (k[1] - k[0])
-        w[w == np.inf] = 0.0
-        nodes.append(distances.argmin(0))
-        weights.append(w)
+        k = np.fft.fftshift(np.fft.fftfreq(n, r))
+        k_new = np.fft.fftshift(np.fft.fftfreq(m, d))
+        # the node at or below each new frequency; node 0, weight 0 below the first
+        node = np.maximum(np.searchsorted(k, k_new, side="right") - 1, 0)
+        w = np.maximum(k_new - k[node], 0.0) / (k[1] - k[0])
+        nodes.append(xp.asarray(node))
+        weights.append(xp.asarray(w, dtype=dtype))
 
     v, u = nodes
     vw, uw = weights
@@ -3915,6 +3916,8 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
+        elif isinstance(sampling, tuple) and len(sampling) == 2:
+            validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")
 
@@ -3931,7 +3934,7 @@ def _diffraction_pattern_resampling_gpts(
             gpts = (gpts,) * 2
 
         validated_sampling = tuple(
-            d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
+            d * old_n / new_n for d, old_n, new_n in zip(old_sampling, old_gpts, gpts)
         )
 
     return gpts, validated_sampling
@@ -4643,7 +4646,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def interpolate(
         self,
         sampling: Optional[str | float | tuple[float, float]] = None,
-        gpts: Optional[tuple[int, int]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
@@ -4656,7 +4659,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             If a single value, the same sampling is used for both axes. If 'uniform',
             the diffraction patterns are down-sampled along the axis with the smallest
             pixel size such that the sampling is uniform.
-        gpts : tuple of int
+        gpts : int or tuple of int
             Number of grid points of the diffraction patterns after interpolation in
             `x` and `y`.
             Do not use if 'sampling' is used.

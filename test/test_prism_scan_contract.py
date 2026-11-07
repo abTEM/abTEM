@@ -130,6 +130,36 @@ def test_prism_keeps_waves_of_every_frozen_phonon_configuration(path, device):
 
 @pytest.mark.parametrize("path", list(_PATHS))
 @pytest.mark.parametrize("frozen_phonons", [None, False])
+@devices
+def test_prism_scan_with_a_slit_detector_matches_multislice(
+    path, frozen_phonons, device
+):
+    # The slit moves the scan axes into its base shape, as the annular
+    # detector does. It sits between detectors with other output shapes, and the
+    # scan (3 x 5), the configurations (2) and the patterns differ in size.
+    potential = _potential(frozen_phonons, device=device)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        return [
+            abtem.AnnularDetector(30, 90),
+            abtem.SpectralSlitDetector(q_max=40.0, width=10.0, angle=30.0),
+            abtem.PixelatedDetector(max_angle=60),
+        ]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=scan, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), **_PATHS[path])
+    measured = measured.compute()
+
+    assert measured[1].shape == ((3, 5) if frozen_phonons is None else (2, 3, 5))
+    _assert_matches(list(measured), list(expected))
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("frozen_phonons", [None, False])
 @pytest.mark.parametrize("detector", ["annular", "pixelated", "waves"])
 @devices
 def test_prism_single_position_matches_multislice(
@@ -325,6 +355,30 @@ def test_upsampled_core_loss_frozen_phonons_match_each_configuration(
     np.testing.assert_allclose(
         measured.array, expected, rtol=TOLERANCE, atol=TOLERANCE * expected.max()
     )
+
+
+def test_lazy_core_loss_prism_scan_with_a_slit_detector_matches_the_eager_scan():
+    # CPU only: the synthetic transition potential is a host array
+    potential = _potential()
+    s_matrix = _s_matrix(potential)
+
+    def scan(lazy):
+        return s_matrix.transition_potential_scan(
+            _transition_potential(potential),
+            scan=_grid_scan(potential),
+            detectors=[
+                abtem.AnnularDetector(0, 40),
+                abtem.SpectralSlitDetector(q_max=40.0, width=10.0, angle=30.0),
+            ],
+            sites=ATOMS[:2],
+            lazy=lazy,
+        )
+
+    measured = scan(lazy=True).compute()
+    expected = scan(lazy=False)
+
+    assert measured[1].shape == expected[1].shape == (3, 5)
+    _assert_matches(list(measured), list(expected))
 
 
 @pytest.mark.parametrize("lazy", [False, True])
