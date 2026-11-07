@@ -534,25 +534,24 @@ class TestEnergyEnsembleSpotIndexing:
         )
         assert np.all(values[..., others] == 0)
 
-    # a rotation series is only indexable lazily, one orientation per block
-    @pytest.mark.parametrize("energy_chunk", [1, 2])
-    def test_lazy_rotation_series_matches_single_energy(self, energy_chunk):
-        dp = self._patterns(chunks=(1, energy_chunk))
+    # the orientation axis is 3 long and the energy axis 2, so a member
+    # indexed with another member's matrix or energy fails the comparison
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (3, 1), (1, 2), (3, 2)])
+    def test_rotation_series_matches_each_member_indexed_alone(self, chunks):
+        dp = self._patterns(chunks=chunks)
         om = self._orientation_matrices()
         ensemble = dp.index_diffraction_spots(
             cell=self._cell(), orientation_matrices=om[:, None], centering="F"
-        ).compute()
-        for j in range(len(self.ENERGIES)):
-            single = (
-                dp[:, j]
-                .index_diffraction_spots(
-                    cell=self._cell(), orientation_matrices=om, centering="F"
+        )
+        assert ensemble.is_lazy == (chunks is not None)
+        values = np.asarray(ensemble.compute().array)
+        reference = self._patterns()
+        for i in range(len(self.ROTATIONS)):
+            for j in range(len(self.ENERGIES)):
+                single = reference[i, j].index_diffraction_spots(
+                    cell=self._cell(), orientation_matrices=om[i], centering="F"
                 )
-                .compute()
-            )
-            self._assert_member_matches(
-                ensemble, np.asarray(ensemble.array)[:, j], single
-            )
+                self._assert_member_matches(ensemble, values[i, j], single)
 
     # an integration radius has its own device handling (the disk weights)
     @pytest.mark.parametrize("device", ["cpu", gpu])

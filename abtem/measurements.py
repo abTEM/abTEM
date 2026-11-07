@@ -4243,45 +4243,49 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         from abtem.bloch.indexing import estimate_necessary_excitation_error
 
+        # bloch.indexing.index_diffraction_spots takes one orientation and one
+        # energy. The orientation matrices, and the energies of an energy
+        # ensemble, have the block's ensemble shape (or length 1 on an axis)
+        # followed by two axes. Split along the first ensemble axis on which
+        # either varies and index each member with its own matrix and energy,
+        # so its spots are filtered and assigned exactly as for that member
+        # indexed on its own.
         energy = np.asarray(energy)
-        if energy.ndim > 0:
-            # Per-member energies of an energy ensemble, shaped like the
-            # orientation matrices: this block's ensemble shape (1 on every
-            # axis but the energy axis) followed by two length-1 axes. Each
-            # member's spots are filtered and assigned with its own excitation
-            # errors -- exactly as for a single-energy measurement of that
-            # member -- rather than with one energy for the whole ensemble.
-            energy = energy[..., 0, 0]
-            kwargs = dict(
-                hkl=hkl, mask_all=mask_all, sampling=sampling, cell=cell,
-                sg_max=sg_max, g_max=g_max, centering=centering, radius=radius,
+        per_member = (orientation_matrices, energy)
+        varying = [
+            i
+            for i, n in enumerate(
+                np.broadcast_shapes(*(x.shape[:-2] for x in per_member if x.ndim))
             )
-            varying = [i for i, n in enumerate(energy.shape) if n > 1]
-            if not varying:
-                return DiffractionPatterns._index_diffraction_spots(
-                    array=array,
-                    orientation_matrices=orientation_matrices,
-                    energy=float(energy.ravel()[0]),
-                    **kwargs,
-                )
-            (axis,) = varying
+            if n > 1
+        ]
+        if varying:
+            axis = varying[0]
+            take = (slice(None),) * axis
             members = []
-            for j in range(energy.shape[axis]):
-                take = (slice(None),) * axis + (slice(j, j + 1),)
-                om = orientation_matrices
-                if om.shape[axis] > 1:
-                    om = om[take]
+            for j in range(array.shape[axis]):
+                om, e = (
+                    x[take + (slice(j, j + 1),)] if x.ndim and x.shape[axis] > 1 else x
+                    for x in per_member
+                )
                 members.append(
                     DiffractionPatterns._index_diffraction_spots(
-                        array=array[take],
+                        array=array[take + (slice(j, j + 1),)],
                         orientation_matrices=om,
-                        energy=float(energy[take].ravel()[0]),
-                        **kwargs,
+                        hkl=hkl,
+                        mask_all=mask_all,
+                        sampling=sampling,
+                        cell=cell,
+                        sg_max=sg_max,
+                        g_max=g_max,
+                        centering=centering,
+                        energy=e,
+                        radius=radius,
                     )
                 )
             return get_array_module(members[0]).concatenate(members, axis=axis)
 
-        energy = float(energy)
+        energy = energy.item()
         if sg_max is None:
             sg_max = estimate_necessary_excitation_error(energy, g_max)
 
@@ -4332,8 +4336,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             three floats (for orthorhombic unit cells).
         orientation_matrices : numpy.ndarray, optional
             Orientation matrices used for indexing the diffraction spots. The shape of
-            the orientation matrices must be broadcastable with the ensemble shape of
-            the diffraction patterns.
+            the orientation matrices, without the last two axes, must broadcast to the
+            ensemble shape of the diffraction patterns: each axis has length 1 or the
+            length of that ensemble axis. Each pattern is indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -4362,12 +4367,17 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        if orientation_matrices is not None and not is_broadcastable(
-            self.ensemble_shape, orientation_matrices.shape[:-2]
+        # each pattern is indexed with one matrix: an axis of the matrices is
+        # either 1 or as long as the matching ensemble axis
+        if orientation_matrices is not None and any(
+            m not in (1, n)
+            for n, m in zip(
+                self.ensemble_shape[::-1], orientation_matrices.shape[:-2][::-1]
+            )
         ):
             raise ValueError(
-                "The ensemble shape and the shape of the orientation matrices must be"
-                " broadcastable."
+                "Every axis of the orientation matrices' ensemble shape must have"
+                " length 1 or the length of the matching ensemble axis."
             )
 
         ensemble_ndim = len(self.array.shape[:-2])
