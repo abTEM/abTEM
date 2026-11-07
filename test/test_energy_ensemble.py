@@ -107,6 +107,7 @@ class TestProbeEnergyEnsemble:
         1/A), the propagator and the interaction constant must all use the
         member's own energy. The potential is a CrystalPotential, which
         generates its slices with its own code."""
+
         # centered along z: atoms on the entrance plane of a crystal that corrects
         # its surfaces are warned about
         atoms = _srtio3_atoms()

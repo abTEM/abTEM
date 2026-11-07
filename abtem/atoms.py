@@ -1070,8 +1070,9 @@ BOX_STRAIN_WARNING_THRESHOLD = 1e-3
 _DEFAULT_BOX_MAX_REPETITIONS = 5
 
 # Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
-# box, and atoms given far outside a non-periodic cell, were reported when the user
-# gave them.
+# box, atoms given far outside a non-periodic cell, and the atoms of the unit of a
+# crystal near its entrance or exit plane (CrystalPotential), were reported when the
+# user gave them.
 _box_strain_warning_suppressed = contextvars.ContextVar(
     "abtem_box_strain_warning_suppressed", default=False
 )

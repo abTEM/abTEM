@@ -340,6 +340,16 @@ def test_a_crystal_stacked_from_a_correcting_crystal_along_z_raises(silicon):
         CrystalPotential(inner, (1, 1, 3))
 
 
+def test_a_crystal_stacked_along_z_from_a_deeper_correcting_crystal_raises(silicon):
+    """The chain of units is checked down to the last crystal."""
+    inner = CrystalPotential(_unit(silicon), (2, 2, 1))
+    middle = CrystalPotential(inner, (2, 1, 1))
+    with pytest.raises(ValueError, match="correct_surfaces=False"):
+        CrystalPotential(middle, (1, 1, 6))
+    # tiled laterally, it is one slab
+    CrystalPotential(middle, (2, 2, 1))
+
+
 def test_a_nested_crystal_without_inner_correction_is_the_stack(silicon):
     unit = _unit(silicon)
     inner = CrystalPotential(unit, (2, 2, 1), correct_surfaces=False)
