@@ -3708,8 +3708,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         def measure(component, subset):
             if component == "pattern":
+                # a pattern is stitched pixel by pixel, so no band of it can
+                # straddle the cut: it is taken at the requested angle, not the
+                # one snapped to the other detectors' bands
                 measurements = self._stitched_pattern_reduce(
-                    scan, ctf, subset, cut, max_batch_reduction, method
+                    scan, ctf, subset, blend_angle, max_batch_reduction, method
                 )
             elif component == "taper":
                 measurements = self._composite_blend_reduce(

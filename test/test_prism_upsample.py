@@ -697,14 +697,15 @@ def test_reductions_on_different_grids_share_a_ctf_without_mixing_their_grids(
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("downsample", [False, "cutoff"])
-@pytest.mark.parametrize("companion", ["flexible", "waves", "real_space"])
+@pytest.mark.parametrize("companion", ["flexible", "waves", "real_space", "annular"])
 @pytest.mark.parametrize("blend_angle", [250, 80])
 def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     blend_angle, companion, downsample, lazy, device
 ):
-    # Neither a detector that cannot be routed through the blended reduction nor
-    # one that reads the wave changes the pattern. Below the blend angle the
-    # patterns agree; 250 mrad lies beyond every detected angle.
+    # Neither a detector that cannot be routed through the blended reduction, nor
+    # one that reads the wave, nor the band of an annular detector changes the
+    # pattern. Below the blend angle the patterns agree; 250 mrad lies beyond
+    # every detected angle.
     potential = _window_potential(_WINDOW_ATOMS, device)
     scan = _window_scan(potential)
     s_matrix = _window_s_matrix(
@@ -714,6 +715,7 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
         "flexible": abtem.FlexibleAnnularDetector,
         "waves": abtem.WavesDetector,
         "real_space": lambda: abtem.PixelatedDetector(reciprocal_space=False),
+        "annular": lambda: abtem.AnnularDetector(inner=50),
     }
 
     def run(detectors):
@@ -721,9 +723,7 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
         return result.compute() if lazy else result
 
     alone = run(abtem.PixelatedDetector(max_angle="cutoff"))
-    shared, _ = run(
-        [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()]
-    )
+    shared, _ = run([abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()])
 
     assert shared.shape == alone.shape
     assert shared.angular_sampling == pytest.approx(alone.angular_sampling)
