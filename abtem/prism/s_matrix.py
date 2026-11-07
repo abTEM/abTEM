@@ -1998,10 +1998,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         The beams are referenced to a depth inside the specimen (see
         :meth:`SMatrix._reference_depth`), so the reduced wave is the exit wave
-        propagated to that depth. A reciprocal-space intensity does not see the
-        difference — the reference is a phase in ``q`` — but a wave function or
-        a real-space intensity does, and is propagated back to the exit
-        surface first.
+        propagated to that depth. A wave function or a real-space intensity is
+        propagated back to the exit surface first. A reciprocal-space intensity
+        is taken at the reference depth: on the full grid the reference is a
+        phase in ``q`` that it does not see, and on a cropped window the
+        propagation would wrap the wave around the window's own periodic grid
+        (see ``_finalize_batch_measurement``).
         """
         for detector in ensure_list(detectors):
             if isinstance(detector, WavesDetector):
@@ -2780,31 +2782,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         + window
                     )
 
-                    ensemble_axes_metadata = [
-                        UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
-                    ] + [ScanAxis(), ScanAxis()]
-
-                    if self._detects_the_wave(detectors):
-                        waves_array = self._to_exit_reference(waves_array)
-
-                    waves = Waves(
+                    self._finalize_batch_measurement(
                         waves_array,
-                        sampling=tuple(self.sampling),
-                        energy=self.energy,
-                        ensemble_axes_metadata=ensemble_axes_metadata,
-                        metadata=self.metadata,
+                        (stop - start, scan_shape[1]),
+                        sub_ctf,
+                        detectors,
+                        measurements,
+                        ctf_slics,
+                        (slice(start, stop),),
+                        pbar,
+                        (stop - start) * scan_shape[1],
                     )
-
-                    indices = ctf_slics + (slice(start, stop),)
-
-                    pbar.update_if_exists((stop - start) * scan_shape[1])
-
-                    # All detectors here see the same, not-yet-mutated
-                    # ``waves`` -- share one diffraction-pattern FFT across
-                    # them.
-                    with waves._share_diffraction_pattern_fft():
-                        for detector, measurement in zip(detectors, measurements):
-                            measurement.array[indices] = detector.detect(waves).array
 
                 del interpolated, plane_wave
 
@@ -3076,18 +3064,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         pbar: TqdmWrapper,
         n_reduced: int,
     ) -> None:
-        """Shared tail of ``_batch_reduce_to_measurements`` and
+        """Shared tail of ``_lattice_batch_reduce_to_measurements``,
+        ``_batch_reduce_to_measurements`` and
         ``_streamed_batch_reduce_to_measurements``: wrap the computed wave
         array as a ``Waves`` object with the correct ensemble metadata,
         detect it, and write the result into each measurement's array
-        slice."""
+        slice. A detector that reads the wave receives a copy propagated to the
+        exit surface; every other detector receives the wave at the reference
+        depth."""
         ensemble_axes_metadata = [
             UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
         ]
         ensemble_axes_metadata += [ScanAxis() for _ in range(len(scan_shape))]
-
-        if self._detects_the_wave(detectors):
-            waves_array = self._to_exit_reference(waves_array)
 
         waves = Waves(
             waves_array,
@@ -3096,16 +3084,26 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=self.metadata,
         )
+        # only the detectors that read the wave see it at the exit surface: on a
+        # cropped window the propagation wraps around the window's own periodic
+        # grid, which a diffraction pattern at the reference depth does not carry
+        exit_waves = waves
+        if self._detects_the_wave(detectors):
+            exit_waves = Waves(
+                self._to_exit_reference(waves_array),
+                **waves._copy_kwargs(exclude=("array",)),
+            )
 
         indices = ctf_slics + slics
 
         pbar.update_if_exists(n_reduced)
 
-        # All detectors here see the same, not-yet-mutated ``waves`` --
-        # share one diffraction-pattern FFT across them.
+        # The detectors that do not read the wave see the same, not-yet-mutated
+        # ``waves`` -- share one diffraction-pattern FFT across them.
         with waves._share_diffraction_pattern_fft():
             for detector, measurement in zip(detectors, measurements):
-                measurement.array[indices] = detector.detect(waves).array
+                source = exit_waves if self._detects_the_wave([detector]) else waves
+                measurement.array[indices] = detector.detect(source).array
 
     def _batch_reduce_to_measurements(
         self,

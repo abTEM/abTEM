@@ -694,34 +694,16 @@ def test_reductions_on_different_grids_share_a_ctf_without_mixing_their_grids(
         assert evaluated[ident][0] == gpts
 
 
-def _padded_waves_patterns(waves, s_matrix):
-    """The diffraction patterns of window waves zero-padded to the downsampled grid,
-    scaled to the power convention of that grid, as an oracle independent of the
-    detector that pads."""
-    xp = get_array_module(waves.array)
-    gpts = tuple(s_matrix.downsampled_gpts)
-    padded = xp.zeros(waves.array.shape[:-2] + gpts, dtype=waves.array.dtype)
-    padded[..., : waves.gpts[0], : waves.gpts[1]] = waves.array * np.sqrt(
-        np.prod(waves.gpts) / np.prod(gpts)
-    ).astype(waves.array.real.dtype)
-    return abtem.Waves(
-        padded,
-        sampling=waves.sampling,
-        energy=waves.energy,
-        ensemble_axes_metadata=waves.ensemble_axes_metadata,
-    ).diffraction_patterns(max_angle="full")
-
-
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("downsample", [False, "cutoff"])
-@pytest.mark.parametrize("companion", ["flexible", "waves"])
+@pytest.mark.parametrize("companion", ["flexible", "waves", "real_space"])
 @pytest.mark.parametrize("blend_angle", [250, 80])
 def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     blend_angle, companion, downsample, lazy, device
 ):
-    # A detector that cannot be routed through the blended reduction does not
-    # move the pattern to the window's coarser grid. Below the blend angle the
+    # Neither a detector that cannot be routed through the blended reduction nor
+    # one that reads the wave changes the pattern. Below the blend angle the
     # patterns agree; 250 mrad lies beyond every detected angle.
     potential = _window_potential(_WINDOW_ATOMS, device)
     scan = _window_scan(potential)
@@ -731,6 +713,7 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     others = {
         "flexible": abtem.FlexibleAnnularDetector,
         "waves": abtem.WavesDetector,
+        "real_space": lambda: abtem.PixelatedDetector(reciprocal_space=False),
     }
 
     def run(detectors):
@@ -738,20 +721,12 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
         return result.compute() if lazy else result
 
     alone = run(abtem.PixelatedDetector(max_angle="cutoff"))
-    shared, other = run(
+    shared, _ = run(
         [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()]
     )
 
     assert shared.shape == alone.shape
     assert shared.angular_sampling == pytest.approx(alone.angular_sampling)
-    if companion == "waves":
-        # Next to a WavesDetector the pattern is that of the returned window waves,
-        # zero-padded to the downsampled grid (scaled to the power convention of
-        # that grid), and cropped to the pattern; it differs from the pattern of a
-        # scan without it by about 1.6e-2 of the maximum.
-        reference = _padded_waves_patterns(other, s_matrix)
-        _assert_close_to(shared.array, reference.crop(gpts=shared.shape[-2:]).array)
-        return
     angles = [
         np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * sampling
         for n, sampling in zip(alone.shape[-2:], alone.angular_sampling)
@@ -766,20 +741,25 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
 @devices
 def test_upsample_frozen_phonon_patterns_are_the_mean_of_the_member_patterns(device):
     # next to a WavesDetector, which returns the window waves of every member, the
-    # pattern of the ensemble is the mean of the patterns of the padded member waves
+    # pattern of the ensemble is the mean of the patterns of the members
     frozen = abtem.FrozenPhonons(_WINDOW_ATOMS, **_WINDOW_FROZEN_PHONONS)
     potential = _window_potential(frozen, device)
-    s_matrix = _window_s_matrix(potential, device)
+    scan = _window_scan(potential)
 
-    shared, waves = s_matrix.scan(
-        scan=_window_scan(potential),
+    shared, waves = _window_s_matrix(potential, device).scan(
+        scan=scan,
         detectors=[abtem.PixelatedDetector(max_angle="cutoff"), abtem.WavesDetector()],
         lazy=False,
     )
 
-    members = _padded_waves_patterns(waves, s_matrix)
-    assert members.shape[0] == _WINDOW_FROZEN_PHONONS["num_configs"]
-    mean = members.crop(gpts=shared.shape[-2:]).array.mean(axis=0)
+    assert waves.shape[0] == _WINDOW_FROZEN_PHONONS["num_configs"]
+    members = [
+        _window_s_matrix(_window_potential(atoms, device), device).scan(
+            scan=scan, detectors=abtem.PixelatedDetector(max_angle="cutoff"), lazy=False
+        )
+        for atoms in frozen
+    ]
+    mean = np.mean([to_host_array(member.array) for member in members], axis=0)
     _assert_close_to(shared.array, mean)
 
 
