@@ -65,7 +65,7 @@ unexpectedly slow under an inherited ``OMP_NUM_THREADS=1``: set
 
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 
 def _usable_cpus() -> int:
@@ -144,15 +144,11 @@ def _seed_numba_num_threads_from_omp() -> int | None:
 
 thread_cap = _seed_numba_num_threads_from_omp()
 
-# The cap is scoped to each launch only with Numba imported first: with abTEM
-# first, the pool the seeding sized is the cap.
-_numba_imported_first = "numba" in sys.modules
-
 
 @contextmanager
-def numba_thread_cap():
+def _numba_thread_cap():
     """Run a ``parallel=True`` kernel launch on at most ``thread_cap``
-    threads, when Numba was imported before abTEM and there is a cap.
+    threads.
 
     Entered on the thread that launches the kernel, because
     ``numba.set_num_threads`` applies to the calling thread only and dask runs
@@ -160,9 +156,6 @@ def numba_thread_cap():
     so a thread that also runs a kernel of the application keeps its count,
     and nothing is set when that count is already within the cap.
     """
-    if thread_cap is None or not _numba_imported_first:
-        yield
-        return
     import numba
 
     previous = numba.get_num_threads()
@@ -174,3 +167,13 @@ def numba_thread_cap():
         yield
     finally:
         numba.set_num_threads(previous)
+
+
+# The context manager of each ``parallel=True`` kernel launch, chosen once. The
+# cap is scoped to each launch only with Numba imported first: with abTEM first,
+# the pool the seeding sized is the cap.
+numba_thread_cap = (
+    nullcontext
+    if thread_cap is None or "numba" not in sys.modules
+    else _numba_thread_cap
+)

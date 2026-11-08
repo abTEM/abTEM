@@ -8,8 +8,8 @@ import pytest
 from abtem.core import _numba_threads
 from abtem.core._numba_threads import (
     _seed_numba_num_threads_from_omp,
+    _numba_thread_cap,
     _usable_cpus,
-    numba_thread_cap,
 )
 from abtem.integrals import _interpolation_threads
 
@@ -235,63 +235,39 @@ class TestNumbaImportedBeforeAbtem:
 
 class TestNumbaThreadCap:
     """The context manager around each ``parallel=True`` kernel launch, on this
-    process's numba, with the module's recorded cap replaced. The thread count
-    that the launched kernels use is checked by the subprocess tests below."""
-
-    @pytest.fixture
-    def calls(self, monkeypatch):
-        """The calls of numba's count functions: ``{"get": n, "set": [...]}``."""
-        calls = {"get": 0, "set": []}
-        get, set_ = numba.get_num_threads, numba.set_num_threads
-
-        def counting_get():
-            calls["get"] += 1
-            return get()
-
-        monkeypatch.setattr(numba, "get_num_threads", counting_get)
-        monkeypatch.setattr(
-            numba, "set_num_threads", lambda n: calls["set"].append(n) or set_(n)
-        )
-        return calls
+    process's numba, with the module's recorded cap replaced. It is the one
+    ``numba_thread_cap`` is bound to when numba was imported before abtem and
+    there is a cap; the subprocess tests below check the binding in each import
+    order and the thread count that the launched kernels use."""
 
     def test_caps_inside_the_block_and_restores_the_count_after_it(self, monkeypatch):
         monkeypatch.setattr(_numba_threads, "thread_cap", 1)
-        monkeypatch.setattr(_numba_threads, "_numba_imported_first", True)
         before = numba.get_num_threads()
 
-        with numba_thread_cap():
+        with _numba_thread_cap():
             assert numba.get_num_threads() == 1
 
         assert numba.get_num_threads() == before
 
     def test_the_count_is_restored_when_the_kernel_raises(self, monkeypatch):
         monkeypatch.setattr(_numba_threads, "thread_cap", 1)
-        monkeypatch.setattr(_numba_threads, "_numba_imported_first", True)
         before = numba.get_num_threads()
 
         with pytest.raises(ZeroDivisionError):
-            with numba_thread_cap():
+            with _numba_thread_cap():
                 1 / 0
 
         assert numba.get_num_threads() == before
 
-    @pytest.mark.parametrize(
-        "cap, numba_first, reads_count",
-        [(None, True, 0), (10**6, True, 1), (1, False, 0)],
-        ids=["no_cap", "count_within_cap", "abtem_imported_first"],
-    )
-    def test_numba_is_left_alone_when_nothing_needs_capping(
-        self, monkeypatch, calls, cap, numba_first, reads_count
-    ):
-        """With abTEM imported first, Numba's pool is the cap, and numba is not
-        called at all."""
-        monkeypatch.setattr(_numba_threads, "thread_cap", cap)
-        monkeypatch.setattr(_numba_threads, "_numba_imported_first", numba_first)
+    def test_a_count_within_the_cap_is_left_alone(self, monkeypatch):
+        monkeypatch.setattr(_numba_threads, "thread_cap", 10**6)
+        sets = []
+        monkeypatch.setattr(numba, "set_num_threads", sets.append)
 
-        with numba_thread_cap():
+        with _numba_thread_cap():
             pass
 
-        assert calls == {"get": reads_count, "set": []}
+        assert sets == []
 
 
 class TestInterpolationThreads:
