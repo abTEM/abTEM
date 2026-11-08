@@ -1,3 +1,4 @@
+import ase
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -906,3 +907,92 @@ def test_pixelated_detector_downsamples_to_two_samplings(device, pair):
     assert detected.sampling == (0.137, 0.15)
     # the pre-allocated output shape is the computed one
     assert detected.base_shape == detector._out_base_shape(waves)[0] == (22, 20)
+
+
+def _resample_entries(device):
+    # the waves are sampled at (0.1, 0.0769) 1 / Å, unequal along the two axes;
+    # a PRISM reduction at interpolation 2 at (0.2, 0.154) 1 / Å
+    atoms = ase.Atoms("C", positions=[(5, 6.5, 1)], cell=(10, 13, 2))
+    potential = abtem.Potential(atoms, gpts=(64, 80), device=device)
+    phonon_potential = abtem.Potential(
+        abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=1),
+        gpts=(64, 80),
+        device=device,
+    )
+    # the step is a whole number of pixels of the PRISM grids, (11, 7) of (44, 56)
+    scan = abtem.GridScan(start=(0, 0), end=(5, 6.5), gpts=(2, 4))
+
+    def probe(energy=100e3):
+        return abtem.Probe(
+            energy=energy,
+            semiangle_cutoff=20,
+            extent=(10, 13),
+            gpts=(64, 80),
+            device=device,
+        )
+
+    def s_matrix(**kwargs):
+        return abtem.SMatrix(
+            potential=potential,
+            energy=100e3,
+            semiangle_cutoff=20,
+            device=device,
+            **kwargs,
+        )
+
+    return {
+        "scan": lambda d: probe().scan(potential, scan=scan, detectors=d, lazy=False),
+        "lazy scan": lambda d: probe().scan(
+            potential, scan=scan, detectors=d, lazy=True
+        ),
+        "detect": lambda d: d.detect(
+            probe().multislice(potential, scan=scan, lazy=False)
+        ),
+        "lazy detect": lambda d: d.detect(
+            probe().multislice(potential, scan=scan, lazy=True)
+        ),
+        "lazy frozen-phonon scan": lambda d: probe().scan(
+            phonon_potential, scan=scan, detectors=d, lazy=True
+        ),
+        "multi-energy lazy scan": lambda d: probe([50e3, 60e3, 70e3]).scan(
+            potential, scan=scan, detectors=d, lazy=True
+        ),
+        "prism scan": lambda d: s_matrix(interpolation=2).scan(
+            scan=scan, detectors=d, lazy=True
+        ),
+        # a cropped window: detected on the padded full grid
+        "cropped-window prism scan": lambda d: s_matrix(
+            interpolation=2, upsample=True, window_gpts=48
+        ).scan(scan=scan, detectors=d, lazy=True),
+    }
+
+
+@devices
+@pytest.mark.parametrize(
+    "entry", list(_resample_entries("cpu")), ids=list(_resample_entries("cpu"))
+)
+@pytest.mark.parametrize("max_angle", ["valid", 60.0])
+# finer along both axes, along x only, along y only, uniform, coarser
+@pytest.mark.parametrize(
+    "resample", [0.05, (0.09, 0.2), (0.2, 0.07), "uniform", (0.12, 0.08)]
+)
+def test_pixelated_detector_resample_equals_interpolate(
+    device, entry, max_angle, resample
+):
+    """A resampling detector gives the patterns of the same run without
+    resampling, interpolated with DiffractionPatterns.interpolate, for samplings
+    coarser and finer than the waves'."""
+    run = _resample_entries(device)[entry]
+    expected = run(abtem.PixelatedDetector(max_angle=max_angle))
+    expected = expected.compute().interpolate(sampling=resample)
+
+    result = run(abtem.PixelatedDetector(max_angle=max_angle, resample=resample))
+    declared = result.shape
+    result = result.compute()
+
+    assert declared == result.shape == expected.shape
+    assert result.sampling == expected.sampling
+    expected = to_host_array(expected.array)
+    np.testing.assert_allclose(
+        to_host_array(result.array), expected, rtol=0, atol=1e-5 * expected.max()
+    )
