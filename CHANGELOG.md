@@ -630,7 +630,7 @@ Bugfixes:
   axis) raised a bare `AssertionError` for eager patterns, and for lazy patterns with more than one member
   per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
-  along an axis, which also failed before, raise a `ValueError` ([PR #<n>](https://github.com/abTEM/abTEM/pull/<n>))
+  along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
 
 Documentation:
 
