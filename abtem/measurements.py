@@ -4650,7 +4650,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
-        different sampling.
+        different sampling. A sampling finer than that of the diffraction patterns, or
+        more `gpts`, is accepted: the interpolation is bilinear and adds no angular
+        resolution, and the new frequencies outside the range of the patterns' frequencies (a pixel or two
+        at the ends of each axis) take the value of the nearest edge pixel, up to the
+        renormalisation that keeps the sums.
 
         Parameters
         ----------

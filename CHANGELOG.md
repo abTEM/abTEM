@@ -525,9 +525,10 @@ Bugfixes:
   float64 and cast to the precision of the patterns, so float32 results are linear interpolation to float32
   rounding (about $2 \times 10^{-7}$) and change by up to that former deviation. Float64 results are
   unchanged ([PR #659](https://github.com/abTEM/abTEM/pull/659))
-- `show()` of complex measurements (domain colouring) with a NaN pixel raised `ValueError: alpha must be
+- `show()` of complex measurements (domain colouring) with a NaN pixel, or an infinite one on a linear scale, raised `ValueError: alpha must be
   between 0 and 1`, also with `vmin` and `vmax` given, and so did moving a shown ensemble to a member with
-  a NaN. NaN pixels are now transparent and leave the scaling of the other pixels as it is ([PR #659](https://github.com/abTEM/abTEM/pull/659))
+  a NaN. Pixels the amplitude norm masks (NaN, $\pm\infty$, and zero amplitude under a log scale, which was drawn
+  opaque) are now transparent; the scaling and the alpha of every other pixel are unchanged ([PR #659](https://github.com/abTEM/abTEM/pull/659))
 - `generate_slices`, `generate_chunked_slices` and `build` of every potential raise a `ValueError` for a slice
   range outside `0 <= first_slice <= last_slice <= len(potential)`; `CrystalPotential.generate_slices(first_slice=-1)`
   returned every slice, `CrystalPotential.generate_chunked_slices` repeated the crystal past its last slice, and the
