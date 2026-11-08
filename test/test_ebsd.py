@@ -3,7 +3,7 @@ import warnings
 import ase
 import numpy as np
 import pytest
-from utils import gpu
+from utils import devices, gpu
 
 import abtem
 import abtem.ebsd.reciprocity as reciprocity
@@ -1712,6 +1712,56 @@ class TestDevices:
 
         self.agree(reference, device)
         self.agree(detector, device)
+
+
+_LAZY_BUILDS = {
+    "EBSD.build": lambda device: EBSD(
+        abtem.Potential(
+            silicon_slab(thickness=4.0),
+            sampling=0.2,
+            slice_thickness=2.0,
+            projection="finite",
+            device=device,
+        ),
+        BackscatterDetector(max_angle=50, gpts=3),
+        30e3,
+        device=device,
+    ).build(lazy=True),
+    "EBSDDetectorPattern.build": lambda device: detector_builder(
+        n_patches=None, sampling=0.25, device=device
+    ).build(lazy=True),
+    "EBSDDetectorPattern.scan": lambda device: detector_builder(
+        n_patches=None, sampling=0.25, device=device
+    ).scan(
+        abtem.Probe(semiangle_cutoff=10, energy=30e3),
+        scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]),
+        lazy=True,
+    ),
+}
+
+
+@devices
+@pytest.mark.parametrize("build", list(_LAZY_BUILDS))
+def test_lazy_builds_compute_on_the_scheduler_of_their_device(
+    device, build, monkeypatch
+):
+    """The tasks of a lazy build return host arrays; the graph records the
+    builder's device, so that with the global device left at 'cpu' the work of
+    an accelerator is computed with the synchronous scheduler."""
+    schedulers = []
+    compute = abtem.array.dask.compute
+
+    def spy(*args, **kwargs):
+        schedulers.append(kwargs.get("scheduler"))
+        return compute(*args, **kwargs)
+
+    with abtem.config.set({"device": "cpu"}):
+        result = _LAZY_BUILDS[build](device)
+        assert abtem.array._graph_holds_work_on(result, device, None)
+        monkeypatch.setattr(abtem.array.dask, "compute", spy)
+        result.compute()
+
+    assert schedulers[0] == (None if device == "cpu" else "synchronous")
 
 
 # --------------------------------------------------------------------------
