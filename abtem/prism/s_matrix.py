@@ -151,6 +151,9 @@ def _finalize_lazy_measurements(
     if extra_ensemble_axes_metadata is None:
         extra_ensemble_axes_metadata = []
 
+    # the tasks of `arrays` run on the device of `waves`, whatever they return
+    _mark_device_work(arrays, waves.device)
+
     measurements = []
     for i, detector in enumerate(detectors):
         # The blocks hold every ensemble axis of the waves, scan axes included.
@@ -6128,7 +6131,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             focal_backprop=focal_backprop,
             meta=np.array((), dtype=object),
         )
-        _mark_device_work(arrays, self.device)
 
         # The grid the driver detects on: the native grid for the double-channel
         # beam-basis reduction, the PRISM cell otherwise.
@@ -6379,7 +6381,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 detectors=detectors,
                 meta=np.array((), dtype=object),
             )
-            _mark_device_work(arrays, self.device)
 
             waves = self._built_dummy_probes(scan)
 

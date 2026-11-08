@@ -819,9 +819,10 @@ def _mark_device_work(array, device: str):
     A task that returns host objects (the measurements of a whole S-matrix
     ensemble member) has a NumPy ``chunk_type`` although it does the work on the
     device. The mark is in the layer's ``collection_annotations``, so the graph
-    of every array derived from this one keeps it. A producer of device-held lazy
-    results whose graph carries no typed layer (object or host-NumPy meta) must
-    call this on each such array.
+    of every array derived from this one keeps it. The S-matrix scans mark their
+    assembled arrays once, in ``_finalize_lazy_measurements``. Any other producer
+    of device-held lazy results whose graph carries no typed layer (object or
+    host-NumPy meta) must call this on each such array.
     """
     array.dask.layers[array.name].collection_annotations["device"] = device
 
