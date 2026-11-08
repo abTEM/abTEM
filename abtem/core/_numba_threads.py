@@ -26,12 +26,12 @@ One call site in this package caps a ``parallel=True`` kernel with
 (``_laplace_stencil_cpu_batch`` in ``finite_difference.py``, reached only
 through ``RealSpaceMultislice``, not the default Fourier multislice path, which
 is FFT-bound and never touches Numba's thread pool). Three more kernels are
-compiled with ``parallel=True`` and have no caller in this package, so with
+compiled with ``parallel=True`` and have no call site in this package, so with
 Numba imported first they are not capped, nor is a kernel that a user calls
-directly: ``central_difference_gradient_pbc`` and
-``central_difference_gradient_cbc`` (both in ``magnetism/pauli.py``;
-``apply_A_xy_dot_nabla_xy`` is their only wrapper and has no caller) and
-``reduce_beamlets_nearest_no_interpolation``
+directly: ``central_difference_gradient_pbc`` (``magnetism/pauli.py``; its only
+caller, ``apply_A_xy_dot_nabla_xy``, has no caller either),
+``central_difference_gradient_cbc`` (``magnetism/pauli.py``; no caller at all)
+and ``reduce_beamlets_nearest_no_interpolation``
 (``prism/_partitioned_s_matrix.py``).
 
 **HPC schedulers routinely export ``OMP_NUM_THREADS=1`` by default, and a
