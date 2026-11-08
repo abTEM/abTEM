@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-from types import SimpleNamespace
 
 import numba
 import pytest
@@ -9,16 +8,13 @@ import pytest
 from abtem.core import _numba_threads
 from abtem.core._numba_threads import (
     _seed_numba_num_threads_from_omp,
+    _usable_cpus,
     numba_thread_cap,
 )
 from abtem.integrals import _interpolation_threads
 
 # Numba's default thread count, which the seeded value has to differ from.
-_AVAILABLE_CPUS = (
-    len(os.sched_getaffinity(0))
-    if hasattr(os, "sched_getaffinity")
-    else os.cpu_count() or 1
-)
+_AVAILABLE_CPUS = _usable_cpus()
 
 
 class TestSeedNumbaNumThreadsFromOmp:
@@ -43,10 +39,11 @@ class TestSeedNumbaNumThreadsFromOmp:
     def _isolated_environ(self, monkeypatch):
         monkeypatch.setattr(os, "environ", os.environ.copy())
         # The seeding then takes the branch for a process that has not imported
-        # numba; the tests of the other branch install a stand-in module.
+        # numba; the test of the other branch installs the module again.
         monkeypatch.delitem(sys.modules, "numba", raising=False)
 
-    def test_sets_numba_num_threads_from_omp_num_threads(self):
+    def test_sets_numba_num_threads_from_omp_num_threads(self, monkeypatch):
+        monkeypatch.setattr(_numba_threads, "_usable_cpus", lambda: 8)
         os.environ["OMP_NUM_THREADS"] = "3"
         os.environ.pop("NUMBA_NUM_THREADS", None)
 
@@ -108,47 +105,17 @@ class TestSeedNumbaNumThreadsFromOmp:
 
         assert _seed_numba_num_threads_from_omp() == 5
 
-    @staticmethod
-    def _install_numba(monkeypatch, pool_started):
-        """A stand-in for an already imported numba that records the calls the
-        seeding makes: ``threading_layer`` raises ``ValueError`` until the pool
-        has started, and ``config.reload_config`` records the environment
-        variable it would re-read."""
-        reloads = []
-
-        def threading_layer():
-            if not pool_started:
-                raise ValueError("Threading layer is not initialized.")
-            return "workqueue"
-
-        config = SimpleNamespace(
-            reload_config=lambda: reloads.append(os.environ.get("NUMBA_NUM_THREADS"))
-        )
-        numba = SimpleNamespace(threading_layer=threading_layer, config=config)
+    def test_imported_numba_keeps_the_environment_and_gets_the_cap(self, monkeypatch):
+        """Numba's pool has its size from its import, and a changed variable
+        would be applied, or refused, at its next compilation."""
+        monkeypatch.setattr(_numba_threads, "_usable_cpus", lambda: 8)
         monkeypatch.setitem(sys.modules, "numba", numba)
-        return reloads
-
-    def test_imported_numba_without_a_started_pool_gets_the_value_at_once(
-        self, monkeypatch
-    ):
-        reloads = self._install_numba(monkeypatch, pool_started=False)
-        os.environ["OMP_NUM_THREADS"] = "3"
-        os.environ.pop("NUMBA_NUM_THREADS", None)
-
-        assert _seed_numba_num_threads_from_omp() == 3
-
-        assert os.environ["NUMBA_NUM_THREADS"] == "3"
-        assert reloads == ["3"]
-
-    def test_imported_numba_with_a_started_pool_is_left_alone(self, monkeypatch):
-        reloads = self._install_numba(monkeypatch, pool_started=True)
         os.environ["OMP_NUM_THREADS"] = "3"
         os.environ.pop("NUMBA_NUM_THREADS", None)
 
         assert _seed_numba_num_threads_from_omp() == 3
 
         assert "NUMBA_NUM_THREADS" not in os.environ
-        assert reloads == []
 
 
 class TestNumbaThreadsReachSpawnedWorkerThreads:
@@ -213,8 +180,8 @@ class TestNumbaThreadsReachSpawnedWorkerThreads:
 )
 class TestNumbaImportedBeforeAbtem:
     """With numba imported before abtem (as pytest does through the
-    ``filterwarnings`` entry naming a numba warning class), the seeded thread
-    count must reach numba at ``import abtem`` and stay fixed afterwards.
+    ``filterwarnings`` entry naming a numba warning class), importing abtem
+    leaves numba's configuration as it is, so no compilation changes it.
     Needs fresh interpreters, because the result depends on the import order.
     """
 
@@ -233,15 +200,16 @@ class TestNumbaImportedBeforeAbtem:
         assert result.returncode == 0, result.stderr
         return result.stdout.split()
 
-    def test_the_seeded_value_applies_at_import_and_survives_a_compilation(self):
+    def test_importing_abtem_leaves_numbas_configuration_alone(self):
         script = (
             "import numba\n"
+            "before = numba.config.NUMBA_NUM_THREADS\n"
             "import abtem\n"
             "after_import = numba.config.NUMBA_NUM_THREADS\n"
             "numba.njit(lambda x: x + 1)(1)\n"
-            "print(after_import, numba.config.NUMBA_NUM_THREADS)\n"
+            "print(before, after_import, numba.config.NUMBA_NUM_THREADS)\n"
         )
-        assert self._run(script) == ["2", "2"]
+        assert len(set(self._run(script))) == 1
 
     def test_a_compilation_after_import_works_when_the_pool_already_runs(self):
         script = (

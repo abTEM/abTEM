@@ -15,10 +15,11 @@ process, when ``NUMBA_NUM_THREADS`` is unset and ``OMP_NUM_THREADS`` is a
 positive integer; ``thread_cap`` holds it, or ``None``. With abTEM imported
 before Numba, the seeded ``NUMBA_NUM_THREADS`` sizes Numba's whole pool at the
 cap, for every ``parallel=True`` kernel in the process, and the interpolation
-pool of the potential has the cap's size. With Numba imported first its pool
-has its own size, and the cap reaches the interpolation pool and abTEM's
-kernels only: ``numba_thread_cap`` sets it on the launching thread for the
-duration of each launch, and other threads of the process keep Numba's count.
+pool of the potential has the cap's size. With Numba imported first, its pool
+keeps its own size and Numba's configuration and environment variable are left
+as they are: the cap reaches the interpolation pool and abTEM's kernels only,
+because ``numba_thread_cap`` sets it on the launching thread for the duration
+of each launch, and other threads of the process keep Numba's count.
 
 One call site in this package caps a ``parallel=True`` kernel with
 ``numba_thread_cap``: the real-space Laplacian stencil
@@ -67,9 +68,15 @@ import sys
 from contextlib import contextmanager
 
 
+def _usable_cpus() -> int:
+    """The number of CPUs the process may run on."""
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    return len(sched_getaffinity(0)) if sched_getaffinity else os.cpu_count() or 1
+
+
 def _seed_numba_num_threads_from_omp() -> int | None:
     """Set ``NUMBA_NUM_THREADS`` from ``OMP_NUM_THREADS``, if neither is
-    already set.
+    already set and Numba has not been imported.
 
     ``NUMBA_NUM_THREADS`` is read by Numba itself the first time it
     is imported, and applies process-wide -- every thread Numba's parallel
@@ -101,16 +108,17 @@ def _seed_numba_num_threads_from_omp() -> int | None:
     exception), rather than raising cleanly the way ``set_num_threads``
     does above its own launch ceiling.
 
-    When the application imported numba before abTEM, Numba has already read
-    its configuration and would apply a new value only at its next
-    compilation, in the middle of whatever abTEM is computing. The value is
-    therefore applied at once by reloading Numba's configuration. When Numba's
-    threads already run, the variable is left unset, because Numba raises at
-    its next compilation when it changes after that point.
+    When the application imported Numba before abTEM, Numba's pool already
+    has its size, which no variable can change, and Numba re-reads
+    ``NUMBA_NUM_THREADS`` at its next compilation, in the middle of whatever
+    abTEM is computing, and raises when its threads already run. The
+    environment is therefore left as it is, and the cap is applied per
+    kernel launch (see ``numba_thread_cap``). Child processes inherit
+    ``OMP_NUM_THREADS`` and derive the same cap.
 
-    Returns the cap, also when Numba's pool already runs and the variable is
-    left unset, or ``None`` when no cap applies: ``NUMBA_NUM_THREADS`` is set,
-    or ``OMP_NUM_THREADS`` is unset, not an integer or not positive.
+    Returns the cap, also when the environment is left as it is because Numba
+    was imported, or ``None`` when no cap applies: ``NUMBA_NUM_THREADS`` is
+    set, or ``OMP_NUM_THREADS`` is unset, not an integer or not positive.
     """
     if "NUMBA_NUM_THREADS" in os.environ:
         return None
@@ -127,24 +135,10 @@ def _seed_numba_num_threads_from_omp() -> int | None:
     if n <= 0:
         return None
 
-    sched_getaffinity = getattr(os, "sched_getaffinity", None)
-    usable_cpus = (
-        len(sched_getaffinity(0)) if sched_getaffinity else os.cpu_count() or 1
-    )
-    cap = min(n, usable_cpus)
+    cap = min(n, _usable_cpus())
 
-    numba = sys.modules.get("numba")
-    if numba is not None:
-        try:
-            numba.threading_layer()
-        except ValueError:  # the thread pool has not started
-            pass
-        else:
-            return cap
-
-    os.environ["NUMBA_NUM_THREADS"] = str(cap)
-    if numba is not None:
-        numba.config.reload_config()
+    if "numba" not in sys.modules:
+        os.environ["NUMBA_NUM_THREADS"] = str(cap)
     return cap
 
 
