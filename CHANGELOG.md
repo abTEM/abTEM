@@ -148,6 +148,27 @@ Performance:
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
+- **Behaviour change:** `OMP_NUM_THREADS` caps the threads of Numba's `parallel=True` kernels and of the
+  interpolation pool of the finite-projection potential when `NUMBA_NUM_THREADS` is unset and
+  `OMP_NUM_THREADS` is a positive integer, where 1.0.11 used all CPUs for both
+    - With `abtem` imported before `numba`, the cap is the size of Numba's whole thread pool, so it holds for
+      every `parallel=True` kernel in the process, the application's own included, and of the interpolation
+      pool. With `numba` imported first, Numba's pool and its configuration are unchanged and the cap applies
+      to the interpolation pool and, set on the launching thread for the duration of each launch, to the
+      real-space Laplacian stencil (`RealSpaceMultislice`) only. On a 24-CPU machine with
+      `OMP_NUM_THREADS=1` and `abtem` imported first, 1.0.11 gave Numba and the interpolation pool 24 threads
+      and both now have 1. `OMP_NUM_THREADS=1` is the default of many HPC schedulers and the value a dask
+      nanny sets in its worker processes, so these kernels then run on one thread. An explicit
+      `NUMBA_NUM_THREADS` overrides the cap
+    - The cap is at most the number of CPUs usable by the process (`os.sched_getaffinity`, else
+      `os.cpu_count()`)
+- **Behaviour change:** the interpolation pool of the finite-projection potential has `NUMBA_NUM_THREADS`
+  threads when it is set and otherwise the cap above or, without one, Numba's default, the number of usable
+  CPUs, where 1.0.11 used `os.cpu_count()` whatever the process may use: under `taskset -c 0-2` the pool has 3
+  threads where it had 24 on a 24-CPU machine, and with `NUMBA_NUM_THREADS=5` it has 5 where it had 24.
+  Potentials built with different interpolation thread counts differ in the last float32 bits: for a silicon
+  cubic cell repeated 3 x 3 x 3 with `gpts=128` and finite projection, two processes with 24 and with 4
+  interpolation threads differed by up to 4.3e-7 of the maximum
 
 Dependencies:
 
@@ -520,30 +541,6 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
-- With `OMP_NUM_THREADS` set to a positive integer and `NUMBA_NUM_THREADS` unset, Numba's thread count is
-  capped at `OMP_NUM_THREADS`, at most the number of CPUs available to the process (`os.sched_getaffinity`,
-  else `os.cpu_count()`). With `abtem` imported before `numba`, the cap sizes Numba's whole thread pool, so it
-  holds for every `parallel=True` kernel in the process, the application's own included, and for the thread
-  pool of the finite-projection potential interpolation. With `numba` imported first, the pool keeps its size
-  and Numba's configuration and environment are not changed; the cap reaches the interpolation pool and, set
-  with `numba.set_num_threads` on the launching thread for the duration of each launch, the real-space
-  Laplacian stencil (`RealSpaceMultislice`); the application's own kernels and thread counts are untouched.
-  An explicit `NUMBA_NUM_THREADS` is left alone.
-    - **Behaviour change:** with `numba` imported before `abtem`, the Laplacian stencil used every core and now
-      uses the cap.
-    - **Behaviour change:** the interpolation pool uses the cap in every import order. Before, with `numba`
-      imported first it used every core until Numba's next compilation applied the seeded variable. Potentials
-      built with different interpolation thread counts differ in the last float32 bits: for a silicon 3x3x3
-      cell with `gpts=128` and finite projection, two processes with 24 and with 4 interpolation threads
-      differed by up to 3.3e-7 of the maximum.
-    - **Behaviour change:** an `OMP_NUM_THREADS` above the number of usable CPUs is now clamped to it, where
-      it was clamped to `os.cpu_count()`: with `OMP_NUM_THREADS=8` under `taskset -c 0-3`, the interpolation pool
-      uses 4 threads, not 8, as does every `parallel=True` kernel with `abtem` imported first, and the float32
-      bits of a potential can change.
-    - With `numba` imported before `abtem`, importing `abtem` no longer changes Numba's configuration, so the
-      next Numba compilation neither switches the thread count in the middle of a computation nor raises
-      `RuntimeError: Cannot set NUMBA_NUM_THREADS to a different value once the threads have been launched`
-      when Numba's threads already ran.
 
 Documentation:
 
