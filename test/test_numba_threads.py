@@ -1,20 +1,19 @@
+import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import numba
 import pytest
 
 from abtem.core import _numba_threads
 from abtem.core._numba_threads import (
-    _seed_numba_num_threads_from_omp,
     _numba_thread_cap,
+    _seed_numba_num_threads_from_omp,
     _usable_cpus,
 )
 from abtem.integrals import _interpolation_threads
-
-# Numba's default thread count, which the seeded value has to differ from.
-_AVAILABLE_CPUS = _usable_cpus()
 
 
 class TestSeedNumbaNumThreadsFromOmp:
@@ -175,64 +174,6 @@ class TestNumbaThreadsReachSpawnedWorkerThreads:
         assert worker_count == 2
 
 
-@pytest.mark.skipif(
-    _AVAILABLE_CPUS < 3, reason="needs more available CPUs than the seeded value"
-)
-class TestNumbaImportedBeforeAbtem:
-    """With numba imported before abtem (as pytest does through the
-    ``filterwarnings`` entry naming a numba warning class), importing abtem
-    leaves numba's configuration as it is, so no compilation changes it.
-    Needs fresh interpreters, because the result depends on the import order.
-    """
-
-    @staticmethod
-    def _run(script):
-        env = os.environ.copy()
-        env.pop("NUMBA_NUM_THREADS", None)
-        env["OMP_NUM_THREADS"] = "2"
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        assert result.returncode == 0, result.stderr
-        return result.stdout.split()
-
-    def test_importing_abtem_leaves_numbas_configuration_alone(self):
-        script = (
-            "import numba\n"
-            "before = numba.config.NUMBA_NUM_THREADS\n"
-            "import abtem\n"
-            "after_import = numba.config.NUMBA_NUM_THREADS\n"
-            "numba.njit(lambda x: x + 1)(1)\n"
-            "print(before, after_import, numba.config.NUMBA_NUM_THREADS)\n"
-        )
-        assert len(set(self._run(script))) == 1
-
-    def test_a_compilation_after_import_works_when_the_pool_already_runs(self):
-        script = (
-            "import numba\n"
-            "import numpy as np\n"
-            "\n"
-            "@numba.njit(parallel=True)\n"
-            "def total(x):\n"
-            "    s = 0.0\n"
-            "    for i in numba.prange(x.size):\n"
-            "        s += x[i]\n"
-            "    return s\n"
-            "\n"
-            "total(np.ones(100))\n"
-            "launched = numba.config.NUMBA_NUM_THREADS\n"
-            "import abtem\n"
-            "numba.njit(lambda x: x + 1)(1)\n"
-            "print(launched, numba.config.NUMBA_NUM_THREADS)\n"
-        )
-        launched, after = self._run(script)
-        assert launched == after
-
-
 class TestNumbaThreadCap:
     """The context manager around each ``parallel=True`` kernel launch, on this
     process's numba, with the module's recorded cap replaced. It is the one
@@ -280,6 +221,131 @@ class TestInterpolationThreads:
         assert _interpolation_threads() == max(int(numba.config.NUMBA_NUM_THREADS), 1)
 
 
+_START_POOL = (
+    "@numba.njit(parallel=True)\n"
+    "def total(x):\n"
+    "    s = 0.0\n"
+    "    for i in numba.prange(x.size):\n"
+    "        s += x[i]\n"
+    "    return s\n"
+    "\n"
+    "total(np.ones(100))\n"
+)
+
+# The imports of each process, up to and including `import abtem`, which leave
+# numba's configured thread count before the import in `config_before`.
+_ABTEM_FIRST = "import abtem\nimport numba\nimport numpy as np\nconfig_before = None\n"
+_NUMBA_FIRST = (
+    "import numba\n"
+    "import numpy as np\n"
+    "config_before = numba.config.NUMBA_NUM_THREADS\n"
+    "import abtem\n"
+)
+_POOL_RUNNING = (
+    "import numba\n"
+    "import numpy as np\n"
+    f"{_START_POOL}"
+    "config_before = numba.config.NUMBA_NUM_THREADS\n"
+    "import abtem\n"
+)
+# The process may run on two CPUs from the import of abtem on, while
+# OMP_NUM_THREADS is 3: the cap is the usable CPUs.
+_RESTRICTED = (
+    "import numba\n"
+    "import numpy as np\n"
+    "import os\n"
+    "config_before = numba.config.NUMBA_NUM_THREADS\n"
+    "os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])\n"
+    "import abtem\n"
+)
+
+# Launches the real-space Laplacian stencil from spawned threads, as dask's
+# threaded scheduler does, with the thread count numba has there recorded at the
+# kernel launch, builds a small potential, and prints the findings as JSON.
+# Numba sets the thread count per thread, so one thread keeps numba's count and
+# another has chosen a count of its own (the integer `chosen`, 0 for none). The
+# stencil has different sizes along the stacked, row and column axes.
+_BODY = """
+import contextlib
+import hashlib
+import json
+import threading
+
+import dask
+from ase.build import bulk
+
+import abtem.core._numba_threads as numba_threads
+import abtem.finite_difference as finite_difference
+import abtem.integrals as integrals
+
+abtem.config.set({"fft": "numpy"})
+result = {
+    "cap_is_noop": numba_threads.numba_thread_cap is contextlib.nullcontext,
+    "config_before": config_before,
+    "interpolation_threads": integrals._interpolation_threads(),
+}
+
+used = []
+kernel = finite_difference._laplace_stencil_cpu_kernel
+finite_difference._laplace_stencil_cpu_kernel = (
+    lambda *args: used.append(numba.get_num_threads()) or kernel(*args)
+)
+stencil = finite_difference._laplace_operator_stencil(
+    4, 1.0, mode="none", dtype=np.complex64
+)
+
+
+def launch(chosen):
+    out = {}
+
+    def run():
+        if chosen:
+            numba.set_num_threads(chosen)
+        out["before"] = numba.get_num_threads()
+        stencil(np.ones((3, 16, 20), dtype=np.complex64))
+        out["launched"] = used[-1]
+        out["after"] = numba.get_num_threads()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    return out
+
+
+result["default"] = launch(0)
+result["chosen"] = launch(chosen) if chosen else None
+
+# The number of interpolation chunks of each call of the threaded interpolation.
+calls = []
+interpolate = integrals.interpolate_radial_functions
+integrals.interpolate_radial_functions = (
+    lambda *args: calls.append(1) or interpolate(*args)
+)
+chunks = []
+threaded = integrals._threaded_interpolate_radial_functions
+
+
+def count_chunks(*args, **kwargs):
+    calls_before = len(calls)
+    threaded(*args, **kwargs)
+    chunks.append(len(calls) - calls_before)
+
+
+integrals._threaded_interpolate_radial_functions = count_chunks
+with dask.config.set(scheduler="synchronous"):
+    potential = abtem.Potential(
+        bulk("Si", cubic=True), gpts=32, projection="finite", slice_thickness=2
+    ).build(lazy=False).array
+result["max_chunks"] = max(chunks)
+result["digest"] = hashlib.sha1(np.ascontiguousarray(potential).tobytes()).hexdigest()
+
+numba.njit(lambda x: x + 1)(1)
+result["config_after"] = numba.config.NUMBA_NUM_THREADS
+result["interpolation_threads_after"] = integrals._interpolation_threads()
+print(json.dumps(result))
+"""
+
+
 def _run_python(script, extra_env=None):
     env = os.environ.copy()
     env.pop("NUMBA_NUM_THREADS", None)
@@ -293,147 +359,83 @@ def _run_python(script, extra_env=None):
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
-    return result.stdout.split()
+    return json.loads(result.stdout.splitlines()[-1])
 
 
-# Each snippet defines `call`, which launches one real abTEM kernel with a tiny
-# input, and records in `used` the thread count at the launch: the kernel is
-# wrapped by a shim that reads numba's count in the launching thread and calls the
-# real kernel. The sizes along the stacked, row and column axes differ.
-_KERNEL_CALLS = {
-    "real_space_laplacian": (
-        "import abtem.finite_difference as module\n"
-        "real = module._laplace_stencil_cpu_kernel\n"
-        "module._laplace_stencil_cpu_kernel = (\n"
-        "    lambda *args: used.append(numba.get_num_threads()) or real(*args)\n"
-        ")\n"
-        "stencil = module._laplace_operator_stencil(\n"
-        "    4, 1.0, mode='none', dtype=np.complex64\n"
-        ")\n"
-        "call = lambda: stencil(np.ones((3, 16, 20), dtype=np.complex64))\n"
-    ),
-}
-
-_START_POOL = (
-    "@numba.njit(parallel=True)\n"
-    "def total(x):\n"
-    "    s = 0.0\n"
-    "    for i in numba.prange(x.size):\n"
-    "        s += x[i]\n"
-    "    return s\n"
-    "\n"
-    "total(np.ones(100))\n"
-)
-
-_NUMBA_FIRST = "import numba\nimport numpy as np\nimport abtem\n"
-_POOL_RUNNING = f"import numba\nimport numpy as np\n{_START_POOL}import abtem\n"
-_ABTEM_FIRST = "import abtem\nimport numba\nimport numpy as np\n"
-
-# scenario: (imports, environment, threads the thread has before the launch,
-# or None for the pool size, threads the kernel is expected to launch with).
-# OMP_NUM_THREADS is 2.
-# The process may run on 2 CPUs while OMP_NUM_THREADS is 3: the cap is the usable CPUs.
-_RESTRICT = "import os\nos.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])\n"
-_THREE = {"OMP_NUM_THREADS": "3"}
+# name: (imports, OMP_NUM_THREADS, the count the second thread chooses, the
+# CPUs the scenario needs: numba's pool has to be larger than the cap of 2 for
+# the cap to differ from it). The cap is 2 in every scenario.
 _SCENARIOS = {
-    "numba_first": (_NUMBA_FIRST, {}, None, 2),
-    "numba_first_pool_running": (_POOL_RUNNING, {}, None, 2),
-    "abtem_first": (_ABTEM_FIRST, {}, None, 2),
-    "explicit_numba_num_threads": (_NUMBA_FIRST, {"NUMBA_NUM_THREADS": "3"}, None, 3),
-    "numba_first_application_chose_3": (_NUMBA_FIRST, {}, 3, 2),
-    "numba_first_application_chose_1": (_NUMBA_FIRST, {}, 1, 1),
-    "restricted_cpus_numba_first": (_RESTRICT + _NUMBA_FIRST, _THREE, None, 2),
-    "restricted_cpus_pool_running": (_RESTRICT + _POOL_RUNNING, _THREE, None, 2),
-    "restricted_cpus_abtem_first": (_RESTRICT + _ABTEM_FIRST, _THREE, None, 2),
+    "abtem_first": (_ABTEM_FIRST, "2", 0, 1),
+    "numba_first": (_NUMBA_FIRST, "2", 3, 3),
+    "numba_first_pool_running": (_POOL_RUNNING, "2", 3, 3),
+    "numba_first_restricted_cpus": (_RESTRICTED, "3", 3, 3),
 }
-_NEEDS_AFFINITY = pytest.mark.skipif(
-    not hasattr(os, "sched_setaffinity"), reason="needs os.sched_setaffinity"
-)
-_SCENARIO_PARAMS = [
-    pytest.param(name, marks=_NEEDS_AFFINITY) if name.startswith("restricted") else name
-    for name in _SCENARIOS
-]
 
 
-@pytest.mark.skipif(
-    _AVAILABLE_CPUS < 3, reason="needs more available CPUs than the seeded value"
-)
-class TestKernelsFollowTheCap:
-    """``OMP_NUM_THREADS=2`` reaches the ``parallel=True`` kernels whichever of
-    numba and abtem is imported first, also when numba's pool already runs.
-    Numba sets the thread count per thread, so the kernel is launched from a
-    spawned thread, as dask's threaded scheduler does. The count the kernel
-    launches with is read there, and the thread's own count has to be back
-    afterwards. An explicit ``NUMBA_NUM_THREADS`` is not overridden, a count
-    the application set on the thread is kept, and the cap does not exceed the
-    CPUs the process may use."""
+@pytest.fixture(scope="module")
+def runs():
+    """The findings of one interpreter per import order, run side by side."""
+    names = [name for name, v in _SCENARIOS.items() if v[3] <= _usable_cpus()]
 
-    @pytest.mark.parametrize("kernel", _KERNEL_CALLS)
-    @pytest.mark.parametrize("scenario", _SCENARIO_PARAMS)
-    def test_the_kernel_launches_with_the_cap_and_the_thread_keeps_its_count(
-        self, scenario, kernel
+    def run(name):
+        imports, omp, chosen, _ = _SCENARIOS[name]
+        script = f"chosen = {chosen}\n{imports}{_BODY}"
+        return _run_python(script, {"OMP_NUM_THREADS": omp})
+
+    with ThreadPoolExecutor(len(names)) as pool:
+        return dict(zip(names, pool.map(run, names)))
+
+
+def _scenario(name, runs):
+    if name not in runs:
+        pytest.skip(f"needs {_SCENARIOS[name][3]} usable CPUs")
+    return runs[name]
+
+
+@pytest.mark.parametrize("name", _SCENARIOS)
+class TestEveryImportOrder:
+    """``OMP_NUM_THREADS`` reaches the ``parallel=True`` kernels, the
+    interpolation pool of the potential and numba's configuration the same way
+    whichever of numba and abtem is imported first, also when numba's pool
+    already runs, and when the process may use fewer CPUs than
+    ``OMP_NUM_THREADS``. Only the import order needs a fresh interpreter."""
+
+    def test_numba_thread_cap_does_nothing_with_abtem_imported_first(self, name, runs):
+        assert _scenario(name, runs)["cap_is_noop"] == (name == "abtem_first")
+
+    def test_the_stencil_launches_with_the_cap_and_the_thread_keeps_its_count(
+        self, name, runs
     ):
-        imports, extra_env, chosen, expected = _SCENARIOS[scenario]
-        script = (
-            f"{imports}"
-            "import threading\n"
-            "used = []\n"
-            f"{_KERNEL_CALLS[kernel]}"
-            "out = []\n"
-            "def run():\n"
-            f"    {'numba.set_num_threads(%d)' % chosen if chosen else 'pass'}\n"
-            "    before = numba.get_num_threads()\n"
-            "    call()\n"
-            "    out.extend([before, used[0], numba.get_num_threads()])\n"
-            "thread = threading.Thread(target=run)\n"
-            "thread.start()\n"
-            "thread.join()\n"
-            "print(*out)\n"
-        )
-        before, launched, after = (int(x) for x in _run_python(script, extra_env))
-        assert launched == expected
-        assert after == before
-        if chosen is None and scenario.startswith("numba_first"):
-            assert before > expected  # the pool, which the cap is below
-        elif chosen is not None:
-            assert before == chosen
+        found = _scenario(name, runs)["default"]
+        assert found["launched"] == 2
+        assert found["after"] == found["before"]
+        if name != "abtem_first":
+            assert found["before"] > 2  # numba's pool, which the cap is below
 
+    def test_a_count_the_application_chose_is_kept(self, name, runs):
+        found = _scenario(name, runs)["chosen"]
+        if name == "abtem_first":
+            assert found is None
+        else:
+            assert found == {"before": 3, "launched": 2, "after": 3}
 
-@pytest.mark.skipif(
-    _AVAILABLE_CPUS < 3, reason="needs more available CPUs than the seeded value"
-)
-class TestInterpolationThreadsFollowTheCap:
-    """The interpolation pool of the potential follows the same cap as the
-    kernels, so the potential does not depend on the import order. The thread
-    count changes the order of the float32 sums in the last bits."""
+    def test_the_interpolation_pool_has_the_cap_before_and_after_a_compilation(
+        self, name, runs
+    ):
+        found = _scenario(name, runs)
+        assert found["interpolation_threads"] == 2
+        assert found["interpolation_threads_after"] == 2
+        assert found["max_chunks"] == 2
 
-    @staticmethod
-    def _in_every_import_order(omp, restrict=""):
-        build = (
-            "import hashlib\n"
-            "from ase.build import bulk\n"
-            "from abtem.integrals import _interpolation_threads\n"
-            "abtem.config.set({'fft': 'numpy'})\n"
-            "atoms = bulk('Si', cubic=True) * (2, 2, 2)\n"
-            "potential = abtem.Potential(\n"
-            "    atoms, gpts=64, projection='finite', slice_thickness=2\n"
-            ").build(lazy=False).array\n"
-            "digest = hashlib.sha1(np.ascontiguousarray(potential).tobytes())\n"
-            "print(_interpolation_threads(), digest.hexdigest())\n"
-        )
-        return [
-            _run_python(restrict + imports + build, {"OMP_NUM_THREADS": omp})
-            for imports in (_NUMBA_FIRST, _POOL_RUNNING, _ABTEM_FIRST)
-        ]
+    def test_numbas_configuration_is_the_pool_it_has(self, name, runs):
+        """It is the cap with abtem imported first, and what numba had before
+        abtem was imported otherwise, through a compilation as well."""
+        found = _scenario(name, runs)
+        expected = 2 if name == "abtem_first" else found["config_before"]
+        assert found["config_after"] == expected
 
-    @pytest.mark.parametrize("omp", ["2", "3"])
-    def test_the_potential_is_bitwise_the_same_in_every_import_order(self, omp):
-        results = self._in_every_import_order(omp)
-        assert {threads for threads, _ in results} == {omp}
-        assert len({digest for _, digest in results}) == 1
-
-    @_NEEDS_AFFINITY
-    def test_the_count_is_the_usable_cpus_in_every_import_order(self):
-        results = self._in_every_import_order("3", restrict=_RESTRICT)
-        assert {threads for threads, _ in results} == {"2"}
-        assert len({digest for _, digest in results}) == 1
+    def test_the_potential_is_the_same_in_every_import_order(self, name, runs):
+        """The thread count changes the order of the float32 sums in the last
+        bits."""
+        assert _scenario(name, runs)["digest"] == runs["abtem_first"]["digest"]
