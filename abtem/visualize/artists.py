@@ -996,10 +996,10 @@ class ScatterArtist(Artist2D):
 
 
 def _domain_coloring_alpha(norm, abs_array):
-    # NaN pixels are transparent and do not enter the autoscaled limits
+    # Pixels the norm masks are transparent: NaN and inf, which do not enter the
+    # autoscaled limits, and zero amplitude on a log scale.
     alpha = np.clip(norm(np.ma.masked_invalid(abs_array)), a_min=0.0, a_max=1.0)
-    alpha[np.isnan(abs_array)] = 0.0
-    return alpha
+    return np.ma.filled(alpha, 0.0)
 
 
 class DomainColoringArtist(Artist2D):

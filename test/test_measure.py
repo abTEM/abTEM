@@ -3644,12 +3644,22 @@ def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
 
 @pytest.mark.parametrize("cls", [DiffractionPatterns, Images])
 @pytest.mark.parametrize(
-    "limits", [dict(), dict(vmin=0.1, vmax=1.2), dict(logscale=True)]
+    "special, limits",
+    [
+        (np.nan, dict()),
+        (np.nan, dict(vmin=0.1, vmax=1.2)),
+        (np.nan, dict(logscale=True)),
+        (np.inf, dict()),
+        (np.inf, dict(logscale=True)),
+        (0.0, dict(logscale=True)),
+    ],
 )
-def test_show_complex_measurements_with_nan(cls, limits):
-    """The pixel of NaN is transparent and the other pixels are drawn as without
-    it, when shown, when the power changes and when the visualization moves to
-    another member. Host matplotlib code, so the device is not a parameter."""
+def test_show_complex_measurements_with_masked_pixels(cls, special, limits):
+    """A pixel the amplitude norm masks (NaN, inf, zero on a log scale) is
+    transparent and the other pixels are drawn as without it, when shown, after a
+    power change (which replaces a log norm by a power norm) and when the
+    visualization moves to another member. Host matplotlib code, so the device is
+    not a parameter."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -3661,7 +3671,7 @@ def test_show_complex_measurements_with_nan(cls, limits):
     finite = array.copy()
     # a value inside the range of the others, which gives the same limits
     finite[:, 2, 5] = array[:, 3, 3]
-    array[:, 2, 5] = np.nan
+    array[:, 2, 5] = special
     kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
     if cls is DiffractionPatterns:
         kwargs.update(fftshift=True, metadata={"energy": 100e3})
