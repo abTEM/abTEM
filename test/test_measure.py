@@ -3031,10 +3031,11 @@ def test_diffraction_patterns_interpolate_to_gpts_keeps_the_angular_extent(
 
 @lazy_params
 @devices
-def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device):
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device, pair):
     patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
 
-    interpolated = patterns.interpolate(sampling=(0.0131, 0.012))
+    interpolated = patterns.interpolate(sampling=pair((0.0131, 0.012)))
 
     assert interpolated.sampling == (0.0131, 0.012)
     assert interpolated.base_shape == (49, 52)

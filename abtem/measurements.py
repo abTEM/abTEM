@@ -3916,7 +3916,7 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
-        elif isinstance(sampling, tuple) and len(sampling) == 2:
+        elif isinstance(sampling, (tuple, list)) and len(sampling) == 2:
             validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")

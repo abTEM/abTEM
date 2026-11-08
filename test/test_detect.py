@@ -888,7 +888,8 @@ def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
 
 
 @devices
-def test_pixelated_detector_downsamples_to_two_samplings(device):
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_pixelated_detector_downsamples_to_two_samplings(device, pair):
     # both samplings are coarser than the waves' (0.1 and 0.077 1 / Å)
     probe = abtem.Probe(
         energy=100e3,
@@ -898,7 +899,7 @@ def test_pixelated_detector_downsamples_to_two_samplings(device):
         device=device,
     )
     waves = probe.build()
-    detector = abtem.PixelatedDetector(resample=(0.137, 0.15))
+    detector = abtem.PixelatedDetector(resample=pair((0.137, 0.15)))
 
     detected = detector.detect(waves)
 
