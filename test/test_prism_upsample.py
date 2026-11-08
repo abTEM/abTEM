@@ -518,9 +518,11 @@ def test_upsample_with_a_cropped_window_declares_the_shape_it_computes(
 
 # The cell of the cropped-window tests below: a grid sampled differently along x and
 # y, a downsampled grid of (40, 40) at interpolation 2, a window of (24, 32) pixels,
-# and a scan of whole pixels of the downsampled grid.
+# and a scan of whole pixels of the downsampled grid. Two frozen-phonon configs are
+# enough for the ensemble checks to fail: one member differs from their mean by
+# about 2e-2 of the maximum, against a tolerance of 1e-5.
 _WINDOW_ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
-_WINDOW_FROZEN_PHONONS = dict(num_configs=3, sigmas=0.05, seed=1)
+_WINDOW_FROZEN_PHONONS = dict(num_configs=2, sigmas=0.05, seed=1)
 
 
 def _window_potential(atoms, device):
