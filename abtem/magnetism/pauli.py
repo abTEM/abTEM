@@ -4,8 +4,6 @@ import numba  # type: ignore
 import numpy as np
 from numba import prange
 
-from abtem.core._numba_threads import numba_thread_cap
-
 
 @numba.jit(nopython=True, parallel=True)
 def central_difference_gradient_pbc(X, dx=1.0, dy=1.0):
@@ -122,10 +120,9 @@ def apply_A_xy_dot_nabla_xy(A, wave_functions, sampling):
     result : numpy.ndarray
         Result of the operation $A \cdot \nabla_{xy} \psi$.
     """
-    with numba_thread_cap():
-        grad_x, grad_y = central_difference_gradient_pbc(
-            wave_functions, dx=sampling[0], dy=sampling[1]
-        )
+    grad_x, grad_y = central_difference_gradient_pbc(
+        wave_functions, dx=sampling[0], dy=sampling[1]
+    )
 
     A = np.broadcast_to(A, (2,) + wave_functions.shape[-2:])
 

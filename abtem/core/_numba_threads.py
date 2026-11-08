@@ -20,18 +20,18 @@ has its own size, and the cap reaches the interpolation pool and abTEM's
 kernels only: ``numba_thread_cap`` sets it on the launching thread for the
 duration of each launch, and other threads of the process keep Numba's count.
 
-Four kernels in this package are compiled with ``parallel=True``: the
-real-space Laplacian stencil (``finite_difference.py``, reached only through
-``RealSpaceMultislice``, not the default Fourier multislice path, which is
-FFT-bound and never touches Numba's thread pool), the two non-collinear
-magnetism gradient kernels (``magnetism/pauli.py``), and the partitioned
-S-matrix kernel (``prism/_partitioned_s_matrix.py``). Two of them have a call
-site in this package and use ``numba_thread_cap``: the stencil and
-``central_difference_gradient_pbc`` (through ``apply_A_xy_dot_nabla_xy``).
-``central_difference_gradient_cbc`` and
-``reduce_beamlets_nearest_no_interpolation`` have no caller in this package,
-so with Numba imported first they are not capped, nor is a kernel that a user
-calls directly.
+One call site in this package caps a ``parallel=True`` kernel with
+``numba_thread_cap``: the real-space Laplacian stencil
+(``_laplace_stencil_cpu_batch`` in ``finite_difference.py``, reached only
+through ``RealSpaceMultislice``, not the default Fourier multislice path, which
+is FFT-bound and never touches Numba's thread pool). Three more kernels are
+compiled with ``parallel=True`` and have no caller in this package, so with
+Numba imported first they are not capped, nor is a kernel that a user calls
+directly: ``central_difference_gradient_pbc`` and
+``central_difference_gradient_cbc`` (both in ``magnetism/pauli.py``;
+``apply_A_xy_dot_nabla_xy`` is their only wrapper and has no caller) and
+``reduce_beamlets_nearest_no_interpolation``
+(``prism/_partitioned_s_matrix.py``).
 
 **HPC schedulers routinely export ``OMP_NUM_THREADS=1`` by default, and a
 single abTEM process then runs these kernels on that many threads

@@ -368,17 +368,6 @@ _KERNEL_CALLS = {
         ")\n"
         "call = lambda: stencil(np.ones((3, 16, 20), dtype=np.complex64))\n"
     ),
-    "magnetism_gradient": (
-        "import abtem.magnetism.pauli as module\n"
-        "real = module.central_difference_gradient_pbc\n"
-        "module.central_difference_gradient_pbc = (\n"
-        "    lambda *args, **kwargs: used.append(numba.get_num_threads())\n"
-        "    or real(*args, **kwargs)\n"
-        ")\n"
-        "A = np.ones((2, 12, 9))\n"
-        "wave = np.ones((4, 12, 9), dtype=np.complex64)\n"
-        "call = lambda: module.apply_A_xy_dot_nabla_xy(A, wave, (0.1, 0.2))\n"
-    ),
 }
 
 _START_POOL = (
