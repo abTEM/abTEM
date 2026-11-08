@@ -339,15 +339,28 @@ _SCENARIOS = {
 }
 
 
+def _can_run(name):
+    imports, _, _, cpus = _SCENARIOS[name]
+    restricts_cpus = imports is _RESTRICTED
+    return cpus <= _usable_cpus() and (
+        not restricts_cpus or hasattr(os, "sched_setaffinity")
+    )
+
+
 @pytest.fixture(scope="module")
 def runs():
-    """The findings of one interpreter per import order, run side by side."""
-    names = [name for name, v in _SCENARIOS.items() if v[3] <= _usable_cpus()]
+    """The findings of one interpreter per import order, run side by side. A
+    scenario whose interpreter failed holds the failure, raised by the tests of
+    that scenario only."""
+    names = [name for name in _SCENARIOS if _can_run(name)]
 
     def run(name):
         imports, omp, chosen, _ = _SCENARIOS[name]
         script = f"chosen = {chosen}\n{imports}{_BODY}"
-        return _run_python(script, omp)
+        try:
+            return _run_python(script, omp)
+        except Exception as error:
+            return error
 
     with ThreadPoolExecutor(len(names)) as pool:
         return dict(zip(names, pool.map(run, names)))
@@ -355,7 +368,9 @@ def runs():
 
 def _scenario(name, runs):
     if name not in runs:
-        pytest.skip(f"needs {_SCENARIOS[name][3]} usable CPUs")
+        pytest.skip(f"needs usable CPUs or os.sched_setaffinity: {name}")
+    if isinstance(runs[name], Exception):
+        raise runs[name]
     return runs[name]
 
 
