@@ -1068,19 +1068,6 @@ class TestCrystalPotentialChunking:
 
         assert len(builds) == expected
 
-    @staticmethod
-    def _count_pool_builds(monkeypatch):
-        """The frozen-phonon seeds of every pool built, one entry per build."""
-        builds = []
-        build = Potential.build
-
-        def counting(self, *args, **kwargs):
-            builds.append(tuple(int(seed) for seed in self.frozen_phonons.seed))
-            return build(self, *args, **kwargs)
-
-        monkeypatch.setattr(Potential, "build", counting)
-        return builds
-
     # The threaded scheduler is the one that can race; the synchronous one runs
     # the same blocks in order.
     @pytest.mark.parametrize("scheduler", ["threads"])
@@ -1112,7 +1099,7 @@ class TestCrystalPotentialChunking:
             crystal = _frozen_phonon_crystal(6, (2, 3, 3), **kwargs)
             expected = probe.scan(crystal, lazy=False, max_batch=2, **scan_kwargs)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             num_blocks = {}
             pools = {}
             results = {}
@@ -1139,7 +1126,7 @@ class TestCrystalPotentialChunking:
             np.testing.assert_allclose(result.array, expected.array, rtol=1e-5)
 
     @staticmethod
-    def _count_member_pool_builds(monkeypatch):
+    def _count_pool_array_builds(monkeypatch):
         """The frozen-phonon seeds of every pool built, one entry per build. The
         pool of a finite projection is built from plain atoms, not by
         `Potential.build`, so `_build_pool_array` is the counted call."""
@@ -1184,7 +1171,7 @@ class TestCrystalPotentialChunking:
             scheduler="synchronous", progress_bar=False
         )
 
-        builds = self._count_member_pool_builds(monkeypatch)
+        builds = self._count_pool_array_builds(monkeypatch)
         result = s_matrix.build(lazy=False, max_batch=4)
 
         # 55 plane waves in blocks of 4
@@ -1247,7 +1234,7 @@ class TestCrystalPotentialChunking:
         """The pools it holds on exit are those it held on entry, also when the
         body raises."""
         crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
-        builds = self._count_pool_builds(monkeypatch)
+        builds = self._count_pool_array_builds(monkeypatch)
 
         with pytest.raises(RuntimeError):
             with crystal._holding_build_state():
@@ -1281,7 +1268,7 @@ class TestCrystalPotentialChunking:
         on: the outer context builds the pool once, and on its exit the crystal is
         as before the first entry."""
         crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
-        builds = self._count_pool_builds(monkeypatch)
+        builds = self._count_pool_array_builds(monkeypatch)
 
         with crystal._holding_build_state():
             with crystal._holding_build_state():
@@ -1346,7 +1333,7 @@ class TestCrystalPotentialChunking:
         with abtem.config.set({"potential.slice-chunk-size": 2}):
             expected = scan(lazy=False)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             lazy = scan(lazy=True)
             assert lazy.array.npartitions == 4
             result = lazy.compute(scheduler=scheduler, progress_bar=False)
