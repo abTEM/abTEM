@@ -2221,6 +2221,22 @@ def _crop_margin(waves: WavesType, margin: float | tuple[float, float]) -> Waves
     if margin[0] == 0.0 and margin[1] == 0.0:
         return waves
 
+    from abtem.waves import Waves
+
+    if not isinstance(waves, Waves):
+        # A waves builder, asked for the output shape before any waves exist
+        # (e.g. to size a multislice batch): a copy on the grid that cropping
+        # its waves would give, the rounding as in `Waves.crop`.
+        from abtem.core.grid import Grid
+
+        gpts = tuple(
+            int(np.round(n * (e - 2 * m) / e))
+            for n, e, m in zip(waves.gpts, waves.extent, margin)
+        )
+        cropped = waves.copy()
+        cropped._grid = Grid(gpts=gpts, sampling=waves.sampling)
+        return cropped
+
     return waves.crop(
         extent=(waves.extent[0] - 2 * margin[0], waves.extent[1] - 2 * margin[1]),
         centered=True,
