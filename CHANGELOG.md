@@ -208,6 +208,30 @@ Performance:
       beams
     - The expansion costs about 0.3 s per 1000 Å of the largest thickness on that GPU
     - A rotation series computes the structure factors once, not once per orientation or dask block
+- **Behaviour change:** `OMP_NUM_THREADS` caps the threads of Numba's `parallel=True` kernels and of the
+  interpolation pool of the finite-projection potential when `NUMBA_NUM_THREADS` is unset and
+  `OMP_NUM_THREADS` is a positive integer, where 1.0.11 used every CPU usable by the process for Numba and
+  every CPU of the machine for the interpolation pool
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
+    - With `abtem` imported before `numba`, the cap is the size of Numba's whole thread pool, so it holds for
+      every `parallel=True` kernel in the process, the application's own included, and the size of the
+      interpolation pool. With `numba` imported first, Numba's pool and its configuration are unchanged and
+      the cap applies to the interpolation pool and, set on the launching thread for the duration of each
+      launch, to the real-space Laplacian stencil (`RealSpaceMultislice`) only. On a 24-CPU machine with
+      `OMP_NUM_THREADS=1` and `abtem` imported first, 1.0.11 gave Numba and the interpolation pool 24 threads
+      and both now have 1. `OMP_NUM_THREADS=1` is the default of many HPC schedulers and the value a dask
+      nanny sets in its worker processes when the variable is unset, so these kernels then run on one
+      thread. An explicit `NUMBA_NUM_THREADS` overrides the cap
+    - The cap is at most the number of CPUs usable by the process (`os.sched_getaffinity`, else
+      `os.cpu_count()`)
+- **Behaviour change:** the interpolation pool of the finite-projection potential has `NUMBA_NUM_THREADS`
+  threads when it is set and otherwise the cap above or, without one, Numba's default, the number of usable
+  CPUs, where 1.0.11 used `os.cpu_count()` whatever the process may use: under `taskset -c 0-2` the pool has 3
+  threads where it had 24 on a 24-CPU machine, and with `NUMBA_NUM_THREADS=5` it has 5 where it had 24.
+  Potentials built with different interpolation thread counts differ in the last float32 bits: for a silicon
+  cubic cell repeated 3 x 3 x 3 with `gpts=128` and finite projection, two processes with 24 and with 4
+  interpolation threads differed by up to 4.3e-7 of the maximum
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
 
 Dependencies:
 

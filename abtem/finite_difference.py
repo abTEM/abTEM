@@ -8,6 +8,7 @@ import scipy.ndimage  # type: ignore
 from numba import njit, prange  # type: ignore
 
 from abtem.antialias import AntialiasAperture
+from abtem.core._numba_threads import numba_thread_cap
 from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.utils import get_dtype
@@ -298,7 +299,8 @@ def _laplace_operator_stencil(
     padding = n + 1
 
     def _laplace_stencil_cpu_batch(a):
-        return _laplace_stencil_cpu_kernel(a, c, n)
+        with numba_thread_cap():
+            return _laplace_stencil_cpu_kernel(a, c, n)
 
     if device == "gpu":
         check_cupy_is_installed()
