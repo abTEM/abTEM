@@ -11,13 +11,16 @@ pattern.
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import assert_array_objects_equal, devices
+from utils import assert_array_objects_equal, devices, to_host_array
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.distributions import uniform
 from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 from abtem.potentials.iam import PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.prism.utils import window_crop
 from abtem.scan import validate_scan
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
@@ -42,6 +45,26 @@ def _potential(
         )
     return abtem.Potential(
         atoms, gpts=gpts, slice_thickness=2, exit_planes=exit_planes, device=device
+    )
+
+
+def _energy_resolved_potential(ensemble_mean, device="cpu", exit_planes=None):
+    # 2 energy losses x 4 configurations: two potential ensemble axes of
+    # different sizes, every member displaced differently
+    rng = np.random.default_rng(2)
+    snapshots = []
+    for _ in range(2):
+        row = []
+        for _ in range(4):
+            atoms = ATOMS.copy()
+            atoms.positions += rng.normal(scale=0.05, size=atoms.positions.shape)
+            row.append(atoms)
+        snapshots.append(row)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, energies=[10.0, 20.0], ensemble_mean=ensemble_mean
+    )
+    return abtem.Potential(
+        ensemble, gpts=64, slice_thickness=2, exit_planes=exit_planes, device=device
     )
 
 
@@ -359,6 +382,97 @@ def test_upsampled_prism_sizes_detectors_on_a_non_square_grid(
     )
 
 
+# a square cell sampled differently along x and y, and a rectangular cell
+_CUTOFF_CELLS = {
+    "square-cell": (ATOMS, (56, 64)),
+    "rectangular-cell": (bulk("Si", cubic=True) * (1, 2, 1), (48, 100)),
+}
+
+
+def _assert_values_match(measured, expected):
+    # PRISM results carry the band limit of the built S-matrix in their metadata,
+    # which multislice results have no reason to; the rest must agree
+    scale = _max_abs(expected)
+    for measured_i, expected_i in zip(measured, expected):
+        assert measured_i.shape == expected_i.shape
+        assert measured_i.axes_metadata == expected_i.axes_metadata
+        np.testing.assert_allclose(
+            measured_i.to_cpu().array,
+            expected_i.to_cpu().array,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * scale,
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("cell", list(_CUTOFF_CELLS))
+@devices
+def test_downsampled_prism_detects_to_the_antialias_cutoff_of_multislice(
+    cell, lazy, device
+):
+    # downsample="cutoff" keeps everything the full grid's antialias aperture
+    # passes, so at interpolation 1 the patterns, the radial bins and the
+    # automatic outer angle are those of multislice on the full grid
+    atoms, gpts = _CUTOFF_CELLS[cell]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    scan = _grid_scan(potential)
+    s_matrix = _s_matrix(potential, downsample="cutoff", device=device)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+
+    def detectors():
+        return [
+            abtem.PixelatedDetector(max_angle="cutoff"),
+            abtem.FlexibleAnnularDetector(),
+            abtem.AnnularDetector(50),
+        ]
+
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), lazy=lazy).compute()
+    expected = probe.scan(potential, scan=scan, detectors=detectors(), lazy=False)
+
+    probe.grid.match(potential)
+    assert measured[0].max_angles == pytest.approx(probe.cutoff_angles)
+    _assert_values_match(list(measured), list(expected))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"upsample": True}, {"upsample": True, "window_gpts": (24, 32)}],
+    ids=["prism", "upsample", "upsample-window"],
+)
+@devices
+def test_downsampled_prism_keeps_the_cutoff_at_interpolation_two(kwargs, device):
+    # at interpolation 2 the patterns lie on the grid the reduction detects on
+    # (the window, or with upsample the downsampled grid), whose angular sampling
+    # is coarser than that of the full grid; their outermost angle is the full
+    # grid's cutoff, rounded to that sampling
+    atoms, gpts = _CUTOFF_CELLS["square-cell"]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    # whole pixels of the (40, 40) downsampled grid, which the compressed
+    # reduction requires for its fast path
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    s_matrix = _s_matrix(
+        potential, interpolation=2, downsample="cutoff", device=device, **kwargs
+    )
+
+    measured = s_matrix.scan(
+        scan=scan, detectors=abtem.PixelatedDetector(max_angle="cutoff"), lazy=False
+    )
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    for angle, cutoff, sampling in zip(
+        measured.max_angles, probe.cutoff_angles, measured.angular_sampling
+    ):
+        assert abs(angle - cutoff) <= sampling
+
+
 # automatic batches are sized by the chunk size; with a 64 x 64 grid, 37 beams and
 # 4 exit planes (6 slices, exit_planes=2) one complex64 wave of one exit plane is
 # 32768 bytes
@@ -487,3 +601,188 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def _averaged_defocus_ctf():
+    # 6 defoci: differs from the 2 configurations, the 4 exit planes and the
+    # 3 x 5 scan, so an axis landing on another raises or is caught by value
+    return abtem.CTF(
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 6, ensemble_mean=True)
+    )
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("frozen_phonons", [None, False, True])
+@pytest.mark.parametrize("exit_planes", [None, 2])
+@devices
+def test_prism_averages_a_ctf_ensemble_as_multislice_of_each_member(
+    path, frozen_phonons, exit_planes, device
+):
+    # the intensity of a CTF ensemble is the mean of the intensities of its
+    # members, each a multislice run of the dummy probes with one defocus
+    potential = _potential(frozen_phonons, device=device, exit_planes=exit_planes)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+    ctf = _averaged_defocus_ctf()
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 90), abtem.PixelatedDetector(max_angle=60)]
+
+    members = [
+        s_matrix.dummy_probes(ctf=abtem.CTF(semiangle_cutoff=20, defocus=defocus)).scan(
+            potential=potential, scan=scan, detectors=detectors(), lazy=False
+        )
+        for defocus in ctf.defocus.values
+    ]
+    measured = s_matrix.reduce(
+        scan=scan, detectors=detectors(), ctf=ctf, **_PATHS[path]
+    ).compute()
+
+    for i, measured_i in enumerate(measured):
+        expected = np.mean([to_host_array(member[i]) for member in members], axis=0)
+        assert measured_i.shape == expected.shape
+        np.testing.assert_allclose(
+            to_host_array(measured_i),
+            expected,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * np.abs(expected).max(),
+        )
+
+
+def test_auto_reduction_batch_follows_the_chunk_size_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    # the window is the 48 x 48 grid (interpolation 1), 18432 bytes per position
+    potential = _potential(gpts=48)
+    s_matrix_array = _s_matrix(potential).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "1 MB", "dask.chunk-size-gpu": "180 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+        monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert cpu == 1_000_000 // 18432
+    assert gpu == 180_000 // 18432
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_auto_reduction_batch_holds_the_crop_box(monkeypatch, lazy):
+    """CPU only: the automatic batch follows dask.chunk-size, not chunk-size-gpu."""
+    # window 32 x 32 on the 64 x 64 grid; a batch of positions is contracted over
+    # a box that spans the batch and one window
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=lazy)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    detector = abtem.AnnularDetector(30, 90)
+    expected = s_matrix_array.reduce(
+        scan=scan, detectors=detector, max_batch_reduction=len(scan)
+    ).compute()
+
+    # the contraction forms an array of one box per position, see _reduce_to_waves
+    contracted = []
+    reduce_to_waves = SMatrixArray._reduce_to_waves
+
+    def spy(self, array, positions, coefficients):
+        pixel_positions = positions / np.array(self.waves.sampling) - np.asarray(
+            self.window_offset
+        )
+        _, box, _ = window_crop(pixel_positions, self.window_gpts, self.gpts)
+        contracted.append(positions.size // 2 * int(np.prod(box)) * 8)
+        return reduce_to_waves(self, array, positions, coefficients)
+
+    monkeypatch.setattr(SMatrixArray, "_reduce_to_waves", spy)
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        measured = s_matrix_array.reduce(scan=scan, detectors=detector).compute()
+
+    assert max(contracted) <= 400_000
+    assert len(contracted) > 1
+    _assert_matches(measured, expected)
+
+
+def test_auto_reduction_batch_holds_the_crop_box_of_the_device(monkeypatch):
+    """CPU only: the device label is set by hand, the batch size is only computed."""
+    potential = _potential()
+    s_matrix_array = _s_matrix(potential, interpolation=2).build(lazy=False)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(12, 20),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    with abtem.config.set({"dask.chunk-size": "400 kB"}):
+        cpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+    # the 32 x 32 windows alone would allow 400000 // 8192 positions
+    assert cpu < 400_000 // 8192
+
+    monkeypatch.setattr(s_matrix_array, "_device", "gpu")
+    with abtem.config.set(
+        {"dask.chunk-size": "100 MB", "dask.chunk-size-gpu": "400 kB"}
+    ):
+        gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
+
+    assert gpu == cpu
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("ensemble_mean", [False, True])
+@devices
+def test_prism_of_an_energy_resolved_ensemble_matches_multislice(
+    path, ensemble_mean, device
+):
+    # two potential ensemble axes (energy loss x configuration); the
+    # configuration axis is averaged by ensemble_mean, the energy-loss axis never
+    potential = _energy_resolved_potential(ensemble_mean, device=device)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        # the elastic and diffuse components need the configurations averaged
+        components = ("elastic", "diffuse") if ensemble_mean else None
+        return [
+            abtem.AnnularDetector(30, 90),
+            abtem.WavesDetector(),
+            abtem.PixelatedDetector(max_angle=100, components=components),
+        ]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=scan, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), **_PATHS[path])
+    measured = measured.compute()
+
+    assert measured[0].shape == ((2, 3, 5) if ensemble_mean else (2, 4, 3, 5))
+    assert measured[1].shape == (2, 4, 3, 5, 64, 64)
+    _assert_matches(list(measured), list(expected))
+
+
+@devices
+def test_lazy_build_of_an_energy_resolved_ensemble_matches_the_eager_build(device):
+    # exit_planes=3 gives 3 planes, a third size next to the 2 x 4 ensemble, so a
+    # misplaced plane symbol changes the shape
+    potential = _energy_resolved_potential(False, device=device, exit_planes=3)
+    s_matrix = _s_matrix(potential, device=device)
+
+    lazy = s_matrix.build(lazy=True)
+    eager = s_matrix.build(lazy=False)
+
+    # one block per member of every ensemble axis, as multislice partitions them
+    assert lazy.array.chunks[:2] == ((1, 1), (1, 1, 1, 1))
+    assert lazy.array.shape[:3] == (2, 4, 3)
+    _assert_matches(lazy.waves.compute(), eager.waves)

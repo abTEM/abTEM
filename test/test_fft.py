@@ -807,6 +807,9 @@ _LAZY_CONVOLVE_CASES = [
     ((2, 3, 16, 20), (1, 3, 16, 20), (2, 1, 16, 20)),
     # x broadcasts against a longer kernel axis
     ((1, 16, 20), (1, 16, 20), (3, 16, 20)),
+    # x is split along the grid
+    ((3, 16, 20), (3, 8, 20), (16, 20)),
+    ((3, 16, 20), (1, (10, 6), (5, 5, 10)), (3, 16, 20)),
 ]
 
 
@@ -840,6 +843,36 @@ def test_lazy_fft2_convolve_matches_eager(shape, chunks, kernel_shape, device):
         result = asnumpy(lazy.compute(scheduler="synchronous"))
 
     assert result.shape == expected.shape
+    if device == "cpu":
+        np.testing.assert_array_equal(result, expected)
+    else:
+        np.testing.assert_allclose(
+            result, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("chunks", [(3, 8, 20), (3, 16, 7), (1, (10, 6), (5, 5, 10))])
+@pytest.mark.parametrize("func_name", ["fft2", "ifft2", "fftn"])
+def test_lazy_fft_of_an_array_split_along_the_transformed_axes(
+    func_name, chunks, device
+):
+    """A lazy transform gives the eager result, and one chunk along every
+    transformed axis, when its input is split along them."""
+    import dask.array as da
+
+    from abtem.core.backend import asnumpy, copy_to_device
+
+    func = getattr(abtem_fft, func_name)
+    rng = np.random.default_rng(0)
+    x = copy_to_device(_random_complex(rng, (3, 16, 20)), device)
+
+    with config.set({"fft": "numpy"}):
+        expected = asnumpy(func(x.copy()))
+        lazy = func(da.from_array(x, chunks=chunks))
+        result = asnumpy(lazy.compute(scheduler="synchronous"))
+
+    assert [len(c) for c in lazy.chunks[-2:]] == [1, 1]
     if device == "cpu":
         np.testing.assert_array_equal(result, expected)
     else:

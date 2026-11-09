@@ -461,6 +461,18 @@ def test_slice_thickness_no_degenerate_trailing_slice():
     assert result == pytest.approx((1.0, 1.0, 1.15))
 
 
+def test_slice_thickness_splits_gaps_thicker_than_target():
+    """Planes further apart than the target (cubic fcc has them 0.5 a apart)
+    must be split into equal slices near the target, not left as one thick slice."""
+    atoms = bulk("Au", cubic=True)
+
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+
+    assert result == pytest.approx((atoms.cell[2, 2] / 4,) * 4)
+    potential = abtem.Potential(atoms, slice_thickness="auto", sampling="auto")
+    assert potential.slice_thickness == pytest.approx(result)
+
+
 def test_slice_thickness_merges_planes_closer_than_tolerance():
     """Two atoms much closer together than `tolerance` must be recognized as
     a single plane even when they straddle what would be a fixed-grid
@@ -547,3 +559,133 @@ def test_atoms_ensemble_single_config_still_uses_commensurate_search():
 
     assert ensemble_pot.gpts == plain_pot.gpts
     assert ensemble_pot.slice_thickness == plain_pot.slice_thickness
+
+
+# ── the defaults are 'auto' ──────────────────────────────────────────────────
+def _gold():
+    return bulk("Au", cubic=True).repeat((2, 2, 2))
+
+
+def test_default_slice_thickness_and_sampling_are_auto():
+    default = abtem.Potential(_gold())
+    auto = abtem.Potential(_gold(), slice_thickness="auto", sampling="auto")
+
+    assert default.slice_thickness == pytest.approx(auto.slice_thickness)
+    assert default.slice_thickness == pytest.approx((1.02,) * 8)
+    assert default.gpts == auto.gpts
+    assert default.grid.gpts_is_default
+    assert not auto.grid.gpts_is_default
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_waves_without_a_grid_adopt_the_default_potential_grid(device):
+    potential = abtem.Potential(_gold(), device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device).multislice(potential)
+
+    assert waves.gpts == potential.gpts == (168, 168)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "grid_kwargs, expected_gpts",
+    [({"gpts": 100}, (100, 100)), ({"sampling": 0.1}, (82, 82))],
+)
+def test_explicit_waves_grid_overrides_the_default_potential_grid(
+    device, grid_kwargs, expected_gpts
+):
+    potential = abtem.Potential(_gold(), device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device, **grid_kwargs).multislice(
+        potential
+    )
+
+    assert waves.gpts == potential.gpts == expected_gpts
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("grid_kwargs", [{"gpts": 100}, {"sampling": 0.1}])
+def test_explicit_auto_sampling_is_not_overridden_by_the_waves_but_warns(
+    device, grid_kwargs
+):
+    potential = abtem.Potential(_gold(), sampling="auto", device=device)
+    waves = abtem.PlaneWave(energy=200e3, device=device, **grid_kwargs)
+
+    with pytest.warns(UserWarning, match="sampling='auto'"):
+        exit_waves = waves.multislice(potential)
+
+    assert exit_waves.gpts == (168, 168)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "make_potential, make_waves",
+    [
+        # nothing explicit on the waves: they adopt the 'auto' grid
+        (
+            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, device=d),
+        ),
+        # an explicit grid on the waves agreeing with the 'auto' one
+        (
+            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=168, device=d),
+        ),
+        # the default grid yields to the waves without comment
+        (
+            lambda d: abtem.Potential(_gold(), device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
+        ),
+        # a numeric sampling on the potential is not an 'auto' one
+        (
+            lambda d: abtem.Potential(_gold(), sampling=0.05, device=d),
+            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
+        ),
+    ],
+)
+def test_no_warning_unless_an_explicit_waves_grid_meets_an_explicit_auto_one(
+    device, make_potential, make_waves, recwarn
+):
+    make_waves(device).multislice(make_potential(device))
+
+    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_waves_that_adopted_a_grid_do_not_count_as_explicit(device, recwarn):
+    """A probe reused with a second potential has a grid only because it took one
+    from the first; that is not an explicit request to warn about, or to override
+    the grid of a default potential."""
+    first = abtem.Potential(_gold(), device=device)
+    second = abtem.Potential(bulk("Au", cubic=True).repeat((3, 3, 1)), device=device)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+
+    probe.grid.match(first)
+    probe.grid.match(second)
+
+    assert probe.gpts == second.gpts
+    assert second.grid.gpts_is_default
+    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_matched_to_a_default_potential_adopts_its_grid(device):
+    potential = abtem.Potential(_gold(), device=device)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+
+    probe.grid.match(potential)
+    measurement = probe.scan(
+        potential,
+        scan=abtem.GridScan((0, 0), (4, 4), sampling=2.0),
+        detectors=abtem.AnnularDetector(50, 200),
+    )
+
+    assert probe.gpts == potential.gpts == (168, 168)
+    assert measurement.shape == (2, 2)
+
+
+def test_auto_slicing_and_grid_of_a_structure_without_atoms():
+    empty = _gold()[:0]
+
+    potential = abtem.Potential(empty, slice_thickness="auto", sampling="auto")
+
+    assert sum(potential.slice_thickness) == pytest.approx(empty.cell[2, 2])
+    assert potential.gpts is not None
