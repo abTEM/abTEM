@@ -450,7 +450,7 @@ class BasePotential(BaseField, metaclass=ABCMeta):
     """Base class of all potentials. Documented in the subclasses."""
 
     def _holding_build_state(self):
-        """Context in which the potential keeps the state it prepares for the
+        """Context in which the potential keeps state it prepares for the
         multislices of one build call, released on exit."""
         return nullcontext()
 
@@ -2757,7 +2757,8 @@ class CrystalPotential(_PotentialBuilder):
     _shared_pool = None
     _member_pools = None
 
-    # Set by `_holding_build_state` only, so no instance has it otherwise.
+    # `_holding_build_state` sets it on the instance for the duration of the
+    # context and restores the previous value.
     _hold_member_pools = False
 
     # A crystal pickled before `correct_surfaces` loads without it.
@@ -3205,14 +3206,8 @@ class CrystalPotential(_PotentialBuilder):
                 # than once per block. Like the shared pool, it is derived from
                 # the graph's one copy of the unit. A pool is held until the last
                 # block of its member has run.
-                member_pools = tuple(
-                    dask.delayed(self._build_member_pool)(
-                        lazy_unit,
-                        self._n_lateral_tiles,
-                        int(seed),
-                        self._surface_repetitions,
-                    )
-                    for seed in self.seeds
+                member_pools = self._build_member_pools(
+                    lazy_unit, dask.delayed(self._build_member_pool)
                 )
 
             arrays = []
@@ -3248,14 +3243,8 @@ class CrystalPotential(_PotentialBuilder):
                     potential_unit, self._n_lateral_tiles, self._surface_repetitions
                 )
             elif pool_per_member and member_pools is None and self._hold_member_pools:
-                member_pools = self._member_pools = tuple(
-                    self._build_member_pool(
-                        potential_unit,
-                        self._n_lateral_tiles,
-                        int(seed),
-                        self._surface_repetitions,
-                    )
-                    for seed in self.seeds
+                member_pools = self._member_pools = self._build_member_pools(
+                    potential_unit, self._build_member_pool
                 )
 
             array = np.zeros((len(chunks[0]),), dtype=object)
@@ -3286,18 +3275,28 @@ class CrystalPotential(_PotentialBuilder):
 
         return (array,)
 
+    def _build_member_pools(self, unit, build) -> tuple:
+        """The pools of the members of this crystal, one for each seed, made by
+        `build` (`_build_member_pool`, or a delayed version of it)."""
+        return tuple(
+            build(unit, self._n_lateral_tiles, int(seed), self._surface_repetitions)
+            for seed in self.seeds
+        )
+
     @contextmanager
     def _holding_build_state(self):
         """Holds the pools of the members that reseed their own for the
         multislices inside the context (see `_partition_args`); on exit the
-        crystal holds the pools it held on entry."""
-        prior = self._member_pools
+        crystal holds the pools and the hold it had on entry. A crystal with N
+        members holds N pools inside the context; `SMatrix.build` enters it with
+        crystals of one member."""
+        prior_pools, prior_hold = self._member_pools, self._hold_member_pools
         self._hold_member_pools = True
         try:
             yield
         finally:
-            self._hold_member_pools = False
-            self._member_pools = prior
+            self._hold_member_pools = prior_hold
+            self._member_pools = prior_pools
 
     @property
     def _n_lateral_tiles(self) -> int:
