@@ -11,7 +11,7 @@ import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
-from gpu_groups import assign_gpu_groups, load_costs
+from gpu_groups import assign_gpu_groups
 from utils import _ACCELERATOR
 from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
@@ -21,7 +21,9 @@ from utils import requires_multigpu as _requires_multigpu
 # for a user who transforms one shape many times, but the tests use most of
 # their (often hypothesis-drawn) shapes only a few times, and measuring each
 # new shape cost more than the transforms (8 of 16 s in one Bloch-wave test).
-config.set({"diagnostics.progress_bar": False, "fftw.planning_effort": "FFTW_ESTIMATE"})
+config.set(
+    {"diagnostics.progress_bar": False, "fftw.planning_effort": "FFTW_ESTIMATE"}
+)
 
 # The literal device string that actually exercises an accelerator -- "gpu"
 # with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
@@ -65,11 +67,7 @@ settings.register_profile(
     max_examples=10,
     print_blob=True,
     deadline=None,
-    suppress_health_check=(
-        HealthCheck.too_slow,
-        HealthCheck.data_too_large,
-        HealthCheck.filter_too_much,
-    ),
+    suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.filter_too_much),
     # Not just Phase.generate: without `explicit` every @example is silently
     # skipped, without `reuse` a failure found once is never replayed from the
     # example database, and without `shrink` it is reported unminimised.
@@ -247,7 +245,8 @@ def pytest_collection_modifyitems(config, items):
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(
-            isinstance(v, str) and v == _GPU_DEVICE for v in callspec.params.values()
+            isinstance(v, str) and v == _GPU_DEVICE
+            for v in callspec.params.values()
         )
         # "gpu" is the dedicated marker requires_gpu/requires_multigpu both
         # apply (see test/utils.py); the reason-string match is a fallback
@@ -262,6 +261,6 @@ def pytest_collection_modifyitems(config, items):
             gpu_items.append(item)
 
     # after the loop: the placement of one function depends on all the others
-    groups = assign_gpu_groups(gpu_items, _GPU_WORKERS, load_costs())
+    groups = assign_gpu_groups(gpu_items, _GPU_WORKERS)
     for item in gpu_items:
         item.add_marker(pytest.mark.xdist_group(groups[item.nodeid]))

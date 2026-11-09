@@ -18,7 +18,7 @@ tests share a worker may not recur with a subset.
 
 Refreshing the table
 --------------------
-The table is a measurement of one machine (europa, an RTX 4090). The order of
+The table is a measurement of one machine (an RTX 4090 workstation). The order of
 the expensive functions transfers to other cards, their absolute seconds do
 not, and it only needs refreshing when a function that dominates a group is
 added or changes. On the GPU machine, run the suite with durations and with
@@ -34,9 +34,12 @@ the tail of the table. Only the ``@gpuN`` lines are read: the CPU cases of a
 function run outside the groups, and the multi-GPU tests are in a group of their
 own (``@gpu``). Per function, the seconds of setup, call and teardown of all its
 GPU cases are summed, the ``@gpuN`` suffix is dropped, and the TABLE_SIZE most
-expensive functions are written to ``gpu_test_costs.json``. The script prints
-the seconds of each group as measured and as the new table places them, so a
-second run of the command above shows the effect.
+expensive functions are written to ``gpu_test_costs.json``. A log of fewer than
+TABLE_SIZE functions, such as one of a partial run, is refused and leaves the
+table as it is. The script prints the seconds of each group as measured and as
+the new table places them, so a second run of the command above shows the
+effect. Only a run with more than one GPU worker reads the table; with one, every
+GPU test is in the single ``gpu`` group.
 """
 
 from __future__ import annotations
@@ -51,15 +54,17 @@ COSTS_PATH = Path(__file__).with_name("gpu_test_costs.json")
 
 # The seconds of a function that is not in the table: about the median of all
 # the GPU functions. The 80 functions of the table hold 74 % of the seconds. On
-# europa (4 workers) the groups then took 96 to 120 s, the slowest 7 % above the
-# mean; a table of all 500 functions gave 114 to 122 s.
+# the RTX 4090 workstation it was measured on (4 workers) the groups then took 96
+# to 120 s, the slowest 7 % above the mean; a table of all 500 functions gave 114
+# to 122 s.
 DEFAULT_COST = 0.25
 TABLE_SIZE = 80
 
-# "12.34s call     test/test_x.py::test_y[gpu-a]@gpu1"
+# "12.34s call     test/test_x.py::test_y[gpu-a b]@gpu1": a parameter id may
+# hold spaces, so the nodeid runs up to the last "@gpuN"
 _DURATION_LINE = re.compile(
     r"^\s*(?P<seconds>[\d.]+)s\s+(?:setup|call|teardown)\s+"
-    r"(?P<nodeid>\S+)@(?P<group>gpu\d+)\s*$"
+    r"(?P<nodeid>\S.*?)@(?P<group>gpu\d+)\s*$"
 )
 
 
@@ -87,15 +92,20 @@ def assign_groups(functions, n_groups: int, costs: dict[str, float]) -> dict[str
     return groups
 
 
-def assign_gpu_groups(items, n_groups: int, costs: dict[str, float]) -> dict[str, str]:
+def assign_gpu_groups(
+    items, n_groups: int, costs: dict[str, float] | None = None
+) -> dict[str, str]:
     """The xdist group of each GPU test item, by nodeid. With one group every
-    item is in ``gpu``. Otherwise the test functions are spread over the groups
-    ``gpu0`` ... by their cost, so the cases of one function (and their
-    fixtures) stay on one worker, and multi-GPU tests (the ``multigpu`` keyword)
-    share the group ``gpu`` of their own."""
+    item is in ``gpu``, and the table is not read. Otherwise the test functions
+    are spread over the groups ``gpu0`` ... by their cost (``costs``, or the
+    shipped table), so the cases of one function (and their fixtures) stay on
+    one worker, and multi-GPU tests (the ``multigpu`` keyword) share the group
+    ``gpu`` of their own."""
     items = list(items)
     if n_groups == 1:
         return {item.nodeid: "gpu" for item in items}
+    if costs is None:
+        costs = load_costs()
     single = [item for item in items if "multigpu" not in item.keywords]
     placed = assign_groups((function_id(i.nodeid) for i in single), n_groups, costs)
     groups = {item.nodeid: "gpu" for item in items}
@@ -138,6 +148,13 @@ def main(argv: list[str]) -> int:
     functions, measured = parse_durations(Path(argv[1]).read_text().splitlines())
     if not functions:
         print(f"no grouped (@gpuN) tests in {argv[1]}; was --durations=0 given?")
+        return 1
+    if len(functions) < TABLE_SIZE:
+        print(
+            f"only {len(functions)} grouped functions in {argv[1]}, fewer than the"
+            f" {TABLE_SIZE} of the table; is it the log of a whole run?"
+            f" {COSTS_PATH.name} is left as it is"
+        )
         return 1
     costs = top_costs(functions)
     COSTS_PATH.write_text(json.dumps(costs, indent=1) + "\n")
