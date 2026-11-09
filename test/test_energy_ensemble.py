@@ -98,6 +98,56 @@ class TestPlaneWaveEnergyEnsemble:
             )
 
 
+class TestEnergyEnsembleChunkSplitting:
+    """An energy ensemble split across dask chunks must keep its ensemble axis.
+
+    A chunk holding exactly one member reconstructs as a builder with a scalar
+    energy and no ensemble axis, so _calculate_array returns the bare base
+    array while map_blocks has been told to expect one axis per ensemble
+    dimension. Downstream, ArrayObject._apply_transform splits its blockwise
+    args positionally, so a block of the wrong ndim silently feeds the array's
+    own RealSpaceAxis to the transform's reconstruction chain.
+
+    The split only happens once a single wave exceeds the chunk-size budget --
+    at production grids, not at test grids -- so force it by shrinking the
+    budget rather than growing gpts.
+    """
+
+    @staticmethod
+    def _build_with_chunk_size(chunk_size):
+        with abtem.config.set({"dask.chunk-size": chunk_size}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            return pw.build(lazy=True)
+
+    def test_split_blocks_keep_ensemble_axis(self):
+        waves = self._build_with_chunk_size("4 kB")
+        array = waves.array
+        assert len(array.chunks[0]) > 1, "ensemble was not split; lower chunk-size"
+
+        for i in range(array.numblocks[0]):
+            block = array.blocks[i, 0, 0].compute()
+            assert block.ndim == array.ndim, (
+                f"block {i} has ndim {block.ndim} (shape {block.shape}), "
+                f"expected {array.ndim}"
+            )
+
+    def test_split_matches_unsplit(self):
+        split = self._build_with_chunk_size("4 kB")
+        whole = self._build_with_chunk_size("128 MB")
+
+        assert len(split.array.chunks[0]) > 1
+        assert len(whole.array.chunks[0]) == 1
+        assert np.array_equal(split.compute().array, whole.compute().array)
+
+    def test_multislice_over_split_ensemble(self):
+        atoms = ase.build.bulk("Si", cubic=True)
+        with abtem.config.set({"dask.chunk-size": "4 kB"}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            assert len(pw.build(lazy=True).array.chunks[0]) > 1
+            result = pw.multislice(atoms).compute()
+        assert result.array.shape[0] == len(ENERGIES)
+
+
 class TestProbeEnergyEnsemble:
     @lazy_params
     def test_multislice_members_match_single_energy(self, lazy):
@@ -942,6 +992,8 @@ class TestBlochWavesEnergyEnsemble:
             assert [type(a) for a in result.ensemble_axes_metadata] == axes
             assert result.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
             assert result.shape[0] == len(BLOCH_ENERGIES)
+            # the EnergyAxis is the one record of the energies
+            assert result.metadata["energy"] is None
 
         union = {tuple(hkl): j for j, hkl in enumerate(dp_single.miller_indices)}
         for i, energy in enumerate(BLOCH_ENERGIES):
@@ -960,6 +1012,9 @@ class TestBlochWavesEnergyEnsemble:
                     assert not any(
                         isinstance(a, EnergyAxis) for a in result.axes_metadata
                     ), message
+                # each member reports its own energy, not the first
+                assert patterns[i]._get_energy() == dp._get_energy() == energy
+                assert exit_waves[i].wavelength == ew.wavelength, message
 
                 indices = [union[tuple(hkl)] for hkl in dp.miller_indices]
                 member = np.asarray(patterns.array[i])
@@ -978,6 +1033,39 @@ class TestBlochWavesEnergyEnsemble:
                     np.asarray(exit_waves.array[i]), reference, rtol=0,
                     atol=1e-5 * np.abs(reference).max(), err_msg=message,
                 )
+
+    def test_energy_matches_plane_wave_contract(self, bw_multi):
+        """Several energies are a distribution, as PlaneWave.energy, and leave
+        the accelerator (and so the wavelength) without an energy; the
+        distribution round-trips through the constructor. One energy stays a
+        float."""
+        from abtem.core.energy import EnergyUndefinedError
+        from abtem.distributions import BaseDistribution
+
+        plane_wave = PlaneWave(energy=BLOCH_ENERGIES, gpts=8, extent=2.0)
+        for obj in (bw_multi, bw_multi.rotate("x", np.array([0.0, 0.01]))):
+            assert isinstance(obj.energy, BaseDistribution)
+            np.testing.assert_array_equal(
+                obj.energy.values, plane_wave.energy.values
+            )
+            np.testing.assert_array_equal(
+                obj.energy.weights, plane_wave.energy.weights
+            )
+        assert bw_multi.accelerator.energy is plane_wave.accelerator.energy is None
+        with pytest.raises(EnergyUndefinedError):
+            bw_multi.wavelength
+
+        rebuilt = BlochWaves(
+            bw_multi.structure_factor, energy=bw_multi.energy,
+            sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX,
+        )
+        np.testing.assert_array_equal(rebuilt._energies, BLOCH_ENERGIES)
+
+        single = bw_multi.select_energy(BLOCH_ENERGIES[1])
+        assert isinstance(single.energy, float)
+        assert single.energy == single.accelerator.energy == BLOCH_ENERGIES[1]
+        # the multi-energy object keeps its own (absent) accelerator energy
+        assert bw_multi.accelerator.energy is None
 
     def test_inactive_beams_are_zero(self, bw_multi, dp_single):
         """Beams inactive at a given energy must have zero intensity in the output.
@@ -1005,6 +1093,37 @@ class TestBlochWavesEnergyEnsemble:
                 dp_single.array[i, inactive], 0.0,
                 err_msg=f"Inactive beams non-zero at energy index {i}",
             )
+
+
+def test_bloch_waves_multi_energy_diffraction_patterns_eager_matches_lazy():
+    """lazy=False takes a separate code path through the same _embed_beams/
+    stack helpers (used directly, not via da.stack/map_blocks) -- this is
+    the path BlochwaveEnsemble._run_calculate_diffraction_patterns actually
+    calls (it always computes eagerly per dask block), so a bug specific
+    to it doesn't show up through TestBlochWavesEnergyEnsemble's dp_multi/
+    dp_single, which only exercise the lazy branch via .compute(). On CPU both
+    branches use numpy either way; the eager branch additionally needs to
+    allocate its zero-padding array on whatever device the per-energy result
+    is actually on, rather than assuming numpy, since it runs unconditionally
+    for every _run_calculate_diffraction_patterns block regardless of
+    device.
+
+    g_max=3 and sg_max=0.1 (413 beams), not the class's BLOCH_G_MAX and
+    BLOCH_SG_MAX: the energies have different active-beam sets (289 and 385
+    of the 413), so the zero-padding is exercised. At BLOCH_SG_MAX=0.03 one
+    energy activates every beam of the union and nothing is padded."""
+    bw = BlochWaves(_srtio3_atoms(), energy=BLOCH_ENERGIES, sg_max=0.1, g_max=3.0)
+    n_union = int(bw._hkl_mask.sum())
+    assert all(int(sub.sum()) < n_union for sub in bw._energy_hkl_masks), (
+        "every energy must leave some beams of the union inactive, or the "
+        "zero-padding this test is about is not exercised"
+    )
+
+    lazy = bw.calculate_diffraction_patterns(BLOCH_THICKNESS).compute()
+    eager = bw.calculate_diffraction_patterns(BLOCH_THICKNESS, lazy=False)
+    assert isinstance(eager, IndexedDiffractionPatterns)
+    assert eager.array.shape == lazy.array.shape
+    np.testing.assert_array_equal(eager.array, lazy.array)
 
 
 # ---------------------------------------------------------------------------
