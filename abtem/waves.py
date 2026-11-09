@@ -119,12 +119,75 @@ def _ensure_parity_of_gpts(
 
 
 def _antialias_cutoff_gpts(
-    gpts: tuple[int, int], sampling: tuple[float, float]
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    extent: Optional[tuple[float, float]] = None,
 ) -> tuple[int, int]:
+    """The number of points within the antialias cutoff of a grid of the given
+    ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
+    grid of ``gpts`` points at ``sampling``).
+
+    The count takes the parity of the number of points of the grid at ``sampling``
+    that spans ``extent`` when that number is an integer, as it is for downsampled or
+    tiled waves, and the parity of ``gpts`` otherwise."""
     kcut = 2.0 / 3.0 / max(sampling)
-    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    if extent is None:
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+    ratio = extent[0] / sampling[0], extent[1] / sampling[1]
+    parity_gpts = tuple(
+        round(r) if abs(r - round(r)) < 1e-6 else n for r, n in zip(ratio, gpts)
+    )
+    return _ensure_parity_of_gpts(new_gpts, parity_gpts, parity="same")
+
+
+def _max_batch_with_exit_planes(
+    waves_builder: WavesBuilder,
+    potential: BasePotential,
+    detectors: Optional[BaseDetector | list[BaseDetector]],
+    max_batch: int | str,
+) -> int | str:
+    """An automatic ``max_batch`` divided so that a block of detector output fits
+    the chunk size.
+
+    A block returns one output per exit plane and detector for each of its waves, all
+    in one chunk. The automatic batch of waves is divided by the output of the
+    block, in units of one wave, when that exceeds one wave; an integer
+    ``max_batch`` is returned as it is.
+    """
+    if max_batch != "auto":
+        return max_batch
+
+    from abtem.core.chunks import estimate_scan_batch_size
+    from abtem.detectors import validate_detectors
+
+    wave_bytes = (
+        int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
+    )
+
+    # The detectors of a multi-energy ensemble are sized by its highest energy.
+    sized = waves_builder
+    if isinstance(waves_builder.energy, BaseDistribution):
+        sized = waves_builder.copy()
+        sized.energy = float(max(waves_builder.energy.values))
+
+    output_bytes = sum(
+        int(np.prod(detector._out_base_shape(sized)[0]))
+        * np.dtype(detector._out_dtype(sized)[0]).itemsize
+        for detector in validate_detectors(detectors, sized)
+    )
+    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+
+    if ratio <= 1:
+        return max_batch
+
+    return max(
+        1,
+        estimate_scan_batch_size(
+            waves_builder.gpts, waves_builder.dtype, waves_builder.device
+        )
+        // ratio,
+    )
 
 
 def _prebuild_reused_potential(
@@ -233,18 +296,49 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         ]
 
     @property
+    def _antialias_sampling(self) -> tuple[float, float]:
+        """The sampling of the grid whose antialias aperture band-limits the waves:
+        their own, or that of the grid they were resampled from."""
+        return self.metadata.get("antialias_sampling", self._valid_sampling)
+
+    @property
+    def _coarsest_sampling(self) -> tuple[float, float]:
+        """The sampling of the coarsest grid the waves were resampled onto, at which
+        their content ends: their own, if they were not resampled."""
+        return self.metadata.get("coarsest_sampling", self._valid_sampling)
+
+    def _resampling_metadata(self, gpts: tuple[int, int]) -> dict:
+        """The metadata of these waves resampled to ``gpts`` points over their
+        extent that keeps the band limit of the content."""
+        sampling = (self._valid_extent[0] / gpts[0], self._valid_extent[1] / gpts[1])
+        return {
+            "antialias_sampling": self._antialias_sampling,
+            "coarsest_sampling": tuple(
+                max(coarsest, new)
+                for coarsest, new in zip(self._coarsest_sampling, sampling)
+            ),
+        }
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            n = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
+            # waves stored with the pixel count itself
+            cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
+        else:
+            cutoff_gpts = _antialias_cutoff_gpts(
+                self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
-            m = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][1], self._valid_gpts[1]
-            )
-            return n, m
-        return _antialias_cutoff_gpts(self._valid_gpts, self._valid_sampling)
+        # the content ends at the edge of the coarsest grid it was resampled onto
+        content_gpts = [
+            round(length / sampling)
+            for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
+        ]
+        return (
+            min(cutoff_gpts[0], content_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1], self._valid_gpts[1]),
+        )
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
@@ -859,8 +953,7 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        # The norm sums over the whole grid, so a lazy block must hold all of it.
-        return transform.apply(self.no_base_chunks())
+        return transform.apply(self)
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -1403,7 +1496,7 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        waves = self.ensure_real_space()
+        waves = self.ensure_real_space().no_base_chunks()
         xp = get_array_module(waves.array)
 
         if gpts is None:
@@ -1429,9 +1522,7 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            waves.antialias_cutoff_gpts
-        )
+        kwargs["metadata"].update(waves._resampling_metadata(gpts))
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()
@@ -1627,15 +1718,16 @@ class Waves(BaseWaves, ArrayObject):
                 else np.finfo(self.array.dtype).dtype
             )
 
+            array = self.no_base_chunks()._lazy_array
             pattern = da.map_blocks(
                 self._diffraction_pattern,
-                self.array,
+                array,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
                 reciprocal_space=self.reciprocal_space,
-                chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
         else:
@@ -2534,7 +2626,8 @@ class PlaneWave(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2558,6 +2651,8 @@ class PlaneWave(WavesBuilder):
         potential = validate_potential(potential)
 
         self.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(self, potential, detectors, max_batch)
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
@@ -2911,7 +3006,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2929,6 +3025,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2989,7 +3087,9 @@ class Probe(WavesBuilder):
         max_batch : int or str, optional
             The number of probe wave functions in each chunk of the Dask array. If
             'auto' (default), the batch size is chosen from the abtem configuration
-            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``), and divided so that the
+            output of a block, one for every exit plane of the potential, fits the
+            chunk size.
         lazy : bool, optional
             If True, build measurements lazily; otherwise compute eagerly. Defaults to
             the value set in the user configuration file.
@@ -3017,6 +3117,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -3058,7 +3160,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
