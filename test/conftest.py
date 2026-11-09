@@ -11,7 +11,7 @@ import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
-from gpu_groups import assign_groups, function_id, load_costs
+from gpu_groups import assign_gpu_groups, load_costs
 from utils import _ACCELERATOR
 from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
@@ -21,9 +21,7 @@ from utils import requires_multigpu as _requires_multigpu
 # for a user who transforms one shape many times, but the tests use most of
 # their (often hypothesis-drawn) shapes only a few times, and measuring each
 # new shape cost more than the transforms (8 of 16 s in one Bloch-wave test).
-config.set(
-    {"diagnostics.progress_bar": False, "fftw.planning_effort": "FFTW_ESTIMATE"}
-)
+config.set({"diagnostics.progress_bar": False, "fftw.planning_effort": "FFTW_ESTIMATE"})
 
 # The literal device string that actually exercises an accelerator -- "gpu"
 # with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
@@ -44,24 +42,6 @@ _SERIALIZE_GPU_TESTS = _ACCELERATOR == "gpu" or (
 # (ABTEM_TEST_GPU_WORKERS=4) shortens a run whose wall time is otherwise that
 # of the GPU tests one after another.
 _GPU_WORKERS = max(int(os.environ.get("ABTEM_TEST_GPU_WORKERS", "1")), 1)
-
-
-def _gpu_groups(gpu_items) -> dict[str, str]:
-    """The xdist group of each GPU test, by nodeid. With more than one GPU
-    worker, the test functions are spread over _GPU_WORKERS groups by their
-    measured cost (see gpu_groups.py), so the cases of one function (and their
-    fixtures) stay on one worker. Multi-GPU tests share a group of their own."""
-    if _GPU_WORKERS == 1:
-        return {item.nodeid: "gpu" for item in gpu_items}
-    single = [item for item in gpu_items if "multigpu" not in item.keywords]
-    placed = assign_groups(
-        (function_id(item.nodeid) for item in single), _GPU_WORKERS, load_costs()
-    )
-    groups = {item.nodeid: "gpu" for item in gpu_items}
-    groups.update(
-        {item.nodeid: f"gpu{placed[function_id(item.nodeid)]}" for item in single}
-    )
-    return groups
 
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
@@ -85,7 +65,11 @@ settings.register_profile(
     max_examples=10,
     print_blob=True,
     deadline=None,
-    suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.filter_too_much),
+    suppress_health_check=(
+        HealthCheck.too_slow,
+        HealthCheck.data_too_large,
+        HealthCheck.filter_too_much,
+    ),
     # Not just Phase.generate: without `explicit` every @example is silently
     # skipped, without `reuse` a failure found once is never replayed from the
     # example database, and without `shrink` it is reported unminimised.
@@ -239,7 +223,7 @@ def pytest_collection_modifyitems(config, items):
     Routing every such test into one ``xdist_group`` makes xdist schedule
     them onto the same worker, so at most one runs at a time regardless of
     ``-n`` -- while CPU-only tests still fan out across every worker
-    (ABTEM_TEST_GPU_WORKERS spreads them over more groups, see _gpu_groups). This
+    (ABTEM_TEST_GPU_WORKERS spreads them over more groups, see gpu_groups.py). This
     only takes effect together with ``--dist=loadgroup`` (see pyproject.toml);
     without it, xdist's default scheduler ignores ``xdist_group`` entirely.
     A test is "GPU-touching" if any of its parametrized values -- direct or
@@ -263,8 +247,7 @@ def pytest_collection_modifyitems(config, items):
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(
-            isinstance(v, str) and v == _GPU_DEVICE
-            for v in callspec.params.values()
+            isinstance(v, str) and v == _GPU_DEVICE for v in callspec.params.values()
         )
         # "gpu" is the dedicated marker requires_gpu/requires_multigpu both
         # apply (see test/utils.py); the reason-string match is a fallback
@@ -279,6 +262,6 @@ def pytest_collection_modifyitems(config, items):
             gpu_items.append(item)
 
     # after the loop: the placement of one function depends on all the others
-    groups = _gpu_groups(gpu_items)
+    groups = assign_gpu_groups(gpu_items, _GPU_WORKERS, load_costs())
     for item in gpu_items:
         item.add_marker(pytest.mark.xdist_group(groups[item.nodeid]))
