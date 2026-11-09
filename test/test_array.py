@@ -876,7 +876,8 @@ def test_device_mark_stays_in_the_graph_of_derived_arrays(marked, derive):
     `_is_mps_array_object` true, for the marked device only, for the array object
     and for anything derived from it; an unmarked CPU array object is neither.
     The mark is what selects the synchronous scheduler for host results of
-    device work, so this holds without an accelerator."""
+    device work. The test is device-independent (NumPy data, no accelerator
+    needed), so it runs in the CPU-only CI and is not parametrized over devices."""
     images = Images(
         np.ones((3, 16, 20), dtype=np.float32),
         sampling=(0.5, 0.25),
