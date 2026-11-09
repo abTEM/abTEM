@@ -102,6 +102,12 @@ ArrayObjectTypeAlt = TypeVar("ArrayObjectTypeAlt", bound="ArrayObject")
 ArrayItemType = Union[int, slice, list, np.ndarray, None]
 
 
+def _auto_ensemble_chunks(n_ensemble: int, n_base: int) -> tuple:
+    """Chunks that let dask choose the size of the ensemble chunks and keep each
+    base array (the grid of a wave function or an image) in one chunk."""
+    return ("auto",) * n_ensemble + (-1,) * n_base
+
+
 def _to_hyperspy_axes_metadata(
     axes_metadata: list[AxisMetadata], shape: int | tuple[int, ...]
 ):
@@ -137,6 +143,17 @@ def _to_hyperspy_axes_metadata(
         hyperspy_axes.append(hyperspy_axis)
 
     return hyperspy_axes
+
+
+def _chunk_axes_metadata(
+    axes_metadata: list[AxisMetadata], slices: Sequence[slice]
+) -> list[AxisMetadata]:
+    """The axes metadata of the chunk that `slices` selects along the leading axes;
+    the axes after them are kept whole."""
+    return [
+        axis[slic] if hasattr(axis, "__getitem__") else axis.copy()
+        for axis, slic in zip(axes_metadata, slices)
+    ] + list(axes_metadata[len(slices) :])
 
 
 def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
@@ -2057,7 +2074,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             return self
 
         if chunks == "auto":
-            chunks = ("auto",) * len(self.ensemble_shape) + (-1,) * len(self.base_shape)
+            chunks = _auto_ensemble_chunks(
+                len(self.ensemble_shape), len(self.base_shape)
+            )
 
         array = da.from_array(self.array, chunks=chunks)
 
@@ -2280,15 +2299,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
-        """Rechunk to remove chunks across the base dimensions."""
+        """Rechunk to remove chunks across the base dimensions.
+
+        An array whose base dimensions are in one chunk is returned as it is.
+        Otherwise dask chooses the chunks of the ensemble dimensions again, so that
+        a block holds the whole base array of as many members as fit dask's
+        `array.chunk-size`.
+        """
         if not self._has_base_chunks:
             return self
-        # See the comment in _has_base_chunks: -0 is 0, not "the end".
-        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
-        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(
-            self.base_shape
+        return self.rechunk(
+            _auto_ensemble_chunks(len(self.ensemble_shape), len(self.base_shape))
         )
-        return self.rechunk(chunks)
 
     @staticmethod
     def _apply_transform(
@@ -2372,6 +2394,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObject
             The transformed array object.
         """
+
+        if self._has_base_chunks and not transform._allow_base_chunks:
+            # Each lazy block is transformed on its own, so it must hold the
+            # whole base array (the grid of a wave function or an image).
+            return self.no_base_chunks().apply_transform(transform, max_batch)
 
         # A transform whose output size depends on the ensemble (a pixelated
         # detector's crop of a multi-energy ensemble) is fixed against the whole
@@ -2629,6 +2656,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         destination = ensemble_axes + axes_base_indices[::-1]
 
         if transpose:
+            # HyperSpy takes the axes in the order of the array's dimensions.
+            axes_base = axes_base[::-1]
             if self.is_lazy:
                 array = da.moveaxis(self.array, source=source, destination=destination)
             else:
@@ -2640,7 +2669,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # HyperSpy holds NumPy, dask or CuPy data, not torch backend arrays.
             array = asnumpy(array)
 
-        s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+        s = signal_type(array, axes=ensemble_axes_metadata + axes_base)
 
         if self.is_lazy:
             s = s.as_lazy()
@@ -2826,12 +2855,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                new_ensemble_axes_metadata = [
-                    axis[slic[i]] if hasattr(axis, "__getitem__") else axis.copy()
-                    for i, axis in enumerate(self.ensemble_axes_metadata)
-                ]
-
-                itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
+                itemset(
+                    ensemble_axes_metadata,
+                    index,
+                    _chunk_axes_metadata(self.ensemble_axes_metadata, slic),
+                )
 
         if lazy:
             ensemble_axes_metadata = da.from_array(ensemble_axes_metadata, chunks=1)
@@ -3033,7 +3061,7 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
             # actually wrote, which itself never splits base axes -- this
             # branch only matters if a caller explicitly opts into "auto".
             num_ensemble_axes = zarr_array.ndim - cls._base_dims
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
@@ -3102,7 +3130,7 @@ def _from_zarr_legacy(root, chunks, decode_types, url):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:

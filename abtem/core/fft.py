@@ -116,19 +116,15 @@ _warned_slow_fft_shapes_lock = threading.Lock()
 _SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
 
 
-def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int, ...]:
+def _transformed_axes(ndim: int, func_name: str, kwargs: dict) -> tuple[int, ...]:
     """
-    The array lengths a transform actually acts on.
+    The axes of an array of `ndim` dimensions that a transform acts on.
 
-    Only the transformed axes matter for the Bluestein fallback: batch axes are
-    looped over, whatever their length. Which axes those are depends on the
-    function -- ``fftn`` transforms all of them unless ``axes`` says otherwise,
-    ``fft2`` the trailing two, ``fft`` a single one -- so reading the trailing
-    two axes unconditionally misreports every non-2D transform.
+    Which axes those are depends on the function -- ``fftn`` transforms all of
+    them unless ``axes`` says otherwise, ``fft2`` the trailing two, ``fft`` a
+    single one.
     """
-    kwargs = kwargs or {}
     axes = kwargs.get("axes")
-    # An explicit `s` overrides the array lengths (None entries keep theirs).
     s = kwargs.get("s")
 
     if axes is None:
@@ -136,8 +132,8 @@ def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int
             # numpy and cupy apply `s` to the TRAILING len(s) axes when no axes
             # are given, so deriving the axes from the array rank alone would
             # pair `s` with the wrong ones.
-            count = len(s) if s is not None else len(shape)
-            axes = tuple(range(len(shape) - count, len(shape)))
+            count = len(s) if s is not None else ndim
+            axes = tuple(range(ndim - count, ndim))
         elif func_name.endswith("fft2"):
             axes = (-2, -1)
         else:
@@ -147,8 +143,21 @@ def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int
     # for arrays of fewer than two dimensions, and this runs ahead of every GPU
     # transform: raising here would break a transform that would otherwise
     # succeed, rather than merely skipping a diagnostic.
-    ndim = len(shape)
-    axes = tuple(axis for axis in axes if -ndim <= axis < ndim)
+    return tuple(axis for axis in axes if -ndim <= axis < ndim)
+
+
+def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int, ...]:
+    """
+    The array lengths a transform actually acts on.
+
+    Only the transformed axes matter for the Bluestein fallback: batch axes are
+    looped over, whatever their length. Reading the trailing two axes
+    unconditionally would misreport every non-2D transform.
+    """
+    kwargs = kwargs or {}
+    # An explicit `s` overrides the array lengths (None entries keep theirs).
+    s = kwargs.get("s")
+    axes = _transformed_axes(len(shape), func_name, kwargs)
 
     lengths = []
     for i, axis in enumerate(axes):
@@ -665,9 +674,12 @@ def _fft_dispatch(
             raise RuntimeError()
 
     if isinstance(x, da.core.Array):
+        # Each block is transformed on its own, so it must hold the whole of
+        # every transformed axis.
+        axes = _transformed_axes(x.ndim, func_name, kwargs)
         return da.map_blocks(
             _fft_dispatch,
-            x,
+            x.rechunk({axis: -1 for axis in axes}),
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
@@ -980,6 +992,8 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
     if isinstance(x, da.core.Array):
         # The product is taken in place, so the blocks keep the dtype of the transform.
         dtype = _fft_dtype(x.dtype)
+        # Each block is convolved on its own, so it must hold the whole grid.
+        x = x.rechunk({-2: -1, -1: -1})
         # The kernel goes in as a second dask array, so each block of x meets
         # the matching block of the kernel. Passed whole, it is broadcast
         # against every block, and a kernel axis longer than a block of x

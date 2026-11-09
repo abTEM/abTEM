@@ -1645,7 +1645,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         (total number of grid points).
     sampling : one or two float or 'auto', optional
         Sampling of the potential in `x` and `y` [Å].
-        Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
+        Provide either "sampling" or "gpts". If neither is given, the sampling is
+        'auto' as a default: waves that are matched to the potential adopt it, unless
+        they have a `gpts` or `sampling` of their own, which then takes precedence.
+        If 'auto' is given explicitly, a `gpts` or `sampling` of the waves is not
+        used (with a warning), and the grid points are chosen
         to be commensurate with the atom positions (closest to a default of 0.05 Å)
         and, whenever compatible with commensurability, a fast FFT size (all prime
         factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
@@ -1657,7 +1661,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         target sampling is used directly (rounded up to a fast FFT size).
     slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
-        (default is 1 Å).
+        (default is 'auto').
         If given as a float, the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
@@ -1752,7 +1756,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
         sampling: float | tuple[float, float] | str | None = None,
-        slice_thickness: float | tuple[float, ...] | str = 1,
+        slice_thickness: float | tuple[float, ...] | str = "auto",
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] | None = None,
@@ -1768,6 +1772,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         origin = _validate_origin(origin)
         if box is not None:
             box = _validate_box(box)
+
+        # With neither `gpts` nor `sampling`, the grid is chosen as for
+        # `sampling="auto"`, but only as a default: waves that have a `gpts` or
+        # `sampling` of their own override it, see `Grid.match`.
+        default_grid = gpts is None and sampling is None
+        if default_grid:
+            sampling = "auto"
+        auto_grid = isinstance(sampling, str) and sampling == "auto"
 
         frozen_phonons = _validate_frozen_phonons(atoms)
         atoms_obj = frozen_phonons.atoms
@@ -1910,6 +1922,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             periodic=periodic,
             integrator=integrator,
         )
+        self.grid._gpts_is_default = default_grid
+        # A default is overridden quietly; an explicit 'auto' is warned about.
+        self.grid._gpts_are_auto = auto_grid and not default_grid
 
 
 class FieldArray(BaseField, ArrayObject):

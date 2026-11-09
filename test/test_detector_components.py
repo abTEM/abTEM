@@ -762,11 +762,71 @@ def test_prism_upsample_refuses_components_but_averages_waves(device):
     )
 
 
+@pytest.mark.parametrize("frozen_phonons", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("method", ["reduce", "scan"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_upsample_with_a_cropped_window_refuses_components(
+    device, method, lazy, frozen_phonons
+):
+    # the window (16, 20) is smaller than the downsampled grid (32, 32), and
+    # differs along x and y: the patterns are then detected on the full grid by a
+    # stand-in for the detector, which must carry the components to the refusal
+    potential = _potential(True)
+    if not frozen_phonons:
+        potential = abtem.Potential(
+            potential.frozen_phonons.atoms, gpts=48, slice_thickness=2.0
+        )
+    s_matrix = abtem.SMatrix(
+        energy=100e3,
+        semiangle_cutoff=20,
+        potential=potential,
+        interpolation=2,
+        upsample=True,
+        window_gpts=(16, 20),
+        device=device,
+    )
+    assert s_matrix.window_gpts != s_matrix.downsampled_gpts
+    scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+
+    with pytest.raises(NotImplementedError, match="upsample"):
+        getattr(s_matrix, method)(
+            scan=scan,
+            detectors=PixelatedDetector(MAX_ANGLE, components="all"),
+            lazy=lazy,
+        )
+
+
 # ---------------------------------------------------------------------------------
 # The same options through the PRISM scan of several energies
 # ---------------------------------------------------------------------------------
 
 ENERGIES = [100e3, 200e3]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_upsample_with_a_cropped_window_refuses_components_for_energies(device):
+    # the same refusal for the scan of several energies, which takes the cropped
+    # window to the detection one energy at a time
+    s_matrix = abtem.SMatrix(
+        energy=ENERGIES,
+        semiangle_cutoff=20,
+        potential=abtem.Potential(
+            _potential(True).frozen_phonons.atoms, gpts=48, slice_thickness=2.0
+        ),
+        interpolation=2,
+        upsample=True,
+        window_gpts=(16, 20),
+        device=device,
+    )
+    assert s_matrix.window_gpts != s_matrix.downsampled_gpts
+
+    with pytest.raises(NotImplementedError, match="upsample"):
+        s_matrix.scan(
+            scan=abtem.GridScan((1, 1), (3, 4), gpts=(2, 3)),
+            detectors=PixelatedDetector(MAX_ANGLE, components="all"),
+            lazy=False,
+        )
 
 
 def _prism_scan_energies(device, lazy, detector, ensemble_mean=True):
