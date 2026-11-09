@@ -177,6 +177,7 @@ Performance:
   instead of once per plane-wave block: 3 members over 14 blocks build 3 pools instead of 42, and an eager
   `reduce` at a `dask.chunk-size` of 16 kB builds 3 instead of 165. The pool is held while the member is built and
   released when its build returns; values are unchanged
+  ([PR #666](https://github.com/abTEM/abTEM/pull/666))
 
 Dependencies:
 
