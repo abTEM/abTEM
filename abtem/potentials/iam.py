@@ -2698,18 +2698,20 @@ class CrystalPotential(_PotentialBuilder):
         `thickness` and `exit_planes` as without.
 
         The tails are at the depth of the outermost slice, not at their own, so the
-        exit wave is not that of a slab with vacuum. For Si on four or more slices per
-        unit at 100 kV, the diffraction intensity of a plane wave is about 3 times
-        closer to the slab's than that of the periodic stack for atoms on the
-        entrance or exit plane of the unit, and 5-7 times closer for atoms 0.15-0.6 Å
-        from it; the intensity at the columns of a focused probe (ADF, 20 mrad) is
-        within about 1 % of the slab's for atoms at least 0.3 Å from the plane. For
-        atoms on the plane the potential beyond it is half of their own, and it is
-        added at the focus of a probe at the entrance: the ADF at their columns was
-        10-40 % too high in the same tests, against 20-30 % too low (or right by
-        cancellation) for the periodic stack. A warning is given for atoms within
-        0.3 Å of the plane, and suggests centering them in the cell, with
-        ``atoms.center(axis=2)``.
+        exit wave is not that of a slab with vacuum. The error falls with thinner
+        slices and with the distance of the atoms from the entrance and exit plane of
+        the unit. For Si at 100 kV the diffraction intensity of a plane wave is closer
+        to the slab's than that of the periodic stack by a factor 2.9 for atoms on the
+        plane and 7 at 0.3 Å from it on four slices per unit (5.6 and 14 on eight). The
+        ADF (50-100 mrad, a 20 mrad probe focused on the entrance) at the column of the
+        atoms nearest the plane is within 0.4 % of the slab's from 0.3 Å on, against 3-4
+        % for the periodic stack. For atoms on the plane the potential beyond it is
+        half of their own, and it is added at the focus of the probe: the ADF at their
+        columns is too high by 12 % for Si on four slices per unit (5 % on eight), and
+        by 10 % and 38 % for Au on quarter-lattice and half-lattice slices, whereas the
+        periodic stack is 28-37 % too low for Si (and right for Au on half-lattice
+        slices only by cancellation). A warning is given for atoms within 0.3 Å of the
+        plane, and suggests centering them in the cell, with ``atoms.center(axis=2)``.
 
         A `CrystalPotential` that stacks a unit along z cannot have a unit that
         corrects its surfaces, at any depth of nested crystals, since every junction

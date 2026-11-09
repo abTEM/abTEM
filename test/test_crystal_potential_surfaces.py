@@ -412,6 +412,10 @@ def test_atoms_farther_than_the_distance_are_not_warned_about(silicon, shift):
 def test_no_warning_when_there_is_no_correction_to_be_poor(silicon):
     CrystalPotential(_unit(silicon), (1, 1, 2), correct_surfaces=False)
     CrystalPotential(_unit(silicon, projection="infinite"), (1, 1, 2))
+    # an explicit correction of a projection that has no surfaces to correct
+    CrystalPotential(
+        _unit(silicon, projection="infinite"), (1, 1, 2), correct_surfaces=True
+    )
     CrystalPotential(_unit(silicon).build(lazy=False), (1, 1, 2))
 
 

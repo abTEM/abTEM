@@ -20,16 +20,18 @@ Features:
   surface are added to the slice next to it, which conserves the projected potential of the slab; the slices equal
   those of a slab with vacuum, with the vacuum slices added to the adjacent ones. The crystal itself is unchanged: its
   slices, `box`, `thickness` and `exit_planes` are as without, so nothing shifts and the exit wave is not propagated
-  further. The tails are at the depth of the outermost slice rather than their own. For Si on four or more slices per
-  unit at 100 kV, the diffraction intensity of a plane wave is about 3 times closer to that of the slab than that of
-  the periodic stack for atoms on the entrance or exit plane of the unit, and 5-7 times closer for atoms 0.15-0.6 Å
-  from it; the ADF at the columns of a 20 mrad probe is within about 1 % for atoms at least 0.3 Å from the plane. For
-  atoms on the plane, the correction is poor: the ADF at their columns was 10-40 % too high in the same tests (20-30
-  % too low for the periodic stack), so a warning is given for atoms of the unit within 0.3 Å of the plane, which
-  suggests centering them in the cell with `atoms.center(axis=2)`. **Behaviour change:** the first and last slices of
-  a `CrystalPotential` of a finite-projection unit differ from those of the periodic stack; pass
-  `correct_surfaces=False` for the previous ones. A `CrystalPotential` that stacks a unit along z raises if a
-  `CrystalPotential` at any depth of its units corrects its surfaces (pass `correct_surfaces=False` to it); a built
+  further. The tails are at the depth of the outermost slice rather than their own, so the error falls with thinner
+  slices and with the distance of the atoms from the entrance and exit plane of the unit. For Si at 100 kV, the
+  diffraction intensity of a plane wave is closer to that of the slab than that of the periodic stack by a factor 2.9
+  for atoms on the plane and 7 at 0.3 Å from it on four slices per unit (5.6 and 14 on eight), and the ADF at the
+  columns of a 20 mrad probe (50-100 mrad) is within 0.4 % of the slab's from 0.3 Å on. For atoms on the plane the
+  correction is poor: the ADF at their columns is too high by 12 % for Si on four slices per unit (5 % on eight) and
+  by 10 % and 38 % for Au on quarter-lattice and half-lattice slices, against 28-37 % too low for the periodic stack
+  of Si, so a warning is given for atoms of the unit within 0.3 Å of the plane, which suggests centering them in the
+  cell with `atoms.center(axis=2)`. **Behaviour change:** the first and last slices of a `CrystalPotential` of a
+  finite-projection unit differ from those of the periodic stack; pass `correct_surfaces=False` for the previous
+  ones. A `CrystalPotential` that stacks a unit along z raises if a `CrystalPotential` at any depth of its units
+  corrects its surfaces (pass `correct_surfaces=False` to it); a built
   crystal (a `PotentialArray` from `build()`) is a slab with no flag to check, and must not be stacked along z. An
   infinite projection has no surfaces to correct, and a unit that is not a `Potential` is left as it is
   ([PR #648](https://github.com/abTEM/abTEM/pull/648))
