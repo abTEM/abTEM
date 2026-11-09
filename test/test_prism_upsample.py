@@ -767,6 +767,174 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     )
 
 
+_DETECTOR_LISTS = {
+    # target, companion: a companion that cannot be routed through the blended
+    # reduction (the wave and flexible readers), and one whose band snaps the
+    # blend angle below the target's band
+    "annular70+waves": (
+        lambda: abtem.AnnularDetector(inner=70),
+        abtem.WavesDetector,
+    ),
+    "annular70+flexible": (
+        lambda: abtem.AnnularDetector(inner=70),
+        abtem.FlexibleAnnularDetector,
+    ),
+    "annular50+waves": (
+        lambda: abtem.AnnularDetector(inner=50),
+        abtem.WavesDetector,
+    ),
+    "annular50-100+annular60-70": (
+        lambda: abtem.AnnularDetector(inner=50, outer=100),
+        lambda: abtem.AnnularDetector(inner=60, outer=70),
+    ),
+}
+
+
+@devices
+@pytest.mark.parametrize(
+    "pair, window_gpts, blend_angle, reduction",
+    [
+        (pair, *case)
+        for pair in _DETECTOR_LISTS
+        for case in (
+            # the scan, at the default ('auto') blend and at an explicit one,
+            # on the full window and on a cropped one, and the mode
+            # contraction of the full window
+            (None, None, "scan"),
+            ((24, 32), None, "scan"),
+            ((24, 32), 80, "scan"),
+            ((24, 32), "aperture", "scan"),
+            (None, None, "modes"),
+        )
+        # at the aperture blend both bands lie above the cut, with nothing to
+        # snap to
+        if not (pair.startswith("annular50-100") and case[1] == "aperture")
+    ]
+    # the composite blend of an explicit plane-wave window adds intensities,
+    # hence takes annular detectors only
+    + [("annular50-100+annular60-70", (24, 32), 80, "composite")],
+)
+def test_upsample_detector_value_does_not_depend_on_the_other_detectors(
+    pair, window_gpts, blend_angle, reduction, device
+):
+    # A detector reads the same value in a list as scanned alone: it is routed
+    # to its branch, and the blend angle is snapped to its band, whatever the
+    # other detectors of the list. The automatic blend angle of this cell is
+    # 62.5 mrad, so the default blend routes the bands above it.
+    target, companion = _DETECTOR_LISTS[pair]
+    potential = _window_potential(bulk("Si", cubic=True) * (1, 1, 8), device)
+    kwargs = {} if window_gpts is None else {"window_gpts": window_gpts}
+    if blend_angle is not None:
+        kwargs["blend_angle"] = blend_angle
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        device=device,
+        **kwargs,
+    )
+    scan = _window_scan(potential)
+
+    if reduction == "scan":
+        def measure(detectors):
+            return s_matrix.scan(scan=scan, detectors=detectors, lazy=False)
+    else:
+        built = s_matrix.build(lazy=False)
+        options = (
+            {"method": "modes"}
+            if reduction == "modes"
+            else {"blend_window_gpts": "period"}
+        )
+
+        def measure(detectors):
+            return built.reduce(scan=scan, detectors=detectors, **options)
+
+    alone = measure([target()])
+    shared = measure([target(), companion()])[0]
+
+    assert shared.shape == alone.shape
+    _assert_close_to(shared.array, alone.array)
+
+
+@devices
+def test_upsample_window_waves_propagate_on_the_full_grid(device):
+    # The waves of a cropped window are propagated to the exit surface as their
+    # zero-padding onto the full grid would be, then cropped back: the window's
+    # own grid is not periodic, and a propagation on it would wrap the probe
+    # tails around the window.
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    built = _window_s_matrix(potential, device).build(lazy=False)
+    assert built.reference_depth > 0.0
+    window, gpts = tuple(built.window_gpts), tuple(built.gpts)
+
+    rng = np.random.default_rng(3)
+    # more waves than one padded batch holds, so the propagation takes several
+    waves = rng.standard_normal((2, 5) + window) + 1j * rng.standard_normal(
+        (2, 5) + window
+    )
+    xp = get_array_module(built.u)
+    waves = xp.asarray(waves.astype(np.dtype(built.u.dtype)))
+    padded = xp.zeros(waves.shape[:-2] + gpts, dtype=waves.dtype)
+    padded[..., : window[0], : window[1]] = waves
+
+    expected = built._to_exit_reference(padded)[..., : window[0], : window[1]]
+    _assert_close_to(built._to_exit_reference(waves), expected)
+
+
+@devices
+def test_upsample_window_waves_follow_the_full_window(device):
+    # On a cell thick enough that the probe spreads across the window between
+    # the reference depth and the exit surface, the exit waves of a cropped
+    # window follow the full-window waves cropped to the same pixels. The
+    # remaining difference is the truncation of the window; a propagation that
+    # wraps around the window triples it (1.1e-1 of the maximum intensity
+    # against 3.4e-2).
+    potential = _window_potential(bulk("Si", cubic=True) * (1, 1, 8), device)
+    pixels = np.array([[10, 20], [28, 32], [3, 60]])
+    scan = CustomScan(pixels * np.array(potential.sampling))
+    kwargs = dict(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        downsample=False,
+        device=device,
+    )
+    window = (32, 40)
+    full = to_host_array(
+        SMatrix(**kwargs)
+        .scan(scan=scan, detectors=abtem.WavesDetector(), lazy=False)
+        .array
+    )
+    cropped = to_host_array(
+        SMatrix(window_gpts=window, **kwargs)
+        .scan(scan=scan, detectors=abtem.WavesDetector(), lazy=False)
+        .array
+    )
+
+    gpts = potential.gpts
+    # a unit probe carries a real-space power of 1 / grid size
+    scale = np.sqrt(np.prod(gpts) / np.prod(window))
+    expected = np.array(
+        [
+            full[n][
+                np.ix_(
+                    (x - window[0] // 2 + np.arange(window[0])) % gpts[0],
+                    (y - window[1] // 2 + np.arange(window[1])) % gpts[1],
+                )
+            ]
+            for n, (x, y) in enumerate(pixels)
+        ]
+    ) * scale
+
+    intensity = np.abs(expected) ** 2
+    error = np.abs(np.abs(cropped) ** 2 - intensity).max() / intensity.max()
+    assert error < 5e-2
+
+
 @devices
 def test_upsample_frozen_phonon_patterns_are_the_mean_of_the_member_patterns(device):
     # next to a WavesDetector, which returns the window waves of every member, the
@@ -1639,6 +1807,13 @@ def test_upsample_blend_taper_routing(device):
     # outside the zone the taper changes nothing
     assert np.allclose(to_host_array(tapered[0]), to_host_array(sharp[0]), rtol=1e-5)
     assert np.allclose(to_host_array(tapered[2]), to_host_array(sharp[2]), rtol=1e-5)
+
+    # each ring reads the same scanned alone: a band wholly below the cut is not
+    # snapped to its own outer edge, which would put it inside the taper
+    for ring, value in zip(rings, tapered):
+        alone = built.scan(scan=scan, detectors=ring, blend_angle=cut,
+                           blend_taper=taper)
+        assert np.allclose(to_host_array(alone), to_host_array(value), rtol=1e-5)
 
     # inside the zone the value lies between the two pure branches
     low = to_host_array(built.scan(scan=scan, detectors=rings[1], blend_angle=0))
