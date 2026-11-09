@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import warnings
 from abc import ABCMeta, abstractmethod
+from contextlib import contextmanager, nullcontext
 from functools import partial, reduce
 from numbers import Number
 from operator import mul
@@ -447,6 +448,11 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
 class BasePotential(BaseField, metaclass=ABCMeta):
     """Base class of all potentials. Documented in the subclasses."""
+
+    def _holding_build_state(self):
+        """Context in which the potential keeps the state it prepares for the
+        multislices of one build call, released on exit."""
+        return nullcontext()
 
     @property
     def base_axes_metadata(self):
@@ -2732,8 +2738,14 @@ class CrystalPotential(_PotentialBuilder):
     # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
     # this class's own get_sliced_atoms(); CrystalPotential descends from
     # _PotentialBuilder, so it does not inherit that declaration), and the pools
-    # that _partition_args builds once, for all members or for each member.
-    _eq_exclude = ("_sliced_atoms", "_shared_pool", "_member_pools")
+    # that _partition_args builds once, for all members or for each member, and
+    # the flag that makes it keep the pools of each member it builds.
+    _eq_exclude = (
+        "_sliced_atoms",
+        "_shared_pool",
+        "_member_pools",
+        "_hold_member_pools",
+    )
 
     # Appended to a FrozenPhonons unit's seeds to make the root seed of a
     # crystal (see _root_seed_of): "CRYS" in ASCII.
@@ -2744,6 +2756,9 @@ class CrystalPotential(_PotentialBuilder):
     # of its unit, or none when it has member seeds.
     _shared_pool = None
     _member_pools = None
+
+    # Set by `_holding_build_state` only, so no instance has it otherwise.
+    _hold_member_pools = False
 
     # A crystal pickled before `correct_surfaces` loads without it.
     _correct_surfaces = False
@@ -3147,7 +3162,8 @@ class CrystalPotential(_PotentialBuilder):
         # _pool_unit_for_member), the members of an unbuilt unit draw from one
         # pool. It is built once, here, for all members and blocks, rather
         # than by every member's generate_slices. Members that reseed their
-        # pools are given them in a lazy graph (see below).
+        # pools are given them in a lazy graph or hold them in
+        # _holding_build_state (see below).
         shared_pool = self._shared_pool
         member_pools = self._member_pools
         fp = getattr(potential_unit, "frozen_phonons", None)
@@ -3231,6 +3247,16 @@ class CrystalPotential(_PotentialBuilder):
                 shared_pool = self._build_shared_pool(
                     potential_unit, self._n_lateral_tiles, self._surface_repetitions
                 )
+            elif pool_per_member and member_pools is None and self._hold_member_pools:
+                member_pools = self._member_pools = tuple(
+                    self._build_member_pool(
+                        potential_unit,
+                        self._n_lateral_tiles,
+                        int(seed),
+                        self._surface_repetitions,
+                    )
+                    for seed in self.seeds
+                )
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -3239,9 +3265,11 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                # An eager ensemble runs its members one after another, and each
-                # member that reseeds its pool builds it once, unless it was given
-                # its pool as a member of a lazy block.
+                # An eager ensemble runs its members one after another. A member
+                # that reseeds its pool builds it for each multislice it runs,
+                # unless it was given its pool as a member of a lazy block, or
+                # runs them inside _holding_build_state, which keeps the pool
+                # built above.
                 itemset(
                     array,
                     i,
@@ -3257,6 +3285,19 @@ class CrystalPotential(_PotentialBuilder):
                 array = _wrap_with_array(array[0], ndims=0)
 
         return (array,)
+
+    @contextmanager
+    def _holding_build_state(self):
+        """Holds the pools of the members that reseed their own for the
+        multislices inside the context (see `_partition_args`); on exit the
+        crystal holds the pools it held on entry."""
+        prior = self._member_pools
+        self._hold_member_pools = True
+        try:
+            yield
+        finally:
+            self._hold_member_pools = False
+            self._member_pools = prior
 
     @property
     def _n_lateral_tiles(self) -> int:

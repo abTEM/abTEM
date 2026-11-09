@@ -7,6 +7,7 @@ import inspect
 import operator
 import warnings
 from abc import abstractmethod
+from contextlib import nullcontext
 from functools import partial, reduce
 
 import dask
@@ -5409,21 +5410,29 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
-                for start, stop in wave_vector_blocks:
-                    items = (slice(None),) * len(exit_planes_shape) + (
-                        slice(start, stop),
-                    )
-                    if self.ensemble_shape:
-                        items = i + items
+                # The potential holds its state for the blocks of this member.
+                potential = s_matrix.potential
+                holding = (
+                    nullcontext()
+                    if potential is None
+                    else potential._holding_build_state()
+                )
+                with holding:
+                    for start, stop in wave_vector_blocks:
+                        items = (slice(None),) * len(exit_planes_shape) + (
+                            slice(start, stop),
+                        )
+                        if self.ensemble_shape:
+                            items = i + items
 
-                    new_array = self._build_s_matrix(
-                        s_matrix, slice(start, stop), pbar=pbar
-                    )
+                        new_array = self._build_s_matrix(
+                            s_matrix, slice(start, stop), pbar=pbar
+                        )
 
-                    if self.store_on_host:
-                        new_array = asnumpy(new_array)
+                        if self.store_on_host:
+                            new_array = asnumpy(new_array)
 
-                    array[items] = new_array
+                        array[items] = new_array
 
         waves = Waves(
             array,
