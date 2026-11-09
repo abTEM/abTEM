@@ -172,6 +172,11 @@ Performance:
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
+- An eager `SMatrix.build`, and so an eager `SMatrix.reduce` or `SMatrix.scan`, of a `CrystalPotential` whose
+  members reseed their frozen-phonon pools (`seeds` or `num_frozen_phonons`) builds each member's pool once
+  instead of once per plane-wave block: 3 members over 14 blocks build 3 pools instead of 42, and an eager
+  `reduce` at a `dask.chunk-size` of 16 kB builds 3 instead of 165. The pool is held while the member is built and
+  released when its build returns; values are unchanged
 
 Dependencies:
 
