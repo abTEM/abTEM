@@ -244,7 +244,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         """Whether the intensities are a dask array awaiting computation."""
         return isinstance(self._array, da.core.Array)
 
-    def compute(self, **kwargs) -> "SphericalPattern":
+    def compute(self, **kwargs) -> "SphericalPattern | tuple[SphericalPattern, tuple]":
         """Compute a lazy pattern, returning one holding a plain array.
 
         The scheduler is chosen as in :meth:`abtem.array.ArrayObject.compute`: the
@@ -256,13 +256,16 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         ----------
         kwargs :
             As for :meth:`abtem.array.ArrayObject.compute`: ``progress_bar``, which
-            displays a progress bar during computation with a local scheduler, and
-            additional keyword arguments passed to `dask.compute`.
+            displays a progress bar during computation with a local scheduler (by
+            default the one set by ``diagnostics.progress_bar``), ``profiler`` and
+            ``resource_profiler``, and additional keyword arguments passed to
+            `dask.compute`.
 
         Returns
         -------
         pattern : SphericalPattern
-            Self, if the pattern was not lazy.
+            Self, if the pattern was not lazy. With ``profiler`` or
+            ``resource_profiler``, a tuple of the pattern and the profilers.
         """
         if not isinstance(self._array, da.core.Array):
             return self
@@ -273,7 +276,9 @@ class SphericalPattern(CopyMixin, EqualityMixin):
             ensemble_axes_metadata=self._ensemble_axes_metadata,
             metadata=self._metadata,
         )
-        _compute([computed], **kwargs)
+        _, profilers = _compute([computed], **kwargs)
+        if profilers:
+            return computed, profilers
         return computed
 
     @property

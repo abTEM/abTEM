@@ -822,7 +822,9 @@ def _mark_device_work(array, device: str):
     of every array derived from this one keeps it. The S-matrix scans mark their
     assembled arrays once, in ``_finalize_lazy_measurements``. Any other producer
     of device-held lazy results whose graph carries no typed layer (object or
-    host-NumPy meta) must call this on each such array.
+    host-NumPy meta) must call this on each such array. A device of ``None`` (the
+    producer follows the global configuration) marks nothing that a computation
+    reads: the scheduler choice then comes from ``config["device"]``.
     """
     array.dask.layers[array.name].collection_annotations["device"] = device
 

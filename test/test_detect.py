@@ -967,11 +967,23 @@ def _resample_entries(device):
     }
 
 
-@devices
-@pytest.mark.parametrize(
-    "entry", list(_resample_entries("cpu")), ids=list(_resample_entries("cpu"))
+_RESAMPLE_ENTRIES = (
+    "scan",
+    "lazy scan",
+    "detect",
+    "lazy detect",
+    "lazy frozen-phonon scan",
+    "multi-energy lazy scan",
+    "prism scan",
+    "cropped-window prism scan",
 )
-@pytest.mark.parametrize("max_angle", ["valid", 60.0])
+
+
+@devices
+@pytest.mark.parametrize("entry", _RESAMPLE_ENTRIES)
+# a number is the only cut that matches the pixel counts of a multi-energy ensemble;
+# None keeps the whole grid
+@pytest.mark.parametrize("max_angle", ["valid", 60.0, None])
 # finer along both axes, along x only, along y only, uniform, coarser
 @pytest.mark.parametrize(
     "resample", [0.05, (0.09, 0.2), (0.2, 0.07), "uniform", (0.12, 0.08)]

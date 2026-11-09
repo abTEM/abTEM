@@ -1795,6 +1795,19 @@ def test_spherical_pattern_compute_respects_an_explicit_scheduler(device, monkey
     assert schedulers == ["threads"]
 
 
+@pytest.mark.filterwarnings(PARTIAL)
+def test_spherical_pattern_compute_returns_the_profilers_it_is_asked_for():
+    """As ArrayObject.compute does, compute(profiler=True) also returns the
+    profilers, and without one it returns the pattern alone."""
+    pattern = tiny_reference().build(lazy=True, pbar=False)
+
+    computed, profilers = pattern.compute(profiler=True)
+
+    assert not computed.is_lazy
+    assert len(profilers) == 1
+    assert not pattern.compute().is_lazy
+
+
 # --------------------------------------------------------------------------
 # reference.py
 # --------------------------------------------------------------------------
