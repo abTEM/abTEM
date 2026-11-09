@@ -50,9 +50,9 @@ from pathlib import Path
 COSTS_PATH = Path(__file__).with_name("gpu_test_costs.json")
 
 # The seconds of a function that is not in the table: about the median of all
-# the GPU functions. The 80 functions of the table hold 74 % of the seconds,
-# and on the europa measurement a table of that size places the groups within
-# 2 % of each other (the whole table of 500 functions: within 0.1 %).
+# the GPU functions. The 80 functions of the table hold 74 % of the seconds. On
+# europa (4 workers) the groups then took 96 to 120 s, the slowest 7 % above the
+# mean; a table of all 500 functions gave 114 to 122 s.
 DEFAULT_COST = 0.25
 TABLE_SIZE = 80
 
