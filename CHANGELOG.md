@@ -623,6 +623,9 @@ Documentation:
   tutorial, which now selects the paraxial propagator explicitly where it compares algorithms at equal order
 - The installation page documents the optional pip extras (`gpaw`, `extra`, `all`) and why the GPU packages
   are not among them
+- The `angular_spread` docstrings of `SpatialEnvelope` and `CTF` now state the 1/e width convention
+  (`angular_spread = √2·σ`), matching `focal_spread`, and the `CTF` unit is corrected from Å to mrad
+  ([PR #645](https://github.com/abTEM/abTEM/pull/645))
 - The configuration reference is synchronized with the new and changed config keys
 - The multiple-GPUs section of the parallelization walkthrough is expanded to cover the multi-GPU
   hardening fixes above, and the FFT plan-cache documentation is corrected to match the shipped `auto`
