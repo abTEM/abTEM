@@ -11,6 +11,7 @@ import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
+import scipy.interpolate
 import scipy.ndimage
 import scipy.signal
 import strategies as abtem_st
@@ -1082,7 +1083,6 @@ def test_dtype_preserving_operations_keep_complex():
         "interpolate_line": (lambda m: m.interpolate_line((0, 0), (2, 2)), im_e, im_l),
         "line_profile_interpolate": (lambda m: m.interpolate(gpts=128), lp_e, lp_l),
         "bandlimit": (lambda m: m.bandlimit(0, 10), dp_e, dp_l),
-        "polar_binning": (lambda m: m.polar_binning(4, 4, 0, 10), dp_e, dp_l),
         "integrate_radial": (lambda m: m.integrate_radial(0, 10), dp_e, dp_l),
         "azimuthal_average": (lambda m: m.azimuthal_average(), dp_e, dp_l),
     }
@@ -2849,6 +2849,130 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
         rtol=0,
         atol=2e-3 * np.abs(expected).max(),
     )
+
+
+_GRID_SPLIT_PATTERN_OPERATIONS = {
+    "bandlimit": lambda patterns: patterns.bandlimit(0, 10),
+    "block_direct": lambda patterns: patterns.block_direct(),
+    "crop": lambda patterns: patterns.crop(10),
+    "interpolate": lambda patterns: patterns.interpolate(0.03),
+    "index_diffraction_spots": lambda patterns: patterns.index_diffraction_spots(
+        cell=4.0
+    ),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_PATTERN_OPERATIONS))
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 17, 21),
+        (3, 9, 21),
+        (3, 17, 11),
+        (1, (10, 7), (4, 4, 13)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_diffraction_patterns_split_along_the_grid_match_eager(
+    device, chunks, operation
+):
+    """A lazy operation on diffraction patterns whose grid is in several dask
+    chunks gives the eager result: the grid is gathered into one chunk first."""
+    shape = (3, 17, 21)
+    array = np.random.default_rng(2).random(shape).astype(np.float32)
+    kwargs = dict(
+        sampling=0.05,
+        metadata={"energy": 1e5, "semiangle_cutoff": 10.0},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = DiffractionPatterns(copy_to_device(array, device), **kwargs)
+    lazy = DiffractionPatterns(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+    apply = _GRID_SPLIT_PATTERN_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager)
+        result = apply(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    assert computed.array.shape == expected_array.shape
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@lazy_params
+@float64_devices
+def test_diffraction_patterns_interpolate_in_float64_is_linear_interpolation(
+    lazy, device
+):
+    # Linear interpolation on the centred frequency axes, renormalized to the
+    # input's total as interpolate does, compared on the pixels inside the
+    # input's frequency range. Weights built in float32 deviate by 2e-6 of the
+    # maximum here (64 x 67 pixels) and by up to about 8e-5 at 1024 x 1027,
+    # depending on the data.
+    shape = (2, 64, 67)
+    sampling, new_sampling = (0.01, 0.0093), 0.0131
+    array = np.random.default_rng(1).random(shape)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    interpolated = patterns.interpolate(sampling=new_sampling)
+
+    values = asnumpy(interpolated.copy().compute().array)
+    assert values.dtype == np.float64
+    k = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(shape[1:], sampling)
+    ]
+    k_new = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(interpolated.base_shape, interpolated.sampling)
+    ]
+    inside = ((k_new[0] >= k[0][0]) & (k_new[0] <= k[0][-1]))[:, None] & (
+        (k_new[1] >= k[1][0]) & (k_new[1] <= k[1][-1])
+    )[None]
+    points = np.stack(np.meshgrid(*k_new, indexing="ij"), -1)[inside]
+    for member, pattern in enumerate(asnumpy(patterns.copy().compute().array)):
+        expected = scipy.interpolate.RegularGridInterpolator(k, pattern)(points)
+        found = values[member][inside]
+        expected *= found.sum() / expected.sum()
+        np.testing.assert_allclose(found, expected, rtol=0, atol=1e-12 * found.max())
+
+
+@lazy_params
+@devices
+def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
+    lazy, device
+):
+    array = np.ones((2, 32, 32), dtype=np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.polar_binning(2, 4)
+    assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
 
 
 @given(
