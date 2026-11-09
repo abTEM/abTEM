@@ -1,3 +1,4 @@
+import functools
 import math
 import operator
 import pickle
@@ -3329,6 +3330,49 @@ class TestDiffractionPatternsIndexOrientations:
 
         return Rotation.random(n, random_state=seed).as_matrix()
 
+    @staticmethod
+    def _array():
+        # float32 on every device (Metal stores float32), so the values compare
+        # exactly: indexing without a radius only picks and masks pixels
+        return np.random.default_rng(0).random(
+            TestDiffractionPatternsIndexOrientations.SHAPE + (17, 21), np.float32
+        )
+
+    @staticmethod
+    def _energy_axis_values(energy_axis):
+        shape = TestDiffractionPatternsIndexOrientations.SHAPE
+        energies = np.full(shape, 100e3)
+        if energy_axis is not None:
+            n = shape[energy_axis]
+            values = TestDiffractionPatternsIndexOrientations.ENERGIES[:n]
+            energies = np.take(values, np.indices(shape)[energy_axis])
+        return energies
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _members_alone(matrices_shape, energy_axis):
+        """Each member indexed on its own, per index: (miller indices, array).
+        It depends on the layout of the matrices and energies only, not on the
+        chunking or the device."""
+        cls = TestDiffractionPatternsIndexOrientations
+        array = cls._array()
+        matrices = cls._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        energies = cls._energy_axis_values(energy_axis)
+        alone = {}
+        for index in np.ndindex(cls.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": energies[index]}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices_shape))
+                ],
+            )
+            alone[index] = ([tuple(h) for h in single.miller_indices], single.array)
+        return alone
+
     @devices
     @pytest.mark.parametrize(
         "matrices_shape, energy_axis",
@@ -3343,27 +3387,21 @@ class TestDiffractionPatternsIndexOrientations:
             ((4, 1), 1),
         ],
     )
-    @pytest.mark.parametrize(
-        "chunks", [None, (1, 1), (4, 1), (1, 3), (2, 3), (3, 2), (4, 3)]
-    )
+    # eager; one member per chunk; every member in one chunk; uneven on both axes
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 3), (3, 2)])
     def test_members_match_each_member_indexed_alone(
         self, device, matrices_shape, energy_axis, chunks
     ):
-        # float32 on every device (Metal stores float32), so the values compare
-        # exactly: indexing without a radius only picks and masks pixels
-        array = np.random.default_rng(0).random(self.SHAPE + (17, 21), np.float32)
         matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
             matrices_shape + (3, 3)
         )
         axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
-        energies = np.full(self.SHAPE, 100e3)
         metadata = {"energy": 100e3}
         if energy_axis is not None:
             n = self.SHAPE[energy_axis]
             axes[energy_axis] = EnergyAxis(values=self.ENERGIES[:n])
-            energies = np.take(self.ENERGIES[:n], np.indices(self.SHAPE)[energy_axis])
             metadata = {}
-        data = copy_to_device(array, device)
+        data = copy_to_device(self._array(), device)
         if chunks is not None:
             data = da.from_array(data, chunks=chunks + (-1, -1))
         patterns = DiffractionPatterns(
@@ -3377,18 +3415,12 @@ class TestDiffractionPatternsIndexOrientations:
         values = asnumpy(indexed.compute().array)
 
         column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        alone = self._members_alone(matrices_shape, energy_axis)
         for index in np.ndindex(self.SHAPE):
-            single = DiffractionPatterns(
-                array[index], sampling=0.5, metadata={"energy": energies[index]}
-            ).index_diffraction_spots(
-                cell=4.0,
-                orientation_matrices=matrices[
-                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices_shape))
-                ],
-            )
-            columns = [column[tuple(h)] for h in single.miller_indices]
+            millers, expected = alone[index]
+            columns = [column[h] for h in millers]
             others = np.setdiff1d(np.arange(len(column)), columns)
-            np.testing.assert_array_equal(values[index][columns], single.array)
+            np.testing.assert_array_equal(values[index][columns], expected)
             assert np.all(values[index][others] == 0)
 
     @lazy_params

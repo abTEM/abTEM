@@ -1,5 +1,7 @@
 """Tests of the upsampled (C-PRISM) scattering matrix, ``SMatrix(upsample=True)``."""
 
+import functools
+
 import numpy as np
 import pytest
 from ase.build import bulk
@@ -694,11 +696,41 @@ def test_reductions_on_different_grids_share_a_ctf_without_mixing_their_grids(
         assert evaluated[ident][0] == gpts
 
 
+def _run_upsample_scan(detectors, blend_angle, downsample, lazy, device):
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    s_matrix = _window_s_matrix(
+        potential, device, downsample=downsample, blend_angle=blend_angle
+    )
+    result = s_matrix.scan(scan=_window_scan(potential), detectors=detectors, lazy=lazy)
+    return result.compute() if lazy else result
+
+
+@functools.lru_cache(maxsize=None)
+def _pattern_scanned_alone(blend_angle, downsample, lazy, device):
+    """The pattern of the upsampled window scanned alone: it does not depend on
+    the companion detector of the test, so every companion shares it."""
+    detector = abtem.PixelatedDetector(max_angle="cutoff")
+    return _run_upsample_scan(detector, blend_angle, downsample, lazy, device)
+
+
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("downsample", [False, "cutoff"])
-@pytest.mark.parametrize("companion", ["flexible", "waves", "real_space", "annular"])
-@pytest.mark.parametrize("blend_angle", [250, 80])
+@pytest.mark.parametrize(
+    "companion, blend_angle",
+    [
+        # a detector that cannot be routed through the blended reduction, and the
+        # band of an annular detector, act through the blend angle
+        ("flexible", 250),
+        ("flexible", 80),
+        ("annular", 250),
+        ("annular", 80),
+        # the wave readers are not routable either and take the same unrouted
+        # reduction as the flexible detector, so one blend angle covers them
+        ("waves", 80),
+        ("real_space", 80),
+    ],
+)
 def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     blend_angle, companion, downsample, lazy, device
 ):
@@ -706,11 +738,6 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     # one that reads the wave, nor the band of an annular detector changes the
     # pattern. Below the blend angle the patterns agree; 250 mrad lies beyond
     # every detected angle.
-    potential = _window_potential(_WINDOW_ATOMS, device)
-    scan = _window_scan(potential)
-    s_matrix = _window_s_matrix(
-        potential, device, downsample=downsample, blend_angle=blend_angle
-    )
     others = {
         "flexible": abtem.FlexibleAnnularDetector,
         "waves": abtem.WavesDetector,
@@ -718,12 +745,14 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
         "annular": lambda: abtem.AnnularDetector(inner=50),
     }
 
-    def run(detectors):
-        result = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
-        return result.compute() if lazy else result
-
-    alone = run(abtem.PixelatedDetector(max_angle="cutoff"))
-    shared, _ = run([abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()])
+    alone = _pattern_scanned_alone(blend_angle, downsample, lazy, device)
+    shared, _ = _run_upsample_scan(
+        [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()],
+        blend_angle,
+        downsample,
+        lazy,
+        device,
+    )
 
     assert shared.shape == alone.shape
     assert shared.angular_sampling == pytest.approx(alone.angular_sampling)
