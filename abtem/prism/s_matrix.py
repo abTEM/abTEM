@@ -2014,20 +2014,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 return True
         return False
 
-    def _to_exit_reference(self, array, periodic: bool = False):
+    def _to_exit_reference(self, array):
         """Propagate reduced waves from the reference depth to the exit surface.
 
         The propagation is a Fresnel multiplication in reciprocal space, hence
         periodic with the grid it is applied on. On the full grid that period
-        is the cell's, as in multislice. The interpolated wave of a cropped
-        window is not periodic with the window, so it is zero-padded to the
-        full grid, propagated there and cropped back: the probe tails the
-        propagation moves past the window edge leave it, as the tails beyond
-        the window already have when the matrix was cropped, instead of
-        wrapping around onto the opposite side of the window. ``periodic=True``
-        propagates on the window's own grid, which is exact for a wave that is
-        periodic with the window: the plane-wave (PRISM) branch on a whole
-        number of interpolation periods (see `_plane_wave_is_window_periodic`).
+        is the cell's, as in multislice. The waves of a cropped window are not
+        periodic with the window, so they are zero-padded to the full grid,
+        propagated there and cropped back: the probe tails the propagation
+        moves past the window edge leave it, as the tails beyond the window
+        already have when the matrix was cropped, instead of wrapping around
+        onto the opposite side of the window. Both branches of a blended
+        reduction are propagated this way.
         """
         if self._reference_depth == 0.0:
             return array
@@ -2035,21 +2033,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         window = tuple(array.shape[-2:])
         gpts = tuple(self.gpts)
         sampling = tuple(e / n for e, n in zip(self.extent, self.gpts))
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        propagator = complex_exponential(
+            -np.pi * self.wavelength * self._reference_depth
+            * (kx[:, None] ** 2 + ky[None] ** 2)
+        ).astype(get_dtype(complex=True))
 
-        def propagator(shape):
-            kx, ky = spatial_frequencies(shape, sampling, xp=xp)
-            return complex_exponential(
-                -np.pi * self.wavelength * self._reference_depth
-                * (kx[:, None] ** 2 + ky[None] ** 2)
-            ).astype(get_dtype(complex=True))
-
-        if periodic or window == gpts:
-            return ifft2(fft2(array) * propagator(window))
-
-        if any(w > g for w, g in zip(window, gpts)):
-            raise RuntimeError("the reduction window is larger than the grid")
-
-        full_propagator = propagator(gpts)
+        if window == gpts:
+            return ifft2(fft2(array) * propagator)
 
         # the propagation is linear, so the padded copies need no rescaling;
         # they are made a few waves at a time, which bounds the extra memory by
@@ -2062,63 +2053,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             stop = min(start + step, len(flat))
             padded = xp.zeros((stop - start,) + gpts, dtype=array.dtype)
             padded[..., : window[0], : window[1]] = flat[start:stop]
-            padded = ifft2(fft2(padded, overwrite_x=True) * full_propagator)
+            padded = ifft2(fft2(padded, overwrite_x=True) * propagator)
             result[start:stop] = padded[..., : window[0], : window[1]]
         return result.reshape(leading + window)
-
-    @property
-    def _plane_wave_is_window_periodic(self) -> bool:
-        """Whether the plane-wave (PRISM) branch is periodic with the window:
-        its field is periodic with one interpolation period ``gpts /
-        interpolation``, so it is when the window holds a whole number of
-        periods."""
-        return all(
-            g % i == 0 and w % (g // i) == 0
-            for g, i, w in zip(self.gpts, self._interpolation, self.window_gpts)
-        )
-
-    def _needs_branch_propagation(self, detectors, blend_angle) -> bool:
-        """Whether a blended batch is propagated to the exit surface branch by
-        branch (see `_blended_waves`): a detector reads the wave of a cropped
-        window referenced to a depth inside the specimen."""
-        return (
-            blend_angle is not None
-            and self._reference_depth != 0.0
-            and tuple(self.window_gpts) != tuple(self.gpts)
-            and self._detects_the_wave(detectors)
-        )
-
-    def _blended_waves(self, interpolated, plane_wave, weight, component, exit):
-        """The blended waves, and with ``exit`` also their propagation to the
-        exit surface (else None).
-
-        The propagation of a cropped window depends on the branch: the
-        interpolated wave is propagated on the zero-padded full grid, the
-        plane-wave wave on the window's own grid when it is periodic with it
-        (see `_to_exit_reference`). Both are linear, so the blended exit wave is
-        the sum of the propagated weighted branches.
-        """
-        if not exit:
-            return (
-                self._blend_wave_batches(interpolated, plane_wave, weight, component),
-                None,
-            )
-        low, high = self._blend_wave_batches(
-            interpolated, plane_wave, weight, component, separate=True
-        )
-        if low is None or high is None:
-            waves = high if low is None else low
-        else:
-            waves = low + high
-        exit_waves = None
-        if low is not None:
-            exit_waves = self._to_exit_reference(low)
-        if high is not None:
-            high = self._to_exit_reference(
-                high, periodic=self._plane_wave_is_window_periodic
-            )
-            exit_waves = high if exit_waves is None else exit_waves + high
-        return waves, exit_waves
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -2324,16 +2261,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
     @staticmethod
-    def _snapped_blend_angle(blend_angle, detectors, margin: float = 0.0):
-        """The blend angle lowered to a detector collection boundary.
+    def _snapped_blend_angle(blend_angle, detector, margin: float = 0.0):
+        """The blend angle one detector is reduced with.
 
         Above the blend angle the reduction is the plane-wave branch alone,
         which is the PRISM algorithm exactly; below it the interpolated branch
-        takes over. A detector whose collection range straddles the blend angle
-        therefore mixes the two, and is the only way the blended reduction can
-        come out worse than PRISM on a band. Snapping the angle down to the
-        nearest boundary leaves every band wholly on one side: the bands above
-        are PRISM, the bands below are the interpolated reduction.
+        takes over. A band that straddles the blend angle would mix the two,
+        which is the only way the blended reduction can come out worse than
+        PRISM on a band, so the angle is lowered to the band's inner boundary,
+        which leaves the band wholly above it. A band wholly below or above the
+        blend angle keeps it: lowering it to the band's outer edge would put
+        the band inside a blend taper. The cut depends on this detector alone,
+        never on the other detectors of a list.
 
         The boundaries of an offset annular or segmented detector are the
         bounds of the angles it covers (see `_collected_angle_bounds`, which
@@ -2342,47 +2281,21 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         if blend_angle is None or isinstance(blend_angle, str):
             return blend_angle
 
-        if detectors is None:
-            return blend_angle
-        if not isinstance(detectors, (list, tuple)):
-            detectors = [detectors]
-
-        bounds = set()
-        for detector in detectors:
-            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
-                values = _collected_angle_bounds(detector, margin)
-            else:
-                values = tuple(
-                    getattr(detector, name, None) for name in ("inner", "outer")
-                )
-            for value in values:
-                if value is not None and np.isfinite(value):
-                    bounds.add(float(value))
+        if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+            bounds = _collected_angle_bounds(detector, margin)
+        else:
+            bounds = tuple(getattr(detector, name, None) for name in ("inner", "outer"))
+        inner, outer = (
+            float(value) if value is not None and np.isfinite(value) else None
+            for value in bounds
+        )
 
         tolerance = blend_angle * (1.0 + 1e-6) + 1e-9
-        below = [value for value in bounds if 0.0 < value <= tolerance]
-        return max(below) if below else blend_angle
-
-    def _detector_blend_angle(self, blend_angle, detector):
-        """The blend angle one detector is reduced with.
-
-        A band that straddles the blend angle is snapped down to one of its own
-        boundaries (see `_snapped_blend_angle`), which puts it wholly above the
-        cut. A band wholly below or above the blend angle keeps it: snapping it
-        to its own outer edge would put it inside a blend taper. The cut does
-        not depend on the other detectors of a list.
-        """
-        if blend_angle is None or isinstance(blend_angle, str):
+        if outer is not None and outer <= tolerance:
             return blend_angle
-        if isinstance(detector, (AnnularDetector, SegmentedDetector)):
-            _, outer = _collected_angle_bounds(
-                detector, self._offset_rounding_margin
-            )
-            if outer is not None and outer <= blend_angle * (1.0 + 1e-6) + 1e-9:
-                return blend_angle
-        return self._snapped_blend_angle(
-            blend_angle, [detector], self._offset_rounding_margin
-        )
+        if inner is not None and 0.0 < inner <= tolerance:
+            return inner
+        return blend_angle
 
     @staticmethod
     def _blend_branches(blend_angle, blend_component):
@@ -2396,9 +2309,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             blend_angle is not None and blend_component != "low",
         )
 
-    def _blend_wave_batches(
-        self, interpolated, plane_wave, weight, component=None, separate=False
-    ):
+    def _blend_wave_batches(self, interpolated, plane_wave, weight, component=None):
         """Combine the two reductions in Fourier space with the radial weight.
 
         ``component='low'`` returns the interpolated branch alone weighted by
@@ -2407,22 +2318,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         measurements blends the intensities instead of the amplitudes, which
         permits a different reduction window per branch. The branch a component
         discards may be given as ``None`` (see :meth:`_blend_branches`).
-        ``separate=True`` returns the two weighted branches ``(low, high)``
-        instead of their sum, the one a component discards as ``None``.
         """
-        if separate:
-            low = high = None
-            if component != "high":
-                low = fft2(interpolated, overwrite_x=True)
-                low *= (np.sqrt(weight) if component == "low" else weight)[None]
-                low = ifft2(low, overwrite_x=True)
-            if component != "low":
-                high = fft2(plane_wave, overwrite_x=True)
-                high *= (
-                    np.sqrt(1.0 - weight) if component == "high" else 1.0 - weight
-                )[None]
-                high = ifft2(high, overwrite_x=True)
-            return low, high
         if component == "low":
             interpolated = fft2(interpolated, overwrite_x=True)
             interpolated *= np.sqrt(weight)[None]
@@ -2835,7 +2731,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         keep_interpolated, keep_plane_wave = self._blend_branches(
             blend_angle, blend_component
         )
-        branch_exit = self._needs_branch_propagation(detectors, blend_angle)
 
         pbar = TqdmWrapper(
             enabled=pbar,
@@ -2900,14 +2795,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     )
 
                     waves_array = interpolated[rows] if keep_interpolated else None
-                    exit_array = None
                     if blend_angle is not None:
-                        waves_array, exit_array = self._blended_waves(
+                        waves_array = self._blend_wave_batches(
                             waves_array,
                             plane_wave[rows] if keep_plane_wave else None,
                             blend_weight,
-                            blend_component,
-                            exit=branch_exit,
+                            component=blend_component,
                         )
                     waves_array = waves_array.reshape(
                         (1,) * len(sub_ctf.ensemble_shape)
@@ -2925,7 +2818,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         (slice(start, stop),),
                         pbar,
                         (stop - start) * scan_shape[1],
-                        exit_waves_array=exit_array,
                     )
 
                 del interpolated, plane_wave
@@ -3197,7 +3089,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         slics: tuple,
         pbar: TqdmWrapper,
         n_reduced: int,
-        exit_waves_array=None,
     ) -> None:
         """Shared tail of ``_lattice_batch_reduce_to_measurements``,
         ``_batch_reduce_to_measurements`` and
@@ -3206,8 +3097,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         detect it, and write the result into each measurement's array
         slice. A detector that reads the wave receives a copy propagated to the
         exit surface; every other detector receives the wave at the reference
-        depth. A blended batch passes its exit-surface waves as
-        ``exit_waves_array`` (see `_blended_waves`)."""
+        depth."""
         ensemble_axes_metadata = [
             UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
         ]
@@ -3225,10 +3115,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # which a diffraction pattern at the reference depth keeps
         exit_waves = waves
         if self._detects_the_wave(detectors):
-            if exit_waves_array is None:
-                exit_waves_array = self._to_exit_reference(waves_array)
             exit_waves = Waves(
-                exit_waves_array.reshape(waves_array.shape),
+                self._to_exit_reference(waves_array),
                 **waves._copy_kwargs(exclude=("array",)),
             )
 
@@ -3268,7 +3156,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         keep_interpolated, keep_plane_wave = self._blend_branches(
             blend_angle, blend_component
         )
-        branch_exit = self._needs_branch_propagation(detectors, blend_angle)
 
         for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
             sub_ctf = sub_ctf.item()
@@ -3327,7 +3214,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     (len(positions),) + self.window_gpts,
                     dtype=get_dtype(complex=True),
                 )
-                exit_array = xp.zeros_like(waves_array) if branch_exit else None
                 for i, offset in enumerate(unique_offsets):
                     mask = xp.asarray(inverse == i)
                     reduce_to_waves = (
@@ -3344,15 +3230,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                     new_waves = branch(values) if keep_interpolated else None
                     if blend_angle is not None:
-                        new_waves, new_exit = self._blended_waves(
+                        new_waves = self._blend_wave_batches(
                             new_waves,
                             branch(plane_wave_values) if keep_plane_wave else None,
                             blend_weight,
-                            blend_component,
-                            exit=branch_exit,
+                            component=blend_component,
                         )
-                        if branch_exit:
-                            exit_array[mask] = new_exit
                     waves_array[mask] = new_waves
 
                 waves_array = waves_array.reshape(
@@ -3369,7 +3252,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     slics,
                     pbar,
                     len(positions),
-                    exit_waves_array=exit_array,
                 )
 
         pbar.close_if_exists()
@@ -3624,7 +3506,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # not depend on the other detectors of the list; the ones that
                 # cannot be routed come back here with _route=False
                 return self._routed_reduce(
-                    scan, ctf, detectors, cut, max_batch_reduction, method,
+                    scan,
+                    ctf,
+                    detectors,
+                    cut,
+                    max_batch_reduction,
+                    method,
                     blend_taper=0.0 if blend_taper is None else blend_taper,
                     unrouted_blend_angle=blend_angle if explicit_blend else None,
                     unrouted_blend_taper=blend_taper,
@@ -3774,8 +3661,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             for n, e in zip(self._interpolation, self.extent)
         )
 
-    def _routing_sides(self, cut, detectors, taper: float = 0.0):
-        """Which branch each detector reads from, or None when not routable.
+    def _routing_side(self, cut, detector, taper: float = 0.0):
+        """The branch a detector reads from, or None when it is not routable.
 
         A detector collecting only below the blend angle reads the interpolated
         reduction, one collecting only above it the plane-wave (PRISM)
@@ -3786,54 +3673,63 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         straddling the cut without a taper, or one whose collection range is
         not an angular band, is not routable.
         """
-        sides = []
-        for detector in detectors:
-            if isinstance(detector, SpectralAnnularDetector):
-                # a sweep of disks out to q_max: `inner`/`outer` are the disk's
+        if isinstance(detector, SpectralAnnularDetector):
+            # a sweep of disks out to q_max: `inner`/`outer` are the disk's
+            return None
+        if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+            # an offset region is routed on the angles it covers, which reach
+            # outer + |offset|
+            inner, outer = _collected_angle_bounds(
+                detector, self._offset_rounding_margin
+            )
+            if outer is not None and outer <= cut - taper:
+                return "low"
+            if inner is not None and inner >= cut:
+                return "high"
+            if taper > 0.0 and inner is not None and outer is not None:
+                return "taper"
+            if outer is not None and outer <= cut:
+                return "low"
+            return None
+        if isinstance(detector, PixelatedDetector):
+            max_angle = detector.max_angle
+            divisible = all(g % i == 0 for g, i in zip(self.gpts, self._interpolation))
+            if tuple(self.window_gpts) == tuple(self.gpts):
+                # the patterns are already on the simulation grid
+                if isinstance(max_angle, (int, float)) and max_angle <= cut - taper:
+                    return "low"
                 return None
-            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
-                # an offset region is routed on the angles it covers, which
-                # reach outer + |offset|
-                inner, outer = _collected_angle_bounds(
-                    detector, self._offset_rounding_margin
-                )
-                if outer is not None and outer <= cut - taper:
-                    sides.append("low")
-                elif inner is not None and inner >= cut:
-                    sides.append("high")
-                elif taper > 0.0 and inner is not None and outer is not None:
-                    sides.append("taper")
-                elif outer is not None and outer <= cut:
-                    sides.append("low")
-                else:
-                    return None
-            elif isinstance(detector, PixelatedDetector):
-                max_angle = detector.max_angle
-                divisible = all(
-                    g % i == 0 for g, i in zip(self.gpts, self._interpolation)
-                )
-                if tuple(self.window_gpts) == tuple(self.gpts):
-                    # the patterns are already on the simulation grid
-                    if isinstance(max_angle, (int, float)) and (
-                        max_angle <= cut - taper
-                    ):
-                        sides.append("low")
-                    else:
-                        return None
-                elif detector.reciprocal_space and not detector.resample and divisible:
-                    # patterns of a windowed reduction are always detected on
-                    # the full grid, whether or not the cut falls inside them:
-                    # the window is an internal accuracy device, and its
-                    # reciprocal sampling is not one a user asked for
-                    sides.append("pattern")
-                else:
-                    return None
-            else:
-                return None
-        return sides
+            if detector.reciprocal_space and not detector.resample and divisible:
+                # patterns of a windowed reduction are always detected on the
+                # full grid, whether or not the cut falls inside them: the
+                # window is an internal accuracy device, and its reciprocal
+                # sampling is not one a user asked for
+                return "pattern"
+        return None
+
+    @staticmethod
+    def _reduce_by_group(detectors, keys, reduce_group):
+        """Reduce the detectors one group of equal keys at a time and return
+        the measurements in the order of the detectors; ``reduce_group(key,
+        subset)`` reduces one group."""
+        groups = {}
+        for index, key in enumerate(keys):
+            groups.setdefault(key, []).append(index)
+        ordered = [None] * len(detectors)
+        for key, indices in groups.items():
+            measurements = reduce_group(key, [detectors[i] for i in indices])
+            for index, measurement in zip(indices, ensure_list(measurements)):
+                ordered[index] = measurement
+        return ordered
 
     def _routed_reduce(
-        self, scan, ctf, detectors, blend_angle, max_batch_reduction, method,
+        self,
+        scan,
+        ctf,
+        detectors,
+        blend_angle,
+        max_batch_reduction,
+        method,
         blend_taper: float = 0.0,
         unrouted_blend_angle=None,
         unrouted_blend_taper: float = None,
@@ -3841,66 +3737,61 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     ):
         """Route each detector to the branch its band lies in.
 
-        The blend angle is snapped to a boundary of a band that straddles it
-        (see `_detector_blend_angle`), so that every band lies wholly below or
-        above its cut: the bands below read the interpolated (C-PRISM)
-        reduction on this array's window, the bands above the plane-wave
-        reduction on one interpolation period — the window and the algorithm of
-        PRISM. This is the composite blend without
-        any Fourier weighting, possible whenever a band does not straddle its
-        cut.
+        The blend angle is lowered to the inner boundary of a band that
+        straddles it (see `_snapped_blend_angle`), so that every band lies
+        wholly below or above its cut: the bands below read the interpolated
+        (C-PRISM) reduction on this array's window, the bands above the
+        plane-wave reduction on one interpolation period — the window and the
+        algorithm of PRISM. This is the composite blend without any Fourier
+        weighting, possible whenever a band does not straddle its cut.
 
         Routing and snapping are decided per detector, so the value of a
-        detector does not depend on the other detectors of the list: a
-        detector that cannot be routed is reduced without the routing, with
-        ``unrouted_blend_angle`` (the plain interpolated reduction when None),
-        and the routable ones are still routed. Detectors with the same branch
-        and cut share one reduction.
+        detector does not depend on the other detectors of the list. A detector
+        that cannot be routed is reduced without the routing: with
+        ``unrouted_blend_angle``, or, when it is None, with the plain
+        interpolated reduction that the bands below the cut read too. The
+        detectors that read the same reduction share it: the bands below the
+        cut and the unroutable detectors at the default blend, the bands above
+        the cut (the plane-wave branch has a sharp edge, so a band wholly above
+        the smallest cut of the group reads the same pixels at any cut), the
+        patterns, and the taper bands of one cut.
         """
-        single = not isinstance(detectors, (list, tuple))
-        detectors = [detectors] if single else list(detectors)
+        detectors = ensure_list(detectors)
 
-        cuts, sides = [], []
+        cuts, keys = [], []
         for detector in detectors:
-            detector_cut = self._detector_blend_angle(blend_angle, detector)
-            side = self._routing_sides(detector_cut, [detector], taper=blend_taper)
-            sides.append(None if side is None else side[0])
-            # the interpolated branch, the stitched pattern and the unrouted
-            # reduction do not depend on the snapped cut
-            cuts.append(detector_cut if sides[-1] in ("high", "taper") else None)
+            cut = self._snapped_blend_angle(
+                blend_angle, detector, self._offset_rounding_margin
+            )
+            side = self._routing_side(cut, detector, taper=blend_taper)
+            if side is None and unrouted_blend_angle is None:
+                side = "low"
+            cuts.append(cut)
+            keys.append((side, cut if side == "taper" else None))
+        cut_of = dict(zip(map(id, detectors), cuts))
 
-        def measure(component, cut, subset):
+        def measure(key, subset):
+            component, cut = key
             if component is None:
-                if unrouted_blend_angle is None:
-                    measurements = self._reduce(
-                        scan=scan,
-                        ctf=ctf,
-                        detectors=subset,
-                        max_batch_reduction=max_batch_reduction,
-                        max_batch_expansion=max_batch_expansion,
-                        method=method,
-                        blend_angle=0.0,
-                    )
-                else:
-                    measurements = self._reduce(
-                        scan=scan,
-                        ctf=ctf,
-                        detectors=subset,
-                        max_batch_reduction=max_batch_reduction,
-                        max_batch_expansion=max_batch_expansion,
-                        method=method,
-                        blend_angle=unrouted_blend_angle,
-                        blend_taper=unrouted_blend_taper,
-                        _route=False,
-                    )
-            elif component == "pattern":
+                return self._reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    max_batch_expansion=max_batch_expansion,
+                    method=method,
+                    blend_angle=unrouted_blend_angle,
+                    blend_taper=unrouted_blend_taper,
+                    _route=False,
+                )
+            if component == "pattern":
                 # a pattern is stitched pixel by pixel, so no band of it can
                 # straddle the cut: it is taken at the requested angle
-                measurements = self._stitched_pattern_reduce(
+                return self._stitched_pattern_reduce(
                     scan, ctf, subset, blend_angle, max_batch_reduction, method
                 )
-            elif component == "taper":
-                measurements = self._composite_blend_reduce(
+            if component == "taper":
+                return self._composite_blend_reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3911,44 +3802,30 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     blend_taper=blend_taper,
                     snap=False,
                 )
-            elif component == "low":
-                measurements = self._reduce(
+            if component == "low":
+                return self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
                     max_batch_reduction=max_batch_reduction,
+                    max_batch_expansion=max_batch_expansion,
                     method=method,
                     blend_angle=0.0,
                 )
-            else:
-                period = tuple(
-                    min(-(-g // i), g)
-                    for g, i in zip(self.gpts, self._interpolation)
-                )
-                measurements = self._with_window(period)._reduce(
-                    scan=scan,
-                    ctf=ctf,
-                    detectors=subset,
-                    max_batch_reduction=max_batch_reduction,
-                    blend_angle=cut,
-                    _blend_component="high",
-                    _blend_taper=0.0,
-                )
-            if not isinstance(measurements, (list, tuple)):
-                measurements = [measurements]
-            return list(measurements)
+            period = tuple(
+                min(-(-g // i), g) for g, i in zip(self.gpts, self._interpolation)
+            )
+            return self._with_window(period)._reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=subset,
+                max_batch_reduction=max_batch_reduction,
+                blend_angle=min(cut_of[id(d)] for d in subset),
+                _blend_component="high",
+                _blend_taper=0.0,
+            )
 
-        groups = {}
-        for index, key in enumerate(zip(sides, cuts)):
-            groups.setdefault(key, []).append(index)
-
-        ordered = [None] * len(detectors)
-        for (component, cut), indices in groups.items():
-            subset = [detectors[i] for i in indices]
-            for index, measurement in zip(indices, measure(component, cut, subset)):
-                ordered[index] = measurement
-
-        return ordered[0] if single else _wrap_measurements(ordered)
+        return _wrap_measurements(self._reduce_by_group(detectors, keys, measure))
 
     def _stitched_pattern_reduce(
         self, scan, ctf, detectors, cut, max_batch_reduction, method
@@ -4126,35 +4003,30 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # detector is snapped to its own band, so its value does not depend on
         # the other detectors of the list; detectors snapped to the same angle
         # share one reduction.
-        if snap and isinstance(detectors, (list, tuple)) and len(detectors) > 1:
+        if snap and detectors is not None:
+            detectors = ensure_list(detectors)
             cuts = [
-                self._detector_blend_angle(blend_angle, detector)
+                self._snapped_blend_angle(
+                    blend_angle, detector, self._offset_rounding_margin
+                )
                 for detector in detectors
             ]
-            if len(set(cuts)) > 1:
-                ordered = [None] * len(detectors)
-                for cut in dict.fromkeys(cuts):
-                    indices = [i for i, c in enumerate(cuts) if c == cut]
-                    measurements = self._composite_blend_reduce(
+            return _wrap_measurements(
+                self._reduce_by_group(
+                    detectors,
+                    cuts,
+                    lambda cut, subset: self._composite_blend_reduce(
                         scan=scan,
                         ctf=ctf,
-                        detectors=[detectors[i] for i in indices],
+                        detectors=subset,
                         max_batch_reduction=max_batch_reduction,
                         method=method,
                         blend_angle=cut,
                         blend_window_gpts=blend_window_gpts,
                         blend_taper=blend_taper,
                         snap=False,
-                    )
-                    for index, measurement in zip(
-                        indices, ensure_list(measurements)
-                    ):
-                        ordered[index] = measurement
-                return _wrap_measurements(ordered)
-            blend_angle = cuts[0]
-        elif snap and detectors is not None and len(ensure_list(detectors)) == 1:
-            blend_angle = self._detector_blend_angle(
-                blend_angle, ensure_list(detectors)[0]
+                    ),
+                )
             )
 
         low = self._reduce(
@@ -4328,10 +4200,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         Scattering angle [mrad] above which the reduction of the compressed
         scattering matrix follows the plane-wave (PRISM) reduction of the built
         beams, below which the interpolated (C-PRISM) reduction. Acts through
-        the detector routing of the reduction: the angle is snapped down to a
-        detector collection boundary and each detector reads the branch its
-        band lies in, guaranteeing the dark-field bands match the PRISM
-        algorithm. 'auto' (default with ``upsample=True``) derives the angle
+        the detector routing of the reduction: each detector reads the branch
+        its band lies in, and for a band that straddles the angle the angle is
+        lowered to the band's inner boundary, guaranteeing the dark-field bands
+        match the PRISM algorithm. Each detector is routed on its own, so its
+        value does not depend on the other detectors scanned with it; a
+        detector that cannot be routed (wave functions, flexible annular or
+        full-window patterns) reads the plain interpolated reduction. 'auto'
+        (default with ``upsample=True``) derives the angle
         from the aliasing limit of the interpolation,
         ``extent / (2 * interpolation * thickness)``; a number fixes it;
         0 disables blending. Only used when ``upsample=True``.

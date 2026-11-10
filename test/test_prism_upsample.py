@@ -797,14 +797,20 @@ _DETECTOR_LISTS = {
         (pair, *case)
         for pair in _DETECTOR_LISTS
         for case in (
-            # the scan, at the default ('auto') blend and at an explicit one,
-            # on the full window and on a cropped one, and the mode
-            # contraction of the full window
+            # the scan, at the default ('auto') blend and at a blend angle set
+            # on the SMatrix, on the full window and on a cropped one, and the
+            # mode contraction of the full window: an unroutable companion
+            # reads the plain interpolated reduction
             (None, None, "scan"),
             ((24, 32), None, "scan"),
             ((24, 32), 80, "scan"),
             ((24, 32), "aperture", "scan"),
             (None, None, "modes"),
+            # a blend angle passed to reduce, which an unroutable companion
+            # reads as the Fourier-weighted blend, also with a taper
+            ((24, 32), 80, "reduce"),
+            ((24, 32), "aperture", "reduce"),
+            ((24, 32), 80, "reduce-taper"),
         )
         # at the aperture blend both bands lie above the cut, with nothing to
         # snap to
@@ -824,7 +830,7 @@ def test_upsample_detector_value_does_not_depend_on_the_other_detectors(
     target, companion = _DETECTOR_LISTS[pair]
     potential = _window_potential(bulk("Si", cubic=True) * (1, 1, 8), device)
     kwargs = {} if window_gpts is None else {"window_gpts": window_gpts}
-    if blend_angle is not None:
+    if blend_angle is not None and not reduction.startswith("reduce"):
         kwargs["blend_angle"] = blend_angle
     s_matrix = SMatrix(
         potential=potential,
@@ -838,15 +844,18 @@ def test_upsample_detector_value_does_not_depend_on_the_other_detectors(
     scan = _window_scan(potential)
 
     if reduction == "scan":
+
         def measure(detectors):
             return s_matrix.scan(scan=scan, detectors=detectors, lazy=False)
+
     else:
         built = s_matrix.build(lazy=False)
-        options = (
-            {"method": "modes"}
-            if reduction == "modes"
-            else {"blend_window_gpts": "period"}
-        )
+        options = {
+            "modes": {"method": "modes"},
+            "composite": {"blend_window_gpts": "period"},
+            "reduce": {"blend_angle": blend_angle},
+            "reduce-taper": {"blend_angle": blend_angle, "blend_taper": 10.0},
+        }[reduction]
 
         def measure(detectors):
             return built.reduce(scan=scan, detectors=detectors, **options)
@@ -918,17 +927,20 @@ def test_upsample_window_waves_follow_the_full_window(device):
     gpts = potential.gpts
     # a unit probe carries a real-space power of 1 / grid size
     scale = np.sqrt(np.prod(gpts) / np.prod(window))
-    expected = np.array(
-        [
-            full[n][
-                np.ix_(
-                    (x - window[0] // 2 + np.arange(window[0])) % gpts[0],
-                    (y - window[1] // 2 + np.arange(window[1])) % gpts[1],
-                )
+    expected = (
+        np.array(
+            [
+                full[n][
+                    np.ix_(
+                        (x - window[0] // 2 + np.arange(window[0])) % gpts[0],
+                        (y - window[1] // 2 + np.arange(window[1])) % gpts[1],
+                    )
+                ]
+                for n, (x, y) in enumerate(pixels)
             ]
-            for n, (x, y) in enumerate(pixels)
-        ]
-    ) * scale
+        )
+        * scale
+    )
 
     intensity = np.abs(expected) ** 2
     error = np.abs(np.abs(cropped) ** 2 - intensity).max() / intensity.max()
@@ -1703,28 +1715,33 @@ def test_upsample_lattice_detection_chunking(device):
 
 def test_upsample_blend_snapping():
     # snapping the blend angle onto a detector boundary is pure angular
-    # arithmetic: device-independent
+    # arithmetic: device-independent. Only a band that straddles the blend
+    # angle is snapped, to its own inner boundary; a band wholly below or
+    # above keeps the blend angle
     from abtem.prism.s_matrix import CompressedSMatrixArray as C
 
-    detectors = [
-        abtem.AnnularDetector(inner=0, outer=15),
-        abtem.AnnularDetector(inner=21, outer=50),
-        abtem.AnnularDetector(inner=50, outer=90),
-    ]
-    assert C._snapped_blend_angle(37.5, detectors) == 21.0
-    assert C._snapped_blend_angle(60.0, detectors) == 50.0
-    assert C._snapped_blend_angle(10.0, detectors) == 10.0   # no boundary below
-    assert C._snapped_blend_angle("aperture", detectors) == "aperture"
-    assert C._snapped_blend_angle(None, detectors) is None
-    assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
+    bright = abtem.AnnularDetector(inner=0, outer=15)
+    middle = abtem.AnnularDetector(inner=21, outer=50)
+    outer = abtem.AnnularDetector(inner=50, outer=90)
+    assert C._snapped_blend_angle(37.5, middle) == 21.0  # straddles
+    assert C._snapped_blend_angle(60.0, outer) == 50.0  # straddles
+    assert C._snapped_blend_angle(37.5, bright) == 37.5  # wholly below
+    assert C._snapped_blend_angle(60.0, middle) == 60.0  # wholly below
+    assert C._snapped_blend_angle(37.5, outer) == 37.5  # wholly above
+    assert C._snapped_blend_angle(50.0, middle) == 50.0  # outer edge at the cut
+    assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=0)) == 10.0
+    assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=5)) == 5.0
+    assert C._snapped_blend_angle("aperture", middle) == "aperture"
+    assert C._snapped_blend_angle(None, middle) is None
 
     # an offset detector's boundaries are the bounds of the angles it covers,
-    # widened by |offset| plus the rounding margin
+    # widened by |offset| plus the rounding margin: here [15, 56]
     offset_detector = abtem.SegmentedDetector(
         nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
     )
-    assert C._snapped_blend_angle(60.0, [offset_detector], margin=1.0) == 56.0
-    assert C._snapped_blend_angle(30.0, [offset_detector], margin=1.0) == 15.0
+    assert C._snapped_blend_angle(30.0, offset_detector, margin=1.0) == 15.0
+    assert C._snapped_blend_angle(53.0, offset_detector, margin=1.0) == 15.0
+    assert C._snapped_blend_angle(60.0, offset_detector, margin=1.0) == 60.0
 
 
 @devices
@@ -1764,19 +1781,25 @@ def test_upsample_blend_snaps_to_detector_boundary(device):
 def test_upsample_plane_wave_branch_is_prism(device):
     # the plane-wave branch reduced on one interpolation period must BE the
     # PRISM reduction, at any tolerance: the compression retains the row space
-    # of the built beams whole rather than by singular value
+    # of the built beams whole rather than by singular value. The comparison is
+    # of diffracted intensities: the compressed waves are referenced to a depth
+    # inside the specimen and propagated back to the exit surface on the padded
+    # grid, which a wave function would see and an intensity in q does not
     potential = _small_potential(repetitions=(2, 2, 6), device=device)
     kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
                   interpolation=2, device=device)
     prism = SMatrix(**kwargs).build(lazy=False)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
-    expected = to_host_array(prism.reduce(scan=scan))
+    detector = abtem.FlexibleAnnularDetector()
+    expected = to_host_array(prism.reduce(scan=scan, detectors=detector))
 
     for tolerance in (1e-1, 1e-2, 1e-3):
         compressed = SMatrix(**kwargs, upsample=True, tolerance=tolerance,
                              window_gpts=int(prism.window_gpts[0])).build(lazy=False)
         # a vanishing blend angle leaves the plane-wave branch alone
-        branch = to_host_array(compressed.reduce(scan=scan, blend_angle=1e-6))
+        branch = to_host_array(
+            compressed.reduce(scan=scan, detectors=detector, blend_angle=1e-6)
+        )
         error = np.abs(branch - expected).max() / np.abs(expected).max()
         assert error < 1e-4, f"tolerance {tolerance}: {error}"
 
@@ -1811,8 +1834,9 @@ def test_upsample_blend_taper_routing(device):
     # each ring reads the same scanned alone: a band wholly below the cut is not
     # snapped to its own outer edge, which would put it inside the taper
     for ring, value in zip(rings, tapered):
-        alone = built.scan(scan=scan, detectors=ring, blend_angle=cut,
-                           blend_taper=taper)
+        alone = built.scan(
+            scan=scan, detectors=ring, blend_angle=cut, blend_taper=taper
+        )
         assert np.allclose(to_host_array(alone), to_host_array(value), rtol=1e-5)
 
     # inside the zone the value lies between the two pure branches
@@ -1919,7 +1943,7 @@ def test_upsample_pixelated_detector_is_stitched(device):
     scan = GridScan.commensurate(built, gpts=4)
     detector = abtem.PixelatedDetector(max_angle=None)
     cut = 40.0
-    assert built._routing_sides(cut, [detector]) == ["pattern"]
+    assert built._routing_side(cut, detector) == "pattern"
 
     stitched = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
     stitched_array = to_host_array(stitched)
@@ -1978,7 +2002,7 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     cut = 60.0
     for max_angle in (None, 30.0):  # below the cut, and straddling it
         detector = abtem.PixelatedDetector(max_angle=max_angle)
-        assert built._routing_sides(cut, [detector]) == ["pattern"]
+        assert built._routing_side(cut, detector) == "pattern"
         patterns = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
         assert np.allclose(patterns.angular_sampling,
                            reference.angular_sampling)
@@ -2005,36 +2029,41 @@ def test_upsample_offset_detectors_route_on_the_angles_they_cover():
     offset = (3.0, 4.0)  # |offset| = 5 mrad
     r = 5.0 + built._offset_rounding_margin
 
-    def sides(detector):
-        return built._routing_sides(cut, [detector])
+    def side(detector):
+        return built._routing_side(cut, detector)
 
     # wholly below / above the cut, with or without an offset
     below = abtem.AnnularDetector(inner=0, outer=cut - r - 1, offset=offset)
     above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
-    assert sides(below) == ["low"]
-    assert sides(above) == ["high"]
-    assert sides(
-        abtem.SegmentedDetector(
-            nbins_radial=1,
-            nbins_azimuthal=4,
-            inner=cut + r + 1,
-            outer=150,
-            offset=offset,
+    assert side(below) == "low"
+    assert side(above) == "high"
+    assert (
+        side(
+            abtem.SegmentedDetector(
+                nbins_radial=1,
+                nbins_azimuthal=4,
+                inner=cut + r + 1,
+                outer=150,
+                offset=offset,
+            )
         )
-    ) == ["high"]
+        == "high"
+    )
     # outer <= cut, but the offset region reaches across it
-    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
-    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
+    assert side(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
+    assert side(abtem.AnnularDetector(inner=0, outer=cut - 1)) == "low"
     # inner >= cut, but the offset region reaches below it
-    assert sides(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
+    assert side(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
     # a q-sweep of disks is not an angular band
-    assert sides(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
+    assert side(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
 
-    # snapping puts the cut on the covered bounds of an offset detector
+    # snapping puts the cut on the covered bounds of an offset detector: a
+    # blend angle inside them moves to the covered inner bound, one beyond
+    # them stays
     detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
-    assert built._snapped_blend_angle(
-        40 + r + 1, [detector], built._offset_rounding_margin
-    ) == pytest.approx(40 + r)
+    margin = built._offset_rounding_margin
+    assert built._snapped_blend_angle(40, detector, margin) == pytest.approx(20 - r)
+    assert built._snapped_blend_angle(40 + r + 1, detector, margin) == 40 + r + 1
 
 
 def _defocus_mean_reference(built, scan, detector, defoci, **kwargs):
