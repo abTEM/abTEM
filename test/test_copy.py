@@ -683,3 +683,82 @@ class TestEqualityDiscriminates:
         assert tp2.__dict__["_local_potential_device_cache"] is None
 
         assert tp1 == tp2
+
+    @pytest.mark.parametrize(
+        "a, b",
+        [
+            ((), (1,)),
+            ([], [5]),
+            (7, (7, 7)),
+            (7, (7,)),
+            ((5,), (5, 5)),
+            ((1.0,), (1.0, 1.0)),
+            (np.arange(7), np.tile(np.arange(7), (7, 1))),
+            (np.zeros(3), np.zeros((2, 3))),
+        ],
+        ids=[
+            "empty-vs-one",
+            "empty-list-vs-one",
+            "number-vs-pair",
+            "number-vs-one",
+            "one-vs-two",
+            "float-one-vs-two",
+            "int-array-vs-tile",
+            "float-array-vs-stack",
+        ],
+    )
+    def test_values_of_different_shapes_are_different(self, a, b):
+        """`np.equal` and `np.allclose` broadcast, so `(5,)` equalled `(5, 5)`
+        and an empty sequence equalled anything. The array pairs differ in size
+        along both axes. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self, value):
+                self._value = value
+
+        assert Holder(a) != Holder(b)
+        assert Holder(b) != Holder(a)
+
+    @pytest.mark.parametrize(
+        "a, b",
+        [
+            ([7], (7,)),
+            (np.arange(3), [0, 1, 2]),
+            (((1, 2), (3,)), ((1, 2), (3,))),
+            ((1.0,), (1.0 + 1e-9,)),
+            (np.zeros((2, 3)), np.zeros((2, 3))),
+        ],
+        ids=["list-vs-tuple", "array-vs-list", "ragged", "float-tolerance", "array"],
+    )
+    def test_values_of_the_same_shape_still_compare_equal(self, a, b):
+        """The shape check adds no difference between values of one shape: a list
+        and a tuple, an array and a list, identical ragged tuples and floats
+        within `np.allclose`'s tolerance stay equal, and different ragged tuples
+        stay different. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self, value):
+                self._value = value
+
+        assert Holder(a) == Holder(b)
+        assert Holder(((1, 2), (3,))) != Holder(((1, 2), (4,)))
+
+    @pytest.mark.parametrize("kind", ["FrozenPhonons", "NoiseTransform"])
+    def test_one_seed_against_two_equal_seeds_is_different(self, kind):
+        """A `FrozenPhonons` of one configuration and one of two with the same
+        seed, and noise transforms with seeds `(5,)` and `(5, 5)`, draw
+        different numbers of random streams. Device-independent."""
+        import abtem
+        from abtem.noise import NoiseTransform
+
+        def make(seeds):
+            if kind == "NoiseTransform":
+                return NoiseTransform(dose=1e3, seeds=seeds)
+            return abtem.FrozenPhonons(
+                self._atoms(), len(seeds), sigmas=0.1, seed=seeds
+            )
+
+        assert make((5,)) != make((5, 5))
+        assert make((5, 5)) == make((5, 5))

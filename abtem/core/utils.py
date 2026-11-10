@@ -136,11 +136,18 @@ def _is_integral(value) -> bool:
     return getattr(getattr(value, "dtype", None), "kind", None) in ("b", "i", "u")
 
 
+def _shape(value) -> tuple[int, ...]:
+    """The `.shape` of `value`, else `np.shape`, which raises on Metal torch arrays."""
+    shape = getattr(value, "shape", None)
+    return np.shape(value) if shape is None else tuple(shape)
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
 
-    Integers, and tuples, lists and arrays of integers, compare exactly; any
-    other number compares to the default tolerance of `np.allclose`.
+    Numbers, and tuples, lists and arrays of numbers, are equal when their
+    shapes and their values are: integers exactly, any other number to the
+    default tolerance of `np.allclose`. A list equals a tuple of the same values.
 
     A lazy (dask) attribute decides nothing: comparing its values would run its
     graph, discard the result and let an error from inside the graph escape
@@ -201,12 +208,13 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
 
         if not isinstance(value, EqualityMixin):
             # A tolerance is for floating-point round-off; integers (seeds,
-            # counts, indices) are exact.
+            # counts, indices) compare without one. Both comparisons broadcast,
+            # so the shapes must match as well: (5,) is not (5, 5).
             compare = (
                 np.equal if _is_integral(value) and _is_integral(other) else np.allclose
             )
             try:
-                equal = compare(value, other)
+                equal = np.all(compare(value, other)) and _shape(value) == _shape(other)
             except (ValueError, TypeError):
                 pass
         # else:
