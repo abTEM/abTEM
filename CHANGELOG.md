@@ -21,7 +21,7 @@ Changed behaviour:
   from the centre, in the direction of its `wavelength * k`, so that the distance from the centre is the angle and
   rings of constant angle are circles; the axes read "scattering angle". The pixels, uniform in `wavelength * k`, are
   stretched towards 90 degrees, where the plot ends; evanescent beams are not drawn. Patterns in `1/Å` are images of
-  their grid as before ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+  their grid as before ([PR #676](https://github.com/abTEM/abTEM/pull/676))
 
 Features:
 
