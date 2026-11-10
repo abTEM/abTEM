@@ -204,6 +204,21 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         """Number of projected potential slices."""
         return len(self.slice_thickness)
 
+    def _slice_range(
+        self, first_slice: int, last_slice: Optional[int]
+    ) -> tuple[int, int]:
+        """The range ``first_slice:last_slice`` of slices, ``last_slice=None`` being
+        the number of slices; a range outside ``0 <= first_slice <= last_slice <=
+        len(self)`` raises a ValueError."""
+        if last_slice is None:
+            last_slice = len(self)
+        if not 0 <= first_slice <= last_slice <= len(self):
+            raise ValueError(
+                f"slice range {first_slice}:{last_slice} is not within the "
+                f"{len(self)} slices"
+            )
+        return first_slice, last_slice
+
     @property
     @abstractmethod
     def slice_thickness(self) -> tuple[float, ...]:
@@ -755,8 +770,7 @@ class _FieldBuilder(BaseField):
 
         self.grid.check_is_defined()
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if lazy:
             blocks = self.ensemble_blocks(self._default_ensemble_chunks)
@@ -884,8 +898,7 @@ class _FieldBuilder(BaseField):
             generate_chunks,
         )
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if chunk_size == "auto":
             # A chunk holds every member of the ensemble.
@@ -1482,8 +1495,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         xp = get_array_module(self.device)
 
@@ -2024,8 +2036,7 @@ class FieldArray(BaseField, ArrayObject):
         """
         self._warn_if_ensemble()
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         exit_plane_after = self._exit_plane_after
         # cum_thickness = np.cumsum(self.slice_thickness)
@@ -2095,8 +2106,7 @@ class FieldArray(BaseField, ArrayObject):
             generate_chunks,
         )
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if chunk_size == "auto":
             chunk_size = estimate_potential_chunk_size(
@@ -3697,8 +3707,7 @@ class CrystalPotential(_PotentialBuilder):
         """
         potentials = self._built_pool()
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
@@ -3837,8 +3846,7 @@ class CrystalPotential(_PotentialBuilder):
         """
         from abtem.core.chunks import estimate_potential_chunk_size
 
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if chunk_size == "auto":
             chunk_size = estimate_potential_chunk_size(self.gpts, self.device)

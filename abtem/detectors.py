@@ -2286,9 +2286,14 @@ class PixelatedDetector(BaseDetector):
         For waves with several energies, every energy is cropped to the same
         number of pixels, those of the highest energy, as
         `Waves.diffraction_patterns` crops such waves.
-    resample : str or False
+    resample : str, float, two floats or False
         If 'uniform', the diffraction patterns from rectangular cells will be
-        downsampled to a uniform angular sampling.
+        downsampled to a uniform angular sampling. A float or two floats resample
+        the diffraction patterns to that angular sampling [1 / Å], as
+        `DiffractionPatterns.interpolate` does. A sampling finer than that of the
+        waves adds pixels but no angular resolution: along each axis, the pattern has
+        the ratio of the sampling of the waves to the new sampling times as many
+        pixels as the cropped pattern, rounded up.
     reciprocal_space : bool, optional
         If True (default), the diffraction pattern intensities are detected, otherwise
         the probe intensities are
@@ -2558,11 +2563,6 @@ class PixelatedDetector(BaseDetector):
                 gpts=None,
                 adjust_sampling=False,
             )
-
-            if self.max_angle:
-                gpts = tuple(
-                    min(g, g_max) for g, g_max in zip(gpts, self._crop_gpts(waves))
-                )
         else:
             sampling = waves.reciprocal_space_sampling
             gpts = self._crop_gpts(waves)

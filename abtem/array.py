@@ -817,20 +817,64 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
-def _is_gpu_array_object(obj) -> bool:
-    """Return True if obj's computation involves GPU (CuPy) arrays.
+def _mark_device_work(array, device: str):
+    """Record on the layer that produced a dask array that its tasks run their
+    computation on ``device``.
 
-    Detects GPU even when the output array has numpy meta, e.g. when a detector
-    with to_cpu=True produces CPU-resident results from GPU wave computations.
-    ArrayObject.device checks _device first (set in apply_transform when the source
-    was GPU), so this correctly handles the to_cpu=True case.
+    A task that returns host objects (the measurements of a whole S-matrix
+    ensemble member) has a NumPy ``chunk_type`` although it does the work on the
+    device. The mark is in the layer's ``collection_annotations``, so the graph
+    of every array derived from this one keeps it. The S-matrix scans mark their
+    assembled arrays once, in ``_finalize_lazy_measurements``. Any other producer
+    of device-held lazy results whose graph carries no typed layer (object or
+    host-NumPy meta) must call this on each such array. A device of ``None`` (the
+    producer follows the global configuration) marks nothing that a computation
+    reads: the scheduler choice then comes from ``config["device"]``.
     """
-    return hasattr(obj, "device") and obj.device == "gpu"
+    array.dask.layers[array.name].collection_annotations["device"] = device
+
+
+def _graph_holds_work_on(obj, device: str, array_type) -> bool:
+    """Whether the graph of a lazy array object has a layer of ``array_type``
+    chunks or a layer marked as running on ``device``.
+
+    dask records the chunk type of every array layer it creates in the layer's
+    ``collection_annotations``, and the graph of an array derived from another
+    keeps the other's layers. Device work upstream therefore stays visible in a
+    result held on the CPU (a detector's ``to_cpu=True``), whichever method
+    rebuilt that result.
+    """
+    if not getattr(obj, "is_lazy", False):
+        return False
+    chunk_type = None if array_type is None else dask.utils.typename(array_type)
+    layers = getattr(obj.array.__dask_graph__(), "layers", {})
+    annotations = (
+        getattr(layer, "collection_annotations", None) or {}
+        for layer in layers.values()
+    )
+    return any(
+        annotation.get("device") == device
+        or (chunk_type is not None and annotation.get("chunk_type") == chunk_type)
+        for annotation in annotations
+    )
+
+
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays: obj is
+    labelled or stored on the GPU, or its graph has CuPy chunks or tasks marked
+    as running on the GPU."""
+    return (hasattr(obj, "device") and obj.device == "gpu") or _graph_holds_work_on(
+        obj, "gpu", None if cp is None else cp.ndarray
+    )
 
 
 def _is_mps_array_object(obj) -> bool:
-    """Return True if obj's computation involves Metal (MPS) arrays."""
-    return hasattr(obj, "device") and obj.device == "mps"
+    """Return True if obj's computation involves Metal (MPS) arrays: obj is
+    labelled or stored on Metal, or its graph has Metal chunks or tasks marked as
+    running on Metal."""
+    return (hasattr(obj, "device") and obj.device == "mps") or _graph_holds_work_on(
+        obj, "mps", backend.TorchNDArray
+    )
 
 
 def _resolve_mps_scheduler(kwargs: dict) -> dict:
@@ -1274,21 +1318,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return len(set(axis).intersection(base_axes)) > 0
 
     def apply_func(self, func: Callable, **kwargs) -> Self:
-        """Apply a function to the array object. The function must take an array as its
-        first argument, only the array is modified, the metadata is not changed. The
-        function is applied lazily if the array object is lazy.
+        """Apply a function to the array of the array object; the metadata is not
+        changed.
+
+        The function is called with the array object as its first argument and returns
+        the new array, of the same shape and dtype. For a lazy array object it is
+        applied lazily, block by block: each call then receives an eager array object
+        that holds one block, with the ensemble axes metadata of that block.
 
         Parameters
         ----------
         func : callable
-            Function to apply to the array object.
+            Function taking the array object as its first argument and returning the
+            new array.
         kwargs :
             Additional keyword arguments passed to the function.
 
         Returns
         -------
         array_object : ArrayObject or subclass of ArrayObject
-            The array object with the function applied.
+            The array object with the new array.
         """
         transform = TransformFromFunc(func, func_kwargs=kwargs)
         return transform.apply(self)
