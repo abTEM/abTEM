@@ -14,6 +14,7 @@ import abtem
 from abtem.core.backend import asnumpy
 from abtem.core.energy import (
     energy2wavelength,
+    to_angle_plane,
     to_grid_angle,
     to_scattering_angle,
     to_scattering_angle_limit,
@@ -457,17 +458,28 @@ def test_the_spectral_annular_detector_shows_the_cones_it_detects():
         gx, gy = np.meshgrid(*k, indexing="ij")
         pixels = np.stack([gx.ravel(), gy.ravel()], axis=1)
         for q, outline in zip(np.linspace(0.0, 1400.0, 5), outlines):
-            # every point is outer from the centre direction, or on the edge of the
-            # propagating beams where the cone runs past 90 degrees
+            # the plot is on scattering angles: a point at p is the beam at the
+            # angle |p| from the axis in the direction of p. Every point is outer
+            # from the centre direction, or at 90 degrees where the cone runs past.
             theta = q / 1e3
             centre = [np.sin(theta) * cos_a, np.sin(theta) * sin_a, np.cos(theta)]
-            g = outline / 1e3
-            on_edge = np.isclose(np.hypot(*g.T), 1.0)
-            n = np.column_stack([g, np.sqrt(np.clip(1 - (g**2).sum(1), 0, None))])
+            polar = np.hypot(*outline.T) / 1e3
+            azimuth = np.arctan2(outline[:, 1], outline[:, 0])
+            n = np.column_stack(
+                [
+                    np.sin(polar) * np.cos(azimuth),
+                    np.sin(polar) * np.sin(azimuth),
+                    np.cos(polar),
+                ]
+            )
+            on_edge = np.isclose(polar, np.pi / 2)
             angles = 1e3 * np.arccos(np.clip(n @ centre, -1, 1))
             np.testing.assert_allclose(angles[~on_edge], outer, atol=1e-6)
             assert np.all(angles[on_edge] <= outer + 1e-6)
             assert on_edge.any() == (q + outer > 1e3 * np.pi / 2)
+            if q == 0.0:
+                # about the axis, the cone is a circle of radius outer
+                np.testing.assert_allclose(polar * 1e3, outer)
 
             # and it holds the pixels the detector integrates, up to some of the
             # pixels its edge crosses (at most 14 here; a circle of radius outer
@@ -475,7 +487,9 @@ def test_the_spectral_annular_detector_shows_the_cones_it_detects():
             mask = _annular_detector_mask(
                 gpts, sampling, 0.0, outer, offset=(q * cos_a, q * sin_a)
             ).ravel()
-            inside = Path(outline).contains_points(pixels)
+            inside = Path(outline).contains_points(
+                np.column_stack(to_angle_plane(*pixels.T))
+            )
             edge_pixels = 2 * np.pi * outer / min(sampling)
             assert (mask != inside).sum() < edge_pixels / 3
 
@@ -499,3 +513,104 @@ def test_an_offset_centre_beyond_the_grid_has_no_pixel():
         reference = 1e3 * np.arccos(np.clip(nx * c[0] + ny * c[1] + nz * c[2], -1, 1))
         assert alpha.min() > 100.0
         np.testing.assert_allclose(alpha, reference, atol=0.2)
+
+
+def test_a_pattern_in_angles_is_drawn_on_its_scattering_angles():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+    from matplotlib.image import AxesImage
+
+    patterns = plane_waves().diffraction_patterns(max_angle="full")
+    with abtem.config.set({"angles": "paraxial"}):
+        patterns.show(units="mrad")
+        assert isinstance(plt.gca().get_images()[0], AxesImage)
+        plt.close("all")
+    with abtem.config.set({"angles": "exact"}):
+        # in 1/Å the pattern stays an image of its grid
+        patterns.show()
+        assert plt.gca().get_images()
+        plt.close("all")
+
+        visualization = patterns.show(units="mrad", cbar=True)
+        artist = visualization.artists.ravel()[0]
+        ax = artist._ax
+        (mesh,) = [c for c in ax.collections if isinstance(c, QuadMesh)]
+        assert not ax.get_images()
+        assert ax.get_xlabel().startswith("scattering angle x")
+
+        # every corner is at its scattering angle from the axis, in the direction
+        # of its wavelength * k, and corners of evanescent beams at 90 degrees
+        corners = mesh.get_coordinates()
+        n = patterns.shape[-1]
+        sampling = patterns.angular_sampling
+        edges = [(np.arange(n + 1) - n // 2 - 0.5) * d for d in sampling]
+        gx, gy = np.meshgrid(*edges, indexing="ij")
+        g = np.hypot(gx, gy).T
+        expected = 1e3 * np.arcsin(np.minimum(g / 1e3, 1.0))
+        np.testing.assert_allclose(np.hypot(*corners.T).T, expected, atol=1e-6)
+        azimuth = np.arctan2(corners[..., 1], corners[..., 0])
+        inside = g > 0
+        np.testing.assert_allclose(
+            np.angle(np.exp(1j * (azimuth - np.arctan2(gy.T, gx.T))))[inside],
+            0.0,
+            atol=1e-9,
+        )
+
+        # the evanescent beam (wavelength * k = 1.084, at n = 50) is not drawn,
+        # the beam of 1050 mrad (n = 40) is
+        values = mesh.get_array()
+        centre = np.round(np.fft.fftshift(np.fft.fftfreq(n) * n)).astype(int)
+        row = int(np.flatnonzero(centre == 0)[0])
+        assert values.mask[row, int(np.flatnonzero(centre == 50)[0])]
+        assert not values.mask[row, int(np.flatnonzero(centre == 40)[0])]
+
+        # the data can be replaced, and the axes end at 90 degrees
+        artist.set_data(patterns * 2)
+        np.testing.assert_allclose(
+            mesh.get_array().compressed(), 2 * values.compressed()
+        )
+        xlim = artist.get_xlim()
+        assert xlim[1] == pytest.approx(1e3 * np.pi / 2, rel=1e-4)
+        plt.close("all")
+
+
+def test_a_complex_pattern_in_angles_is_drawn_on_its_scattering_angles():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+
+    ctf = abtem.CTF(energy=ENERGY, defocus=20.0, semiangle_cutoff=800.0)
+    with abtem.config.set({"angles": "exact"}):
+        ctf.to_diffraction_patterns(max_angle=1200.0, gpts=64).show(units="mrad")
+        meshes = [c for c in plt.gca().collections if isinstance(c, QuadMesh)]
+        # the phase and the amplitude
+        assert len(meshes) == 2
+        assert not plt.gca().get_images()
+        plt.close("all")
+
+
+def test_the_slit_is_drawn_on_the_scattering_angles():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    detector = abtem.SpectralSlitDetector(width=300.0, q_min=0.0, q_max=1400.0)
+    patterns = plane_waves().diffraction_patterns(max_angle="full")
+    with abtem.config.set({"angles": "exact"}):
+        ax = detector.show(patterns, show_pattern=True)
+        (polygon,) = ax.patches
+        vertices = polygon.get_xy()
+        # the far edge of the slit is at q = 1400 mrad on its centre line, and its
+        # corners where the rectangle on the grid puts them
+        far = vertices[np.argmax(vertices[:, 0])]
+        assert np.hypot(*far) <= 1e3 * np.pi / 2 + 1e-9
+        on_axis = vertices[np.isclose(vertices[:, 1], 0.0, atol=1e-9)]
+        assert on_axis[:, 0].max() == pytest.approx(1400.0)
+        assert ax.get_xlabel().startswith("scattering angle x")
+        plt.close("all")

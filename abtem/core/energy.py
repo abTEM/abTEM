@@ -235,6 +235,40 @@ def to_signed_grid_angle(angle, convention: Optional[str] = None):
     return xp.sign(angle) * to_grid_angle(xp.abs(angle), "exact")
 
 
+def to_angle_plane(gx, gy, convention: Optional[str] = None):
+    """
+    Positions [mrad] at which to draw the beams at grid coordinates ``(gx, gy)``
+    [mrad on the angular grid] so that the distance from the origin is the
+    scattering angle in the configured convention, in the direction of the beam.
+
+    Paraxially the grid itself. With the ``exact`` convention a beam at
+    ``wavelength * k = g`` is drawn at ``1e3 * arcsin(|g| / 1e3)`` along ``g``
+    (an azimuthal equidistant projection of the directions); coordinates beyond
+    ``|g| = 1e3``, the evanescent beams, are put on the circle of 90 degrees.
+
+    Parameters
+    ----------
+    gx, gy : float or array
+        Coordinates on the angular grid [mrad].
+    convention : {"paraxial", "exact"}, optional
+        The convention, if not the configured one.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        The positions ``(x, y)`` [mrad].
+    """
+    gx = np.asarray(gx)
+    gy = np.asarray(gy)
+    if (convention or angle_convention()) == "paraxial":
+        return gx, gy
+    radius = np.hypot(gx, gy)
+    angle = 1e3 * np.arcsin(np.minimum(radius / 1e3, 1.0))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        scale = np.where(radius > 0, angle / radius, 1.0)
+    return gx * scale, gy * scale
+
+
 def offset_to_grid(offset, convention: Optional[str] = None) -> np.ndarray:
     """
     The position on the angular grid [mrad] of the centre of a detector region
