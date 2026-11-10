@@ -419,13 +419,11 @@ def assert_array_objects_equal(
 ):
     """Assert two ArrayObjects (Waves, measurements, ...) are equal in value.
 
-    ``a == b`` cannot be used for this: ``safe_equality`` skips any attribute
-    whose comparison is a dask value, so for lazy objects only the metadata
-    is ever compared and e.g. ``Images(da.zeros(...)) == Images(da.ones(...))``
-    is True (abTEM issue #413). This computes both sides, moves them to the
-    host and checks, in turn: type, shape, dtype, base and ensemble axes
-    metadata, the ``metadata`` dict, every other constructor attribute
-    (sampling, energy, ...) and finally the array values.
+    ``a == b`` cannot be used for this: it has no verdict for a lazy object
+    (it raises ``TypeError``), and tolerances need ``np.testing``. This
+    computes both sides, moves them to the host and checks, in turn: type, shape,
+    dtype, base and ensemble axes metadata, the ``metadata`` dict, every other
+    constructor attribute (sampling, energy, ...) and finally the array values.
 
     The default tolerance is exact, for comparing two objects that went
     through the same code path (a round trip, a copy, a stack slice). For a

@@ -52,7 +52,7 @@ def test_copy_equals(data, copyable):
         )
 
     if isinstance(original, ArrayObject):
-        # `==` compares no values for lazy objects (abTEM#413).
+        # `==` has no verdict for lazy objects.
         assert_array_objects_equal(copied, original)
         _assert_copy_does_not_share_the_array(original)
     else:
@@ -181,6 +181,32 @@ class TestEqualityDiscriminates:
         assert Holder("one") == Holder("one")
         assert Holder("one") != Holder("two")
 
+    def test_an_object_missing_an_attribute_is_not_equal(self):
+        """An object restored without an attribute the other has (for example
+        unpickled from an older version) differs from it."""
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self):
+                self._a = 1.0
+                self._b = 2.0
+
+        complete, incomplete = Holder(), Holder()
+        del incomplete.__dict__["_b"]
+
+        assert complete != incomplete
+
+    def test_an_attribute_whose_comparison_raises_is_a_difference(self):
+        """`list.__eq__` reduces each pairwise `==` of arrays to a bool, which
+        numpy refuses for arrays of more than one element."""
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self):
+                self._arrays = [np.zeros(3)]
+
+        assert Holder() != Holder()
+
     def test_a_built_potential_equals_an_unbuilt_one_inside_a_container(self):
         """`_eq_exclude` is applied by `EqualityMixin.__eq__`, but
         `safe_equality` recurses into a nested `EqualityMixin` directly and so
@@ -249,14 +275,8 @@ class TestEqualityDiscriminates:
         assert built == unbuilt
 
     def test_equality_does_not_execute_a_dask_graph(self):
-        """`np.all` on a dask value returns another dask value, and the `not`
-        in front of it calls `__bool__`, which computes it. Comparing two lazy
-        objects would then run both simulations and discard the results.
-
-        This pins the cost, not the verdict: what `==` should mean for a lazy
-        object is a separate question, and today a deferred attribute is simply
-        skipped -- the behaviour that has always been in place.
-        """
+        """Refusing to compare lazy content must not run the graphs: the
+        comparison raises before anything is computed."""
         import dask
         import dask.array as da
 
@@ -273,11 +293,86 @@ class TestEqualityDiscriminates:
         try:
             a = Images(da.zeros((16, 16), dtype="float32"), sampling=0.1)
             b = Images(da.ones((16, 16), dtype="float32"), sampling=0.1)
-            a == b
+            with pytest.raises(TypeError):
+                a == b
         finally:
             dask.base.compute = real_compute
 
         assert not calls, f"`==` executed {len(calls)} dask graph(s)"
+
+    @staticmethod
+    def _images(array):
+        from abtem.measurements import Images
+
+        return Images(array, sampling=0.1)
+
+    def test_lazy_objects_with_different_content_do_not_compare(self):
+        """A dask value is never the `False` singleton, so `==` used to skip a
+        lazy attribute and every lazy object compared equal to every other.
+        Lazy content now has no verdict, and `==` and `!=` say so."""
+        import dask.array as da
+
+        zeros = self._images(da.zeros((16, 12), dtype="float32"))
+        ones = self._images(da.ones((16, 12), dtype="float32"))
+
+        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+            zeros == ones
+        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+            zeros != ones
+
+    def test_a_lazy_object_does_not_compare_with_an_eager_one(self):
+        """The content is lazy on one side only, in either order."""
+        import dask.array as da
+
+        lazy = self._images(da.zeros((16, 12), dtype="float32"))
+        eager = self._images(np.zeros((16, 12), dtype="float32"))
+
+        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+            lazy == eager
+        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+            eager == lazy
+
+    def test_a_lazy_object_compares_after_compute(self):
+        import dask.array as da
+
+        zeros = self._images(da.zeros((16, 12), dtype="float32")).compute()
+        ones = self._images(da.ones((16, 12), dtype="float32")).compute()
+        zeros_again = self._images(da.zeros((16, 12), dtype="float32")).compute()
+
+        assert zeros == zeros_again
+        assert zeros != ones
+
+    def test_the_very_same_dask_array_compares_equal(self):
+        """Two objects that hold the same dask array (the same object, or a
+        copy with the same name) have the same content by construction, so the
+        array compares equal and the other attributes decide."""
+        import dask.array as da
+
+        array = da.zeros((16, 12), dtype="float32")
+        a = self._images(array)
+
+        assert a == self._images(array)
+        assert not a != self._images(array)
+        assert a == a.copy()
+        assert a.copy().array is not a.array
+        assert a.copy().array.name == a.array.name
+
+        different_sampling = type(a)(array, sampling=0.2)
+        assert a != different_sampling
+
+    def test_nested_lazy_content_does_not_compare(self):
+        """An object that holds a lazy `EqualityMixin` raises through the
+        nested comparison instead of reporting the objects unequal."""
+        import abtem
+
+        def s_matrix():
+            potential = abtem.Potential(
+                self._atoms(), gpts=(16, 16), slice_thickness=2.0
+            ).build(lazy=True)
+            return abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
+
+        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+            s_matrix() == s_matrix()
 
     def test_slice_indexed_atoms_equals_an_identical_twin(self):
         """`_slice_index` is a list of integer arrays, one per slice.
