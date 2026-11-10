@@ -73,8 +73,9 @@ def function_id(nodeid: str) -> str:
     return nodeid.split("[")[0]
 
 
-def load_costs(path: Path = COSTS_PATH) -> dict[str, float]:
-    return json.loads(path.read_text())
+def load_costs(path: Path | None = None) -> dict[str, float]:
+    """The cost table at ``path``, by default COSTS_PATH as it is at the call."""
+    return json.loads((COSTS_PATH if path is None else path).read_text())
 
 
 def assign_groups(functions, n_groups: int, costs: dict[str, float]) -> dict[str, int]:

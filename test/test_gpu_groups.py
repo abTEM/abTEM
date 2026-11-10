@@ -87,9 +87,12 @@ def test_multi_gpu_tests_keep_a_group_of_their_own():
 
 
 def test_one_gpu_worker_keeps_the_single_gpu_group_without_reading_the_table(
-    tmp_path, monkeypatch
+    monkeypatch,
 ):
-    monkeypatch.setattr(gpu_groups, "COSTS_PATH", tmp_path / "missing.json")
+    def no_table(*args, **kwargs):
+        raise AssertionError("the cost table was read with one GPU worker")
+
+    monkeypatch.setattr(gpu_groups, "load_costs", no_table)
     items = [
         _item("test/t.py::test_a[gpu]"),
         _item("test/t.py::test_b[gpu]"),
@@ -147,6 +150,22 @@ def test_main_writes_the_most_expensive_functions_of_a_whole_run(tmp_path, monke
     # the 5 cheapest functions, 1 to 5 s, are left out
     assert min(costs.values()) == 6.0
     assert list(costs) == sorted(costs)
+
+
+def test_main_accepts_a_log_of_exactly_the_table_size(tmp_path, monkeypatch):
+    table = tmp_path / "costs.json"
+    monkeypatch.setattr(gpu_groups, "COSTS_PATH", table)
+    log = _durations_log(tmp_path / "durations.log", TABLE_SIZE)
+
+    assert gpu_groups.main(["gpu_groups.py", str(log)]) == 0
+    assert len(json.loads(table.read_text())) == TABLE_SIZE
+
+
+def test_load_costs_reads_the_table_path_at_the_call(tmp_path, monkeypatch):
+    table = tmp_path / "costs.json"
+    table.write_text('{"test/t.py::test_a": 1.5}\n')
+    monkeypatch.setattr(gpu_groups, "COSTS_PATH", table)
+    assert load_costs() == {"test/t.py::test_a": 1.5}
 
 
 def test_main_leaves_the_table_alone_for_a_partial_log(tmp_path, monkeypatch):
