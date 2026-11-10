@@ -2007,6 +2007,31 @@ class TestTransitionPotentialDeviceMemo:
         assert a.array is b.array, "the array data itself should be memoized"
         assert a._local_potential is b._local_potential
 
+    def test_compute_drops_the_copies_cached_while_lazy(self):
+        tp = self._make()
+        lazy = tp.ensure_lazy()
+        lazy.copy_to_device("cpu")  # caches the lazy array and local potential
+        lazy.compute()
+
+        on_cpu = lazy.copy_to_device("cpu")
+        assert not on_cpu.is_lazy
+        np.testing.assert_array_equal(on_cpu.array, tp.array)
+        np.testing.assert_array_equal(on_cpu._local_potential, tp._local_potential)
+
+    def test_setting_the_array_derives_the_local_potential_from_it(self):
+        tp = self._make()
+        doubled = 2 * tp.array
+        tp.array = doubled
+
+        expected = TransitionPotentialArray(
+            Z=14,
+            array=doubled,
+            energy=ENERGY,
+            extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+        np.testing.assert_array_equal(tp._local_potential, expected._local_potential)
+
     def test_mutating_one_wrapper_does_not_corrupt_the_cache(self):
         """The defect this guards against: if the memo cached the *wrapper*
         rather than its array data, mutating one task's copy (as ``scatter``

@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import bulk
+from dask import is_dask_collection
 from test_imports import NEEDS_CUPY
 from utils import assert_array_objects_equal
 
@@ -183,6 +184,29 @@ def test_array_object_round_trip(name, tmp_path):
     url = str(tmp_path / "array_object.zarr")
     array_object.to_zarr(url)
     assert_array_objects_equal(abtem.from_zarr(url), array_object)
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_compute_leaves_no_lazy_attribute(name, tmp_path):
+    """compute() turns every array the object holds eager, not only its main one,
+    so the computed object compares equal to the eagerly built one.
+
+    CPU only: which attributes compute() replaces is bookkeeping shared by every
+    device.
+    """
+    array_object = CASES[name]()
+    url = str(tmp_path / "array_object.zarr")
+    array_object.to_zarr(url)
+
+    for computed in (
+        array_object.ensure_lazy().compute(),
+        abtem.from_zarr(url).compute(),
+    ):
+        lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
+        assert not computed.is_lazy
+        assert lazy == []
+        assert computed == array_object
+        assert_array_objects_equal(computed, array_object)
 
 
 @pytest.mark.parametrize("lazy", [False, True])

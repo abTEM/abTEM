@@ -6879,7 +6879,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
         self._miller_indices = miller_indices
-        self._intensities = array
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
     def from_array_and_metadata(
