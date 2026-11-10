@@ -869,6 +869,30 @@ def test_results_of_accelerator_work_held_on_the_cpu_compute_synchronously(
     assert scheduler == (None if device == "cpu" else "synchronous")
 
 
+@pytest.mark.parametrize("derive", list(_DERIVED))
+@pytest.mark.parametrize("marked", ["gpu", "mps", None])
+def test_device_mark_stays_in_the_graph_of_derived_arrays(marked, derive):
+    """A layer marked as running on a device makes `_is_gpu_array_object` or
+    `_is_mps_array_object` true, for the marked device only, for the array object
+    and for anything derived from it; an unmarked CPU array object is neither.
+    The mark is what selects the synchronous scheduler for host results of
+    device work. The test is device-independent (NumPy data, no accelerator
+    needed), so it runs in the CPU-only CI and is not parametrized over devices."""
+    images = Images(
+        np.ones((3, 16, 20), dtype=np.float32),
+        sampling=(0.5, 0.25),
+        ensemble_axes_metadata=[OrdinalAxis(values=(1.0, 2.0, 3.0))],
+    ).ensure_lazy(chunks=(1, -1, -1))
+    if marked is not None:
+        abtem.array._mark_device_work(images.array, marked)
+
+    derived = _DERIVED[derive](images)
+
+    assert derived.is_lazy
+    assert abtem.array._is_gpu_array_object(derived) == (marked == "gpu")
+    assert abtem.array._is_mps_array_object(derived) == (marked == "mps")
+
+
 @devices
 @lazy_params
 def test_apply_func_calls_the_function_with_the_array_object(device, lazy):
