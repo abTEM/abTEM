@@ -753,9 +753,17 @@ Bugfixes:
       local potential of `new`, where they kept using that of the old array. `local_potential()` itself
       recomputes from the array and is unchanged
     - `IndexedDiffractionPatterns` no longer keeps a second reference to its array, which `compute()` left lazy
-- `==` and `!=` on an object that holds a `CrystalPotential` (an `SMatrix`, a `MultisliceTransform`, a crystal of
-  crystals) use the crystal's own comparison, so crystals with different frozen-phonon mosaics no longer make their
-  holders compare equal
+- `==` and `!=` on an object that holds another abTEM object use that object's own comparison, where the holder
+  judged it by the generic rule and skipped any check the object's class adds (the slice index of
+  `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
+  `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
+  unequal the other, and is unequal both ways, as the two objects are on their own
+- `==` and `!=` compare integers exactly, where `np.allclose`'s relative tolerance took seeds a few parts per
+  million apart as equal, so `FrozenPhonons`, `Potential`, `CrystalPotential` and noise transforms that draw
+  different random numbers, and the `SMatrix` or `MultisliceTransform` that holds them, no longer compare equal
+    - **Behaviour change:** integer attributes (seeds, but also counts, sizes and an `energy` given as an integer)
+      that differ by a small relative amount compare unequal. An integer against a float, and floats, keep the
+      tolerance, so `energy=100_000` still equals `energy=100e3`
 - A `StructureFactorArray` read from zarr keeps its Miller indices and cell as arrays, so `BlochWaves`, `g_vec` and
   `get_projected_potential` work on it, and an `SMatrixArray` read from zarr keeps the float64 wave vectors it was
   written with and reduces to the same waves as the S-matrix that was written, where they were read at the working
