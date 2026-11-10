@@ -144,7 +144,7 @@ Features:
   `SpectralSlitDetector` and the slit mode of `momentum_resolved_spectrum` support `"exact"`: the coordinates of the
   slit along and across its long axis are the angles whose sines are the direction cosines of the beam, so the slit is
   a rectangle in the diffraction plane, and the q axis of the spectrum is the scattering angle on the centre line of
-  the slit ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+  the slit ([PR #673](https://github.com/abTEM/abTEM/pull/673))
     - A detector, aperture, or `crop` with an explicit angle above 250 mrad now warns while `angles` is
       `"paraxial"`
 - Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
