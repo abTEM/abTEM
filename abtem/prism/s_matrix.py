@@ -2035,7 +2035,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         sampling = tuple(e / n for e, n in zip(self.extent, self.gpts))
         kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
         propagator = complex_exponential(
-            -np.pi * self.wavelength * self._reference_depth
+            -np.pi
+            * self.wavelength
+            * self._reference_depth
             * (kx[:, None] ** 2 + ky[None] ** 2)
         ).astype(get_dtype(complex=True))
 
@@ -3401,7 +3403,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             instead, bounding the memory at one batch of plane waves plus one batch
             of reduced wave functions, at the cost of repeating the expansion for
             every batch of probe positions. If not given (default), the value set
-            on the :class:`.SMatrix` is used. Only used with ``method='expand'``.
+            on the :class:`.SMatrix` is used. Only used with ``method='expand'``;
+            ignored when the reduced wave functions are cropped, by
+            ``window_gpts`` or by the automatic window.
         method : {'auto', 'expand', 'modes'}, optional
             How the full-window reduction is evaluated. ``'expand'`` expands the
             compressed factorization to the interpolation-(1, 1) scattering matrix
@@ -3503,8 +3507,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     else blend_angle
                 )
                 # every detector is routed on its own, so that its value does
-                # not depend on the other detectors of the list; the ones that
-                # cannot be routed come back here with _route=False
+                # not depend on the other detectors of the list
                 return self._routed_reduce(
                     scan,
                     ctf,
@@ -3539,11 +3542,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         full_window = tuple(self.window_gpts) == tuple(self.gpts)
 
         if not full_window:
-            if max_batch_expansion != "auto":
-                raise ValueError(
-                    "max_batch_expansion applies to the reduction of the expanded "
-                    "scattering matrix; it cannot be combined with window_gpts."
-                )
+            # a cropped window always contracts the modes and has no expansion
+            # to stream, so max_batch_expansion is ignored
             if method == "expand":
                 raise ValueError(
                     "method='expand' applies to the full-window reduction; with "
@@ -3803,16 +3803,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     snap=False,
                 )
             if component == "low":
-                # max_batch_expansion streams the expansion of the full window;
-                # a cropped window has none, and its routed bands always ignored
-                # the argument
-                full_window = tuple(self.window_gpts) == tuple(self.gpts)
                 return self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
                     max_batch_reduction=max_batch_reduction,
-                    max_batch_expansion=max_batch_expansion if full_window else None,
+                    max_batch_expansion=max_batch_expansion,
                     method=method,
                     blend_angle=0.0,
                 )
@@ -4240,7 +4236,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         expansion instead, bounding the memory at one batch of plane waves plus
         one batch of reduced wave functions, at the cost of repeating the
         expansion for every batch of probe positions. Only used when
-        ``upsample=True`` and the reduced wave functions are not cropped.
+        ``upsample=True``. It is ignored when the reduced wave functions are
+        cropped by the automatic window, and cannot be combined with a cropping
+        `window_gpts`.
     downsample : {'cutoff', 'valid'} or float or bool
         Controls whether to downsample the scattering matrix after running the
         multislice algorithm.

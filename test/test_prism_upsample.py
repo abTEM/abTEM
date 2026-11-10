@@ -1267,11 +1267,50 @@ def test_upsample_streamed_expansion_validation():
     assert copied.max_batch_expansion == 8
     assert copied.window_gpts == s_matrix.window_gpts
 
-    s_matrix_array = SMatrix(
-        **kwargs, interpolation=2, upsample=True, window_gpts=32
-    ).build(lazy=False)
-    with pytest.raises(ValueError, match="window_gpts"):
-        s_matrix_array.reduce(max_batch_expansion=8)
+
+
+@devices
+def test_upsample_cropped_window_ignores_max_batch_expansion(device):
+    # a cropped window contracts the modes and has no expansion to stream, so
+    # max_batch_expansion is ignored there, also when it is set on the SMatrix
+    # and the automatic window happens to be cropped, and whichever blend is
+    # requested; it used to raise in those cases
+    potential = _small_potential(gpts=128, repetitions=(4, 4, 1), device=device)
+    kwargs = dict(
+        potential=potential,
+        energy=200e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-2,
+        device=device,
+    )
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    detector = abtem.AnnularDetector(inner=0, outer=25)
+
+    s_matrix = SMatrix(**kwargs, max_batch_expansion=8)
+    assert tuple(s_matrix.window_gpts) != tuple(s_matrix.downsampled_gpts)
+    built = s_matrix.build(lazy=False)
+    for blend_angle in (None, 0.0, 30.0):
+        expected = to_host_array(
+            built.reduce(
+                scan=scan,
+                detectors=detector,
+                blend_angle=blend_angle,
+                max_batch_expansion="auto",
+            )
+        )
+        # the value set on the SMatrix, then the value passed to reduce
+        for max_batch_expansion in (None, 8):
+            measured = to_host_array(
+                built.reduce(
+                    scan=scan,
+                    detectors=detector,
+                    blend_angle=blend_angle,
+                    max_batch_expansion=max_batch_expansion,
+                )
+            )
+            np.testing.assert_array_equal(measured, expected)
 
 
 @devices
