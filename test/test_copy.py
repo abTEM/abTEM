@@ -762,3 +762,38 @@ class TestEqualityDiscriminates:
 
         assert make((5,)) != make((5, 5))
         assert make((5, 5)) == make((5, 5))
+
+    @pytest.mark.parametrize("kind", ["PlaneWave", "Probe"])
+    def test_a_one_value_energy_list_equals_the_value(self, kind):
+        """A one-value energy list is stored as its value, so it builds the
+        same waves as the value and compares equal to it in both orders; two
+        energies still make an `EnergyAxis`. Device-independent."""
+        import abtem
+        from abtem.core.axes import EnergyAxis
+
+        def make(energy):
+            if kind == "PlaneWave":
+                return abtem.PlaneWave(energy=energy, gpts=16, extent=4)
+            return abtem.Probe(energy=energy, semiangle_cutoff=20, gpts=16, extent=4)
+
+        value, listed = make(100e3), make([100e3])
+        assert value == listed
+        assert listed == value
+        assert value.ensemble_shape == listed.ensemble_shape == ()
+        np.testing.assert_array_equal(
+            value.build(lazy=False).array, listed.build(lazy=False).array
+        )
+
+        pair = make([100e3, 200e3])
+        assert pair != value
+        assert isinstance(pair.ensemble_axes_metadata[0], EnergyAxis)
+
+    def test_the_energy_setter_stores_a_one_value_list_as_its_value(self):
+        """Device-independent."""
+        from abtem.waves import EnergyEnsemble
+
+        ensemble = EnergyEnsemble(100e3)
+        ensemble.energy = [200e3]
+
+        assert ensemble == EnergyEnsemble(200e3)
+        assert EnergyEnsemble(200e3) == ensemble
