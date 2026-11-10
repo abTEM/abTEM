@@ -656,14 +656,16 @@ class _AbstractRadialDetector(BaseDetector):
         # shifted beyond the Nyquist frequency are dropped, not wrapped round.
         max_angle: float | str = outer
         if np.any(np.array(self._offset) != 0.0):
-            max_angle = (
-                outer + float(np.hypot(*self._offset)) + max(waves.angular_sampling)
+            # The beams within `outer` of a centre at |offset| from the axis are
+            # within |offset| + `outer` of it (the triangle inequality, which holds
+            # for angles on the sphere too); the pixel for the rounding of the
+            # centre is added on the grid, where the rounding is.
+            reach = to_grid_angle(outer + float(np.hypot(*self._offset)))
+            max_angle = to_scattering_angle_limit(
+                reach + max(waves.angular_sampling)
             )
             gpts = waves._gpts_within_angle(max_angle, parity="same")
-            # angles do not add with the exact convention: use the full pattern
-            if angle_convention() == "exact" or any(
-                g >= n for g, n in zip(gpts, waves._valid_gpts)
-            ):
+            if any(g >= n for g, n in zip(gpts, waves._valid_gpts)):
                 max_angle = "full"
 
         measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")

@@ -9,6 +9,15 @@ The `dev` branch is at version `1.1.0`. The entries below are merged into `dev` 
 
 Fixes that were also released in 1.0.11 are listed under that version as well.
 
+Changed behaviour:
+- **Angles are scattering angles by default.** `abtem.config["angles"]` is `"exact"`: an angle that you give (detector
+  limits and offsets, apertures and the probe's `semiangle_cutoff`, `max_angle` of crops and patterns, slit
+  coordinates) is the scattering angle `arcsin(wavelength * k)`, not `wavelength * k`. Every result that depends on
+  such an angle changes slightly: by 0.01 % at 25 mrad, 0.7 % at 200 mrad and 19 % at 1000 mrad. A detector without an
+  outer limit counts the propagating beams only, and the axes of patterns are labelled `λk`. Set
+  `abtem.config.set({"angles": "paraxial"})` to reproduce the results of earlier versions
+  ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+
 Features:
 
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
@@ -128,7 +137,7 @@ Features:
   `select_energy(energy)` returns the single-energy Bloch waves; `calculate_structure_matrix` and
   `calculate_scattering_matrix` still need a single energy and point to it ([PR #456](https://github.com/abTEM/abTEM/pull/456))
 - `abtem.config["angles"]`, the relation between the angles that you give and spatial frequencies: `"paraxial"`
-  (default, unchanged) takes an angle as `wavelength * k`, `"exact"` as the scattering angle,
+  takes an angle as `wavelength * k`, as earlier versions did, `"exact"` (now the default) as the scattering angle,
   `arcsin(wavelength * k)`. The two differ by 0.2 % at 100 mrad, 19 % at 1000 mrad, and matter for wide-angle
   scattering at low energies: at 200 eV the {200} reflection of graphene is at 951 mrad, not the 814 mrad of
   `wavelength * k`. With `"exact"`, detector limits and offsets, `PixelatedDetector(max_angle=...)`, `crop`,

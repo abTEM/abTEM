@@ -19,7 +19,15 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
-from utils import devices, gpu, lazy_params, si_cubic_atoms
+from utils import (  # noqa: F401
+    angle_by_hand,
+    devices,
+    each_angle_convention,
+    gpu,
+    grid_angle_by_hand,
+    lazy_params,
+    si_cubic_atoms,
+)
 
 ENERGIES = [80e3, 200e3, 300e3]
 
@@ -856,7 +864,7 @@ class TestTransferFunctionEnergyMatching:
             assert ctf.energy == 200e3, energy
             assert ctf.ensemble_axes_metadata == [], energy
 
-    def test_profiles(self):
+    def test_profiles(self, each_angle_convention):
         """Each energy member of the profiles is the single-energy profile on the
         common spatial-frequency grid, which reaches max_angle at the highest
         energy."""
@@ -872,7 +880,11 @@ class TestTransferFunctionEnergyMatching:
 
         shortest = energy2wavelength(max(TEST_ENERGIES))
         for i, energy in enumerate(TEST_ENERGIES):
-            member_max_angle = max_angle * energy2wavelength(energy) / shortest
+            # the common grid of wavelength * k scaled to the member's wavelength,
+            # as an angle in the configured convention
+            member_max_angle = angle_by_hand(
+                grid_angle_by_hand(max_angle) * energy2wavelength(energy) / shortest
+            )
             oracle = abtem.CTF(energy=energy, **self.CTF_KWARGS).profiles(
                 max_angle=member_max_angle
             )

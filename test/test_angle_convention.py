@@ -1,5 +1,6 @@
-"""The ``angles`` configuration: an angle that you give is either wavelength * k (the
-paraxial convention, today's behaviour) or the scattering angle arcsin(wavelength * k).
+"""The ``angles`` configuration: an angle that you give is either the scattering angle
+arcsin(wavelength * k) (the exact convention, the default) or wavelength * k (the
+paraxial convention of earlier versions).
 
 The oracle is a wave of plane waves at chosen spatial frequencies: which of them a
 detector, aperture or crop includes follows from sin(angle) = wavelength * k by hand.
@@ -47,8 +48,8 @@ def detected(detector, device="cpu"):
     return np.asarray(asnumpy(detector.detect(waves).array))
 
 
-def test_the_default_is_paraxial():
-    assert abtem.config.get("angles") == "paraxial"
+def test_the_default_is_exact():
+    assert abtem.config.get("angles") == "exact"
 
 
 def test_helpers_are_inverse_and_the_paraxial_one_is_the_identity():

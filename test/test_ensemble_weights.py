@@ -20,7 +20,7 @@ Tests that set float64 use correspondingly tighter bounds (stated in place).
 import ase
 import numpy as np
 import pytest
-from utils import gpu
+from utils import each_angle_convention, gpu, grid_angle_by_hand  # noqa: F401
 
 import abtem
 from abtem import distributions
@@ -260,7 +260,9 @@ def test_lorentzian_effective_weights(kind, device):
 
 
 @pytest.mark.parametrize("precision, atol", [("float32", 2e-5), ("float64", 1e-9)])
-def test_defocus_average_reproduces_kirkland_temporal_envelope(precision, atol):
+def test_defocus_average_reproduces_kirkland_temporal_envelope(
+    precision, atol, each_angle_convention
+):
     # For a Gaussian defocus distribution with standard deviation σ about d0, the
     # probability-weighted average of the coherent phase factor is the Gaussian
     # characteristic function,
@@ -298,9 +300,10 @@ def test_defocus_average_reproduces_kirkland_temporal_envelope(precision, atol):
         assert components == ("ctf", "temporal envelope")
         quasi_coherent_ctf, envelope = _to_numpy(quasi_coherent.array)
 
-    # Analytic oracle on the same angular grid as CTF.profiles.
+    # Analytic oracle on the same angular grid as CTF.profiles, which is uniform in
+    # wavelength * k (the envelope and chi are functions of it).
     wavelength = energy2wavelength(energy)
-    alpha = np.linspace(0, 30e-3, 200)
+    alpha = np.linspace(0, grid_angle_by_hand(30.0) * 1e-3, 200)
     kirkland = np.exp(-((np.pi * wavelength * focal_spread * (alpha / wavelength) ** 2 / 2) ** 2))
     coherent_at_d0 = np.sin(np.pi * alpha**2 * d0 / wavelength)
 
