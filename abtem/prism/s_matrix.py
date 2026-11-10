@@ -1080,9 +1080,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
-        kwargs["wave_vectors"] = np.array(
-            kwargs["wave_vectors"], dtype=get_dtype(complex=False)
-        )
+        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=float)
         return kwargs
 
         # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])

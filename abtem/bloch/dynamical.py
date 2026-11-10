@@ -822,6 +822,14 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
     ) -> StructureFactorArray:
         raise NotImplementedError
 
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        # zarr attributes hold the Miller indices and the cell as nested lists
+        kwargs = super()._unpack_kwargs(attrs)
+        kwargs["hkl"] = np.array(kwargs["hkl"], dtype=int)
+        kwargs["cell"] = np.array(kwargs["cell"], dtype=float)
+        return kwargs
+
     @property
     def gpts(self) -> tuple[int, int, int]:
         """Number of reciprocal space grid points for 3D structure factors."""

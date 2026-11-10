@@ -227,6 +227,65 @@ def test_indexed_diffraction_patterns_unpickled_from_an_older_version_compare_eq
     assert new == restored
 
 
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_zarr_round_trip_keeps_array_valued_attributes(name, tmp_path):
+    """Every array-valued attribute (Miller indices, cell, wave vectors, ...) reads
+    back from zarr with its type, dtype, shape and values; the zarr attributes hold
+    it as nested JSON lists, which `==` (np.allclose) cannot tell from the array.
+
+    CPU only: zarr is written and read on the host.
+    """
+    array_object = CASES[name]()
+    url = str(tmp_path / "array_object.zarr")
+    array_object.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    for key, value in vars(array_object).items():
+        if key == "_array" or not hasattr(value, "dtype") or np.ndim(value) == 0:
+            continue
+        other = vars(read)[key]
+        assert type(other) is type(value), (key, type(other), type(value))
+        assert other.dtype == value.dtype, (key, other.dtype, value.dtype)
+        np.testing.assert_array_equal(np.asarray(other), np.asarray(value), err_msg=key)
+
+
+def test_structure_factor_read_from_zarr_gives_the_same_bloch_wave_patterns(tmp_path):
+    """The Miller indices and the cell of a structure factor read from zarr are
+    arrays, so `BlochWaves` accepts it. `lazy=False`: a lazy `BlochWaves` does not
+    take an eager structure factor.
+
+    CPU only: zarr is written and read on the host.
+    """
+    structure_factor = CASES["StructureFactorArray"]()
+    url = str(tmp_path / "structure_factor.zarr")
+    structure_factor.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    def patterns(structure_factor):
+        bloch_waves = abtem.BlochWaves(structure_factor, energy=ENERGY, sg_max=0.05)
+        return bloch_waves.calculate_diffraction_patterns(10.0, lazy=False)
+
+    assert_array_objects_equal(patterns(read), patterns(structure_factor))
+
+
+def test_s_matrix_read_from_zarr_reduces_to_the_same_waves(tmp_path):
+    """The wave vectors of an S-matrix read from zarr keep the float64 they were
+    written in, so reducing it gives the waves of the S-matrix that was written.
+    The 5 x 4 scan differs in size from the 9 plane waves and from each grid axis.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = CASES["SMatrixArray"]()
+    url = str(tmp_path / "s_matrix.zarr")
+    s_matrix.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    scan = abtem.GridScan((0.0, 0.0), (4.0, 3.0), gpts=(5, 4))
+    assert_array_objects_equal(
+        read.reduce(scan=scan).compute(), s_matrix.reduce(scan=scan).compute()
+    )
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_transmission_function_with_ensemble_axes_and_exit_planes_round_trip(
     lazy, tmp_path
