@@ -224,14 +224,47 @@ def to_scattering_angle(grid_angle, convention: Optional[str] = None):
         return 1e3 * xp.arcsin(xp.where(xp.abs(ratio) <= 1.0, ratio, xp.nan))
 
 
-def require_paraxial_angles(feature: str) -> None:
-    """Raise if the ``angles`` configuration is ``"exact"``, for a feature whose
-    angles are not converted yet."""
-    if angle_convention() != "paraxial":
-        raise NotImplementedError(
-            f"{feature} does not support the 'exact' angle convention yet; set the "
-            "'angles' configuration to 'paraxial'."
-        )
+def to_signed_grid_angle(angle, convention: Optional[str] = None):
+    """
+    :func:`to_grid_angle` of a signed angle, such as one Cartesian coordinate of a
+    position: odd in the angle, so ``-angle`` maps to ``-to_grid_angle(angle)``.
+    """
+    if (convention or angle_convention()) == "paraxial":
+        return angle
+    xp = get_array_module(angle)
+    return xp.sign(angle) * to_grid_angle(xp.abs(angle), "exact")
+
+
+def offset_to_grid(offset, convention: Optional[str] = None) -> np.ndarray:
+    """
+    The position on the angular grid [mrad] of the centre of a detector region
+    displaced from the optical axis by ``offset`` [mrad].
+
+    With the ``exact`` convention the centre is the beam direction at the scattering
+    angle ``hypot(*offset)`` from the optical axis, in the azimuthal direction of
+    ``offset``, so its position is ``1e3 * sin(|offset| / 1e3)`` along ``offset``.
+    This does not depend on the orientation of the axes, as the per-component
+    conversion would.
+
+    Parameters
+    ----------
+    offset : two float
+        Offset [mrad] in the configured convention.
+    convention : {"paraxial", "exact"}, optional
+        The convention, if not the configured one.
+
+    Returns
+    -------
+    np.ndarray
+        Position of the centre on the angular grid [mrad].
+    """
+    offset = np.asarray(offset, dtype=float)
+    if (convention or angle_convention()) == "paraxial":
+        return offset
+    radius = float(np.hypot(*offset))
+    if radius == 0.0:
+        return offset
+    return offset * (to_grid_angle(radius, "exact") / radius)
 
 
 def to_scattering_angle_limit(grid_angle, convention: Optional[str] = None):

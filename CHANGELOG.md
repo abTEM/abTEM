@@ -136,9 +136,15 @@ Features:
   `collection_angle` and the radial bins of polar detectors, which are then uniform in the angle, are scattering
   angles, and a detector without an outer limit counts the propagating beams only. The axes of patterns stay
   uniform in `wavelength * k` and are labelled so; `DiffractionPatterns.scattering_angles()` returns the angle of every
-  pixel (NaN for evanescent beams). `SpectralSlitDetector` raises with `"exact"`; the CTF, its envelopes, the
-  PRISM blend angle and core-loss momentum transfer stay paraxial
-  ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
+  pixel (NaN for evanescent beams). The CTF, its envelopes, the PRISM blend angle and core-loss momentum transfer
+  stay paraxial ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
+- With `abtem.config["angles"] = "exact"`, an offset detector (`offset` of the annular, segmented, flexible and spectral
+  annular detectors) is centred on the direction at the angle `hypot(*offset)` from the optical axis, and its limits,
+  bins, azimuths and sensitivity are angles from that direction, not a shift of the pattern.
+  `SpectralSlitDetector` and the slit mode of `momentum_resolved_spectrum` support `"exact"`: the coordinates of the
+  slit along and across its long axis are the angles whose sines are the direction cosines of the beam, so the slit is
+  a rectangle in the diffraction plane, and the q axis of the spectrum is the scattering angle on the centre line of
+  the slit ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
     - A detector, aperture, or `crop` with an explicit angle above 250 mrad now warns while `angles` is
       `"paraxial"`
 - Convergent-beam electron diffraction from Bloch waves: `BlochWaves.calculate_cbed_patterns` solves each
