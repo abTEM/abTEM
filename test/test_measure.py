@@ -20,6 +20,7 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
     _gpu_count,
+    angle_by_hand,
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
@@ -1713,15 +1714,20 @@ def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_b
     """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
     centered at 2116 and half a unit from the next edge, which float32 radii of
     that size cannot resolve. Slow (a 4240 x 96 pattern in 2118 bins): it guards
-    against a return to radii in the configured precision."""
+    against a return to radii in the configured precision.
+
+    At 300 keV the pattern reaches wavelength * k = 0.834, so every beam has a
+    scattering angle, and max_angle, the angle of the edge of the 2118 bins on the
+    grid, holds them in either angle convention. (At 200 keV the pixel would be an
+    evanescent beam, wavelength * k = 1.06, without a scattering angle.)"""
     data = np.zeros((4240, 96), dtype=np.float32)
     data[2120 + 2116, 48 + 46] = 1.0
     with abtem.config.set({"precision": "float32"}):
         patterns = DiffractionPatterns(
-            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 200e3}
+            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 300e3}
         )
         profiles = patterns.azimuthal_average(
-            max_angle=2118 * patterns.angular_sampling[0]
+            max_angle=angle_by_hand(2118 * patterns.angular_sampling[0])
         )
 
     assert profiles.shape == (2118,)
