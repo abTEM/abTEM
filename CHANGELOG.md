@@ -16,7 +16,7 @@ Changed behaviour:
   such an angle changes slightly: by 0.01 % at 25 mrad, 0.7 % at 200 mrad and 19 % at 1000 mrad. A detector without an
   outer limit counts the propagating beams only, and the axes of patterns are labelled `λk`. Set
   `abtem.config.set({"angles": "paraxial"})` to reproduce the results of earlier versions
-  ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+  ([PR #675](https://github.com/abTEM/abTEM/pull/675))
 
 Features:
 
