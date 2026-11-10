@@ -764,6 +764,13 @@ Bugfixes:
     - **Behaviour change:** integer attributes (seeds, but also counts, sizes and an `energy` given as an integer)
       that differ by a small relative amount compare unequal. An integer against a float, and floats, keep the
       tolerance, so `energy=100_000` still equals `energy=100e3`
+- `==` and `!=` compare the shapes of numbers, tuples, lists and arrays as well as their values, where broadcasting
+  made `(5,)` equal to `(5, 5)` and an empty sequence equal to anything, so a `FrozenPhonons` of one configuration
+  and one of two with the same seed, and `NoiseTransform`s with seeds `(5,)` and `(5, 5)`, no longer compare equal
+    - **Behaviour change:** a number and a one-element sequence of it compare unequal, so
+      `Probe(semiangle_cutoff=20) != Probe(semiangle_cutoff=[20])`, whose `[20]` adds a length-1 ensemble axis. It
+      was equal one way round. The energy of a `PlaneWave` or `Probe` is the exception: a one-value list is stored
+      as its value, so `energy=100e3` and `energy=[100e3]` compare equal both ways
 - A `StructureFactorArray` read from zarr keeps its Miller indices and cell as arrays, so `BlochWaves`, `g_vec` and
   `get_projected_potential` work on it, and an `SMatrixArray` read from zarr keeps the float64 wave vectors it was
   written with and reduces to the same waves as the S-matrix that was written, where they were read at the working
