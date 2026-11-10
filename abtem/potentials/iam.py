@@ -2904,12 +2904,6 @@ class CrystalPotential(_PotentialBuilder):
                 else self._root_seed_of(self._potential_unit)
             )
 
-    def __eq__(self, other):
-        # The root seed is an identity, compared exactly: the generic equality
-        # compares numbers to a relative tolerance, under which two different
-        # 128-bit roots can compare equal.
-        return super().__eq__(other) and self._root_seed == other._root_seed
-
     @property
     def ensemble_mean(self) -> bool:
         return self._ensemble_mean

@@ -298,11 +298,12 @@ class TestEqualityDiscriminates:
     @pytest.mark.parametrize(
         "holder", ["SMatrix", "MultisliceTransform", "CrystalPotential"]
     )
-    def test_a_held_crystal_potential_compares_by_its_own_eq(self, holder):
-        """`CrystalPotential.__eq__` compares the root seed exactly; the generic
-        rule compares it with `np.allclose`, which takes the root seeds of two
-        crystals built from seeds one apart as equal. An object holding a crystal
-        gives the crystal's own verdict. Device-independent."""
+    def test_an_object_holding_a_crystal_potential_tells_two_mosaics_apart(
+        self, holder
+    ):
+        """Crystals built from seeds one apart have different root seeds, so an
+        object holding one of them differs from an object holding the other.
+        Device-independent."""
         import abtem
         from abtem.multislice import MultisliceTransform
 
@@ -342,6 +343,76 @@ class TestEqualityDiscriminates:
 
         assert Holder(self._atoms(), 1.0) == Holder(self._atoms(), 1.0)
         assert Holder(self._atoms(), 1.0) != Holder(self._atoms(), 0.5)
+
+    @pytest.mark.parametrize(
+        "kind", ["FrozenPhonons", "Potential", "CrystalPotential", "NoiseTransform"]
+    )
+    def test_seeds_a_few_parts_per_million_apart_are_different(self, kind):
+        """Integers compare exactly. `np.allclose` takes seeds that differ by one
+        in a million as equal, so objects that draw different random numbers
+        compared equal. Device-independent."""
+        import abtem
+        from abtem.noise import NoiseTransform
+
+        seeds = (1_000_000, 2_000_000)
+        near = (1_000_001, 2_000_000)
+
+        def make(seeds):
+            atoms = self._atoms()
+            if kind == "NoiseTransform":
+                return NoiseTransform(dose=1e3, seeds=seeds)
+            frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=seeds)
+            if kind == "FrozenPhonons":
+                return frozen_phonons
+            unit = abtem.Potential(
+                frozen_phonons, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 4
+            )
+            if kind == "Potential":
+                return unit
+            unit = abtem.Potential(
+                abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+                gpts=(16, 16),
+                slice_thickness=atoms.cell[2, 2] / 4,
+            )
+            return abtem.CrystalPotential(unit, (2, 2, 1), seeds=seeds)
+
+        assert make(seeds) != make(near)
+        assert make(seeds) == make(seeds)
+
+    @pytest.mark.parametrize(
+        "a, b",
+        [
+            ({"energy": 100_000}, {"energy": 100e3}),
+            ({"sampling": 1, "gpts": None}, {"sampling": 1.0, "gpts": None}),
+            ({"semiangle_cutoff": 20}, {"semiangle_cutoff": 20.0}),
+        ],
+        ids=["energy", "sampling", "semiangle_cutoff"],
+    )
+    def test_an_integer_and_the_same_float_still_compare_equal(self, a, b):
+        """Only a pair of integers compares exactly; an integer against a float
+        keeps the tolerance of `np.allclose`. Device-independent."""
+        import abtem
+
+        def probe(**kwargs):
+            kwargs = {"semiangle_cutoff": 20, "gpts": 64, "extent": 10, **kwargs}
+            return abtem.Probe(**{k: v for k, v in kwargs.items() if v is not None})
+
+        assert probe(**a) == probe(**b)
+
+    def test_integers_compare_by_value_whatever_the_container(self):
+        """A list and a tuple of the same integers are equal, as are an array and
+        a list, and differing integers are not. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self, values):
+                self._values = values
+
+        assert Holder([7]) == Holder((7,))
+        assert Holder(np.array([7, 8])) == Holder([7, 8])
+        assert Holder(1_000_000) != Holder(1_000_001)
+        assert Holder((1_000_000, 2)) != Holder((1_000_001, 2))
+        assert Holder(True) != Holder(False)
 
     def test_equality_does_not_execute_a_dask_graph(self):
         """Refusing to compare lazy content must not run the graphs: the

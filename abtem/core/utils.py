@@ -127,8 +127,20 @@ class LazyComparisonError(TypeError):
     """`==` met lazy (dask) content that only computing it could decide."""
 
 
+def _is_integral(value) -> bool:
+    """Whether `value` is an integer, or a tuple, list or array of integers."""
+    if isinstance(value, (int, np.integer)):
+        return True
+    if isinstance(value, (tuple, list)):
+        return all(_is_integral(item) for item in value)
+    return getattr(getattr(value, "dtype", None), "kind", None) in ("b", "i", "u")
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
+
+    Integers, and tuples, lists and arrays of integers, compare exactly; any
+    other number compares to the default tolerance of `np.allclose`.
 
     A lazy (dask) attribute decides nothing: comparing its values would run its
     graph, discard the result and let an error from inside the graph escape
@@ -188,8 +200,13 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
         if not isinstance(value, EqualityMixin):
+            # A tolerance is for floating-point round-off; integers (seeds,
+            # counts, indices) are exact.
+            compare = (
+                np.equal if _is_integral(value) and _is_integral(other) else np.allclose
+            )
             try:
-                equal = np.allclose(value, other)
+                equal = compare(value, other)
             except (ValueError, TypeError):
                 pass
         # else:
