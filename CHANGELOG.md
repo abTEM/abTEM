@@ -11,6 +11,30 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
+  as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
+  whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
+  (atoms a slab does not have; with an atomic plane on the slice boundary the last slice differed from a slab's by as
+  much as its largest slice potential) and miss the tails of the potential of the surface atoms beyond them. With it,
+  the slices within the integration cutoff of a surface are calculated without the images, and the tails beyond the
+  surface are added to the slice next to it, which conserves the projected potential of the slab; the slices equal
+  those of a slab with vacuum, with the vacuum slices added to the adjacent ones. The crystal itself is unchanged: its
+  slices, `box`, `thickness` and `exit_planes` are as without, so nothing shifts and the exit wave is not propagated
+  further. The tails are at the depth of the outermost slice rather than their own, so the error falls with thinner
+  slices and with the distance of the atoms from the entrance and exit plane of the unit. For Si at 100 kV, the
+  diffraction intensity of a plane wave is closer to that of the slab than that of the periodic stack by a factor 2.9
+  for atoms on the plane and 7 at 0.3 Å from it on four slices per unit (5.6 and 14 on eight), and the ADF at the
+  columns of a 20 mrad probe (50-100 mrad) is within 0.4 % of the slab's from 0.3 Å on. For atoms on the plane the
+  correction is poor: the ADF at their columns is too high by 12 % for Si on four slices per unit (5 % on eight) and
+  by 10 % and 38 % for Au on quarter-lattice and half-lattice slices, against 28-37 % too low for the periodic stack
+  of Si, so a warning is given for atoms of the unit within 0.3 Å of the plane, which suggests centering them in the
+  cell with `atoms.center(axis=2)`. **Behaviour change:** the first and last slices of a `CrystalPotential` of a
+  finite-projection unit differ from those of the periodic stack; pass `correct_surfaces=False` for the previous
+  ones. A `CrystalPotential` that stacks a unit along z raises if a `CrystalPotential` at any depth of its units
+  corrects its surfaces (pass `correct_surfaces=False` to it); a built
+  crystal (a `PotentialArray` from `build()`) is a slab with no flag to check, and must not be stacked along z. An
+  infinite projection has no surfaces to correct, and a unit that is not a `Potential` is left as it is
+  ([PR #648](https://github.com/abTEM/abTEM/pull/648))
 - Energy ensemble support across the codebase: `PlaneWave`, `Probe`, `SMatrix`, `BlochWaves` and `CTF`
   accept a list of energies, and the resulting `EnergyAxis` propagates through indexing, angular sampling,
   unit conversion and diffraction-spot indexing ([PR #257](https://github.com/abTEM/abTEM/pull/257))
@@ -232,6 +256,12 @@ Performance:
   cubic cell repeated 3 x 3 x 3 with `gpts=128` and finite projection, two processes with 24 and with 4
   interpolation threads differed by up to 4.3e-7 of the maximum
   ([PR #658](https://github.com/abTEM/abTEM/pull/658))
+- An eager `SMatrix.build`, and so an eager `SMatrix.reduce` or `SMatrix.scan`, of a `CrystalPotential` whose
+  members reseed their frozen-phonon pools (`seeds` or `num_frozen_phonons`) builds each member's pool once
+  instead of once per plane-wave block: 3 members over 14 blocks build 3 pools instead of 42, and an eager
+  `reduce` at a `dask.chunk-size` of 16 kB builds 3 instead of 165. The pool is held while the member is built and
+  released when its build returns; values are unchanged
+  ([PR #666](https://github.com/abTEM/abTEM/pull/666))
 
 Dependencies:
 

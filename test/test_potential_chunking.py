@@ -1,7 +1,9 @@
 """Tests verifying that potential chunking does not affect numerical results."""
 
+import gc
 import sys
 import types
+import weakref
 
 import ase
 import numpy as np
@@ -28,6 +30,7 @@ from abtem.magnetism.iam import (
     VectorPotentialArray,
 )
 from abtem.potentials.iam import BasePotential, CrystalPotential, PotentialArray
+from abtem.prism.s_matrix import SMatrixArray
 
 
 @pytest.fixture
@@ -476,13 +479,22 @@ class TestFiniteProjectionChunked:
 
 
 def _frozen_phonon_crystal(
-    num_configs, repetitions, unit_seed=1, device="cpu", **kwargs
+    num_configs,
+    repetitions,
+    unit_seed=1,
+    device="cpu",
+    projection="infinite",
+    **kwargs,
 ):
     atoms = bulk("Si", cubic=True)
+    if projection == "finite":
+        # off the entrance and exit planes, which the surface correction warns of
+        atoms.center(axis=2)
     unit = Potential(
         abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=unit_seed),
         gpts=(16, 16),
         slice_thickness=atoms.cell[2, 2] / 4,  # 4 slices per unit
+        projection=projection,
         device=device,
     )
     return CrystalPotential(unit, repetitions, **kwargs)
@@ -1182,19 +1194,6 @@ class TestCrystalPotentialChunking:
 
         assert len(builds) == expected
 
-    @staticmethod
-    def _count_pool_builds(monkeypatch):
-        """The frozen-phonon seeds of every pool built, one entry per build."""
-        builds = []
-        build = Potential.build
-
-        def counting(self, *args, **kwargs):
-            builds.append(tuple(int(seed) for seed in self.frozen_phonons.seed))
-            return build(self, *args, **kwargs)
-
-        monkeypatch.setattr(Potential, "build", counting)
-        return builds
-
     # The threaded scheduler is the one that can race; the synchronous one runs
     # the same blocks in order.
     @pytest.mark.parametrize("scheduler", ["threads"])
@@ -1226,7 +1225,7 @@ class TestCrystalPotentialChunking:
             crystal = _frozen_phonon_crystal(6, (2, 3, 3), **kwargs)
             expected = probe.scan(crystal, lazy=False, max_batch=2, **scan_kwargs)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             num_blocks = {}
             pools = {}
             results = {}
@@ -1251,6 +1250,176 @@ class TestCrystalPotentialChunking:
         # moves the atoms, which changes the result by far more.
         for result in results.values():
             np.testing.assert_allclose(result.array, expected.array, rtol=1e-5)
+
+    @staticmethod
+    def _count_pool_array_builds(monkeypatch):
+        """The frozen-phonon seeds of every pool built, one entry per build. The
+        pool of a finite projection is built from plain atoms, not by
+        `Potential.build`, so `_build_pool_array` is the counted call."""
+        builds = []
+        build = CrystalPotential._build_pool_array.__func__
+
+        def counting(cls, pool_unit, *args):
+            builds.append(tuple(int(seed) for seed in pool_unit.frozen_phonons.seed))
+            return build(cls, pool_unit, *args)
+
+        monkeypatch.setattr(
+            CrystalPotential, "_build_pool_array", classmethod(counting)
+        )
+        return builds
+
+    @devices
+    @pytest.mark.parametrize("projection", ["infinite", "finite"])
+    @pytest.mark.parametrize(
+        "kwargs",
+        [dict(seeds=(1, 2, 3)), dict(num_frozen_phonons=3), dict(seeds=(7,))],
+        ids=["seeds", "num_frozen_phonons", "one member"],
+    )
+    def test_a_reseeded_pool_is_built_once_in_an_eager_s_matrix(
+        self, monkeypatch, kwargs, projection, device
+    ):
+        """The eager S-matrix runs every plane-wave block of a member through its
+        own multislice. Each member's pool, with the surface slices of a finite
+        projection, is built once, not once per block (3 members over 14 blocks
+        build 3 pools), and the result is that of the lazy build, which builds
+        each pool once."""
+        crystal = _frozen_phonon_crystal(
+            6, (2, 3, 3), device=device, projection=projection, **kwargs
+        )
+        s_matrix = abtem.SMatrix(
+            potential=crystal,
+            energy=100e3,
+            semiangle_cutoff=10,
+            interpolation=1,
+            device=device,
+        )
+        expected = s_matrix.build(lazy=True, max_batch=4).compute(
+            scheduler="synchronous", progress_bar=False
+        )
+
+        builds = self._count_pool_array_builds(monkeypatch)
+        result = s_matrix.build(lazy=False, max_batch=4)
+
+        # 55 plane waves in blocks of 4
+        assert result.array.shape[-3:] == (55, 22, 32)
+        assert len(builds) == len(set(builds)) == len(crystal.seeds)
+        expected = asnumpy(expected.array)
+        np.testing.assert_allclose(
+            asnumpy(result.array), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+        )
+
+    @devices
+    def test_the_pool_of_an_eager_build_is_released_when_the_build_returns(
+        self, monkeypatch, device
+    ):
+        """A guard against keeping a pool beyond the build: an eager reduce builds
+        its members one at a time, and a member holds its pool only while its
+        S-matrix is built, not through the reduction. The crystal the caller holds
+        never holds one."""
+        pools = []
+        build = CrystalPotential._build_member_pool.__func__
+
+        def recording(cls, *args):
+            pool = build(cls, *args)
+            pools.append(weakref.ref(pool))
+            return pool
+
+        monkeypatch.setattr(
+            CrystalPotential, "_build_member_pool", classmethod(recording)
+        )
+        reduced = []
+        reduce = SMatrixArray._reduce
+
+        def checking(self, *args, **kwargs):
+            gc.collect()
+            reduced.append(len(pools))
+            assert all(pool() is None for pool in pools)
+            return reduce(self, *args, **kwargs)
+
+        monkeypatch.setattr(SMatrixArray, "_reduce", checking)
+
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), device=device, seeds=(1, 2, 3))
+        abtem.SMatrix(
+            potential=crystal,
+            energy=100e3,
+            semiangle_cutoff=10,
+            interpolation=1,
+            device=device,
+        ).reduce(
+            scan=abtem.GridScan(gpts=(2, 2)),
+            detectors=abtem.AnnularDetector(0, 20),
+            lazy=False,
+        )
+
+        assert reduced == [1, 2, 3]
+        assert crystal._member_pools is None
+
+    def test_a_crystal_holds_the_pools_built_inside_its_build_state_context(
+        self, monkeypatch
+    ):
+        """The pools it holds on exit are those it held on entry, also when the
+        body raises."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        builds = self._count_pool_array_builds(monkeypatch)
+
+        with pytest.raises(RuntimeError):
+            with crystal._holding_build_state():
+                crystal.build(lazy=False)
+                crystal.build(lazy=False)
+                assert crystal._member_pools is not None
+                raise RuntimeError
+        assert len(builds) == 1
+        assert crystal._member_pools is None
+
+        crystal.build(lazy=False)
+        assert len(builds) == 2
+
+        held = crystal._member_pools = (
+            crystal._build_member_pool(
+                crystal.potential_unit,
+                crystal._n_lateral_tiles,
+                7,
+                crystal._surface_repetitions,
+            ),
+        )
+        builds.clear()
+        with crystal._holding_build_state():
+            crystal.build(lazy=False)
+        assert crystal._member_pools is held and builds == []
+
+    def test_a_nested_build_state_context_keeps_the_hold_of_the_outer_one(
+        self, monkeypatch
+    ):
+        """The inner context drops the pools built inside it and leaves the hold
+        on: the outer context builds the pool once, and on its exit the crystal is
+        as before the first entry."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        builds = self._count_pool_array_builds(monkeypatch)
+
+        with crystal._holding_build_state():
+            with crystal._holding_build_state():
+                crystal.build(lazy=False)
+            assert crystal._hold_member_pools and crystal._member_pools is None
+            crystal.build(lazy=False)
+            crystal.build(lazy=False)
+        assert len(builds) == 2
+        assert not crystal._hold_member_pools and crystal._member_pools is None
+
+    def test_a_reseeded_crystal_regridded_after_an_eager_build_takes_the_new_grid(
+        self,
+    ):
+        """A guard: the crystal the caller holds keeps no pool of the grid it was
+        built on. The crystal is on the CPU, as the grid is device-independent."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        abtem.SMatrix(
+            potential=crystal, energy=100e3, semiangle_cutoff=10, interpolation=1
+        ).build(lazy=False)
+        crystal.gpts = (64, 96)
+        regridded = crystal.build(lazy=False).array
+
+        fresh = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        fresh.gpts = (64, 96)
+        np.testing.assert_array_equal(regridded, fresh.build(lazy=False).array)
 
     @pytest.mark.parametrize("scheduler", ["threads"])
     def test_a_reseeded_pool_is_built_once_in_a_lazy_transition_potential_scan(
@@ -1290,7 +1459,7 @@ class TestCrystalPotentialChunking:
         with abtem.config.set({"potential.slice-chunk-size": 2}):
             expected = scan(lazy=False)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             lazy = scan(lazy=True)
             assert lazy.array.npartitions == 4
             result = lazy.compute(scheduler=scheduler, progress_bar=False)

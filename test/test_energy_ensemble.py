@@ -157,8 +157,13 @@ class TestProbeEnergyEnsemble:
         1/A), the propagator and the interaction constant must all use the
         member's own energy. The potential is a CrystalPotential, which
         generates its slices with its own code."""
+
+        # centered along z: atoms on the entrance plane of a crystal that corrects
+        # its surfaces are warned about
+        atoms = _srtio3_atoms()
+        atoms.center(axis=2)
         potential = abtem.CrystalPotential(
-            abtem.Potential(_srtio3_atoms(), sampling=0.1, projection="finite"),
+            abtem.Potential(atoms, sampling=0.1, projection="finite"),
             repetitions=(1, 1, 2),
         )
         energies = [60e3, 100e3, 200e3]
