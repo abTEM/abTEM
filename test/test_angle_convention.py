@@ -192,3 +192,24 @@ def test_the_spectral_slit_detector_refuses_the_exact_convention():
     with abtem.config.set({"angles": "exact"}):
         with pytest.raises(NotImplementedError, match="SpectralSlitDetector"):
             detector.detect(plane_waves())
+
+
+def test_the_prism_eels_collection_angle_is_in_the_configured_convention():
+    """``collection_angle`` is an angle that you give: the guard that refuses one
+    smaller than the detector compares both in the configured convention."""
+    from abtem.inelastic.core_loss import _check_collection_angle
+
+    s_matrix = abtem.SMatrix(
+        semiangle_cutoff=100.0, energy=ENERGY, extent=20.0, gpts=64
+    )
+    detector = abtem.AnnularDetector(inner=0.0, outer=800.0)
+    wavelength = energy2wavelength(ENERGY)
+    k = [np.fft.fftfreq(n, e / n) for n, e in zip(s_matrix.gpts, s_matrix.extent)]
+    grid = 1e3 * wavelength * np.hypot(k[0][:, None], k[1][None])
+    with abtem.config.set({"angles": "exact"}):
+        alpha = to_scattering_angle(grid)
+        # the largest scattering angle of a beam the detector collects
+        edge = float(alpha[alpha < 800.0].max())
+        with pytest.raises(ValueError, match="collection_angle"):
+            _check_collection_angle(s_matrix, [detector], edge - 1e-3)
+        _check_collection_angle(s_matrix, [detector], edge + 1e-3)

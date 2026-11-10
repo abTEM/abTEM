@@ -132,10 +132,10 @@ Features:
   `arcsin(wavelength * k)`. The two differ by 0.2 % at 100 mrad, 19 % at 1000 mrad, and matter for wide-angle
   scattering at low energies: at 200 eV the {200} reflection of graphene is at 951 mrad, not the 814 mrad of
   `wavelength * k`. With `"exact"`, detector limits and offsets, `PixelatedDetector(max_angle=...)`, `crop`,
-  `downsample` and `diffraction_patterns` angles, aperture cutoffs (also of `Probe` and PRISM) and the radial
-  bins of polar detectors, which are then uniform in the angle, are scattering angles, and a detector
-  without an outer limit counts the propagating beams only. The axes of patterns stay uniform in
-  `wavelength * k` and are labelled so; `DiffractionPatterns.scattering_angles()` returns the angle of every
+  `downsample` and `diffraction_patterns` angles, aperture cutoffs (also of `Probe` and PRISM), the PRISM-EELS
+  `collection_angle` and the radial bins of polar detectors, which are then uniform in the angle, are scattering
+  angles, and a detector without an outer limit counts the propagating beams only. The axes of patterns stay
+  uniform in `wavelength * k` and are labelled so; `DiffractionPatterns.scattering_angles()` returns the angle of every
   pixel (NaN for evanescent beams). `SpectralSlitDetector` raises with `"exact"`; the CTF, its envelopes, the
   PRISM blend angle and core-loss momentum transfer stay paraxial
   ([Issue #623](https://github.com/abTEM/abTEM/issues/623), [PR #625](https://github.com/abTEM/abTEM/pull/625))
