@@ -567,19 +567,25 @@ def grid_angle_by_hand(angle):
     configured convention, by hand: the angle itself, or ``1e3 * sin(angle / 1e3)``
     with the exact convention."""
     angle = np.asarray(angle, dtype=np.float64)
-    if not is_exact_angles():
-        return angle
-    return 1e3 * np.sin(np.clip(angle / 1e3, -np.pi / 2, np.pi / 2))
+    if is_exact_angles():
+        angle = 1e3 * np.sin(np.clip(angle / 1e3, -np.pi / 2, np.pi / 2))
+    return _scalar_as_float(angle)
 
 
 def angle_by_hand(grid_angle):
     """The angle [mrad] in the configured convention of a coordinate
     ``1e3 * wavelength * k`` [mrad], by hand: the inverse of `grid_angle_by_hand`."""
     grid_angle = np.asarray(grid_angle, dtype=np.float64)
-    if not is_exact_angles():
-        return grid_angle
-    with np.errstate(invalid="ignore"):
-        return 1e3 * np.arcsin(grid_angle / 1e3)
+    if is_exact_angles():
+        with np.errstate(invalid="ignore"):
+            grid_angle = 1e3 * np.arcsin(grid_angle / 1e3)
+    return _scalar_as_float(grid_angle)
+
+
+def _scalar_as_float(value):
+    """A 0-d array as a float, as a scalar given to the hand conversions is
+    returned: pytest.approx refuses a 0-d array inside a list."""
+    return float(value) if np.ndim(value) == 0 else value
 
 
 def angles_about_by_hand(gx, gy, offset=(0.0, 0.0), sampling=None):
