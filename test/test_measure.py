@@ -1,3 +1,4 @@
+import functools
 import math
 import operator
 import pickle
@@ -30,7 +31,7 @@ from utils import (
 )
 
 import abtem
-from abtem.core.axes import OrdinalAxis, ScanAxis
+from abtem.core.axes import EnergyAxis, OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype, safe_ceiling_int
@@ -3360,6 +3361,132 @@ class TestDiffractionPatternsCrop:
             for my, j in new[1].items():
                 expected[i, j] = arr[old[0][mx], old[1][my]]
         np.testing.assert_array_equal(cropped.array, expected)
+
+
+class TestDiffractionPatternsIndexOrientations:
+    """index_diffraction_spots with one orientation matrix per member indexes
+    each member with its own matrix, eagerly and with any number of members
+    per dask chunk: each member equals that member indexed on its own."""
+
+    # 4 x 3 patterns, so no two ensemble axes have the same length
+    SHAPE = (4, 3)
+    ENERGIES = (60e3, 100e3, 200e3, 300e3)
+
+    @staticmethod
+    def _matrices(n, seed):
+        from scipy.spatial.transform import Rotation
+
+        return Rotation.random(n, random_state=seed).as_matrix()
+
+    @staticmethod
+    def _array():
+        # float32 on every device (Metal stores float32), so the values compare
+        # exactly: indexing without a radius only picks and masks pixels
+        return np.random.default_rng(0).random(
+            TestDiffractionPatternsIndexOrientations.SHAPE + (17, 21), np.float32
+        )
+
+    @staticmethod
+    def _energy_axis_values(energy_axis):
+        shape = TestDiffractionPatternsIndexOrientations.SHAPE
+        energies = np.full(shape, 100e3)
+        if energy_axis is not None:
+            n = shape[energy_axis]
+            values = TestDiffractionPatternsIndexOrientations.ENERGIES[:n]
+            energies = np.take(values, np.indices(shape)[energy_axis])
+        return energies
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _members_alone(matrices_shape, energy_axis):
+        """Each member indexed on its own, per index: (miller indices, array).
+        It depends on the layout of the matrices and energies only, not on the
+        chunking or the device."""
+        cls = TestDiffractionPatternsIndexOrientations
+        array = cls._array()
+        matrices = cls._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        energies = cls._energy_axis_values(energy_axis)
+        alone = {}
+        for index in np.ndindex(cls.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": energies[index]}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices_shape))
+                ],
+            )
+            alone[index] = ([tuple(h) for h in single.miller_indices], single.array)
+        return alone
+
+    @devices
+    @pytest.mark.parametrize(
+        "matrices_shape, energy_axis",
+        [
+            # varying on one axis, broadcast on the other
+            ((4, 1), None),
+            ((1, 3), None),
+            # varying on both axes
+            ((4, 3), None),
+            # orientation and energy varying on the same axis, and on different axes
+            ((4, 1), 0),
+            ((4, 1), 1),
+        ],
+    )
+    # eager; one member per chunk; every member in one chunk; uneven on both axes
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 3), (3, 2)])
+    def test_members_match_each_member_indexed_alone(
+        self, device, matrices_shape, energy_axis, chunks
+    ):
+        matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
+        metadata = {"energy": 100e3}
+        if energy_axis is not None:
+            n = self.SHAPE[energy_axis]
+            axes[energy_axis] = EnergyAxis(values=self.ENERGIES[:n])
+            metadata = {}
+        data = copy_to_device(self._array(), device)
+        if chunks is not None:
+            data = da.from_array(data, chunks=chunks + (-1, -1))
+        patterns = DiffractionPatterns(
+            data, sampling=0.5, metadata=metadata, ensemble_axes_metadata=axes
+        )
+
+        indexed = patterns.index_diffraction_spots(
+            cell=4.0, orientation_matrices=matrices
+        )
+        assert indexed.is_lazy == (chunks is not None)
+        values = asnumpy(indexed.compute().array)
+
+        column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        alone = self._members_alone(matrices_shape, energy_axis)
+        for index in np.ndindex(self.SHAPE):
+            millers, expected = alone[index]
+            columns = [column[h] for h in millers]
+            others = np.setdiff1d(np.arange(len(column)), columns)
+            np.testing.assert_array_equal(values[index][columns], expected)
+            assert np.all(values[index][others] == 0)
+
+    @lazy_params
+    def test_more_matrices_than_patterns_raises(self, lazy):
+        """One pattern cannot be indexed with three matrices: the result has
+        one member per pattern."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random((1, 17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        with pytest.raises(ValueError, match="length 1 or the length"):
+            patterns.index_diffraction_spots(
+                cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
 
 
 # ---------------------------------------------------------------------------
