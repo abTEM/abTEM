@@ -344,6 +344,11 @@ Bugfixes:
   returned wave of a window smaller than the probe carries less of the bright-field disk than before. For
   diffraction patterns use a `PixelatedDetector`, which is detected from the window at the reference depth and is
   not affected. The waves of a window that spans the downsampled grid are bitwise unchanged
+- C-PRISM ignores `max_batch_expansion` whenever the reduced wave functions are cropped, as the docstrings
+  said. `SMatrix(upsample=True, max_batch_expansion=...)` raised a `ValueError` on every scan when the automatic
+  window came out smaller than the downsampled grid (for example 80 x 80 of 88 x 88 for Si (4, 4, 2) on
+  128 x 128 at 200 keV with `interpolation=2`), and so did `reduce(max_batch_expansion=...)` on a cropped window
+  with a `blend_angle`. Passing it together with a cropping `window_gpts` to `SMatrix` still raises
 - PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
   `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
   plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
