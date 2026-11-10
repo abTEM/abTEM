@@ -728,6 +728,25 @@ Bugfixes:
   per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
   along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
+- `Visualization.set_value_limits` with a new `vmin` and an unchanged `vmax` left the colorbar, and for
+  indexed diffraction patterns the spot radii, on the old limits
+- `==` and `!=` no longer guess that lazy objects are equal ([issue #413](https://github.com/abTEM/abTEM/issues/413)).
+  A dask array never counted as a difference, so lazy `ArrayObject`s compared equal to each other regardless of
+  their array content, lazy zeros equal to lazy ones
+    - **Behaviour change:** comparing objects whose content is lazy on either side raises a `TypeError` that
+      asks for `.compute()` first, so user code that did `lazy_a == lazy_b` now raises. Eager objects compare as
+      before, and objects that hold the very same dask array (the same object, or an array with the same name,
+      as in a `copy()`) still compare equal
+- `compute()` on a `TransitionPotentialArray` read from zarr or built lazily no longer leaves the local
+  potential that site filtering reads (`absolute_threshold`, `filter_sites`, and through them
+  `scatter(threshold=)`, `generate_scattered_waves` and multislice site filtering) lazy. The computed object kept
+  reading its source: `absolute_threshold` ran the graph again on every call, followed a store that was
+  overwritten, and returned `0.0` (site filtering off) once the store was deleted, and `to_cpu()` could return a
+  lazy object
+    - **Behaviour change:** after `tp.array = new`, `absolute_threshold` and the site filtering built on it use the
+      local potential of `new`, where they kept using that of the old array. `local_potential()` itself
+      recomputes from the array and is unchanged
+    - `IndexedDiffractionPatterns` no longer keeps a second reference to its array, which `compute()` left lazy
 
 Documentation:
 
