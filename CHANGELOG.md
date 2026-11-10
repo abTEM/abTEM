@@ -753,6 +753,13 @@ Bugfixes:
       local potential of `new`, where they kept using that of the old array. `local_potential()` itself
       recomputes from the array and is unchanged
     - `IndexedDiffractionPatterns` no longer keeps a second reference to its array, which `compute()` left lazy
+- `==` and `!=` on an object that holds a `CrystalPotential` (an `SMatrix`, a `MultisliceTransform`, a crystal of
+  crystals) use the crystal's own comparison, so crystals with different frozen-phonon mosaics no longer make their
+  holders compare equal
+- A `StructureFactorArray` read from zarr keeps its Miller indices and cell as arrays, so `BlochWaves`, `g_vec` and
+  `get_projected_potential` work on it, and an `SMatrixArray` read from zarr keeps the float64 wave vectors it was
+  written with and reduces to the same waves as the S-matrix that was written, where they were read at the working
+  precision
 
 Documentation:
 
