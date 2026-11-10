@@ -61,6 +61,12 @@ gpaw = [
 mps = [
     "torch>=2.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
+# EBSD: spglib finds a crystal's symmetry, and h5py writes EMsoft master
+# patterns.
+ebsd = [
+    "h5py>=3.0",
+    "spglib>=2.0",
+]
 # Install every optional runtime extra at once. GPU packages (cupy, dask-cuda,
 # torch) are intentionally excluded: their wheels are CUDA/RAPIDS-version or
 # platform specific and must be installed to match the local machine (see the
@@ -68,6 +74,7 @@ mps = [
 all = [
     "abtem[extra]",
     "abtem[gpaw]",
+    "abtem[ebsd]",
 ]
 
 [dependency-groups]
@@ -88,6 +95,7 @@ docs = [
 ]
 test = [
     "deepdiff>=8.6.1",
+    "h5py",
     "hyperspy",
     "hypothesis>=6.151.5",
     "imageio>=2.37.2",
@@ -95,6 +103,7 @@ test = [
     "py>=1.11.0",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.8.0",
+    "spglib",
     "sympy",
     "tox>=4.34.1",
     "xarray",

@@ -11,6 +11,7 @@ import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
+import scipy.interpolate
 import scipy.ndimage
 import scipy.signal
 import strategies as abtem_st
@@ -1082,7 +1083,6 @@ def test_dtype_preserving_operations_keep_complex():
         "interpolate_line": (lambda m: m.interpolate_line((0, 0), (2, 2)), im_e, im_l),
         "line_profile_interpolate": (lambda m: m.interpolate(gpts=128), lp_e, lp_l),
         "bandlimit": (lambda m: m.bandlimit(0, 10), dp_e, dp_l),
-        "polar_binning": (lambda m: m.polar_binning(4, 4, 0, 10), dp_e, dp_l),
         "integrate_radial": (lambda m: m.integrate_radial(0, 10), dp_e, dp_l),
         "azimuthal_average": (lambda m: m.azimuthal_average(), dp_e, dp_l),
     }
@@ -2851,6 +2851,128 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
     )
 
 
+_GRID_SPLIT_PATTERN_OPERATIONS = {
+    "bandlimit": lambda patterns: patterns.bandlimit(0, 10),
+    "block_direct": lambda patterns: patterns.block_direct(),
+    "crop": lambda patterns: patterns.crop(10),
+    "interpolate": lambda patterns: patterns.interpolate(0.03),
+    "index_diffraction_spots": lambda patterns: patterns.index_diffraction_spots(
+        cell=4.0
+    ),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_PATTERN_OPERATIONS))
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 17, 21),
+        (3, 9, 21),
+        (3, 17, 11),
+        (1, (10, 7), (4, 4, 13)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_diffraction_patterns_split_along_the_grid_match_eager(
+    device, chunks, operation
+):
+    """A lazy operation on diffraction patterns whose grid is in several dask
+    chunks gives the eager result: the grid is gathered into one chunk first."""
+    shape = (3, 17, 21)
+    array = np.random.default_rng(2).random(shape).astype(np.float32)
+    kwargs = dict(
+        sampling=0.05,
+        metadata={"energy": 1e5, "semiangle_cutoff": 10.0},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = DiffractionPatterns(copy_to_device(array, device), **kwargs)
+    lazy = DiffractionPatterns(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+    apply = _GRID_SPLIT_PATTERN_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager)
+        result = apply(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    assert computed.array.shape == expected_array.shape
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "dtype, shape, tolerance",
+    [("float32", (2, 512, 515), 2e-6), ("float64", (2, 64, 67), 1e-12)],
+)
+def test_diffraction_patterns_interpolate_is_linear_interpolation(
+    dtype, shape, tolerance, lazy, device
+):
+    # Linear interpolation on the centred frequency axes, renormalized to the
+    # input's total as interpolate does. The new sampling is finer than the old
+    # one, so the output has pixels beyond the input's frequency range on both
+    # sides of both axes; they take the value of the edge node, which is the
+    # interpolation at the frequency clipped to the input's range. The tolerance,
+    # relative to the maximum, is a few float32 epsilons for float32.
+    sampling, new_sampling = (0.01, 0.0093), 0.007
+    patterns = _random_patterns(shape, sampling, dtype, lazy, device)
+
+    interpolated = patterns.interpolate(sampling=new_sampling)
+
+    values = asnumpy(interpolated.copy().compute().array)
+    assert values.dtype == np.dtype(dtype)
+    k = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(shape[1:], sampling)
+    ]
+    k_new = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(interpolated.base_shape, interpolated.sampling)
+    ]
+    assert all((q < p[0]).any() and (q > p[-1]).any() for q, p in zip(k_new, k))
+    k_new = [np.clip(q, p[0], p[-1]) for q, p in zip(k_new, k)]
+    points = np.stack(np.meshgrid(*k_new, indexing="ij"), -1)
+    for member, pattern in enumerate(asnumpy(patterns.copy().compute().array)):
+        expected = scipy.interpolate.RegularGridInterpolator(
+            k, pattern.astype(np.float64)
+        )(points)
+        found = values[member].astype(np.float64)
+        expected *= found.sum() / expected.sum()
+        np.testing.assert_allclose(
+            found, expected, rtol=0, atol=tolerance * found.max()
+        )
+
+
+@lazy_params
+@devices
+def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
+    lazy, device
+):
+    array = np.ones((2, 32, 32), dtype=np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.polar_binning(2, 4)
+    assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
+
+
 @given(
     gpts=st.integers(min_value=16, max_value=32),
     extent=st.floats(min_value=5, max_value=10),
@@ -2868,6 +2990,56 @@ def test_diffraction_patterns_interpolate_uniform(gpts, extent):
     assert np.allclose(
         interpolated_diffraction_patterns.array, diffraction_patterns.array
     )
+
+
+def _random_patterns(shape, sampling, dtype, lazy, device):
+    array = np.random.default_rng(1).random(shape).astype(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    return DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(shape[0])))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("gpts", [(32, 30), 32])
+def test_diffraction_patterns_interpolate_to_gpts_keeps_the_angular_extent(
+    gpts, lazy, device
+):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(gpts=gpts)
+
+    new_gpts = (gpts,) * 2 if np.isscalar(gpts) else gpts
+    assert interpolated.base_shape == new_gpts
+    np.testing.assert_allclose(
+        interpolated.sampling,
+        (0.01 * 64 / new_gpts[0], 0.0093 * 67 / new_gpts[1]),
+        rtol=1e-12,
+    )
+    computed = asnumpy(interpolated.copy().compute().array)
+    assert computed.shape == (2,) + new_gpts
+    # the grid of a requested sampling that has the same extent
+    by_sampling = patterns.interpolate(sampling=interpolated.sampling)
+    np.testing.assert_array_equal(computed, asnumpy(by_sampling.copy().compute().array))
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device, pair):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(sampling=pair((0.0131, 0.012)))
+
+    assert interpolated.sampling == (0.0131, 0.012)
+    assert interpolated.base_shape == (49, 52)
+    assert interpolated.copy().compute().array.shape == (2, 49, 52)
 
 
 _DISC_SIGMA = 1.0
@@ -3469,6 +3641,66 @@ def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
     assert [line.get_label() for line in lines] == ["channel = single", "channel = double"]
     for line, row in zip(lines, array):
         np.testing.assert_allclose(line.get_ydata(), row)
+
+
+@pytest.mark.parametrize("cls", [DiffractionPatterns, Images])
+@pytest.mark.parametrize(
+    "special, limits",
+    [
+        (np.nan, dict()),
+        (np.nan, dict(vmin=0.1, vmax=1.2)),
+        (np.nan, dict(logscale=True)),
+        (np.inf, dict()),
+        (np.inf, dict(logscale=True)),
+        (0.0, dict(logscale=True)),
+    ],
+)
+def test_show_complex_measurements_with_masked_pixels(cls, special, limits):
+    """A pixel the amplitude norm masks (NaN, inf, zero on a log scale) is
+    transparent and the other pixels are drawn as without it, when shown, after a
+    power change (which replaces a log norm by a power norm) and when the
+    visualization moves to another member. Host matplotlib code, so the device is
+    not a parameter."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(0)
+    shape = (2, 20, 27)
+    array = (rng.random(shape) + 1j * rng.random(shape)).astype(np.complex64)
+    finite = array.copy()
+    # a value inside the range of the others, which gives the same limits
+    finite[:, 2, 5] = array[:, 3, 3]
+    array[:, 2, 5] = special
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
+    if cls is DiffractionPatterns:
+        kwargs.update(fftshift=True, metadata={"energy": 100e3})
+
+    def alpha(artist):
+        return np.ma.filled(np.ma.asarray(artist.phase_axes_image.get_alpha()), -1.0)
+
+    def alphas(data):
+        visualization = cls(data, **kwargs).show(**limits)
+        artist = visualization.artists[0, 0]
+        found = [alpha(artist)]
+        artist.set_power(0.5)
+        found.append(alpha(artist))
+        visualization.update_data_indices((1,))
+        found.append(alpha(artist))
+        return found
+
+    try:
+        expected, found = alphas(finite), alphas(array)
+    finally:
+        plt.close("all")
+
+    # the image is drawn transposed
+    keep = np.ones(expected[0].shape, dtype=bool)
+    keep[5, 2] = False
+    for e, f in zip(expected, found):
+        assert f[5, 2] == 0.0
+        np.testing.assert_array_equal(f[keep], e[keep])
 
 
 def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():

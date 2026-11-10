@@ -102,6 +102,12 @@ ArrayObjectTypeAlt = TypeVar("ArrayObjectTypeAlt", bound="ArrayObject")
 ArrayItemType = Union[int, slice, list, np.ndarray, None]
 
 
+def _auto_ensemble_chunks(n_ensemble: int, n_base: int) -> tuple:
+    """Chunks that let dask choose the size of the ensemble chunks and keep each
+    base array (the grid of a wave function or an image) in one chunk."""
+    return ("auto",) * n_ensemble + (-1,) * n_base
+
+
 def _to_hyperspy_axes_metadata(
     axes_metadata: list[AxisMetadata], shape: int | tuple[int, ...]
 ):
@@ -137,6 +143,17 @@ def _to_hyperspy_axes_metadata(
         hyperspy_axes.append(hyperspy_axis)
 
     return hyperspy_axes
+
+
+def _chunk_axes_metadata(
+    axes_metadata: list[AxisMetadata], slices: Sequence[slice]
+) -> list[AxisMetadata]:
+    """The axes metadata of the chunk that `slices` selects along the leading axes;
+    the axes after them are kept whole."""
+    return [
+        axis[slic] if hasattr(axis, "__getitem__") else axis.copy()
+        for axis, slic in zip(axes_metadata, slices)
+    ] + list(axes_metadata[len(slices) :])
 
 
 def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
@@ -305,6 +322,11 @@ def multi_output_blockwise(
     assert all(
         base_axis.numblocks[0] == len(c) for base_axis, c in zip(array_axes, old_chunks)
     )
+
+    # Pin the positional layout the task function has to reproduce: one axis
+    # arg per array dimension, then one arg per new_axes entry.
+    kwargs.setdefault("num_array_axes", base_ndim)
+    kwargs.setdefault("num_transform_args", len(new_axes))
 
     out_symbols = tuple(range(out_ndim))
     array_symbols = tuple(range(new_ndim, out_ndim))
@@ -795,20 +817,64 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
-def _is_gpu_array_object(obj) -> bool:
-    """Return True if obj's computation involves GPU (CuPy) arrays.
+def _mark_device_work(array, device: str):
+    """Record on the layer that produced a dask array that its tasks run their
+    computation on ``device``.
 
-    Detects GPU even when the output array has numpy meta, e.g. when a detector
-    with to_cpu=True produces CPU-resident results from GPU wave computations.
-    ArrayObject.device checks _device first (set in apply_transform when the source
-    was GPU), so this correctly handles the to_cpu=True case.
+    A task that returns host objects (the measurements of a whole S-matrix
+    ensemble member) has a NumPy ``chunk_type`` although it does the work on the
+    device. The mark is in the layer's ``collection_annotations``, so the graph
+    of every array derived from this one keeps it. The S-matrix scans mark their
+    assembled arrays once, in ``_finalize_lazy_measurements``. Any other producer
+    of device-held lazy results whose graph carries no typed layer (object or
+    host-NumPy meta) must call this on each such array. A device of ``None`` (the
+    producer follows the global configuration) marks nothing that a computation
+    reads: the scheduler choice then comes from ``config["device"]``.
     """
-    return hasattr(obj, "device") and obj.device == "gpu"
+    array.dask.layers[array.name].collection_annotations["device"] = device
+
+
+def _graph_holds_work_on(obj, device: str, array_type) -> bool:
+    """Whether the graph of a lazy array object has a layer of ``array_type``
+    chunks or a layer marked as running on ``device``.
+
+    dask records the chunk type of every array layer it creates in the layer's
+    ``collection_annotations``, and the graph of an array derived from another
+    keeps the other's layers. Device work upstream therefore stays visible in a
+    result held on the CPU (a detector's ``to_cpu=True``), whichever method
+    rebuilt that result.
+    """
+    if not getattr(obj, "is_lazy", False):
+        return False
+    chunk_type = None if array_type is None else dask.utils.typename(array_type)
+    layers = getattr(obj.array.__dask_graph__(), "layers", {})
+    annotations = (
+        getattr(layer, "collection_annotations", None) or {}
+        for layer in layers.values()
+    )
+    return any(
+        annotation.get("device") == device
+        or (chunk_type is not None and annotation.get("chunk_type") == chunk_type)
+        for annotation in annotations
+    )
+
+
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays: obj is
+    labelled or stored on the GPU, or its graph has CuPy chunks or tasks marked
+    as running on the GPU."""
+    return (hasattr(obj, "device") and obj.device == "gpu") or _graph_holds_work_on(
+        obj, "gpu", None if cp is None else cp.ndarray
+    )
 
 
 def _is_mps_array_object(obj) -> bool:
-    """Return True if obj's computation involves Metal (MPS) arrays."""
-    return hasattr(obj, "device") and obj.device == "mps"
+    """Return True if obj's computation involves Metal (MPS) arrays: obj is
+    labelled or stored on Metal, or its graph has Metal chunks or tasks marked as
+    running on Metal."""
+    return (hasattr(obj, "device") and obj.device == "mps") or _graph_holds_work_on(
+        obj, "mps", backend.TorchNDArray
+    )
 
 
 def _resolve_mps_scheduler(kwargs: dict) -> dict:
@@ -1252,21 +1318,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return len(set(axis).intersection(base_axes)) > 0
 
     def apply_func(self, func: Callable, **kwargs) -> Self:
-        """Apply a function to the array object. The function must take an array as its
-        first argument, only the array is modified, the metadata is not changed. The
-        function is applied lazily if the array object is lazy.
+        """Apply a function to the array of the array object; the metadata is not
+        changed.
+
+        The function is called with the array object as its first argument and returns
+        the new array, of the same shape and dtype. For a lazy array object it is
+        applied lazily, block by block: each call then receives an eager array object
+        that holds one block, with the ensemble axes metadata of that block.
 
         Parameters
         ----------
         func : callable
-            Function to apply to the array object.
+            Function taking the array object as its first argument and returning the
+            new array.
         kwargs :
             Additional keyword arguments passed to the function.
 
         Returns
         -------
         array_object : ArrayObject or subclass of ArrayObject
-            The array object with the function applied.
+            The array object with the new array.
         """
         transform = TransformFromFunc(func, func_kwargs=kwargs)
         return transform.apply(self)
@@ -2052,7 +2123,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             return self
 
         if chunks == "auto":
-            chunks = ("auto",) * len(self.ensemble_shape) + (-1,) * len(self.base_shape)
+            chunks = _auto_ensemble_chunks(
+                len(self.ensemble_shape), len(self.base_shape)
+            )
 
         array = da.from_array(self.array, chunks=chunks)
 
@@ -2275,15 +2348,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
-        """Rechunk to remove chunks across the base dimensions."""
+        """Rechunk to remove chunks across the base dimensions.
+
+        An array whose base dimensions are in one chunk is returned as it is.
+        Otherwise dask chooses the chunks of the ensemble dimensions again, so that
+        a block holds the whole base array of as many members as fit dask's
+        `array.chunk-size`.
+        """
         if not self._has_base_chunks:
             return self
-        # See the comment in _has_base_chunks: -0 is 0, not "the end".
-        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
-        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(
-            self.base_shape
+        return self.rechunk(
+            _auto_ensemble_chunks(len(self.ensemble_shape), len(self.base_shape))
         )
-        return self.rechunk(chunks)
 
     @staticmethod
     def _apply_transform(
@@ -2293,15 +2369,45 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array_object_partial: Callable,
         base_ndims: int,
         out_ndim: int,
+        num_array_axes: Optional[int] = None,
+        num_transform_args: Optional[int] = None,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
-        array_axes = axes[: len(array.shape)]
+        # How many of the positional args are the ARRAY's axes is decided when
+        # the graph is built -- it is the dask array's ndim, and
+        # multi_output_blockwise passes exactly that many axis args ahead of
+        # the transform's own partitioned args. Recovering it here from
+        # len(array.shape), a property of whichever chunk actually turned up,
+        # silently mis-splits `axes` the moment the two disagree: the tail of
+        # the array's own axes is then fed to the transform's reconstruction
+        # chain, which unwraps one level per stage and eventually tries to
+        # build an object out of an AxisMetadata, raising an error that points
+        # nowhere near here. Split on the graph-time counts instead, and if a
+        # chunk contradicts them, say which side broke.
+        if num_array_axes is None:
+            num_array_axes = len(array.shape)
+        elif num_array_axes != len(array.shape) or (
+            num_transform_args is not None
+            and len(axes) != num_array_axes + num_transform_args
+        ):
+            raise RuntimeError(
+                "blockwise argument layout does not match the graph: it was "
+                f"built for an array of ndim {num_array_axes} followed by "
+                f"{num_transform_args} transform arg(s), but this task got a "
+                f"chunk of shape {getattr(array, 'shape', None)} "
+                f"(ndim {len(array.shape)}, type {type(array).__name__}) and "
+                f"{len(axes)} axis arg(s) of types "
+                f"{tuple(type(a).__name__ for a in axes)} "
+                f"(base_ndims={base_ndims})."
+            )
+
+        array_axes = axes[:num_array_axes]
         # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
         # comment in ArrayObject.squeeze for a base-less array_object.
         n_ensemble_axes = len(array_axes) - base_ndims
         ensemble_axes = array_axes[:n_ensemble_axes]
-        transform_axes = axes[len(array.shape) :]
+        transform_axes = axes[num_array_axes:]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
@@ -2311,6 +2417,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
+        # one dimension per blockwise axis, from the graph (a transform
+        # argument can span several, e.g. configurations x exit planes)
         packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
@@ -2335,6 +2443,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObject
             The transformed array object.
         """
+
+        if self._has_base_chunks and not transform._allow_base_chunks:
+            # Each lazy block is transformed on its own, so it must hold the
+            # whole base array (the grid of a wave function or an image).
+            return self.no_base_chunks().apply_transform(transform, max_batch)
 
         # A transform whose output size depends on the ensemble (a pixelated
         # detector's crop of a multi-energy ensemble) is fixed against the whole
@@ -2592,6 +2705,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         destination = ensemble_axes + axes_base_indices[::-1]
 
         if transpose:
+            # HyperSpy takes the axes in the order of the array's dimensions.
+            axes_base = axes_base[::-1]
             if self.is_lazy:
                 array = da.moveaxis(self.array, source=source, destination=destination)
             else:
@@ -2603,7 +2718,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # HyperSpy holds NumPy, dask or CuPy data, not torch backend arrays.
             array = asnumpy(array)
 
-        s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+        s = signal_type(array, axes=ensemble_axes_metadata + axes_base)
 
         if self.is_lazy:
             s = s.as_lazy()
@@ -2789,12 +2904,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                new_ensemble_axes_metadata = [
-                    axis[slic[i]] if hasattr(axis, "__getitem__") else axis.copy()
-                    for i, axis in enumerate(self.ensemble_axes_metadata)
-                ]
-
-                itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
+                itemset(
+                    ensemble_axes_metadata,
+                    index,
+                    _chunk_axes_metadata(self.ensemble_axes_metadata, slic),
+                )
 
         if lazy:
             ensemble_axes_metadata = da.from_array(ensemble_axes_metadata, chunks=1)
@@ -2996,7 +3110,7 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
             # actually wrote, which itself never splits base axes -- this
             # branch only matters if a caller explicitly opts into "auto".
             num_ensemble_axes = zarr_array.ndim - cls._base_dims
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
@@ -3065,7 +3179,7 @@ def _from_zarr_legacy(root, chunks, decode_types, url):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:

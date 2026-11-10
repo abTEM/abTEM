@@ -68,7 +68,9 @@ def commensurate_slice_thickness(
     Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
     and the cell height.  Adjacent plane-level slices are merged so that each resulting
     slice thickness is as close as possible to `target_thickness` while keeping
-    boundaries aligned with atomic planes.
+    boundaries aligned with atomic planes.  A gap between planes that is at least
+    1.5 times the target thickness (e.g. cubic fcc, with planes 0.5 a apart) is split
+    into equal slices, which leaves the boundaries aligned with the planes too.
 
     Parameters
     ----------
@@ -96,12 +98,23 @@ def commensurate_slice_thickness(
     # edge, or merge genuinely distinct planes that land in the same bin.
     z[z > cell_z - tolerance] = 0.0
     z = np.sort(z)
-    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])
+    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
     unique_z = z[unique_mask]
     unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
 
     boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
     plane_thicknesses = np.diff(boundaries)
+
+    # A gap between planes that is much thicker than the target cannot be brought
+    # closer to it by merging, so divide it evenly; no atoms lie inside the gap, so
+    # the new boundaries are as commensurate as the plane boundaries.
+    plane_thicknesses = np.concatenate(
+        [
+            np.full(n, t / n)
+            for t in plane_thicknesses
+            for n in [max(1, int(round(t / target_thickness)))]
+        ]
+    )
 
     merged = []
     acc = 0.0
@@ -348,8 +361,9 @@ def commensurate_gpts(
         x[x > L - tolerance] = 0.0
         x = np.sort(x)
 
-        # De-duplicate: keep one representative per distinct atom plane
-        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])
+        # De-duplicate: keep one representative per distinct atom plane (there are
+        # none for an empty structure, which has no commensurability to find)
+        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])[: len(x)]
         unique_x = x[unique_mask]
 
         if len(unique_x) <= 1:

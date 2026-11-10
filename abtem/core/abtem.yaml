@@ -100,8 +100,16 @@ potential:
 #   paraxial  the angle is wavelength * k, as in the small-angle relation
 #   exact     the angle is the scattering angle, arcsin(wavelength * k)
 # The two differ by less than 0.2 % up to 100 mrad. The axes of diffraction patterns are
-# always labelled wavelength * k.
+# always uniform in wavelength * k; with 'exact' they are labelled so.
 angles: paraxial
+bloch:
+  # How Bloch waves compute the beam amplitudes from the structure matrix.
+  #   'eigh'  its eigendecomposition
+  #   'band'  its reduction to band form and a Chebyshev expansion of the incident wave:
+  #           on a GPU, for thousands of beams, several times faster, a quarter of the
+  #           memory and more accurate in single precision; slower on the CPU
+  #   'auto'  'band' on a GPU when it is estimated to be faster, else 'eigh'
+  solver: auto
 antialias:
   # The antialias cutoff in reciprocal space
   cutoff: 0.6666666

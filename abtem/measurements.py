@@ -1428,6 +1428,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             figsize=figsize,
             # interact=interact,
             title=title,
+            units=units,
             **kwargs,
         )
 
@@ -2365,9 +2366,7 @@ class Images(_BaseMeasurement2D):
         self._check_is_complex()
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.rechunk(
-                self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
@@ -2542,15 +2541,13 @@ class Images(_BaseMeasurement2D):
 
         array = None
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             if method == "fft":
                 array = array.map_blocks(
                     fft_interpolate,
                     new_shape=gpts,
                     normalization=normalization,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     # fft_interpolate works in the configured precision
                     meta=xp.array(
                         (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
@@ -2565,7 +2562,7 @@ class Images(_BaseMeasurement2D):
                     order=order,
                     cval=cval,
                     pad_mode=boundary,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -2672,9 +2669,7 @@ class Images(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             # Real on purpose, unlike the dtype-preserving map_blocks
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
             # a power spectrum even when the image itself is complex, with the
@@ -2910,13 +2905,13 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.extent / gpts
 
         if self.is_lazy:
-            array = self.array.rechunk(self.array.chunks[:-1] + ((self.shape[-1],),))
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._interpolate,
                 gpts=gpts,
                 endpoint=endpoint,
                 order=order,
-                chunks=self.array.chunks[:-1] + (gpts,),
+                chunks=array.chunks[:-1] + (gpts,),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
@@ -3001,6 +2996,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             interactive=not interact and display,
             legend=legend,
             common_scale=common_scale,
+            units=units,
             **kwargs,
         )
 
@@ -3176,6 +3172,7 @@ def _fourier_space_bilinear_nodes_and_weight(
     old_angular_sampling: tuple[float, float],
     new_angular_sampling: tuple[float, float],
     xp,
+    dtype,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nodes = []
     weights = []
@@ -3189,15 +3186,16 @@ def _fourier_space_bilinear_nodes_and_weight(
         1 / new_angular_sampling[1] / new_shape[1],
     )
 
+    # In float64 on the host whatever `dtype`: a frequency n / 2 steps from zero
+    # rounded to float32 is off by about eps * n / 2 steps, and so is its weight.
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
-        distances = k_new[None] - k[:, None]
-        distances[distances < 0.0] = np.inf
-        w = distances.min(0) / (k[1] - k[0])
-        w[w == np.inf] = 0.0
-        nodes.append(distances.argmin(0))
-        weights.append(w)
+        k = np.fft.fftshift(np.fft.fftfreq(n, r))
+        k_new = np.fft.fftshift(np.fft.fftfreq(m, d))
+        # the node at or below each new frequency; node 0, weight 0 below the first
+        node = np.maximum(np.searchsorted(k, k_new, side="right") - 1, 0)
+        w = np.maximum(k_new - k[node], 0.0) / (k[1] - k[0])
+        nodes.append(xp.asarray(node))
+        weights.append(xp.asarray(w, dtype=dtype))
 
     v, u = nodes
     vw, uw = weights
@@ -3942,6 +3940,8 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
+        elif isinstance(sampling, (tuple, list)) and len(sampling) == 2:
+            validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")
 
@@ -3958,7 +3958,7 @@ def _diffraction_pattern_resampling_gpts(
             gpts = (gpts,) * 2
 
         validated_sampling = tuple(
-            d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
+            d * old_n / new_n for d, old_n, new_n in zip(old_sampling, old_gpts, gpts)
         )
 
     return gpts, validated_sampling
@@ -4443,10 +4443,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
         if self.is_lazy:
+            array = self.no_base_chunks().array
+
             def block_chunks(shape):
                 return tuple(
-                    c if n == sum(c) else 1
-                    for n, c in zip(shape, self.array.chunks[:-2])
+                    c if n == sum(c) else 1 for n, c in zip(shape, array.chunks[:-2])
                 )
 
             lazy_args = [
@@ -4471,7 +4472,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             intensities = da.map_blocks(
                 index_block,
-                self.array,
+                array,
                 *lazy_args,
                 hkl=hkl,
                 mask_all=mask,
@@ -4482,7 +4483,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centering=centering,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
-                chunks=self.array.chunks[:-2] + (mask.sum(),),
+                chunks=array.chunks[:-2] + (mask.sum(),),
                 meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
@@ -4660,7 +4661,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
         xp = get_array_module(array)
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
-            array.shape[-2:], new_gpts, sampling, new_sampling, xp
+            array.shape[-2:],
+            new_gpts,
+            sampling,
+            new_sampling,
+            xp,
+            np.finfo(array.dtype).dtype,  # real, also for complex patterns
         )
 
         old_shape = array.shape
@@ -4685,11 +4691,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def interpolate(
         self,
         sampling: Optional[str | float | tuple[float, float]] = None,
-        gpts: Optional[tuple[int, int]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
-        different sampling.
+        different sampling. A sampling finer than that of the diffraction patterns, or
+        more `gpts`, is accepted: the interpolation is bilinear and adds no angular
+        resolution, and the new frequencies outside the range of the patterns'
+        frequencies (a pixel or two at the ends of each axis) take the value of the
+        nearest edge pixel, up to the renormalisation that keeps the sums.
 
         Parameters
         ----------
@@ -4698,7 +4708,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             If a single value, the same sampling is used for both axes. If 'uniform',
             the diffraction patterns are down-sampled along the axis with the smallest
             pixel size such that the sampling is uniform.
-        gpts : tuple of int
+        gpts : int or tuple of int
             Number of grid points of the diffraction patterns after interpolation in
             `x` and `y`.
             Do not use if 'sampling' is used.
@@ -4713,7 +4723,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
-        array = self.array
+        array = self.no_base_chunks().array
         if np.issubdtype(array.dtype, np.integer):
             # counts, e.g. from a detector, are interpolated in the configured
             # precision
@@ -4725,7 +4735,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sampling=self.sampling,
                 new_sampling=sampling,
                 new_gpts=gpts,
-                chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
@@ -5082,10 +5092,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         polar_measurements : PolarMeasurements
             The polar measurements.
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         if nbins_radial <= 0 or nbins_azimuthal <= 0:
             raise RuntimeError("number of bins must be greater than zero")
+
+        if np.iscomplexobj(self.array):
+            raise TypeError(
+                "polar binning of complex diffraction patterns is not supported, "
+                "bin their `.intensity()` instead"
+            )
 
         if outer is None:
             outer = min(self.max_angles)
@@ -5174,6 +5195,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         radially_binned_measurement : PolarMeasurements
             Radially binned polar measurement(s).
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         warn_if_paraxial_angle_is_large(inner, outer)
@@ -5421,7 +5447,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array.map_blocks(
                 self._bandlimit,
                 inner=inner,
                 outer=outer,
@@ -5503,11 +5529,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._crop,
                 gpts=gpts,
                 fftshift=self.fftshift,
-                chunks=self.array.chunks[:-2] + gpts,
+                chunks=array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:
@@ -5998,19 +6025,19 @@ def _complex_from_real_and_imag(real, imag):
     return array
 
 
-def _polar_bins_to_grid(array, regions):
+def _polar_bins_to_grid(array, regions, real_dtype):
     """Place polar-bin values (..., nbins_radial, nbins_azimuthal) on a regular grid.
 
     ``regions`` labels each grid pixel with its flat bin index (radial major, as
     from ``_polar_detector_bins``), or a negative value outside every bin, which
-    becomes NaN. Gathers with the array's own module, so it works for NumPy and
-    CuPy, and per block of a dask array.
+    becomes NaN. The result has the real dtype ``real_dtype``. Gathers with the
+    array's own module, so it works for NumPy and CuPy, and per block of a dask array.
     """
     xp = get_array_module(array)
     flat = array.reshape(array.shape[:-2] + (-1,))
     labels = xp.asarray(regions)
-    gathered = flat[..., xp.maximum(labels, 0)].astype(np.float32)
-    return xp.where(labels < 0, np.float32(np.nan), gathered)
+    gathered = flat[..., xp.maximum(labels, 0)].astype(real_dtype)
+    return xp.where(labels < 0, real_dtype.type(np.nan), gathered)
 
 
 class PolarMeasurements(BaseMeasurements):
@@ -6493,7 +6520,9 @@ class PolarMeasurements(BaseMeasurements):
         Returns
         -------
         diffraction_patterns : DiffractionPatterns
-            The diffraction patterns discretized from the polar measurements.
+            The diffraction patterns discretized from the polar measurements, in the
+            real precision of the polar bins (the configured precision for integer
+            counts). Pixels outside every bin are NaN.
         """
 
         if np.isscalar(gpts):
@@ -6522,19 +6551,27 @@ class PolarMeasurements(BaseMeasurements):
             return_indices=False,
         )
 
+        # The real precision of the bins; counts get the configured precision, which
+        # holds the NaN outside the bins.
+        if np.issubdtype(self.array.dtype, np.integer):
+            dtype = np.dtype(get_dtype(complex=False))
+        else:
+            dtype = np.finfo(self.array.dtype).dtype
+
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
-            array = self.array.rechunk(self.array.chunks[:-2] + (-1, -1))
+            array = self.no_base_chunks().array
             xp = get_array_module(array)
             new_array = array.map_blocks(
                 _polar_bins_to_grid,
                 regions=regions,
+                real_dtype=dtype,
                 chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=dtype),
             )
         else:
-            new_array = _polar_bins_to_grid(self.array, regions)
+            new_array = _polar_bins_to_grid(self.array, regions, dtype)
 
         wavelength = energy2wavelength(self._get_energy())
         sampling = (
