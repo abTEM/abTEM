@@ -3803,12 +3803,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     snap=False,
                 )
             if component == "low":
+                # max_batch_expansion streams the expansion of the full window;
+                # a cropped window has none, and its routed bands always ignored
+                # the argument
+                full_window = tuple(self.window_gpts) == tuple(self.gpts)
                 return self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
                     max_batch_reduction=max_batch_reduction,
-                    max_batch_expansion=max_batch_expansion,
+                    max_batch_expansion=max_batch_expansion if full_window else None,
                     method=method,
                     blend_angle=0.0,
                 )
