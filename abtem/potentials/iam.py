@@ -723,6 +723,7 @@ class _FieldBuilder(BaseField):
         last_slice: Optional[int] = None,
         max_batch: int | str = 1,
         lazy: Optional[bool] = None,
+        _members: Optional[list] = None,
     ) -> FieldArray:
         """
         Build the potential.
@@ -789,9 +790,15 @@ class _FieldBuilder(BaseField):
             )
 
             if self.ensemble_shape:
-                for i, _, potential_wrapped in self.generate_blocks(1):
-                    potential = potential_wrapped.item()
+                # `_members` are the members of the ensemble `generate_chunked_slices`
+                # made once for all its chunks; without them each build makes its own
+                members = _members
+                if members is None:
+                    members = (
+                        (i, wrapped.item()) for i, _, wrapped in self.generate_blocks(1)
+                    )
 
+                for i, potential in members:
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
                     ):
@@ -821,6 +828,14 @@ class _FieldBuilder(BaseField):
             ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
         return output_potential
+
+    def _chunk_builder(self):
+        """A function that builds the chunk of the given first and last slice, made
+        once per call of `generate_chunked_slices`, so that whatever the chunks
+        share is made once rather than for each."""
+        return lambda first_slice, last_slice: self.build(
+            first_slice=first_slice, last_slice=last_slice, lazy=False
+        )
 
     def generate_chunked_slices(
         self,
@@ -878,13 +893,12 @@ class _FieldBuilder(BaseField):
         chunk_size = min(chunk_size, last_slice - first_slice)
 
         exit_plane_after = self._exit_plane_after
+        build_chunk = self._chunk_builder()
 
         for chunk_start, chunk_end in generate_chunks(
             last_slice - first_slice, chunks=chunk_size, start=first_slice
         ):
-            chunk = self.build(
-                first_slice=chunk_start, last_slice=chunk_end, lazy=False
-            )
+            chunk = build_chunk(chunk_start, chunk_end)
 
             # A chunk keeps only the exit planes inside its range, counted from
             # its first slice: build() would add the entrance plane to the first
@@ -1067,6 +1081,23 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             _warn_if_given_atoms_far_outside_along_z(
                 _given_configurations(self._frozen_phonons), self.plane
             )
+
+    def _chunk_builder(self):
+        # Each build of an ensemble makes its members again, and with them the
+        # slicing of their atoms, which the members keep: the chunks of one call
+        # share one set of members.
+        if not self.ensemble_shape:
+            return super()._chunk_builder()
+
+        members = [
+            (index, wrapped.item()) for index, _, wrapped in self.generate_blocks(1)
+        ]
+        return lambda first_slice, last_slice: self.build(
+            first_slice=first_slice,
+            last_slice=last_slice,
+            lazy=False,
+            _members=members,
+        )
 
     def _reports_given_atoms(self) -> bool:
         """Whether atoms given far outside the cell along z are reported: for a
@@ -1452,8 +1483,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         sliced_atoms = self.get_sliced_atoms()
 
-        numbers = np.unique(sliced_atoms.atoms.numbers)
-
         exit_plane_after = self._exit_plane_after
 
         cumulative_thickness = np.cumsum(self.slice_thickness)
@@ -1461,7 +1490,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         for start, stop in generate_chunks(
             last_slice - first_slice, chunks=1, start=first_slice
         ):
-            if len(numbers) > 1 or stop - start > 1:
+            if stop - start > 1:
                 array = xp.zeros(
                     (stop - start,) + self.base_shape[1:],
                     dtype=get_dtype(complex=False),
