@@ -11,6 +11,7 @@ aeatom = pytest.importorskip("gpaw.atom.aeatom")
 all_electron = pytest.importorskip("gpaw.atom.all_electron")
 
 from abtem.inelastic.core_loss import (  # noqa: E402
+    _atomic_rv,
     calculate_bound_radial_wavefunction,
     calculate_continuum_radial_wavefunction,
 )
@@ -54,6 +55,9 @@ def test_atom_solve_leaves_sys_stdout_alone(monkeypatch, solve, cls):
 
     monkeypatch.setattr(cls, "run", spy)
     monkeypatch.setattr(sys, "stdout", sentinel)
+    # The atomic potential of the continuum is cached; an earlier solve in this
+    # process would otherwise skip the run being spied on.
+    _atomic_rv.cache_clear()
     solve()
     assert seen and all(seen)
     assert sys.stdout is sentinel

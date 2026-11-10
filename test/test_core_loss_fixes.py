@@ -40,6 +40,11 @@ requires_gpaw = pytest.mark.skipif(
     "gpaw" not in sys.modules, reason="requires gpaw"
 )
 
+# These tests use small, fast cells below the inelastic delocalisation margin
+# of their edges -- deliberate, since they check fixes, not cross-section
+# convergence. Same convention as test/test_ionization.py.
+pytestmark = pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
+
 ENERGY = 100e3
 
 

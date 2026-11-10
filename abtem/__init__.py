@@ -17,6 +17,7 @@ from abtem.core import axes, config
 from abtem.detectors import (
     AnnularDetector,
     FlexibleAnnularDetector,
+    IonizationDetector,
     PixelatedDetector,
     RadialSensitivity,
     SegmentedDetector,
@@ -32,12 +33,17 @@ from abtem.ebsd import (
     EBSDReferencePattern,
     ReferencePatternImages,
 )
-from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.inelastic.core_loss import (
+    EnergyIntegral,
+    SubshellTransitions,
+    TransitionPotentialArray,
+)
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
 )
+from abtem.inelastic.xray import SDDEfficiency, TabulatedEfficiency, XrayDetector
 from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
 from abtem.measurements import (
     DiffractionPatterns,
@@ -90,6 +96,12 @@ __all__ = [
     "PixelatedDetector",
     "WindowedPixelatedDetector",
     "WavesDetector",
+    "IonizationDetector",
+    "SubshellTransitions",
+    "EnergyIntegral",
+    "XrayDetector",
+    "SDDEfficiency",
+    "TabulatedEfficiency",
     "RadialSensitivity",
     "Images",
     "DiffractionPatterns",
