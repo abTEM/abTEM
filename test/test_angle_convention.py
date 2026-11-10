@@ -419,3 +419,61 @@ def test_the_prism_eels_collection_angle_is_in_the_configured_convention():
         with pytest.raises(ValueError, match="collection_angle"):
             _check_collection_angle(s_matrix, [detector], edge - 1e-3)
         _check_collection_angle(s_matrix, [detector], edge + 1e-3)
+
+
+def test_the_spectral_annular_detector_shows_the_cones_it_detects():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle, Polygon
+    from matplotlib.path import Path
+
+    from abtem.measurements import _annular_detector_mask
+
+    waves = plane_waves()
+    outer, angle = 250.0, 30.0
+    # the last cone, at 1400 mrad, reaches beyond 90 degrees
+    detector = abtem.SpectralAnnularDetector(
+        outer=outer, q_min=0.0, q_max=1400.0, q_sampling=350.0, angle=angle
+    )
+    with abtem.config.set({"angles": "paraxial"}):
+        ax = detector.show(waves)
+    assert all(isinstance(p, Circle) and p.radius == outer for p in ax.patches)
+    plt.close(ax.figure)
+
+    with abtem.config.set({"angles": "exact"}):
+        ax = detector.show(waves)
+        outlines = [p.get_xy() for p in ax.patches]
+        assert all(isinstance(p, Polygon) for p in ax.patches)
+        plt.close(ax.figure)
+        assert len(outlines) == 5
+
+        cos_a, sin_a = np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))
+        sampling = waves.angular_sampling
+        gpts = waves.gpts
+        k = [np.fft.fftfreq(n) * n * d for n, d in zip(gpts, sampling)]
+        gx, gy = np.meshgrid(*k, indexing="ij")
+        pixels = np.stack([gx.ravel(), gy.ravel()], axis=1)
+        for q, outline in zip(np.linspace(0.0, 1400.0, 5), outlines):
+            # every point is outer from the centre direction, or on the edge of the
+            # propagating beams where the cone runs past 90 degrees
+            theta = q / 1e3
+            centre = [np.sin(theta) * cos_a, np.sin(theta) * sin_a, np.cos(theta)]
+            g = outline / 1e3
+            on_edge = np.isclose(np.hypot(*g.T), 1.0)
+            n = np.column_stack([g, np.sqrt(np.clip(1 - (g**2).sum(1), 0, None))])
+            angles = 1e3 * np.arccos(np.clip(n @ centre, -1, 1))
+            np.testing.assert_allclose(angles[~on_edge], outer, atol=1e-6)
+            assert np.all(angles[on_edge] <= outer + 1e-6)
+            assert on_edge.any() == (q + outer > 1e3 * np.pi / 2)
+
+            # and it holds the pixels the detector integrates, up to some of the
+            # pixels its edge crosses (at most 14 here; a circle of radius outer
+            # about the centre misses 34 to 339)
+            mask = _annular_detector_mask(
+                gpts, sampling, 0.0, outer, offset=(q * cos_a, q * sin_a)
+            ).ravel()
+            inside = Path(outline).contains_points(pixels)
+            edge_pixels = 2 * np.pi * outer / min(sampling)
+            assert (mask != inside).sum() < edge_pixels / 3

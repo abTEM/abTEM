@@ -23,6 +23,7 @@ from abtem.core.complex import abs2
 from abtem.core.energy import (
     angle_convention,
     energy2wavelength,
+    offset_to_grid,
     to_grid_angle,
     to_scattering_angle,
     to_scattering_angle_limit,
@@ -1276,6 +1277,14 @@ class AnnularDetector(_AbstractRadialDetector):
         return diffraction_patterns
 
 
+def _label_reciprocal_axes(ax) -> None:
+    """Label the axes of a plot on the angular grid, as the axes of diffraction
+    patterns are: the scattering angle only with the paraxial convention."""
+    label = "k" if angle_convention() == "paraxial" else "λk "
+    ax.set_xlabel(f"{label}x [mrad]")
+    ax.set_ylabel(f"{label}y [mrad]")
+
+
 def _slit_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -1892,14 +1901,17 @@ class SpectralSlitDetector(BaseDetector):
         ax.add_patch(patch)
 
         ax.set_aspect("equal")
-        ax.set_xlabel("kx [mrad]")
-        ax.set_ylabel("ky [mrad]")
+        _label_reciprocal_axes(ax)
         if not show_pattern:
             ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
             ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
         if mx is not None:
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
+        elif angle_convention() == "exact":
+            lim = float(np.abs(world).max()) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
         else:
             lim = (self.q_max + self._width) * 1.1
             ax.set_xlim(-lim, lim)
@@ -1947,6 +1959,50 @@ class SpectralSlitDetector(BaseDetector):
             measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
         )
         return measurements
+
+
+def _exact_cone_outline(
+    offset: tuple[float, float], radius: float, num: int = 361
+) -> np.ndarray:
+    """The outline on the angular grid [mrad] of the beams at the scattering angle
+    ``radius`` [mrad] from the direction of a detector centre offset by ``offset``
+    [mrad] (see `offset_to_grid`), for the exact convention.
+
+    The beams at a fixed angle from a direction are a small circle on the sphere of
+    directions, and the grid holds their components ``wavelength * k`` across the
+    optical axis, so the outline is that circle seen along the axis: a circle about
+    the axis, and an oval for a tilted centre. Where the circle runs past 90 degrees
+    from the axis, its beams travel backwards and are not on the grid; the
+    outline follows the edge of the propagating beams, ``|wavelength * k| = 1``,
+    there, which bounds the beams within ``radius`` of the centre.
+
+    Returns
+    -------
+    np.ndarray
+        The ``num`` points of the closed outline, shape ``(num, 2)``.
+    """
+    centre = offset_to_grid(offset, "exact") / 1e3
+    theta = float(np.arcsin(min(float(np.hypot(*centre)), 1.0)))
+    phi = float(np.arctan2(centre[1], centre[0]))
+    c = np.array(
+        [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+    )
+    # orthonormal to the centre: in its meridian plane, and along the azimuth
+    e1 = np.array(
+        [np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -np.sin(theta)]
+    )
+    e2 = np.array([-np.sin(phi), np.cos(phi), 0.0])
+    r = min(radius / 1e3, np.pi)
+    psi = np.linspace(0.0, 2 * np.pi, num)
+    n = np.cos(r) * c + np.sin(r) * (
+        np.cos(psi)[:, None] * e1 + np.sin(psi)[:, None] * e2
+    )
+    xy = n[:, :2]
+    behind = n[:, 2] < 0.0
+    # the edge of the propagating beams at the azimuth of a backward beam, which
+    # is within the angle (it is closer to the centre than the backward beam is)
+    xy[behind] /= np.hypot(*xy[behind].T)[:, None]
+    return 1e3 * xy
 
 
 class SpectralAnnularDetector(AnnularDetector):
@@ -2082,6 +2138,7 @@ class SpectralAnnularDetector(AnnularDetector):
         """
         import matplotlib.pyplot as plt
         from matplotlib.patches import Circle
+        from matplotlib.patches import Polygon as MplPolygon
 
         from abtem.measurements import DiffractionPatterns
 
@@ -2103,23 +2160,21 @@ class SpectralAnnularDetector(AnnularDetector):
         q_vals = np.linspace(self.q_min, q_max, n_steps)
 
         cos_a, sin_a = cos_sin_deg(self._sweep_angle)
+        exact = angle_convention() == "exact"
+        style = dict(fill=False, edgecolor="red", linewidth=0.8, alpha=0.6)
 
         for q in q_vals:
             cx, cy = q * cos_a, q * sin_a
-            ax.add_patch(
-                Circle(
-                    (cx, cy),
-                    self.outer,
-                    fill=False,
-                    edgecolor="red",
-                    linewidth=0.8,
-                    alpha=0.6,
-                )
-            )
+            if exact:
+                # the beams within the angle of a tilted centre are not a circle on
+                # the angular grid of the axes
+                outline = _exact_cone_outline((cx, cy), self.outer)
+                ax.add_patch(MplPolygon(outline, closed=True, **style))
+            else:
+                ax.add_patch(Circle((cx, cy), self.outer, **style))
 
         ax.set_aspect("equal")
-        ax.set_xlabel("kx [mrad]")
-        ax.set_ylabel("ky [mrad]")
+        _label_reciprocal_axes(ax)
         if not show_pattern:
             ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
             ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
@@ -2127,7 +2182,7 @@ class SpectralAnnularDetector(AnnularDetector):
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
         else:
-            lim = (q_max + self.outer) * 1.1
+            lim = to_grid_angle(q_max + self.outer) * 1.1
             ax.set_xlim(-lim, lim)
             ax.set_ylim(-lim, lim)
         ax.set_title(
