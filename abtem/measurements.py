@@ -511,12 +511,13 @@ def _exact_angles_about_centre(
     azimuth = xp.where(propagating, xp.arctan2(ry, rx), 0.0)
 
     # the centre pixel is at exactly 0, with the azimuth 0 of the paraxial
-    # convention, rather than at the angle and azimuth of the rounding
-    index = tuple(
-        int(np.round(c * 1e3 / d)) % n for c, d, n in zip(centre, sampling, gpts)
-    )
-    alpha[index] = 0.0
-    azimuth[index] = 0.0
+    # convention, rather than at the angle and azimuth of the rounding; a centre
+    # beyond the grid has no pixel (its index would wrap round to another one)
+    frequency = [int(np.round(c * 1e3 / d)) for c, d in zip(centre, sampling)]
+    if all(-(n // 2) <= f <= (n - 1) // 2 for f, n in zip(frequency, gpts)):
+        index = tuple(f % n for f, n in zip(frequency, gpts))
+        alpha[index] = 0.0
+        azimuth[index] = 0.0
     return alpha, azimuth
 
 

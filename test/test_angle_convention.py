@@ -477,3 +477,24 @@ def test_the_spectral_annular_detector_shows_the_cones_it_detects():
             inside = Path(outline).contains_points(pixels)
             edge_pixels = 2 * np.pi * outer / min(sampling)
             assert (mask != inside).sum() < edge_pixels / 3
+
+
+def test_an_offset_centre_beyond_the_grid_has_no_pixel():
+    # the centre at 600 mrad is beyond a grid that reaches 320 mrad: no pixel is at
+    # angle 0 (rounding its index used to wrap round to the other side of the grid,
+    # which was then counted as the centre), and every angle is that from the centre
+    from abtem.measurements import _exact_angles_about_centre
+
+    sampling, gpts = (10.0, 10.0), (64, 64)
+    k = [np.fft.fftfreq(n) * n * d / 1e3 for n, d in zip(gpts, sampling)]
+    nx, ny = np.meshgrid(*k, indexing="ij")
+    nz = np.sqrt(1 - nx**2 - ny**2)
+    for offset in ((600.0, 0.0), (-100.0, 640.0)):
+        alpha, _ = _exact_angles_about_centre(gpts, sampling, offset)
+        radius = np.hypot(*offset)
+        g = np.array(offset) / radius * np.sin(radius / 1e3)
+        g = np.round(g * 1e3 / np.array(sampling)) * np.array(sampling) / 1e3
+        c = np.append(g, np.sqrt(1 - g @ g))
+        reference = 1e3 * np.arccos(np.clip(nx * c[0] + ny * c[1] + nz * c[2], -1, 1))
+        assert alpha.min() > 100.0
+        np.testing.assert_allclose(alpha, reference, atol=0.2)
