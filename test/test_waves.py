@@ -13,6 +13,7 @@ from utils import (
     assert_array_matches_laziness,
     devices,
     gpu,
+    lazy_params,
 )
 
 import abtem
@@ -851,6 +852,215 @@ def test_tile(data, repetitions, renormalize, lazy, device):
             .array.sum((-2, -1))
         )
         assert np.allclose(old_sum, new_sum)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_crop(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    old_extent = waves.extent
+    old_energy = waves.energy
+    old_dtype = waves.array.dtype
+
+    half_extent = (old_extent[0] / 2, old_extent[1] / 2)
+    cropped = waves.crop(half_extent, centered=True)
+
+    assert np.allclose(cropped.extent, half_extent, atol=max(waves.sampling))
+    assert cropped.energy == old_energy
+    assert cropped.array.dtype == old_dtype
+    assert cropped.sampling == waves.sampling
+    assert_array_matches_laziness(cropped.array, lazy=lazy)
+    assert_array_matches_device(cropped.array, device=device)
+
+    # cropping to the full extent is a no-op on the array contents
+    full = waves.crop(old_extent, centered=True)
+    np.testing.assert_array_equal(
+        asnumpy(full.compute().array), asnumpy(waves.compute().array)
+    )
+
+
+def test_crop_raises_for_larger_extent():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((100.0, 100.0))
+
+
+def test_crop_raises_in_reciprocal_space():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.crop((1.0, 1.0))
+
+
+def test_crop_centered_rejects_explicit_offset():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_window_boxcar_is_a_no_op(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    windowed = waves.window("boxcar")
+    np.testing.assert_array_equal(
+        asnumpy(windowed.compute().array), asnumpy(waves.compute().array)
+    )
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_window_hann_tapers_to_the_edges(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
+    windowed = waves.window("hann")
+    assert_array_matches_laziness(windowed.array, lazy=lazy)
+    assert windowed.array.dtype == waves.array.dtype
+    array = asnumpy(windowed.compute().array)
+    assert windowed.energy == waves.energy
+    # a Hann window is exactly zero at its first and last sample
+    np.testing.assert_allclose(array[..., 0, :], 0.0, atol=1e-6)
+    np.testing.assert_allclose(array[..., :, 0], 0.0, atol=1e-6)
+
+
+@given(data=st.data())
+@lazy_params
+def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
+    margin = (waves.extent[0] / 4, waves.extent[1] / 4)
+
+    combined = waves.window("hann", margin=margin)
+    separate = waves.crop(
+        (waves.extent[0] - 2 * margin[0], waves.extent[1] - 2 * margin[1]),
+        centered=True,
+    ).window("hann")
+
+    np.testing.assert_allclose(
+        asnumpy(combined.compute().array), asnumpy(separate.compute().array)
+    )
+
+
+@devices
+def test_window_taper_is_kept_but_not_served_across_grids_or_precisions(
+    device, monkeypatch
+):
+    """Every exit plane of a thickness series is windowed with the same taper."""
+    from scipy.signal import windows
+
+    import abtem.waves as waves_module
+    from abtem.core.backend import get_array_module
+
+    monkeypatch.setattr(waves_module, "_window_tapers", None)
+    requested = []
+    get_window = windows.get_window
+
+    def counting(window, n, *args, **kwargs):
+        requested.append((window, n))
+        return get_window(window, n, *args, **kwargs)
+
+    monkeypatch.setattr(windows, "get_window", counting)
+    xp = get_array_module(device)
+
+    def waves(shape, dtype):
+        rng = np.random.default_rng(1)
+        array = (rng.random(shape) + 1j * rng.random(shape)).astype(dtype)
+        return abtem.Waves(xp.asarray(array), energy=200e3, sampling=(0.1, 0.1))
+
+    def reference(waves, window="hann"):
+        taper = np.outer(
+            get_window(window, waves.shape[0]), get_window(window, waves.shape[1])
+        )
+        return asnumpy(waves.array) * taper.astype(waves.array.real.dtype)
+
+    single = waves((24, 20), np.complex64)
+    first = single.window("hann")
+    count = len(requested)
+    again = single.window("hann")
+    assert len(requested) == count  # the second call took the kept taper
+    assert np.array_equal(asnumpy(first.array), asnumpy(again.array))
+    assert np.array_equal(asnumpy(first.array), reference(single))
+
+    # another grid, precision and window each get a taper of their own
+    for other in (waves((24, 22), np.complex64), waves((24, 20), np.complex128)):
+        windowed = other.window("hann")
+        assert windowed.array.dtype == other.array.dtype
+        assert np.array_equal(asnumpy(windowed.array), reference(other))
+    windowed = single.window("hamming")
+    assert np.array_equal(asnumpy(windowed.array), reference(single, "hamming"))
+
+    # the kept taper is not changed by the products
+    assert np.array_equal(asnumpy(single.window("hann").array), reference(single))
+
+
+def test_window_raises_in_reciprocal_space():
+    """A real-space taper multiplied into reciprocal-space waves would be wrong
+    without notice, so window refuses them, as crop does; a no-op window does not."""
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.window("hann")
+    with pytest.raises(NotImplementedError):
+        waves.window("hann", margin=0.2)
+    assert waves.window(None) is waves
+
+
+def test_crop_raises_for_a_region_without_pixels_or_outside_the_waves():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError, match="smaller than one grid point"):
+        waves.crop((0.01, 0.01))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(-0.5, 0.0))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(0.8, 0.0))
+
+
+def test_window_raises_for_a_margin_that_leaves_nothing():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    for margin in (0.8, 1.0, -0.1):
+        with pytest.raises(ValueError):
+            waves.window("hann", margin=margin)
+
+
+@pytest.mark.parametrize("window", ["hann", ("tukey", 0.3), ("kaiser", 8.0)])
+def test_window_accepts_a_tuple_with_parameters(window):
+    from scipy.signal import windows
+
+    waves = abtem.Waves(
+        np.ones((16, 12), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    expected = np.outer(
+        windows.get_window(window, 16), windows.get_window(window, 12)
+    )
+    np.testing.assert_allclose(waves.window(window).array.real, expected, rtol=1e-6)
+
+
+def test_window_none_only_crops():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    windowed = waves.window(None, margin=0.4)
+    np.testing.assert_array_equal(asnumpy(windowed.array), 1.0)
+    assert windowed.array.shape == (8, 8)
 
 
 def _build_exit_plane_waves(device="cpu", exit_planes=1):

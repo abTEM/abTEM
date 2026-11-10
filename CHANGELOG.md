@@ -112,6 +112,35 @@ Features:
 
 Performance:
 
+- Multislice of an ensemble of atoms (such as a 3DED rotation series) no longer repeats host work for
+  every chunk or exit plane, and its potential needs fewer FFTs
+    - The atoms of an ensemble are sliced once per call of `generate_chunked_slices` instead of once per
+      chunk
+    - `Waves.window` keeps its taper, and the power gain of a window is computed once, instead of both
+      building an `n x n` array on the host at every exit plane
+    - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
+      and element
+    - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
+      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"`, on a GPU and
+      with torch (CPU and Metal; the wrapper allocates the output, which avoids a PyTorch warning of
+      the Metal kernels about resizing it);
+      this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
+      and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
+    - Measured with `benchmarks/bench_real_fft_potential.py` on an Apple silicon laptop (Metal,
+      single precision), the potential of the default projection builds 1.22x (1024 x 1024, 8 slices),
+      1.31x (2048 x 2048, 8 slices), 1.62x (4096 x 4096, 16 slices) and 1.67x (2048 x 2048, 80 slices)
+      faster with the real transforms
+    - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
+    - Measured for one orientation of a py3DED run (160 x 160 x 1000 Å, sampling 0.02 Å, slices of
+      0.4 Å, an 8000 x 8000 grid, 251 exit planes) on a 24 GB RTX 4090 in single precision: monoclinic
+      ZrO2 takes 91.1 s instead of 199.6 s (2.19x) and kyanite 104.5 s instead of 253.0 s (2.42x). The
+      patterns of the first three changes are bit-identical; with the real transforms they differ
+      from the old ones by 4e-6 of the largest value, about a tenth of the error of the single
+      precision run itself against a double precision one (4.6e-5 and 8.9e-5), which they leave
+      unchanged
+    - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
+      multislice run into stages, and measured commit by commit with
+      `benchmarks/bisect_multislice_gains.py`
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
   (and re-uploaded to the GPU) for each ([PR #350](https://github.com/abTEM/abTEM/pull/350))
 - Removed a redundant potential rebuild on every scan chunk ([PR #340](https://github.com/abTEM/abTEM/pull/340))
@@ -148,6 +177,61 @@ Performance:
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
+- The Bloch-wave structure matrix is gathered on the device from the structure factors on a dense grid,
+  instead of being looked up through pandas on the host from the (beams², 3) array of Miller index
+  differences; on the GPU that lookup took two thirds of the time of a rotation series at 13,903 beams.
+  The eigendecomposition reuses the structure matrix's memory where the backend allows (CuPy, and NumPy
+  in double precision), and the beam amplitudes no longer form two more beams x beams arrays
+  ([PR #635](https://github.com/abTEM/abTEM/pull/635))
+    - A centrosymmetric crystal is solved as a real symmetric eigenproblem, that of the crystal moved
+      to its inversion center, which halves the memory of the structure matrix and its eigenvectors
+      and is faster to factorize; results agree with the complex solve to rounding.
+      `StructureFactor(inversion_center="auto")` detects the center from the atoms, and
+      `inversion_center=None` keeps the complex solve
+    - Measured for one orientation of monoclinic ZrO2 (13,903 beams, float32) on a 24 GB RTX 4090:
+      the structure matrix takes 0.08 s instead of 10 s and the eigendecomposition 2.8 s instead of
+      5.7 s, with a peak of 3.9 GB instead of 9.3 GB (2.5 instead of 6 complex beams x beams
+      matrices); the error against double precision is 2.6e-4 instead of 4.3e-4. Kyanite's 28,898
+      beams, which ran out of memory, fit with a peak of 16.7 GB
+- Bloch waves have a second solver, chosen by the configuration key `bloch.solver`: `"band"` reduces
+  the structure matrix in place to band form with matrix products and expands the incident wave in
+  Chebyshev polynomials of the band matrix, instead of diagonalizing it (`"eigh"`). The default `"auto"`
+  uses it on a GPU when it is estimated to be faster, which is for thousands of beams; on the CPU, and
+  for small or very thick crystals, the eigendecomposition is faster
+  ([PR #642](https://github.com/abTEM/abTEM/pull/642))
+    - Measured for one orientation on a 24 GB RTX 4090 in single precision, with thicknesses to 1000 Å:
+      monoclinic ZrO2 (13,903 beams) takes 0.71 s instead of 2.90 s (real symmetric form) and 1.13 s
+      instead of 5.77 s (complex), and kyanite (28,898 beams) 2.56 s instead of 24.3 s. The peak memory
+      is a quarter (0.5-0.7 instead of 2.5 complex beams x beams matrices, 1.1-1.3 instead of 5.0), so
+      kyanite's complex form fits (7.2 GB). The error against double precision is 4.8e-5, 9.4e-5 and
+      9.7e-5 instead of 2.6e-4, 4.3e-4 and 1.3e-3: the eigendecomposition's grows with the number of
+      beams
+    - The expansion costs about 0.3 s per 1000 Å of the largest thickness on that GPU
+    - A rotation series computes the structure factors once, not once per orientation or dask block
+- **Behaviour change:** `OMP_NUM_THREADS` caps the threads of Numba's `parallel=True` kernels and of the
+  interpolation pool of the finite-projection potential when `NUMBA_NUM_THREADS` is unset and
+  `OMP_NUM_THREADS` is a positive integer, where 1.0.11 used every CPU usable by the process for Numba and
+  every CPU of the machine for the interpolation pool
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
+    - With `abtem` imported before `numba`, the cap is the size of Numba's whole thread pool, so it holds for
+      every `parallel=True` kernel in the process, the application's own included, and the size of the
+      interpolation pool. With `numba` imported first, Numba's pool and its configuration are unchanged and
+      the cap applies to the interpolation pool and, set on the launching thread for the duration of each
+      launch, to the real-space Laplacian stencil (`RealSpaceMultislice`) only. On a 24-CPU machine with
+      `OMP_NUM_THREADS=1` and `abtem` imported first, 1.0.11 gave Numba and the interpolation pool 24 threads
+      and both now have 1. `OMP_NUM_THREADS=1` is the default of many HPC schedulers and the value a dask
+      nanny sets in its worker processes when the variable is unset, so these kernels then run on one
+      thread. An explicit `NUMBA_NUM_THREADS` overrides the cap
+    - The cap is at most the number of CPUs usable by the process (`os.sched_getaffinity`, else
+      `os.cpu_count()`)
+- **Behaviour change:** the interpolation pool of the finite-projection potential has `NUMBA_NUM_THREADS`
+  threads when it is set and otherwise the cap above or, without one, Numba's default, the number of usable
+  CPUs, where 1.0.11 used `os.cpu_count()` whatever the process may use: under `taskset -c 0-2` the pool has 3
+  threads where it had 24 on a 24-CPU machine, and with `NUMBA_NUM_THREADS=5` it has 5 where it had 24.
+  Potentials built with different interpolation thread counts differ in the last float32 bits: for a silicon
+  cubic cell repeated 3 x 3 x 3 with `gpts=128` and finite projection, two processes with 24 and with 4
+  interpolation threads differed by up to 4.3e-7 of the maximum
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
 
 Dependencies:
 
@@ -568,6 +652,9 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
+- `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
+  more than that g_max apart set to zero as its warning says, where building the structure matrix raised
+  `ValueError: invalid entry in coordinates array` ([PR #635](https://github.com/abTEM/abTEM/pull/635))
 - `DiffractionPatterns.index_diffraction_spots` with one orientation matrix per member (for example
   `(n, 3, 3)` matrices for `n` patterns, or `(n, 1, 3, 3)` for a rotation series with a second ensemble
   axis) raised a bare `AssertionError` for eager patterns, and for lazy patterns with more than one member
@@ -590,6 +677,9 @@ Documentation:
   tutorial, which now selects the paraxial propagator explicitly where it compares algorithms at equal order
 - The installation page documents the optional pip extras (`gpaw`, `extra`, `all`) and why the GPU packages
   are not among them
+- The `angular_spread` docstrings of `SpatialEnvelope` and `CTF` now state the 1/e width convention
+  (`angular_spread = √2·σ`), matching `focal_spread`, and the `CTF` unit is corrected from Å to mrad
+  ([PR #645](https://github.com/abTEM/abTEM/pull/645))
 - The configuration reference is synchronized with the new and changed config keys
 - The multiple-GPUs section of the parallelization walkthrough is expanded to cover the multi-GPU
   hardening fixes above, and the FFT plan-cache documentation is corrected to match the shipped `auto`
