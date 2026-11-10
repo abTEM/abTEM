@@ -752,6 +752,46 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
     np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
 
 
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=10, outer=40),
+        abtem.FlexibleAnnularDetector(outer=40),
+        abtem.SegmentedDetector(
+            inner=10, outer=40, nbins_radial=2, nbins_azimuthal=4
+        ),
+    ],
+    ids=["annular", "flexible_annular", "segmented"],
+)
+def test_radial_detector_show_can_be_drawn(detector):
+    """show() of a radial detector renders, not only builds the figure: the
+    one-region AnnularDetector made a one-colour colormap that matplotlib refused
+    when drawing it ("data mapping points must start with x=0 and end with x=1")."""
+    import matplotlib.pyplot as plt
+
+    detector.show(energy=100e3, gpts=64, sampling=0.05)
+    plt.gcf().canvas.draw()
+    plt.close("all")
+
+
+@pytest.mark.parametrize("num_colors", [1, 2, 5, 10, 13])
+def test_discrete_cmap_gives_the_first_colours_of_its_base_map(num_colors):
+    """Region i of a detector plot (values -0.5 to num_colors - 0.5) has colour i
+    of the base colormap, for one region as for several."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    from abtem.visualize.visualizations import discrete_cmap
+
+    base = "tab10" if num_colors <= 10 else "tab20"
+    cmap = discrete_cmap(num_colors=num_colors, base_cmap=base)
+    norm = Normalize(vmin=-0.5, vmax=num_colors - 0.5)
+    np.testing.assert_allclose(
+        cmap(norm(np.arange(num_colors))),
+        plt.get_cmap(base)(range(num_colors)),
+    )
+
+
 @pytest.fixture
 def float64_numpy_fft():
     with abtem.config.set({"precision": "float64", "fft": "numpy"}):

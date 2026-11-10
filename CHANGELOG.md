@@ -270,6 +270,9 @@ Dependencies:
 
 Bugfixes:
 
+- `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
+  rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
+  regions keep their colours ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
 - PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
   antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
   `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
