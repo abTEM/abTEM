@@ -136,6 +136,35 @@ Features:
 
 Performance:
 
+- Multislice of an ensemble of atoms (such as a 3DED rotation series) no longer repeats host work for
+  every chunk or exit plane, and its potential needs fewer FFTs
+    - The atoms of an ensemble are sliced once per call of `generate_chunked_slices` instead of once per
+      chunk
+    - `Waves.window` keeps its taper, and the power gain of a window is computed once, instead of both
+      building an `n x n` array on the host at every exit plane
+    - `ScatteringFactorProjectionIntegrals` builds its `sinc` once per grid instead of for every slice
+      and element
+    - The default (infinite) projection transforms the real slices of the potential with `rfft2` and
+      `irfft2`, half the work and memory of the complex transforms, with `fft="numpy"`, on a GPU and
+      with torch (CPU and Metal; the wrapper allocates the output, which avoids a PyTorch warning of
+      the Metal kernels about resizing it);
+      this one agrees with the complex transforms to rounding (half an epsilon of the largest value)
+      and not bit for bit; the elements of a slice are summed as half spectra and transformed back once
+    - Measured with `benchmarks/bench_real_fft_potential.py` on an Apple silicon laptop (Metal,
+      single precision), the potential of the default projection builds 1.22x (1024 x 1024, 8 slices),
+      1.31x (2048 x 2048, 8 slices), 1.62x (4096 x 4096, 16 slices) and 1.67x (2048 x 2048, 80 slices)
+      faster with the real transforms
+    - `Potential.generate_slices` no longer finds the elements of all the atoms at every chunk
+    - Measured for one orientation of a py3DED run (160 x 160 x 1000 Å, sampling 0.02 Å, slices of
+      0.4 Å, an 8000 x 8000 grid, 251 exit planes) on a 24 GB RTX 4090 in single precision: monoclinic
+      ZrO2 takes 91.1 s instead of 199.6 s (2.19x) and kyanite 104.5 s instead of 253.0 s (2.42x). The
+      patterns of the first three changes are bit-identical; with the real transforms they differ
+      from the old ones by 4e-6 of the largest value, about a tenth of the error of the single
+      precision run itself against a double precision one (4.6e-5 and 8.9e-5), which they leave
+      unchanged
+    - Found by `benchmarks/bench_multislice_3ded_payload.py`, which splits one orientation of a py3DED
+      multislice run into stages, and measured commit by commit with
+      `benchmarks/bisect_multislice_gains.py`
 - The projection integrator is shared by reference across ensemble members instead of being deep-copied
   (and re-uploaded to the GPU) for each ([PR #350](https://github.com/abTEM/abTEM/pull/350))
 - Removed a redundant potential rebuild on every scan chunk ([PR #340](https://github.com/abTEM/abTEM/pull/340))
@@ -172,6 +201,61 @@ Performance:
   plane waves. For 479 beams, 5 thicknesses and a 256 x 256 grid the synthesis takes 6 ms instead of
   256 ms, and its peak memory 19 MB instead of 5 GB; values agree to float64 rounding
   ([PR #630](https://github.com/abTEM/abTEM/pull/630))
+- The Bloch-wave structure matrix is gathered on the device from the structure factors on a dense grid,
+  instead of being looked up through pandas on the host from the (beams², 3) array of Miller index
+  differences; on the GPU that lookup took two thirds of the time of a rotation series at 13,903 beams.
+  The eigendecomposition reuses the structure matrix's memory where the backend allows (CuPy, and NumPy
+  in double precision), and the beam amplitudes no longer form two more beams x beams arrays
+  ([PR #635](https://github.com/abTEM/abTEM/pull/635))
+    - A centrosymmetric crystal is solved as a real symmetric eigenproblem, that of the crystal moved
+      to its inversion center, which halves the memory of the structure matrix and its eigenvectors
+      and is faster to factorize; results agree with the complex solve to rounding.
+      `StructureFactor(inversion_center="auto")` detects the center from the atoms, and
+      `inversion_center=None` keeps the complex solve
+    - Measured for one orientation of monoclinic ZrO2 (13,903 beams, float32) on a 24 GB RTX 4090:
+      the structure matrix takes 0.08 s instead of 10 s and the eigendecomposition 2.8 s instead of
+      5.7 s, with a peak of 3.9 GB instead of 9.3 GB (2.5 instead of 6 complex beams x beams
+      matrices); the error against double precision is 2.6e-4 instead of 4.3e-4. Kyanite's 28,898
+      beams, which ran out of memory, fit with a peak of 16.7 GB
+- Bloch waves have a second solver, chosen by the configuration key `bloch.solver`: `"band"` reduces
+  the structure matrix in place to band form with matrix products and expands the incident wave in
+  Chebyshev polynomials of the band matrix, instead of diagonalizing it (`"eigh"`). The default `"auto"`
+  uses it on a GPU when it is estimated to be faster, which is for thousands of beams; on the CPU, and
+  for small or very thick crystals, the eigendecomposition is faster
+  ([PR #642](https://github.com/abTEM/abTEM/pull/642))
+    - Measured for one orientation on a 24 GB RTX 4090 in single precision, with thicknesses to 1000 Å:
+      monoclinic ZrO2 (13,903 beams) takes 0.71 s instead of 2.90 s (real symmetric form) and 1.13 s
+      instead of 5.77 s (complex), and kyanite (28,898 beams) 2.56 s instead of 24.3 s. The peak memory
+      is a quarter (0.5-0.7 instead of 2.5 complex beams x beams matrices, 1.1-1.3 instead of 5.0), so
+      kyanite's complex form fits (7.2 GB). The error against double precision is 4.8e-5, 9.4e-5 and
+      9.7e-5 instead of 2.6e-4, 4.3e-4 and 1.3e-3: the eigendecomposition's grows with the number of
+      beams
+    - The expansion costs about 0.3 s per 1000 Å of the largest thickness on that GPU
+    - A rotation series computes the structure factors once, not once per orientation or dask block
+- **Behaviour change:** `OMP_NUM_THREADS` caps the threads of Numba's `parallel=True` kernels and of the
+  interpolation pool of the finite-projection potential when `NUMBA_NUM_THREADS` is unset and
+  `OMP_NUM_THREADS` is a positive integer, where 1.0.11 used every CPU usable by the process for Numba and
+  every CPU of the machine for the interpolation pool
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
+    - With `abtem` imported before `numba`, the cap is the size of Numba's whole thread pool, so it holds for
+      every `parallel=True` kernel in the process, the application's own included, and the size of the
+      interpolation pool. With `numba` imported first, Numba's pool and its configuration are unchanged and
+      the cap applies to the interpolation pool and, set on the launching thread for the duration of each
+      launch, to the real-space Laplacian stencil (`RealSpaceMultislice`) only. On a 24-CPU machine with
+      `OMP_NUM_THREADS=1` and `abtem` imported first, 1.0.11 gave Numba and the interpolation pool 24 threads
+      and both now have 1. `OMP_NUM_THREADS=1` is the default of many HPC schedulers and the value a dask
+      nanny sets in its worker processes when the variable is unset, so these kernels then run on one
+      thread. An explicit `NUMBA_NUM_THREADS` overrides the cap
+    - The cap is at most the number of CPUs usable by the process (`os.sched_getaffinity`, else
+      `os.cpu_count()`)
+- **Behaviour change:** the interpolation pool of the finite-projection potential has `NUMBA_NUM_THREADS`
+  threads when it is set and otherwise the cap above or, without one, Numba's default, the number of usable
+  CPUs, where 1.0.11 used `os.cpu_count()` whatever the process may use: under `taskset -c 0-2` the pool has 3
+  threads where it had 24 on a 24-CPU machine, and with `NUMBA_NUM_THREADS=5` it has 5 where it had 24.
+  Potentials built with different interpolation thread counts differ in the last float32 bits: for a silicon
+  cubic cell repeated 3 x 3 x 3 with `gpts=128` and finite projection, two processes with 24 and with 4
+  interpolation threads differed by up to 4.3e-7 of the maximum
+  ([PR #658](https://github.com/abTEM/abTEM/pull/658))
 - An eager `SMatrix.build`, and so an eager `SMatrix.reduce` or `SMatrix.scan`, of a `CrystalPotential` whose
   members reseed their frozen-phonon pools (`seeds` or `num_frozen_phonons`) builds each member's pool once
   instead of once per plane-wave block: 3 members over 14 blocks build 3 pools instead of 42, and an eager
@@ -186,6 +270,74 @@ Dependencies:
 
 Bugfixes:
 
+- PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
+  antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
+  `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
+  `SMatrix` report the full grid's cutoff angles. Before, the patterns were cropped to about two thirds of that
+  cutoff, and to a different size along x and y on a grid sampled differently along them. For the cubic Si cell
+  (5.43 Å) on a 56 x 64 grid at 100 keV, patterns of (26, 22) pixels become (38, 38), and the cutoff angles of
+  the dummy probes, 88.6 mrad unbuilt and 88.6 x 75.0 mrad for the built S-matrix, become 129.5 mrad. At a
+  larger interpolation factor the patterns lie on the coarser grid of the reduction and extend to the same
+  cutoff angle. At `interpolation=1` the same applies to core-loss PRISM
+  (`SMatrix.transition_potential_scan`): its pixelated and flexible annular outputs have the sizes of core-loss
+  multislice. The automatic outer angle of `AnnularDetector` and `FlexibleAnnularDetector` follows the full
+  grid's cutoff at every interpolation, for a window that spans the downsampled grid. Results with
+  `max_angle="full"` or a numeric angle, and with `downsample=False`, are unchanged
+- A numeric `downsample` below the full grid's antialias cutoff caps the cutoff of the downsampled S-matrix at
+  the edge of the downsampled grid. **Behaviour change:** for the cubic Si cell (5.43 Å) on a 56 x 64 grid at
+  100 keV with `downsample=60`, a 20 x 20 grid with an edge at 68.2 mrad, and `interpolation=1` (or
+  `upsample=True`), `PixelatedDetector("cutoff")` gives (20, 20) pixels instead of (14, 12), and `"valid"` (14, 14)
+  instead of (10, 8). The cutoff angles of the dummy probes are 68.2 mrad instead of 47.7 mrad, and
+  `AnnularDetector(inner=30)`, with its automatic outer angle, collects out to 68.2 mrad instead of 47.7 mrad. Its
+  signal rises by a factor of 2.03 at the centre of the one-cell-thick cell and 2.01 at (1.0, 1.5) Å, and by 1.76
+  and 1.74 for a cell two cells thick
+- `SMatrix`, `Waves.downsample` and `WavesDetector(gpts)` record the band limit of their downsampled waves in the
+  metadata key `antialias_sampling`, the sampling of the grid whose antialias aperture band-limited the waves,
+  instead of the pixel count `adjusted_antialias_cutoff_gpts`, which holds only at the extent it was counted on.
+  `Waves.downsample` and `WavesDetector(gpts)` also record the sampling of the coarsest grid the waves were
+  resampled onto in `coarsest_sampling`, where their content ends. Waves stored with the old key read as before.
+  **Behaviour change:** the cutoff angles of waves resampled by `Waves.downsample` or `WavesDetector(gpts)`
+  survive `Waves.tile`; the waves of `Probe(energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12))`
+  downsampled to `"cutoff"` and tiled by (2, 2) report 66.6 x 64.8 mrad, where they reported 33.3 x 32.4 mrad.
+  The cutoff angles, the `"cutoff"` and `"valid"` patterns and the bins of a `FlexibleAnnularDetector` of such
+  waves that are neither tiled nor given another extent are those of before, however often they are resampled;
+  the changes to `SMatrix` are the ones in the neighbouring entries
+- The batches of the compressed reduction of a C-PRISM window smaller than the downsampled grid are sized for the
+  grid the detectors read. A `PixelatedDetector` detects on the downsampled grid, but the positions per batch
+  followed the window, so a batch of patterns held as many times the budget as the downsampled grid has pixels per
+  window pixel: 2.08 times for a (24, 32) window in a (40, 40) grid (1600 / 768 pixels) and 64 times for a
+  128 x 128 window in a 1024 x 1024 grid. The budget is `dask.chunk-size` (`dask.chunk-size-gpu` on a GPU) for the batches of an
+  arbitrary list of positions, and 1 GiB for the lattice reduction of a `GridScan`. Every other detector reads the window, and the
+  values do not change
+- C-PRISM (`upsample=True`) with a window smaller than the downsampled grid, an explicit `window_gpts` or the
+  automatic window of a large cell, detects the diffraction patterns of a `PixelatedDetector` on the downsampled
+  grid, at the angular sampling of the cell, as multislice does, on the same grid whichever other detectors share
+  the scan. Before, a lazy scan declared a different shape and angular sampling than it computed, a frozen-phonon
+  scan or a multi-energy scan with a numeric `max_angle` raised `ValueError`, and a pattern scanned together with
+  a `FlexibleAnnularDetector` or `WavesDetector` lay on the window's coarser grid. **Behaviour change:** for the
+  cubic Si cell (5.43 Å) on a 56 x 64 grid at 100 keV with `interpolation=2`, `window_gpts=(24, 32)` and
+  `downsample="cutoff"`, `PixelatedDetector("cutoff")` gives (38, 38) pixels at 6.82 mrad instead of (16, 18),
+  `"valid"` (26, 26) instead of (12, 12), and `resample="uniform"` (38, 38) at 6.82 mrad instead of (16, 14) at
+  11.4 mrad. The automatic `FlexibleAnnularDetector` has 124 bins instead of 76, and the cutoff angles of
+  `SMatrix.dummy_probes()` are 125.0 x 127.8 mrad instead of 90.9 x 93.7 mrad. The automatic outer angle of
+  `AnnularDetector` and `FlexibleAnnularDetector` follows these cutoffs (`AnnularDetector(inner=50)` collects out
+  to 125.0 mrad instead of 90.9 mrad). Core-loss PRISM with `interpolation=2` on an 8 x 6 Å cell has the sizes of
+  the full window, (16, 12) and (12, 8) pixels and 74 bins instead of (10, 8), (8, 6) and 46 bins. Plain PRISM and
+  C-PRISM with a window that spans the downsampled grid already detected their patterns on that grid
+- PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
+  `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
+  plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
+  and `reduce(lazy=True, disable_s_matrix_chunks=True)`, the lazy default on a GPU and with `upsample=True`,
+  averaged over a scan axis instead. `CompressedSMatrixArray.reduce` averages the ensemble with every `method`
+  and with `blend_angle`; it did so only with `method="expand"` and no `blend_angle`, the CPU default
+- The PRISM reductions `SMatrix.reduce` and `SMatrix.scan` leave the `CTF` they are given as it is. Before, a single-energy
+  reduction set its grid and energy in place, so `ctf.gpts`, `ctf.extent` and `ctf.energy` held the S-matrix's
+  afterwards, and the tasks of a lazy graph shared the one CTF. A lazy CPU scan of a frozen-phonon ensemble with a cropped C-PRISM
+  window and a `PixelatedDetector` reaching past the blend cut, whose two branches match the CTF to the window and
+  to the plane-wave period, could therefore sample the soft aperture of one configuration on the other grid
+  (15.91 x 13.63 mrad per pixel for a (24, 32) window of a (56, 64) grid, 13.63 x 13.63 mrad for its period). That
+  configuration's pattern was wrong by about 1 % at the edge of the aperture, 3e-3 of the maximum after the mean
+  over three configurations, intermittently in repeated runs of the test of this case
 - Double-channel core-loss multislice (`double_channel=True`, the default) could use the transmission function of
   another slice, so repeated runs differed, with or without frozen phonons
   ([#578](https://github.com/abTEM/abTEM/pull/578)). Double-channel core-loss results computed with 1.0.10 or
@@ -482,6 +634,9 @@ Bugfixes:
       the individual deflections, where the polar angles were summed and the sum was also used as the
       azimuth
     - The `CoreLoss.local_potential` docstring gives `max_angle` in mrad, not degrees
+- `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
+  more than that g_max apart set to zero as its warning says, where building the structure matrix raised
+  `ValueError: invalid entry in coordinates array` ([PR #635](https://github.com/abTEM/abTEM/pull/635))
 
 Documentation:
 
@@ -498,6 +653,9 @@ Documentation:
   tutorial, which now selects the paraxial propagator explicitly where it compares algorithms at equal order
 - The installation page documents the optional pip extras (`gpaw`, `extra`, `all`) and why the GPU packages
   are not among them
+- The `angular_spread` docstrings of `SpatialEnvelope` and `CTF` now state the 1/e width convention
+  (`angular_spread = √2·σ`), matching `focal_spread`, and the `CTF` unit is corrected from Å to mrad
+  ([PR #645](https://github.com/abTEM/abTEM/pull/645))
 - The configuration reference is synchronized with the new and changed config keys
 - The multiple-GPUs section of the parallelization walkthrough is expanded to cover the multi-GPU
   hardening fixes above, and the FFT plan-cache documentation is corrected to match the shipped `auto`

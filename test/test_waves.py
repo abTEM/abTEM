@@ -13,6 +13,7 @@ from utils import (
     assert_array_matches_laziness,
     devices,
     gpu,
+    lazy_params,
 )
 
 import abtem
@@ -521,6 +522,150 @@ def test_downsample(data, max_angle, normalization, lazy, device):
         np.testing.assert_allclose(new_mean_intensity, old_mean_intensity, rtol=1e-4)
 
 
+@pytest.mark.parametrize("gpts", [None, (45, 45), (39, 41)])
+@devices
+def test_downsample_keeps_the_antialias_cutoff(gpts, device):
+    # a grid sampled differently along x and y: the pixel count within the
+    # antialias cutoff of the resampled waves still means the same angles when
+    # the new grid holds them, and is capped at its own grid otherwise
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample(gpts=gpts) if gpts else waves.downsample("cutoff")
+
+    assert downsampled.gpts != waves.gpts
+    expected = [
+        min(angle, nyquist)
+        for angle, nyquist in zip(
+            waves.cutoff_angles,
+            np.array(downsampled.gpts) // 2 * downsampled.angular_sampling,
+        )
+    ]
+    assert downsampled.cutoff_angles == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("gpts", [(45, 45), (45, 50)])
+@devices
+def test_downsample_to_gpts_of_the_other_parity_keeps_the_cutoff_count(gpts, device):
+    # the pixel count within the antialias cutoff takes the parity of the grid
+    # the waves come from; (45, 45) and (45, 50) are not the parity of the (56, 64)
+    # grid, and the angles, the "cutoff" pattern and the bins of a
+    # FlexibleAnnularDetector keep the values that these calls have always given
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample(gpts=gpts)
+
+    assert downsampled.cutoff_angles == pytest.approx([66.62585871, 64.77514041])
+    assert downsampled.diffraction_patterns("cutoff").shape[-2:] == (37, 43)
+    assert abtem.FlexibleAnnularDetector().detect(downsampled).shape == (64, 1)
+
+
+@pytest.mark.parametrize("route", ["downsample", "detector"])
+@devices
+def test_resampling_onto_a_finer_grid_keeps_the_cap_of_the_coarser_grid(route, device):
+    # the content of waves resampled to (30, 40) ends at the edge of that grid, and
+    # resampling them onto the finer (45, 50) grid does not extend it
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    if route == "downsample":
+        coarse = waves.downsample(gpts=(30, 40))
+    else:
+        coarse = abtem.WavesDetector(gpts=(30, 40)).detect(waves)
+    fine = coarse.downsample(gpts=(45, 50))
+
+    assert fine.antialias_cutoff_gpts == (30, 40)
+    assert fine.cutoff_angles == pytest.approx([55.52154893, 61.69060992])
+    assert fine.diffraction_patterns("cutoff").shape[-2:] == (31, 41)
+    assert fine.diffraction_patterns("valid").shape[-2:] == (21, 29)
+    assert abtem.FlexibleAnnularDetector().detect(fine).shape == (55, 1)
+
+
+@devices
+def test_resampled_waves_with_a_changed_extent_are_capped_at_their_grid(device):
+    # the pixels stay when the extent changes, and the cutoff stays within them
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+    fine = waves.downsample(gpts=(30, 40)).downsample(gpts=(45, 50))
+
+    fine.extent = (20, 24)
+
+    assert fine.antialias_cutoff_gpts == (45, 50)
+    assert fine.diffraction_patterns("cutoff").shape[-2:] == (45, 51)
+
+
+@devices
+def test_downsample_twice_keeps_the_antialias_cutoff(device):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample("cutoff").downsample("cutoff")
+
+    assert downsampled.cutoff_angles == pytest.approx(waves.cutoff_angles)
+
+
+def _assert_cutoff_survives_tiling(source, resampled, repetitions):
+    # tiling changes the extent at fixed sampling, so the angles within the antialias
+    # cutoff stay those of the waves the resampled waves come from, up to the
+    # Nyquist angle of their own grid and the parity of the pixel count
+    tiled = resampled.tile(repetitions)
+
+    assert "adjusted_antialias_cutoff_gpts" not in tiled.metadata
+    expected = np.minimum(
+        source.cutoff_angles, np.array(tiled.gpts) // 2 * tiled.angular_sampling
+    )
+    assert tiled.cutoff_angles == pytest.approx(
+        expected, abs=max(tiled.angular_sampling)
+    )
+
+
+@pytest.mark.parametrize("repetitions", [(2, 2), (3, 1)])
+@pytest.mark.parametrize("gpts", [None, (45, 45), (39, 41)])
+@devices
+def test_tiling_downsampled_waves_keeps_the_antialias_cutoff(gpts, repetitions, device):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    downsampled = waves.downsample(gpts=gpts) if gpts else waves.downsample("cutoff")
+
+    _assert_cutoff_survives_tiling(waves, downsampled, repetitions)
+
+
+@pytest.mark.parametrize("repetitions", [(2, 3), (3, 1)])
+@devices
+def test_tiling_resampled_waves_of_a_detector_keeps_the_antialias_cutoff(
+    repetitions, device
+):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, gpts=(56, 64), extent=(10, 12), device=device
+    ).build(lazy=False)
+
+    resampled = abtem.WavesDetector(gpts=(20, 24)).detect(waves)
+
+    _assert_cutoff_survives_tiling(waves, resampled, repetitions)
+
+
+def test_waves_read_a_stored_adjusted_antialias_cutoff():
+    """Metadata stored by earlier versions holds the pixel count itself. The code
+    under test is device-independent metadata, so the test is not parametrised over
+    devices."""
+    waves = abtem.Waves(
+        np.zeros((38, 38), np.complex64),
+        energy=100e3,
+        extent=(5.43, 5.43),
+        metadata={"adjusted_antialias_cutoff_gpts": (26, 22)},
+    )
+
+    assert waves.antialias_cutoff_gpts == (26, 22)
+
+
 @given(
     data=st.data(),
     max_angle=st.sampled_from(["cutoff", "valid"]),
@@ -707,6 +852,215 @@ def test_tile(data, repetitions, renormalize, lazy, device):
             .array.sum((-2, -1))
         )
         assert np.allclose(old_sum, new_sum)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_crop(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    old_extent = waves.extent
+    old_energy = waves.energy
+    old_dtype = waves.array.dtype
+
+    half_extent = (old_extent[0] / 2, old_extent[1] / 2)
+    cropped = waves.crop(half_extent, centered=True)
+
+    assert np.allclose(cropped.extent, half_extent, atol=max(waves.sampling))
+    assert cropped.energy == old_energy
+    assert cropped.array.dtype == old_dtype
+    assert cropped.sampling == waves.sampling
+    assert_array_matches_laziness(cropped.array, lazy=lazy)
+    assert_array_matches_device(cropped.array, device=device)
+
+    # cropping to the full extent is a no-op on the array contents
+    full = waves.crop(old_extent, centered=True)
+    np.testing.assert_array_equal(
+        asnumpy(full.compute().array), asnumpy(waves.compute().array)
+    )
+
+
+def test_crop_raises_for_larger_extent():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((100.0, 100.0))
+
+
+def test_crop_raises_in_reciprocal_space():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.crop((1.0, 1.0))
+
+
+def test_crop_centered_rejects_explicit_offset():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_window_boxcar_is_a_no_op(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    windowed = waves.window("boxcar")
+    np.testing.assert_array_equal(
+        asnumpy(windowed.compute().array), asnumpy(waves.compute().array)
+    )
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+def test_window_hann_tapers_to_the_edges(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
+    windowed = waves.window("hann")
+    assert_array_matches_laziness(windowed.array, lazy=lazy)
+    assert windowed.array.dtype == waves.array.dtype
+    array = asnumpy(windowed.compute().array)
+    assert windowed.energy == waves.energy
+    # a Hann window is exactly zero at its first and last sample
+    np.testing.assert_allclose(array[..., 0, :], 0.0, atol=1e-6)
+    np.testing.assert_allclose(array[..., :, 0], 0.0, atol=1e-6)
+
+
+@given(data=st.data())
+@lazy_params
+def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
+    margin = (waves.extent[0] / 4, waves.extent[1] / 4)
+
+    combined = waves.window("hann", margin=margin)
+    separate = waves.crop(
+        (waves.extent[0] - 2 * margin[0], waves.extent[1] - 2 * margin[1]),
+        centered=True,
+    ).window("hann")
+
+    np.testing.assert_allclose(
+        asnumpy(combined.compute().array), asnumpy(separate.compute().array)
+    )
+
+
+@devices
+def test_window_taper_is_kept_but_not_served_across_grids_or_precisions(
+    device, monkeypatch
+):
+    """Every exit plane of a thickness series is windowed with the same taper."""
+    from scipy.signal import windows
+
+    import abtem.waves as waves_module
+    from abtem.core.backend import get_array_module
+
+    monkeypatch.setattr(waves_module, "_window_tapers", None)
+    requested = []
+    get_window = windows.get_window
+
+    def counting(window, n, *args, **kwargs):
+        requested.append((window, n))
+        return get_window(window, n, *args, **kwargs)
+
+    monkeypatch.setattr(windows, "get_window", counting)
+    xp = get_array_module(device)
+
+    def waves(shape, dtype):
+        rng = np.random.default_rng(1)
+        array = (rng.random(shape) + 1j * rng.random(shape)).astype(dtype)
+        return abtem.Waves(xp.asarray(array), energy=200e3, sampling=(0.1, 0.1))
+
+    def reference(waves, window="hann"):
+        taper = np.outer(
+            get_window(window, waves.shape[0]), get_window(window, waves.shape[1])
+        )
+        return asnumpy(waves.array) * taper.astype(waves.array.real.dtype)
+
+    single = waves((24, 20), np.complex64)
+    first = single.window("hann")
+    count = len(requested)
+    again = single.window("hann")
+    assert len(requested) == count  # the second call took the kept taper
+    assert np.array_equal(asnumpy(first.array), asnumpy(again.array))
+    assert np.array_equal(asnumpy(first.array), reference(single))
+
+    # another grid, precision and window each get a taper of their own
+    for other in (waves((24, 22), np.complex64), waves((24, 20), np.complex128)):
+        windowed = other.window("hann")
+        assert windowed.array.dtype == other.array.dtype
+        assert np.array_equal(asnumpy(windowed.array), reference(other))
+    windowed = single.window("hamming")
+    assert np.array_equal(asnumpy(windowed.array), reference(single, "hamming"))
+
+    # the kept taper is not changed by the products
+    assert np.array_equal(asnumpy(single.window("hann").array), reference(single))
+
+
+def test_window_raises_in_reciprocal_space():
+    """A real-space taper multiplied into reciprocal-space waves would be wrong
+    without notice, so window refuses them, as crop does; a no-op window does not."""
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.window("hann")
+    with pytest.raises(NotImplementedError):
+        waves.window("hann", margin=0.2)
+    assert waves.window(None) is waves
+
+
+def test_crop_raises_for_a_region_without_pixels_or_outside_the_waves():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError, match="smaller than one grid point"):
+        waves.crop((0.01, 0.01))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(-0.5, 0.0))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(0.8, 0.0))
+
+
+def test_window_raises_for_a_margin_that_leaves_nothing():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    for margin in (0.8, 1.0, -0.1):
+        with pytest.raises(ValueError):
+            waves.window("hann", margin=margin)
+
+
+@pytest.mark.parametrize("window", ["hann", ("tukey", 0.3), ("kaiser", 8.0)])
+def test_window_accepts_a_tuple_with_parameters(window):
+    from scipy.signal import windows
+
+    waves = abtem.Waves(
+        np.ones((16, 12), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    expected = np.outer(
+        windows.get_window(window, 16), windows.get_window(window, 12)
+    )
+    np.testing.assert_allclose(waves.window(window).array.real, expected, rtol=1e-6)
+
+
+def test_window_none_only_crops():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    windowed = waves.window(None, margin=0.4)
+    np.testing.assert_array_equal(asnumpy(windowed.array), 1.0)
+    assert windowed.array.shape == (8, 8)
 
 
 def _build_exit_plane_waves(device="cpu", exit_planes=1):

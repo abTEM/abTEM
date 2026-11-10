@@ -1855,9 +1855,9 @@ def _prism_eels_detected_waves(s_matrix, scan, native=False):
     beam-basis reduction detects there (see
     :func:`prism_transition_potential_scan_beam_basis`).
     They carry the probe metadata of the elastic dummy probes (semiangle cutoff
-    and base tilt), which the detectors of the results read, but not their
-    ``adjusted_antialias_cutoff_gpts``. They only describe the grid; the array
-    is a broadcast zero, so no memory is allocated for it."""
+    and base tilt) and the antialias band limit of the built S-matrix, which the
+    detectors of the results read. They only describe the grid; the array is a
+    broadcast zero, so no memory is allocated for it."""
     from abtem.core.utils import safe_ceiling_int
     from abtem.waves import Waves
 
@@ -2474,6 +2474,7 @@ def prism_transition_potential_scan(
                 waves_at_positions,
                 energy=energy,
                 extent=output_window_extent,
+                metadata=detected_waves.metadata,
                 ensemble_axes_metadata=[
                     OrdinalAxis(values=tuple(range(n_T)))
                 ]
