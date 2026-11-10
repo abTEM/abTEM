@@ -312,36 +312,38 @@ Bugfixes:
   of a list all or nothing: one detector it could not route (a `WavesDetector`, a `FlexibleAnnularDetector`, a
   real-space `PixelatedDetector`) sent every detector to the unrouted reduction, which at the default blend is the
   plain interpolated one. And the blend angle was snapped to the largest band edge of any detector of the list
-  below it, so one detector's band moved the cut of every other. Now each detector is routed and snapped on its
-  own, and only a band that straddles the blend angle is snapped; detectors with the same branch and cut still
-  share a reduction. On cubic Si (1, 1, 8) on a 56 x 64 grid
-  at 100 keV with `interpolation=2` (automatic blend angle 62.5 mrad), `AnnularDetector(inner=70)` next to a
-  `WavesDetector` or a `FlexibleAnnularDetector` moved by 0.18 of its maximum, on the full window and with
-  `window_gpts=(24, 32)`; with that window and `blend_angle=80`, `AnnularDetector(50, 100)` next to
-  `AnnularDetector(60, 70)` moved by 0.24, and a `PixelatedDetector(max_angle="cutoff")` next to a
-  `WavesDetector` by 2.8e-3 above the blend angle (0.29 with `blend_angle="aperture"`). On Si (1, 1, 2),
-  `reduce(method="modes")` of `AnnularDetector(inner=50)` next to a `WavesDetector` moved by 2.5e-2. Every
-  single-detector scan without a `blend_taper` is unchanged. With a `blend_taper`, a band that lies wholly
-  below the blend angle was snapped to its own outer edge when scanned alone, which put it inside the taper; it
-  now keeps the blend angle, as it did in a list with a band edge at the blend angle. A list that mixes routable
-  and unroutable detectors, or bands with different cuts, now takes one reduction per group instead of one for
-  the whole list
+  below it, so one detector's band moved the cut of every other. Now each detector is routed on its own, and only
+  a band that straddles the blend angle is snapped, to its own inner edge. Detectors that read the same reduction
+  share it: the bands below the cut and the unroutable detectors at the default blend, and all the bands above the
+  cut. On cubic Si (1, 1, 8) on a 56 x 64 grid at 100 keV with `interpolation=2` (automatic blend angle
+  62.5 mrad), `AnnularDetector(inner=70)` next to a `WavesDetector` or a `FlexibleAnnularDetector` moved by 0.18
+  of its maximum, on the full window and with `window_gpts=(24, 32)`; with that window and `blend_angle=80`,
+  `AnnularDetector(50, 100)` next to `AnnularDetector(60, 70)` moved by 0.24, and a
+  `PixelatedDetector(max_angle="cutoff")` next to a `WavesDetector` by 2.8e-3 above the blend angle (0.29 with
+  `blend_angle="aperture"`). On Si (1, 1, 2), `reduce(method="modes")` of `AnnularDetector(inner=50)` next to a
+  `WavesDetector` moved by 2.5e-2. Every single-detector scan without a `blend_taper` is unchanged. With a
+  `blend_taper`, a band that lies wholly below the blend angle was snapped to its own outer edge when scanned
+  alone, which put it inside the taper; it now keeps the blend angle, so the taper ends at the blend angle as
+  documented. On the same Si (1, 1, 8) cell with `blend_angle=80` and `blend_taper=10`, `AnnularDetector(60, 70)`
+  scanned alone changes by 0.55 (full window) to 0.58 (`window_gpts=(24, 32)`) of its maximum, and
+  `AnnularDetector(0, 30)` by 2.8e-2 to 4.5e-2. A list of detectors that read different branches now takes one
+  reduction per branch instead of one for the whole list
 - The wave functions (`WavesDetector`) and real-space intensities (`PixelatedDetector(reciprocal_space=False)`)
-  of a C-PRISM window smaller than the downsampled grid are propagated from the reference depth to the exit
-  surface on the zero-padded full grid and cropped back to the window
-  ([#665](https://github.com/abTEM/abTEM/issues/665)). Before, the propagation ran on the window's own grid,
-  which is periodic with the window, so the probe tails it moved past one edge of the window re-entered at the
-  opposite edge. Against the waves of the full window cropped to the same pixels, the largest error of the
-  real-space intensity, as a fraction of its maximum, falls from 1.1e-1 to 3.4e-2 for Si (1, 1, 8) (43 Å) on a
-  56 x 64 grid at 100 keV, `interpolation=2`, `window_gpts=(32, 40)`, from 2.3e-2 to 1.1e-2 with
-  `window_gpts=(40, 48)`, and from 3.3e-1 to 9.1e-2 for Si (1, 1, 16) (87 Å) with `window_gpts=(32, 40)`.
-  The tails that leave the window are now lost, as the tails beyond the window already were when the matrix
-  was cropped, so a diffraction pattern computed from the returned wave of a small window carries less of the
-  bright-field disk than before. For diffraction patterns use a `PixelatedDetector`, which is detected from the
-  window at the reference depth and is not affected. With an explicit `blend_angle` the two branches of the
-  blend are propagated separately: the interpolated one on the padded grid, the plane-wave one on the window's
-  own grid when the window holds a whole number of interpolation periods, on which that branch is periodic and
-  the window propagation is exact. The waves of a window that spans the downsampled grid are bitwise unchanged
+  of a C-PRISM window smaller than the downsampled grid, including the automatic window (for example 112 x 112
+  of the 128 x 128 downsampled grid for Si (4, 4, 8) on 192 x 192 at 200 keV with `interpolation=4`), are
+  propagated from the reference depth to the exit surface on the zero-padded full grid and cropped back to the
+  window ([#665](https://github.com/abTEM/abTEM/issues/665)). Before, the propagation ran on the window's own
+  grid, which is periodic with the window, so the probe tails it moved past one edge of the window re-entered at
+  the opposite edge. Both branches of a blend with an explicit `blend_angle` are propagated this way. On windows
+  smaller than the probe, the largest error of the real-space intensity against the waves of the full window
+  cropped to the same pixels, as a fraction of its maximum, falls from 1.1e-1 to 3.4e-2 for Si (1, 1, 8) (43 Å) on
+  a 56 x 64 grid at 100 keV, `interpolation=2`, `window_gpts=(32, 40)`, from 2.3e-2 to 1.1e-2 with
+  `window_gpts=(40, 48)`, and from 3.3e-1 to 9.1e-2 for Si (1, 1, 16) (87 Å) with `window_gpts=(32, 40)`. On
+  windows that cover the probe the change is small. The tails that leave the window are now lost, as the tails
+  beyond the window already were when the matrix was cropped, so a diffraction pattern computed from the
+  returned wave of a window smaller than the probe carries less of the bright-field disk than before. For
+  diffraction patterns use a `PixelatedDetector`, which is detected from the window at the reference depth and is
+  not affected. The waves of a window that spans the downsampled grid are bitwise unchanged
 - PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
   `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
   plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
