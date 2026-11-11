@@ -12,6 +12,7 @@ from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 import dask.array as da
 import numpy as np
 from dask.base import is_dask_collection
+from dask.delayed import Delayed
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
@@ -113,7 +114,10 @@ class CopyMixin:
 
 
 def _is_same_dask_collection(a, b) -> bool:
-    """Whether two dask collections are the same object or the same dask array."""
+    """Whether two dask collections are the same object, the same dask array by
+    name or the same delayed value by key (a copy keeps both)."""
+    if isinstance(a, Delayed) and isinstance(b, Delayed):
+        return a.key == b.key
     return a is b or (
         isinstance(a, da.Array) and isinstance(b, da.Array) and a.name == b.name
     )
@@ -150,8 +154,10 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if is_dask_collection(value) or is_dask_collection(other):
             if _is_same_dask_collection(value, other):
                 continue
-            if getattr(value, "shape", None) != getattr(other, "shape", None):
-                return False
+            # A delayed value has no shape: its attributes are delayed too.
+            if not isinstance(value, Delayed) and not isinstance(other, Delayed):
+                if getattr(value, "shape", None) != getattr(other, "shape", None):
+                    return False
             undecided = undecided or key
             continue
 
@@ -207,8 +213,8 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     if undecided is not None:
         raise LazyComparisonError(
             f"cannot compare the lazy attribute `{undecided}` of "
-            f"{a.__class__.__name__}: call .compute() on both objects "
-            "before comparing them with == or !="
+            f"{a.__class__.__name__} without computing it: compare computed "
+            "objects (.compute() for a lazy array object) instead of lazy ones"
         )
     return True
 
