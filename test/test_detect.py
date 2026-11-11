@@ -958,6 +958,18 @@ def test_real_space_pixelated_detector_refuses_uniform_resampling():
         abtem.PixelatedDetector(reciprocal_space=False, resample="uniform")
 
 
+@pytest.mark.parametrize("max_angle", [0, 0.0, -1, -0.5, np.int64(0), np.float32(-3)])
+def test_pixelated_detector_refuses_a_non_positive_max_angle(max_angle):
+    # a non-positive angle selects no pattern: it is refused at construction
+    with pytest.raises(ValueError, match="max_angle must be positive"):
+        abtem.PixelatedDetector(max_angle=max_angle)
+
+
+@pytest.mark.parametrize("max_angle", [None, "valid", "cutoff", "full", 30, 0.5])
+def test_pixelated_detector_accepts_a_positive_max_angle_or_a_name(max_angle):
+    assert abtem.PixelatedDetector(max_angle=max_angle).max_angle == max_angle
+
+
 def _run_waves_detector(entry, potential, probe, scan, detector, lazy):
     if entry == "scan":
         return probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
