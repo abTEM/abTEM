@@ -741,7 +741,13 @@ Bugfixes:
   `SpectralSlitDetector`), and `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate`.
   On CuPy, the prefilter, the index and the weights are now computed in double precision and the sum in the
   precision of the data, so the results agree with the NumPy results to float32 rounding. On earlier CuPy
-  versions the results change by float32 rounding only. NumPy, Metal and float64 CuPy results are unchanged
+  versions the results change by float32 rounding only. The pixel positions of the line in `interpolate_line`
+  and `interpolate_line_at_position` were Å values rounded to float32 (by up to 4e-5 pixels at 0.1 Å sampling
+  near 100 Å), on every device and for data of any precision. They are now built in float64, which changes the
+  values of these functions and of what builds on them (`Probe.profiles`, `momentum_resolved_spectrum`)
+  slightly, by 1e-5 to 3e-5 of the maximum for random data in the cases checked. The results of
+  `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
+  NumPy, Metal and float64 CuPy are unchanged
   ([PR #680](https://github.com/abTEM/abTEM/pull/680))
 
 Documentation:
