@@ -2122,6 +2122,88 @@ def test_cupy_interpolation_just_below_far_grid_nodes(delta):
     )
 
 
+_LINE_START, _LINE_END = (1.7, 1.1), (100.9, 52.3)
+
+
+def _line_pixel_positions(start, end, gpts, sampling, margin=0.0):
+    """The pixel coordinates of gpts points along a line from start to end [Å],
+    built in float64. A margin extends the line at both ends and, as a scan keeps
+    its sampling, adds the points that fill it."""
+    start, end = np.array(start), np.array(end)
+    length = np.linalg.norm(end - start)
+    direction = (end - start) / length
+    start, end = start - margin * direction, end + margin * direction
+    gpts = int(np.ceil((length + 2 * margin) / (length / gpts)))
+    line = np.stack(
+        [np.linspace(a, b, gpts, endpoint=False) for a, b in zip(start, end)], axis=-1
+    )
+    return line / np.array(sampling)
+
+
+@pytest.mark.parametrize(
+    "width, margin", [(0.0, 0.0), (0.3, 0.0), (0.0, 0.5), (0.3, 0.5)]
+)
+def test_interpolate_line_positions_are_float64(width, margin, monkeypatch):
+    """interpolate_line hands map_coordinates positions that are exact in float64,
+    not rounded to the float32 of a scan's positions, which is up to
+    ulp32(position) / 2 / sampling pixels (3e-5 pixels near 100 Å at 0.1 Å).
+    Run as on the GPU, with SciPy's map_coordinates in place of cupyx's.
+    Pinned to the CPU: what reaches cupyx does not depend on the device."""
+    sampling = (0.1, 0.07)
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    start, end, gpts = (1.3, 2.1), (30.7, 14.9), 503
+
+    seen = []
+
+    def spy(input, coordinates, **kwargs):
+        seen.append(coordinates)
+        return scipy.ndimage.map_coordinates(input, coordinates, **kwargs)
+
+    monkeypatch.setattr(abtem.measurements, "cp", np)
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    Images(array, sampling=sampling).interpolate_line(
+        start=start, end=end, gpts=gpts, width=width, margin=margin
+    )
+
+    (coordinates,) = seen
+    assert coordinates.dtype == np.float64
+    expected = _line_pixel_positions(start, end, gpts, sampling, margin)
+    # The padding of 2 * order pixels shifts the coordinates. The samples across
+    # the width are placed symmetrically about the line, so they average to it.
+    mean = coordinates.T.reshape(len(expected), -1, 2).mean(axis=1) - 6
+    np.testing.assert_allclose(mean, expected, rtol=0, atol=1e-9)
+
+
+@devices
+def test_interpolate_line_matches_float64_reference(device):
+    """Along a line reaching about 1000 pixels along the first axis and 750
+    along the second, the interpolated values of single-precision data match
+    SciPy's cubic spline at positions built in float64, to a few float32
+    roundings. Positions rounded to float32 are off by up to 4e-5 pixels, which
+    moves random data by 1e-5 of the maximum."""
+    sampling = (0.1, 0.07)
+    gpts = 2048
+    array = np.random.default_rng(5).random((1024, 768)).astype(np.float32)
+    positions = _line_pixel_positions(_LINE_START, _LINE_END, gpts, sampling)
+    padded = np.pad(array.astype(np.float64), 6, mode="wrap")
+    expected = scipy.ndimage.map_coordinates(padded, (positions + 6).T, order=3)
+
+    images = Images(copy_to_device(array, device), sampling=sampling)
+    result = asnumpy(
+        images.interpolate_line(_LINE_START, _LINE_END, gpts=gpts, order=3).array
+    )
+
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
     """Regression: interpolate_line's lazy path computed drop_axis/new_axis
     as if the base (spatial) axes were the *first* axes of the array

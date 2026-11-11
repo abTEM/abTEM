@@ -1538,7 +1538,10 @@ class _BaseMeasurement2D(BaseMeasurements):
             scan.add_margin(margin)
 
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self._first_pixel_coordinates)
+            (
+                scan.get_positions(lazy=False, dtype=np.float64)
+                - self._first_pixel_coordinates
+            )
             / self.sampling
         )
 
