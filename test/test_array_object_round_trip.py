@@ -286,6 +286,69 @@ def test_s_matrix_read_from_zarr_reduces_to_the_same_waves(tmp_path):
     )
 
 
+def _s_matrix_with_wave_vectors_of(dtype):
+    s_matrix = CASES["SMatrixArray"]()
+    kwargs = s_matrix._copy_kwargs(exclude=("array",))
+    kwargs["wave_vectors"] = s_matrix.wave_vectors.astype(dtype)
+    return abtem.SMatrixArray(s_matrix.array, **kwargs)
+
+
+def _write_s_matrix(s_matrix, url, layout, without_wave_vectors_dtype):
+    """Write `s_matrix` in the canonical layout (`to_zarr`) or the legacy one
+    (`kwargs0`/`type0` attributes), optionally as a file that has no
+    `wave_vectors_dtype` key, as written by an earlier version."""
+    import zarr
+
+    if layout == "canonical":
+        s_matrix.to_zarr(url)
+        if without_wave_vectors_dtype:
+            root = zarr.open(url, mode="r+")
+            metadata = root.attrs["metadata0"]
+            metadata["kwargs"].pop("wave_vectors_dtype", None)
+            root.attrs["metadata0"] = metadata
+        return
+
+    root = zarr.open(url, mode="w")
+    root.create_array(name="array0", data=s_matrix.array, chunks=s_matrix.shape)
+    kwargs = s_matrix._pack_kwargs(s_matrix._copy_kwargs(exclude=("array",)))
+    if without_wave_vectors_dtype:
+        kwargs.pop("wave_vectors_dtype", None)
+    root.attrs["kwargs0"] = kwargs
+    root.attrs["type0"] = "SMatrixArray"
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_s_matrix_wave_vectors_keep_the_dtype_they_were_written_in(dtype, tmp_path):
+    """The dtype of the wave vectors is stored next to them, so a float32
+    S-matrix reads back as float32, not as the float64 of the JSON numbers.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = _s_matrix_with_wave_vectors_of(dtype)
+    url = str(tmp_path / "s_matrix.zarr")
+    _write_s_matrix(s_matrix, url, "canonical", without_wave_vectors_dtype=False)
+    read = abtem.from_zarr(url).compute()
+
+    assert read.wave_vectors.dtype == dtype
+    np.testing.assert_array_equal(read.wave_vectors, s_matrix.wave_vectors)
+
+
+@pytest.mark.parametrize("layout", ["canonical", "legacy"])
+def test_s_matrix_file_without_a_wave_vector_dtype_reads_float64(layout, tmp_path):
+    """A file with no `wave_vectors_dtype` holds float64 values, which read
+    back unchanged.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = _s_matrix_with_wave_vectors_of(np.float64)
+    url = str(tmp_path / "s_matrix.zarr")
+    _write_s_matrix(s_matrix, url, layout, without_wave_vectors_dtype=True)
+    read = abtem.from_zarr(url).compute()
+
+    assert read.wave_vectors.dtype == np.float64
+    np.testing.assert_array_equal(read.wave_vectors, s_matrix.wave_vectors)
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_transmission_function_with_ensemble_axes_and_exit_planes_round_trip(
     lazy, tmp_path

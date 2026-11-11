@@ -1074,13 +1074,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     @classmethod
     def _pack_kwargs(cls, kwargs):
+        # The dtype is stored next to the values, which are Python floats.
+        kwargs["wave_vectors_dtype"] = np.dtype(kwargs["wave_vectors"].dtype).name
         kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
         return super()._pack_kwargs(kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
-        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=float)
+        # Files written without the dtype hold float64 values.
+        dtype = kwargs.pop("wave_vectors_dtype", "float64")
+        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=dtype)
         return kwargs
 
         # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
