@@ -742,13 +742,13 @@ Internal:
   wave-function resampling and diffraction patterns, the Bloch-wave structure factors and the plasmon
   ensembles use them instead of separate lazy and eager branches, which removes about 370 lines; results
   are unchanged. Every base-axis function now gets whole base arrays, also where the base axes of a lazy
-  array were split into several chunks (e.g. after a reload from zarr)
+  array were split into several chunks (e.g. after a reload from zarr) ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 - New helpers `partition_blocks` and `partition_entries` in `abtem.core.ensemble` package the blocks of an
   ensemble for its tasks, lazy or eager alike: one entry per block, evaluated in the graph when it holds
   dask collections (such as a node shared by every block). The scans, frozen phonons, atoms ensembles,
   plasmon scattering events, distributions, and the GPAW and charge-density potentials use them instead
   of building the object arrays, `from_delayed` blocks and concatenations themselves; results are
-  unchanged
+  unchanged ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 
 Documentation:
 
