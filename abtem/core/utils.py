@@ -142,12 +142,24 @@ def _shape(value) -> tuple[int, ...]:
     return np.shape(value) if shape is None else tuple(shape)
 
 
+def _is_decided_by_eq(value) -> bool:
+    """Whether `==` decides a value: an `EqualityMixin`, or a list or tuple
+    holding one. NumPy would index such a container's elements as arrays."""
+    return isinstance(value, EqualityMixin) or (
+        isinstance(value, (list, tuple))
+        and any(isinstance(v, EqualityMixin) for v in value)
+    )
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
 
     Numbers, and tuples, lists and arrays of numbers, are equal when their
     shapes and their values are: integers exactly, any other number to the
     default tolerance of `np.allclose`. A list equals a tuple of the same values.
+    A list or tuple holding abTEM objects (`EqualityMixin`) is decided by `==` on
+    the container instead: it does not equal a tuple of the same objects, and the
+    numbers in it compare exactly. Only its direct elements are checked.
 
     A lazy (dask) attribute decides nothing: comparing its values would run its
     graph, discard the result and let an error from inside the graph escape
@@ -214,7 +226,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if not isinstance(value, EqualityMixin):
+        if not (_is_decided_by_eq(value) or _is_decided_by_eq(other)):
             # A tolerance is for floating-point round-off; integers (seeds,
             # counts, indices) compare without one. Both comparisons broadcast,
             # so the shapes must match as well: (5,) is not (5, 5).

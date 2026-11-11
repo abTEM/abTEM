@@ -552,6 +552,108 @@ class TestEqualityDiscriminates:
         with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             a == b
 
+    @staticmethod
+    def _list_holder():
+        from abtem.core.utils import EqualityMixin
+
+        class Holder(EqualityMixin):
+            def __init__(self, items):
+                self._items = items
+
+        return Holder
+
+    @pytest.mark.parametrize("container", [list, tuple])
+    def test_a_container_of_array_objects_is_decided_by_its_elements(self, container):
+        """A list or tuple holding `ArrayObject`s is decided by `==` on the
+        container, which compares the elements with their own `__eq__`; indexing
+        the elements for a value comparison raises `RuntimeError`. The sizes
+        differ (3 and 5 rows). Device-independent."""
+        Holder = self._list_holder()
+
+        def images(rows):
+            return self._images(np.zeros((rows, 4), dtype="float32"))
+
+        def hold(*rows):
+            return Holder(container(images(n) for n in rows))
+
+        assert hold(3) == hold(3)
+        assert not hold(3) != hold(3)
+        assert hold(3) != hold(5)
+        assert hold(5) != hold(3)
+        assert hold(3) != hold(3, 3)
+        assert hold(3, 3) != hold(3)
+
+    @pytest.mark.parametrize(
+        "other",
+        ["none", "floats", "empty", "integers", "number", "object"],
+    )
+    @pytest.mark.parametrize("container_first", [True, False])
+    def test_a_container_of_array_objects_differs_from_a_value_in_both_orders(
+        self, other, container_first
+    ):
+        """Whichever side the container of `ArrayObject`s is on, `None`, a list
+        of numbers, an empty list, a number and a bare object differ from it.
+        Device-independent."""
+        Holder = self._list_holder()
+        images = self._images(np.zeros((3, 4), dtype="float32"))
+        values = {
+            "none": None,
+            "floats": [1.0],
+            "empty": [],
+            "integers": [1, 2],
+            "number": 1.0,
+            "object": images,
+        }
+        container = Holder([images, images] if other == "integers" else [images])
+        value = Holder(values[other])
+
+        pair = (container, value) if container_first else (value, container)
+        assert pair[0] != pair[1]
+
+    @pytest.mark.parametrize("object_first", [True, False])
+    def test_an_array_object_differs_from_a_number_in_both_orders(self, object_first):
+        """An `ArrayObject` held directly differs from a number whichever side it
+        is on. Device-independent."""
+        Holder = self._list_holder()
+        images = Holder(self._images(np.zeros((3, 4), dtype="float32")))
+
+        assert (images != Holder(1.0)) if object_first else (Holder(1.0) != images)
+
+    @pytest.mark.parametrize("number_first", [True, False])
+    def test_a_container_of_numbers_and_array_objects_compares_its_objects(
+        self, number_first
+    ):
+        """The objects in a container that also holds a number are compared with
+        their own `__eq__` too: 3 and 5 rows differ, 3 and 3 rows are equal.
+        Device-independent."""
+        Holder = self._list_holder()
+
+        def hold(rows):
+            images = self._images(np.zeros((rows, 4), dtype="float32"))
+            return Holder([1.0, images] if number_first else [images, 1.0])
+
+        assert hold(3) == hold(3)
+        assert hold(3) != hold(5)
+        assert hold(5) != hold(3)
+
+    def test_a_container_of_lazy_array_objects_of_different_shapes_differs(self):
+        """Lazy elements of different shapes are a difference, as lazy arrays of
+        different shapes are; of equal shapes they have no verdict.
+        Device-independent."""
+        import dask.array as da
+
+        from abtem.core.utils import LazyComparisonError
+
+        Holder = self._list_holder()
+
+        def hold(rows, fill=da.zeros):
+            return Holder([self._images(fill((rows, 4), dtype="float32"))])
+
+        assert hold(3) != hold(5)
+        assert hold(5) != hold(3)
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            hold(3) == hold(3, da.ones)
+
     @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
     def test_a_held_object_whose_own_comparison_raises_is_a_difference(self, error):
         """A held object's `__eq__` is compared inside the same `try` as every
