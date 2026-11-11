@@ -536,6 +536,58 @@ class TestEqualityDiscriminates:
         with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             a != b
 
+    def test_lazy_content_inside_a_dict_does_not_compare(self):
+        """A lazy object held in a dict raises as it does in a list."""
+        import dask.array as da
+
+        from abtem.core.utils import EqualityMixin, LazyComparisonError
+
+        class Holder(EqualityMixin):
+            def __init__(self, images):
+                self._images = {"images": images}
+
+        a = Holder(self._images(da.zeros((16, 12), dtype="float32")))
+        b = Holder(self._images(da.ones((16, 12), dtype="float32")))
+
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            a == b
+
+    @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
+    def test_a_held_object_whose_own_comparison_raises_is_a_difference(self, error):
+        """A held object's `__eq__` is compared inside the same `try` as every
+        other attribute, so a `KeyError`, `TypeError` or `ValueError` it raises
+        is a difference, as it is for a list of arrays. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Inner(EqualityMixin):
+            def __eq__(self, other):
+                raise error("not comparable")
+
+        class Holder(EqualityMixin):
+            def __init__(self):
+                self._inner = Inner()
+
+        assert Holder() != Holder()
+
+    def test_lazy_content_in_a_held_object_is_deferred_behind_a_difference(self):
+        """A held lazy object decides nothing, so a difference in an attribute
+        after it makes the holders unequal, wherever the held object sits in
+        `__dict__`; without one, the holders raise. Device-independent."""
+        import dask.array as da
+
+        from abtem.core.utils import EqualityMixin, LazyComparisonError
+
+        class Holder(EqualityMixin):
+            def __init__(self, tail):
+                # `name=False` gives each holder's array its own dask name
+                array = da.from_array(np.zeros((16, 12), "float32"), name=False)
+                self._images = TestEqualityDiscriminates._images(array)
+                self._tail = tail
+
+        assert Holder(1.0) != Holder(2.0)
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            Holder(1.0) == Holder(1.0)
+
     def test_a_difference_decides_before_lazy_content(self):
         """Any attribute that differs makes lazy objects unequal, wherever it
         sits in `__dict__`; only otherwise does lazy content raise."""
