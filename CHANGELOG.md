@@ -771,10 +771,11 @@ Bugfixes:
       `Probe(semiangle_cutoff=20) != Probe(semiangle_cutoff=[20])`, whose `[20]` adds a length-1 ensemble axis. It
       was equal one way round. The energy of a `PlaneWave` or `Probe` is the exception: a one-value list is stored
       as its value, so `energy=100e3` and `energy=[100e3]` compare equal both ways
-- A `StructureFactorArray` read from zarr keeps its Miller indices and cell as arrays, so `BlochWaves`, `g_vec` and
-  `get_projected_potential` work on it, and an `SMatrixArray` read from zarr keeps the float64 wave vectors it was
-  written with and reduces to the same waves as the S-matrix that was written, where they were read at the working
-  precision
+- A `StructureFactorArray` accepts its Miller indices and cell as any array-like, lists included, so one built from
+  lists or read from zarr works with `BlochWaves`, `g_vec` and `get_projected_potential`. The Miller indices are stored
+  as an integer array and the cell as a `Cell`, and a `StructureFactor` stores its Miller indices the same way
+- An `SMatrixArray` read from zarr keeps the float64 wave vectors it was written with and reduces to the same waves as
+  the S-matrix that was written, where they were read at the working precision
 
 Documentation:
 
