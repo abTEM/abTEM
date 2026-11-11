@@ -3,6 +3,7 @@ types."""
 
 from __future__ import annotations
 
+import numbers
 from abc import abstractmethod
 from copy import copy
 from functools import lru_cache, partial
@@ -2271,8 +2272,8 @@ class PixelatedDetector(BaseDetector):
     Parameters
     ----------
     max_angle : float or {'cutoff', 'valid', 'full'}
-        The diffraction patterns will be detected up to this angle [mrad].
-        If str, it must be one of:
+        The diffraction patterns will be detected up to this angle [mrad], which must
+        be positive. If str, it must be one of:
 
         ``cutoff``
             The maximum scattering angle will be the cutoff of the antialiasing
@@ -2382,6 +2383,11 @@ class PixelatedDetector(BaseDetector):
         window_func: Optional[str | tuple] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
+        if isinstance(max_angle, numbers.Real) and max_angle <= 0:
+            raise ValueError(
+                "max_angle must be positive [mrad] or one of 'cutoff', 'valid' or "
+                f"'full', got {max_angle!r}."
+            )
         if not reciprocal_space and isinstance(resample, str):
             raise ValueError(
                 f"resample={resample!r} applies to diffraction patterns only; "

@@ -5666,8 +5666,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
             coefficients in the reduction of the SMatrix.
-        max_batch_multislice : int, optional
-            The number of wave functions in each chunk of the Dask array.
+        max_batch_multislice : int or str, optional
+            The number of plane waves of the S-matrix propagated together in one run
+            of the multislice algorithm, as `max_batch` of :meth:`SMatrix.build`,
+            lazy or not. With a lazy S-matrix in chunks, it is the size of the Dask
+            chunks along the plane-wave axis.
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
@@ -6258,11 +6261,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # driver does not squeeze.
         return _wrap_measurements(reduce_ensemble(measurements))
 
-    def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
+    def _eager_build_s_matrix_detect(
+        self, scan, ctf, detectors, squeeze, max_batch_multislice
+    ):
         detectors = validate_detectors(detectors)
 
         def detect(s_matrix):
-            return s_matrix.build(lazy=False)._reduce(
+            return s_matrix.build(lazy=False, max_batch=max_batch_multislice)._reduce(
                 scan=scan,
                 detectors=detectors,
                 ctf=ctf,
@@ -6274,10 +6279,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
     @staticmethod
-    def _lazy_build_s_matrix_detect(s_matrix, scan, ctf, detectors):
+    def _lazy_build_s_matrix_detect(
+        s_matrix, scan, ctf, detectors, max_batch_multislice
+    ):
         s_matrix = s_matrix.item()
         measurements = s_matrix._eager_build_s_matrix_detect(
-            scan=scan, ctf=ctf, detectors=detectors, squeeze=False
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            squeeze=False,
+            max_batch_multislice=max_batch_multislice,
         )
         # measurements = ensure_list(measurements)
 
@@ -6314,8 +6325,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
             coefficients in the reduction of the SMatrix.
-        max_batch_multislice : int, optional
-            The number of wave functions in each chunk of the Dask array.
+        max_batch_multislice : int or str, optional
+            The number of plane waves of the S-matrix propagated together in one run
+            of the multislice algorithm, as `max_batch` of :meth:`SMatrix.build`,
+            lazy or not. With a lazy S-matrix in chunks, it is the size of the Dask
+            chunks along the plane-wave axis.
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
@@ -6434,7 +6448,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan = validate_scan(scan, self)
 
             measurements = self._eager_build_s_matrix_detect(
-                scan, ctf, detectors, squeeze=True
+                scan,
+                ctf,
+                detectors,
+                squeeze=True,
+                max_batch_multislice=max_batch_multislice,
             )
             # The S-matrix (potential) ensemble is averaged block by block
             # above, but CTF ensemble axes flagged ensemble_mean were returned
@@ -6482,6 +6500,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
+                max_batch_multislice=max_batch_multislice,
                 meta=np.array((), dtype=object),
             )
 

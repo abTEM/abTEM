@@ -270,6 +270,9 @@ Dependencies:
 
 Bugfixes:
 
+- `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
+  rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
+  regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
 - PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
   antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
   `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
@@ -786,6 +789,29 @@ Bugfixes:
     - **Behaviour change:** an `SMatrixArray` file written by this version cannot be read by an earlier version, which
       raises `TypeError` for the unexpected `wave_vectors_dtype` argument. Files written by earlier versions read
       with float64 wave vectors, the values they hold
+- `RealSpaceMultislice(order=n)` for `n` of 4 or more uses the binomial coefficients of the Taylor series of the
+  forward wavenumber, $K(\sqrt{1 + 2C/K} - 1)$ with $K = 2\pi/\lambda$ and $C$ the slice operator, in both
+  expansion scopes. The coefficients of the operator powers were geometric, $-1/(2K), 1/(2K^2), -1/(2K^3), \dots$,
+  which agree with the binomial ones, $-1/(2K), 1/(2K^2), -5/(8K^3), 7/(8K^4), \dots$, through order 3 only, so
+  raising the order past 3 stopped improving the result and the series converged to $C(2K + C)/(2(K + C))$ instead
+  of the square root. For a 300 mrad plane wave at 30 keV in vacuum, the error of the phase advance per ångström
+  stalled at $4.7 \times 10^{-5}$ rad from order 5 on; it now falls to $6 \times 10^{-8}$ rad at order 6.
+  **Behaviour change:** results at `order` 4 and higher change; orders 1 to 3, and the default `order=1`, are unchanged
+- `PixelatedDetector(max_angle=...)` raises a `ValueError` for a number of 0 or below. A `max_angle` of 0 was declared
+  as the uncropped pattern and detected as the few central pixels, so every scan raised
+  `ValueError: could not broadcast input array`; a negative number gave only the few central pixels, without an error.
+  **Behaviour change:** both now raise at construction with a clear message, so a negative `max_angle`, which used to
+  run, no longer does; `None`, `'cutoff'`, `'valid'` and `'full'` are unchanged
+- `SMatrix.reduce(lazy=False)` and `SMatrix.scan(lazy=False)` honour `max_batch_multislice`: the plane waves of the
+  S-matrix are propagated in batches of that size, as `SMatrix.build(lazy=False, max_batch=...)` does, where the
+  eager reduction always used the `'auto'` batch. The same holds for a lazy reduction with
+  `disable_s_matrix_chunks=True` (the default on a GPU and with `upsample=True`). The default `'auto'` batch is
+  unchanged. A smaller batch bounds the memory of the propagation but generates the slices of a streamed potential once
+  per batch. The `max_batch_multislice` docstrings describe the batch of plane waves rather than the Dask chunks.
+  **Behaviour change:** (i) a lazy reduction with `disable_s_matrix_chunks=True` (the default on a GPU) and any call
+  with `upsample=True` now batch the plane waves when a caller passes `max_batch_multislice`, which they ignored
+  before; (ii) `max_batch_multislice=None` or a NumPy integer, which these paths and the eager reduction ignored,
+  now raise `ValueError: limit must be an integer or a string`, as the lazy reduction in chunks already did
 
 Documentation:
 
