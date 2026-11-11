@@ -758,6 +758,12 @@ Bugfixes:
   `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
   `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
   unequal the other, and is unequal both ways, as the two objects are on their own
+- `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
+  in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
+  `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
+    - **Behaviour change:** objects holding a host array and a Metal array of equal content compare equal in both orders. With the
+      host array on the left they compared unequal, because the Metal array layer had no `np.equal`, which it now
+      maps to `torch.eq`; with the Metal array on the left they compared equal
 - `==` and `!=` compare integers exactly, where `np.allclose`'s relative tolerance took seeds a few parts per
   million apart as equal, so `FrozenPhonons`, `Potential`, `CrystalPotential` and noise transforms that draw
   different random numbers, and the `SMatrix` or `MultisliceTransform` that holds them, no longer compare equal
