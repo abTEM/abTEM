@@ -780,8 +780,12 @@ Bugfixes:
 - A `StructureFactorArray` accepts its Miller indices and cell as any array-like, lists included, so one built from
   lists or read from zarr works with `BlochWaves`, `g_vec` and `get_projected_potential`. The Miller indices are stored
   as an integer array and the cell as a `Cell`, and a `StructureFactor` stores its Miller indices the same way
-- An `SMatrixArray` read from zarr keeps the float64 wave vectors it was written with and reduces to the same waves as
-  the S-matrix that was written, where they were read at the working precision
+- An `SMatrixArray` read from zarr keeps the dtype of the wave vectors it was written with and reduces to the same
+  waves as the S-matrix that was written, where they were read as float32. The dtype is stored in the
+  zarr attributes as `wave_vectors_dtype`; a file without it holds float64 values and reads as float64, unchanged
+    - **Behaviour change:** an `SMatrixArray` file written by this version cannot be read by an earlier version, which
+      raises `TypeError` for the unexpected `wave_vectors_dtype` argument. Files written by earlier versions read
+      with float64 wave vectors, the values they hold
 
 Documentation:
 
