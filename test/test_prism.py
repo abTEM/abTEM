@@ -675,6 +675,133 @@ def test_prism_reduces_without_changing_the_ctf_it_is_given(lazy, device):
     assert (ctf.gpts, ctf.extent, ctf.energy) == (None, None, None)
 
 
+@pytest.fixture
+def multislice_blocks(monkeypatch):
+    """The (start, stop) plane-wave ranges of the multislice runs of an S-matrix
+    build, appended in the order they run."""
+    from abtem.prism.s_matrix import SMatrix
+
+    blocks = []
+    build_s_matrix = SMatrix._build_s_matrix
+
+    def recording(s_matrix, wave_vector_range=slice(None), pbar=False):
+        if isinstance(wave_vector_range, slice):
+            blocks.append((wave_vector_range.start, wave_vector_range.stop))
+        else:
+            blocks.append(tuple(wave_vector_range.item()))
+        return build_s_matrix(s_matrix, wave_vector_range, pbar)
+
+    monkeypatch.setattr(SMatrix, "_build_s_matrix", staticmethod(recording))
+    return blocks
+
+
+@devices
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, "auto"), (True, True)],
+    ids=["eager", "lazy", "lazy, one task per S-matrix"],
+)
+def test_reduce_multislices_max_batch_multislice_plane_waves_at_a_time(
+    device, lazy, disable_s_matrix_chunks, multislice_blocks
+):
+    # 9 plane waves, which a batch of 4 does not divide. The oracle is the
+    # multislice of the same probe, to which PRISM at interpolation 1 is equal.
+    import ase.build
+
+    import abtem
+
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True),
+        gpts=(16, 20),
+        slice_thickness=2,
+        device=device,
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 9
+    scan = abtem.GridScan(gpts=(2, 3))
+    detector = abtem.AnnularDetector(0, 20)
+
+    def reduce(**kwargs):
+        multislice_blocks.clear()
+        measurement = s_matrix.reduce(
+            scan=scan,
+            detectors=detector,
+            lazy=lazy,
+            disable_s_matrix_chunks=disable_s_matrix_chunks,
+            **kwargs,
+        )
+        if lazy:
+            measurement = measurement.compute(progress_bar=False)
+        return to_host_array(measurement.array), sorted(multislice_blocks)
+
+    default, default_blocks = reduce()
+    batched, batched_blocks = reduce(max_batch_multislice=4)
+
+    assert default_blocks == [(0, 9)]
+    assert batched_blocks == [(0, 4), (4, 8), (8, 9)]
+    np.testing.assert_allclose(batched, default, rtol=1e-5)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=10, device=device)
+    expected = to_host_array(probe.scan(potential, scan, detector, lazy=False).array)
+    np.testing.assert_allclose(batched, expected, atol=1e-5)
+
+
+@devices
+def test_a_small_max_batch_multislice_builds_each_reseeded_pool_once(
+    device, monkeypatch
+):
+    """An eager reduction in plane-wave batches of 4 builds the frozen-phonon pool of
+    each of 3 crystal members once, since the batches of a member share its pool,
+    not once per batch (6 batches here)."""
+    import collections
+
+    import ase.build
+
+    import abtem
+    from abtem.potentials.iam import CrystalPotential, _FieldBuilder
+
+    builds = collections.Counter()
+    build = _FieldBuilder.build
+
+    def counting(self, *args, **kwargs):
+        if isinstance(getattr(self, "frozen_phonons", None), abtem.FrozenPhonons):
+            builds[int(self.frozen_phonons.seed[0])] += 1
+        return build(self, *args, **kwargs)
+
+    monkeypatch.setattr(_FieldBuilder, "build", counting)
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+        gpts=(16, 20),
+        slice_thickness=atoms.cell[2, 2] / 2,
+        device=device,
+    )
+    crystal = CrystalPotential(unit, (1, 2, 2), seeds=(1, 2, 3))
+    s_matrix = abtem.SMatrix(
+        potential=crystal,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 21
+    s_matrix.reduce(
+        scan=abtem.GridScan(gpts=(2, 3)),
+        detectors=abtem.AnnularDetector(0, 20),
+        max_batch_multislice=4,
+        lazy=False,
+    )
+
+    assert list(builds.values()) == [1, 1, 1]
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_prism_reduction_scheme_is_deprecated_and_has_no_effect(lazy):
     # A lazy S-matrix is always reduced without rechunking: the reduction scheme
