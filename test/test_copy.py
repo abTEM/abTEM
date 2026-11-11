@@ -312,13 +312,16 @@ class TestEqualityDiscriminates:
         Lazy content now has no verdict, and `==` and `!=` say so."""
         import dask.array as da
 
+        from abtem.core.utils import LazyComparisonError
+
         zeros = self._images(da.zeros((16, 12), dtype="float32"))
         ones = self._images(da.ones((16, 12), dtype="float32"))
 
-        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             zeros == ones
-        with pytest.raises(TypeError, match=r"\.compute\(\)"):
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             zeros != ones
+        assert issubclass(LazyComparisonError, TypeError)
 
     def test_a_lazy_object_does_not_compare_with_an_eager_one(self):
         """The content is lazy on one side only, in either order."""
@@ -373,6 +376,73 @@ class TestEqualityDiscriminates:
 
         with pytest.raises(TypeError, match=r"\.compute\(\)"):
             s_matrix() == s_matrix()
+
+    def test_lazy_content_inside_a_list_does_not_compare(self):
+        """A lazy object held in a list raises through `list.__eq__` as it does
+        when held directly, instead of counting as a difference."""
+        import dask.array as da
+
+        from abtem.core.utils import EqualityMixin, LazyComparisonError
+
+        class Holder(EqualityMixin):
+            def __init__(self, images):
+                self._images = [images]
+
+        a = Holder(self._images(da.zeros((16, 12), dtype="float32")))
+        b = Holder(self._images(da.ones((16, 12), dtype="float32")))
+
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            a == b
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            a != b
+
+    def test_a_difference_decides_before_lazy_content(self):
+        """Any attribute that differs makes lazy objects unequal, wherever it
+        sits in `__dict__`; only otherwise does lazy content raise."""
+        import dask.array as da
+
+        from abtem.core.utils import LazyComparisonError
+        from abtem.measurements import IndexedDiffractionPatterns
+
+        def patterns(array, hkl):
+            return IndexedDiffractionPatterns(
+                array=array,
+                miller_indices=np.array(hkl),
+                reciprocal_lattice_vectors=np.eye(3),
+            )
+
+        lazy = patterns(da.zeros(3, dtype="float32"), [[1, 0, 0], [0, 1, 0], [1, 1, 0]])
+        other_hkl = [[1, 0, 0], [0, 1, 0], [2, 0, 0]]
+        # `_miller_indices` comes after `_array` in IndexedDiffractionPatterns
+        assert lazy != patterns(da.ones(3, dtype="float32"), other_hkl)
+        assert lazy != patterns(np.zeros(3, dtype="float32"), other_hkl)
+
+        images = self._images(da.zeros((16, 12), dtype="float32"))
+        transposed = self._images(np.zeros((12, 16), dtype="float32"))
+        assert images != transposed
+        assert transposed != images
+        assert not images == transposed
+        with pytest.raises(LazyComparisonError):
+            images == self._images(np.zeros((16, 12), dtype="float32"))
+
+    def test_lazy_content_in_a_nested_object_decides_last(self):
+        """An `SMatrix` with a lazy potential differs by its energy; with the
+        same energy only the lazy potential is left, and it raises."""
+        import abtem
+        from abtem.core.utils import LazyComparisonError
+
+        def s_matrix(energy):
+            potential = abtem.Potential(
+                self._atoms(), gpts=(16, 16), slice_thickness=2.0
+            ).build(lazy=True)
+            return abtem.SMatrix(
+                potential=potential, energy=energy, semiangle_cutoff=20
+            )
+
+        assert s_matrix(100e3) != s_matrix(200e3)
+        assert not s_matrix(100e3) == s_matrix(200e3)
+        with pytest.raises(LazyComparisonError):
+            s_matrix(100e3) == s_matrix(100e3)
 
     def test_slice_indexed_atoms_equals_an_identical_twin(self):
         """`_slice_index` is a list of integer arrays, one per slice.

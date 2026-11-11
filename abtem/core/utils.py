@@ -119,18 +119,25 @@ def _is_same_dask_collection(a, b) -> bool:
     )
 
 
+class LazyComparisonError(TypeError):
+    """`==` met lazy (dask) content that only computing it could decide."""
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
 
-    A lazy (dask) attribute has no verdict: comparing it would run its graph,
-    discard the result and let an error from inside the graph escape `==`. A
-    `TypeError` asks for `.compute()` instead. Two attributes that are the same
-    dask object, or the same dask array by name, have the same content and
-    compare equal.
+    A lazy (dask) attribute decides nothing: comparing its values would run its
+    graph, discard the result and let an error from inside the graph escape
+    `==`. It is equal when both sides hold the same dask object or the same dask
+    array by name, and different when the shapes differ. Any attribute that
+    differs makes the objects unequal; otherwise an undecided lazy attribute,
+    here or in a nested object, raises `LazyComparisonError` (a `TypeError`),
+    which asks for `.compute()`.
     """
     if not isinstance(b, a.__class__):
         return False
 
+    undecided = None
     for key, value in a.__dict__.items():
         # print(key)
         if key in exclude:
@@ -143,28 +150,28 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if is_dask_collection(value) or is_dask_collection(other):
             if _is_same_dask_collection(value, other):
                 continue
-            raise TypeError(
-                f"cannot compare the lazy attribute `{key}` of "
-                f"{a.__class__.__name__}: call .compute() on both objects "
-                "before comparing them with == or !="
-            )
-
-        if isinstance(value, EqualityMixin):
-            # Recurse directly instead of through `value == other`, and
-            # forward the nested object's own exclusions, which its __eq__
-            # would otherwise apply: without them an exclusion holds only
-            # for a top-level operand, and SMatrix(built potential) !=
-            # SMatrix(unbuilt potential) although the two potentials
-            # compare equal. Evaluating `==` as well compares the nested
-            # object a second time, doubling the work at every level. The
-            # recursion is outside the `try` so that the TypeError for a
-            # lazy attribute reaches the caller.
-            equal = safe_equality(value, other, value._eq_exclude)
-        else:
-            try:
-                equal = value == other
-            except (KeyError, TypeError, ValueError):
+            if getattr(value, "shape", None) != getattr(other, "shape", None):
                 return False
+            undecided = undecided or key
+            continue
+
+        try:
+            if isinstance(value, EqualityMixin):
+                # Recurse directly instead of through `value == other`, and
+                # forward the nested object's own exclusions, which its __eq__
+                # would otherwise apply: without them an exclusion holds only
+                # for a top-level operand, and SMatrix(built potential) !=
+                # SMatrix(unbuilt potential) although the two potentials
+                # compare equal. Evaluating `==` as well compares the nested
+                # object a second time, doubling the work at every level.
+                equal = safe_equality(value, other, value._eq_exclude)
+            else:
+                equal = value == other
+        except LazyComparisonError:
+            undecided = undecided or key
+            continue
+        except (KeyError, TypeError, ValueError):
+            return False
 
         from abtem.core.ensemble import EmptyEnsemble
 
@@ -197,6 +204,12 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if not np.all(equal):
             return False
 
+    if undecided is not None:
+        raise LazyComparisonError(
+            f"cannot compare the lazy attribute `{undecided}` of "
+            f"{a.__class__.__name__}: call .compute() on both objects "
+            "before comparing them with == or !="
+        )
     return True
 
 
