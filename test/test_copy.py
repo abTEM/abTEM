@@ -815,6 +815,47 @@ class TestEqualityDiscriminates:
         assert b != a
         assert images((3, 4)) == images((3, 4))
 
+    @devices
+    @pytest.mark.parametrize("dtype", [np.float32, np.int64])
+    def test_arrays_whose_shapes_do_not_broadcast_are_different_on_any_device(
+        self, device, dtype
+    ):
+        """Operands of shapes `(3, 4)` and `(5, 4)` have no common shape, which
+        NumPy reports as a `ValueError` and torch as a `RuntimeError`; the
+        objects are different, whichever array they hold and whichever side the
+        host array is on."""
+        from abtem.measurements import Images
+
+        def images(shape, on_device=True):
+            array = np.zeros(shape, dtype=dtype)
+            images = Images(array, sampling=0.1)
+            return images.copy_to_device(device) if on_device else images
+
+        a, b, host = images((3, 4)), images((5, 4)), images((5, 4), on_device=False)
+        assert host != a
+        assert not host == a
+        assert a != host
+        assert not a == host
+        assert a != b
+        assert b != a
+        assert not a == b
+
+    @devices
+    def test_a_host_and_a_device_object_compare_the_same_in_both_orders(self, device):
+        """Whether the host array and the device array of equal content are equal
+        depends on what the device's array type accepts from NumPy, but the
+        verdict is the same whichever side the host array is on; a shape that
+        broadcasts against the other is a difference."""
+        from abtem.measurements import Images
+
+        host = Images(np.ones((3, 4), np.int64), sampling=0.1)
+        on_device = host.copy_to_device(device)
+        assert (host == on_device) == (on_device == host)
+
+        narrow = Images(np.ones((1, 4), np.int64), sampling=0.1)
+        assert host != narrow.copy_to_device(device)
+        assert narrow.copy_to_device(device) != host
+
     @pytest.mark.parametrize("kind", ["FrozenPhonons", "NoiseTransform"])
     def test_one_seed_against_two_equal_seeds_is_different(self, kind):
         """A `FrozenPhonons` of one configuration and one of two with the same

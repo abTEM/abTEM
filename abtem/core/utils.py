@@ -180,6 +180,14 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             undecided = undecided or key
             continue
 
+        if not isinstance(value, EqualityMixin):
+            # Arrays of different shapes differ, decided before the values are
+            # compared: a backend can raise its own error for operands that do not
+            # broadcast, and one that does broadcast would compare equal.
+            shapes = getattr(value, "shape", None), getattr(other, "shape", None)
+            if all(isinstance(s, tuple) for s in shapes) and shapes[0] != shapes[1]:
+                return False
+
         try:
             # A held EqualityMixin is compared with its own __eq__, which applies
             # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
