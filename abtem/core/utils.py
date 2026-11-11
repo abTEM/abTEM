@@ -162,17 +162,11 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             continue
 
         try:
-            if isinstance(value, EqualityMixin):
-                # Recurse directly instead of through `value == other`, and
-                # forward the nested object's own exclusions, which its __eq__
-                # would otherwise apply: without them an exclusion holds only
-                # for a top-level operand, and SMatrix(built potential) !=
-                # SMatrix(unbuilt potential) although the two potentials
-                # compare equal. Evaluating `==` as well compares the nested
-                # object a second time, doubling the work at every level.
-                equal = safe_equality(value, other, value._eq_exclude)
-            else:
-                equal = value == other
+            # A held EqualityMixin is compared with its own __eq__, which applies
+            # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
+            # slice index). Lazy content below, in a held object, list or dict,
+            # is deferred like a lazy attribute; any other error is a difference.
+            equal = value == other
         except LazyComparisonError:
             undecided = undecided or key
             continue

@@ -1040,19 +1040,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
     # The exclusion is blunt, and deliberately so for now. get_sliced_atoms()
     # returns this object rather than a copy, so a caller who mutates what it
     # returned changes what the field builds while `==` still reports equal.
-    # What that costs depends on the projection, because the two cache classes
-    # differ. For projection="infinite" the cache is a SliceIndexedAtoms,
-    # whose _slice_index is a list of arrays that safe_equality cannot compare
-    # -- `==` on it raises ValueError, which becomes "unequal" -- so the
-    # comparison is constant-False and excluding it gives up nothing. For
-    # projection="finite" the cache is a SlicedAtoms, which has no
-    # _slice_index and compares correctly; there the exclusion does give up a
-    # real check, one that the np.all fix above would otherwise have made
-    # catch the mutation. Neither path regresses against the old behaviour,
-    # which missed the mutation on both. Comparing derived state only when
-    # both operands have it is the better rule, and belongs with the same
-    # question for lazy arrays -- both are abTEM issue #413 -- rather than
-    # here.
+    # Both cache classes compare correctly (SliceIndexedAtoms for
+    # projection="infinite", SlicedAtoms for "finite"), so the exclusion gives
+    # up a real check on either path. Comparing derived state only when both
+    # operands have it is the better rule, and belongs with the same question
+    # for lazy arrays -- both are abTEM issue #413 -- rather than here.
     _eq_exclude = ("_sliced_atoms",)
 
     def __init__(

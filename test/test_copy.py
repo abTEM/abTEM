@@ -208,11 +208,10 @@ class TestEqualityDiscriminates:
         assert Holder() != Holder()
 
     def test_a_built_potential_equals_an_unbuilt_one_inside_a_container(self):
-        """`_eq_exclude` is applied by `EqualityMixin.__eq__`, but
-        `safe_equality` recurses into a nested `EqualityMixin` directly and so
-        bypasses it. Without forwarding the exclusion, the invariant above held
-        only for a top-level operand: the same potential held by an SMatrix
-        went back to comparing unequal once it had been built."""
+        """`_eq_exclude` is applied by `EqualityMixin.__eq__`, which compares a
+        nested `EqualityMixin` attribute too, so the invariant above holds for
+        an operand held by another object: the same potential held by an
+        SMatrix keeps comparing equal once it has been built."""
         import abtem
 
         built, unbuilt = self._potential(), self._potential()
@@ -221,6 +220,28 @@ class TestEqualityDiscriminates:
         with abtem.config.set({"fft": "numpy"}):
             built.build(lazy=False)
         assert s_built == s_unbuilt
+
+    def test_a_held_object_compares_as_it_does_on_its_own_in_both_orders(self):
+        """A nested object is compared with `==`, so a subclass of the other
+        operand's class is dispatched as at the top level, and the verdict does
+        not depend on which of two held objects is on the left. A
+        `PotentialArray` and a `TransmissionFunction` (its subclass) with the
+        same array differ, whichever way round. Device-independent."""
+        import abtem
+        from abtem.multislice import MultisliceTransform
+
+        transmission = self._potential(gpts=(16, 16)).build(lazy=False)
+        transmission = transmission.transmission_function(100e3)
+        potential = abtem.PotentialArray(
+            transmission.array.copy(),
+            slice_thickness=transmission.slice_thickness,
+            extent=transmission.extent,
+        )
+
+        assert potential != transmission
+        assert transmission != potential
+        assert MultisliceTransform(potential) != MultisliceTransform(transmission)
+        assert MultisliceTransform(transmission) != MultisliceTransform(potential)
 
     def test_a_nested_object_is_compared_once(self, monkeypatch):
         """Each nested `EqualityMixin` attribute is compared once per path, so
@@ -273,6 +294,54 @@ class TestEqualityDiscriminates:
         assert built.__dict__["_sliced_atoms"] is not None
 
         assert built == unbuilt
+
+    @pytest.mark.parametrize(
+        "holder", ["SMatrix", "MultisliceTransform", "CrystalPotential"]
+    )
+    def test_a_held_crystal_potential_compares_by_its_own_eq(self, holder):
+        """`CrystalPotential.__eq__` compares the root seed exactly; the generic
+        rule compares it with `np.allclose`, which takes the root seeds of two
+        crystals built from seeds one apart as equal. An object holding a crystal
+        gives the crystal's own verdict. Device-independent."""
+        import abtem
+        from abtem.multislice import MultisliceTransform
+
+        def crystal(seed):
+            frozen_phonons = abtem.FrozenPhonons(
+                self._atoms(), 2, sigmas=0.1, seed=(seed, 2_000_000)
+            )
+            unit = abtem.Potential(frozen_phonons, gpts=(16, 16), slice_thickness=1.0)
+            return abtem.CrystalPotential(unit, (2, 2, 1))
+
+        def hold(potential):
+            if holder == "SMatrix":
+                return abtem.SMatrix(
+                    potential=potential, energy=100e3, semiangle_cutoff=20
+                )
+            if holder == "MultisliceTransform":
+                return MultisliceTransform(potential)
+            return abtem.CrystalPotential(potential, (1, 1, 2), _root_seed=5)
+
+        a, b = crystal(1_000_000), crystal(1_000_001)
+        assert a != b
+        assert hold(a) != hold(b)
+        assert hold(a) == hold(a.copy())
+
+    def test_held_slice_indexed_atoms_equal_an_identical_twin(self):
+        """`SliceIndexedAtoms.__eq__` compares its list of index arrays with
+        `np.array_equal`; the generic rule compares the list with `list.__eq__`,
+        which raises for arrays of more than one element. An object holding the
+        slices, with no exclusion of them, gives the slices' own verdict.
+        Device-independent."""
+        from abtem.core.utils import EqualityMixin
+        from abtem.slicing import SliceIndexedAtoms
+
+        class Holder(EqualityMixin):
+            def __init__(self, atoms, slice_thickness):
+                self._sliced_atoms = SliceIndexedAtoms(atoms, slice_thickness)
+
+        assert Holder(self._atoms(), 1.0) == Holder(self._atoms(), 1.0)
+        assert Holder(self._atoms(), 1.0) != Holder(self._atoms(), 0.5)
 
     def test_equality_does_not_execute_a_dask_graph(self):
         """Refusing to compare lazy content must not run the graphs: the
