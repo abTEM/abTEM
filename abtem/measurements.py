@@ -6881,6 +6881,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         self._miller_indices = miller_indices
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
+    def __setstate__(self, state):
+        # abTEM 1.0.11 and earlier kept `_intensities`, an alias of the array.
+        state.pop("_intensities", None)
+        self.__dict__.update(state)
+
     def from_array_and_metadata(
         self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
     ) -> BaseMeasurements:

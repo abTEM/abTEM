@@ -209,6 +209,24 @@ def test_compute_leaves_no_lazy_attribute(name, tmp_path):
         assert_array_objects_equal(computed, array_object)
 
 
+def test_indexed_diffraction_patterns_unpickled_from_an_older_version_compare_equal():
+    """abTEM 1.0.11 and earlier pickled `_intensities`, an alias of the array, with
+    the object; one restored from such a pickle compares equal both ways.
+
+    CPU only: unpickling is bookkeeping shared by every device.
+    """
+    import pickle
+
+    old = CASES["IndexedDiffractionPatterns"]()
+    old.__dict__["_intensities"] = old.array
+    restored = pickle.loads(pickle.dumps(old))
+    new = CASES["IndexedDiffractionPatterns"]()
+
+    assert "_intensities" not in vars(restored)
+    assert restored == new
+    assert new == restored
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_transmission_function_with_ensemble_axes_and_exit_planes_round_trip(
     lazy, tmp_path
