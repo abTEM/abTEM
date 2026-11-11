@@ -734,11 +734,15 @@ Bugfixes:
   A dask array never counted as a difference, so lazy `ArrayObject`s compared equal to each other regardless of
   their array content, lazy zeros equal to lazy ones
     - **Behaviour change:** comparing objects whose content is lazy on either side raises
-      `abtem.core.utils.LazyComparisonError`, a `TypeError` subclass that asks for `.compute()` first, so user
+      `abtem.core.utils.LazyComparisonError`, a `TypeError` subclass that asks for computed objects, so user
       code that did `lazy_a == lazy_b` now raises. It is raised only when no attribute differs: objects that
       differ in an eager attribute, or whose lazy arrays differ in shape, compare unequal whatever their order of
       attributes. Eager objects compare as before, and objects that hold the very same dask array (the same
-      object, or an array with the same name, as in a `copy()`) still compare equal
+      object, or an array with the same name, as in a `copy()`) still compare equal. A `GPAWPotential` holds a
+      `.gpw` path as a lazy read keyed by the resolved path, so two potentials read from the same file compare
+      equal without reading it, and two read from different files raise. A relative `.gpw` path is now resolved
+      when the potential is created, so a lazy read uses the working directory of that moment, not of the later
+      computation
 - `compute()` on a `TransitionPotentialArray` read from zarr or built lazily no longer leaves the local
   potential that site filtering reads (`absolute_threshold`, `filter_sites`, and through them
   `scatter(threshold=)`, `generate_scattered_waves` and multislice site filtering) lazy. The computed object kept
