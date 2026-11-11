@@ -703,23 +703,24 @@ def _sum_runs(array, separators):
 AZIMUTHAL_STEP_SINGLE_PASS = True
 
 
-def _cupy_safe_coordinates(array, coordinates):
-    """Cast map_coordinates coordinates to the precision CuPy computes in.
+def _cupy_double_precision(array):
+    """Return a CuPy map_coordinates input in double precision.
 
-    For a float32 (or complex64) input, cupyx's spline kernel takes the
-    starting index from floor((float)c) but the weights from floor(c) on the
-    coordinate's own dtype. A float64 coordinate just below an integer,
-    k - 1e-12, then rounds to k for the index but not for the weights, and
-    the result is the value at node k + 1. Giving the coordinates the
-    kernel's precision keeps both floors consistent. SciPy computes in
-    float64 throughout and is left alone -- on the CPU, and on Metal, whose
+    cupyx's map_coordinates computes in the precision of its input. For a
+    single-precision input, CuPy 14.1 and later take the starting index from
+    floor((float)c) but the weights from floor(c) on the coordinate's own
+    dtype, so a float64 coordinate just below an integer, k - 1e-12, gives the
+    value at node k + 1, while float32 coordinates are consistent but rounded
+    by up to half a float32 spacing: 1.2e-4 pixels 2048 pixels into an axis. A
+    double-precision input makes the prefilter, the index and the weights
+    float64; the output keeps the caller's dtype. SciPy computes in float64
+    throughout and is left alone -- on the CPU, and on Metal, whose
     map_coordinates is SciPy's run on the host.
     """
     xp = get_array_module(array)
     if cp is None or xp is not cp:
-        return coordinates
-    float_dtype = xp.promote_types(array.real.dtype, xp.float32)
-    return coordinates.astype(float_dtype, copy=False)
+        return array
+    return array.astype(xp.promote_types(array.dtype, xp.float64), copy=False)
 
 
 def _interpolate_stack(
@@ -749,11 +750,12 @@ def _interpolate_stack(
         padding = 2 * order
         array = xp.pad(array, ((0, 0), (padding,) * 2, (padding,) * 2), mode=mode)
 
-    positions = _cupy_safe_coordinates(array, positions + padding)
+    positions = positions + padding
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        member = _cupy_double_precision(array[i])
+        map_coordinates(member, positions.T, output=output[i], order=order, **kwargs)
 
     output = output.reshape(old_shape[:-2] + positions_shape[:-1])
     return output
@@ -2821,7 +2823,6 @@ class _BaseMeasurement1D(BaseMeasurements):
         new_points = xp.linspace(3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint)[
             None
         ]
-        new_points = _cupy_safe_coordinates(array, new_points)
 
         # Follow the input dtype: hardcoding float32 downgrades a float64
         # profile and makes map_coordinates reject a complex one outright
@@ -2831,7 +2832,8 @@ class _BaseMeasurement1D(BaseMeasurements):
             # By keyword: Metal's map_coordinates is SciPy's run on the host, and
             # takes `output` only as a keyword. Passed positionally it is copied
             # to the host like any other argument, written there and discarded.
-            map_coordinates(array[i], new_points, output=new_array[i], order=order)
+            member = _cupy_double_precision(array[i])
+            map_coordinates(member, new_points, output=new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 

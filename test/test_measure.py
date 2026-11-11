@@ -2019,6 +2019,109 @@ def test_interpolate_stack_just_below_grid_nodes(device, order):
     np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
 
 
+_EPS32 = np.finfo(np.float32).eps
+
+
+def _spline_interpolate(array, entry):
+    """Spline-interpolate a 2D array (possibly on the GPU) by one of the three
+    public entry points that reach map_coordinates: to 1.31 times the points
+    for the images, to twice the number of rows along the diagonal for the
+    line, and to 1.31 times the points of the first two rows, joined into one
+    profile, for the profile."""
+    if entry == "profile":
+        profiles = RealSpaceLineProfiles(array[:2].reshape(-1), sampling=0.1)
+        return profiles.interpolate(gpts=int(profiles.shape[-1] * 1.31)).array
+    images = Images(array, sampling=(0.1, 0.1))
+    if entry == "line":
+        return images.interpolate_line(
+            start=(0.0, 0.0), end=images.extent, gpts=2 * array.shape[0]
+        ).array
+    gpts = (int(array.shape[0] * 1.31), int(array.shape[1] * 1.31))
+    return images.interpolate(gpts=gpts, method="spline").array
+
+
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_branch_hands_map_coordinates_double_precision(entry, monkeypatch):
+    """The CuPy branch gives map_coordinates a double-precision input and
+    coordinates. cupyx's kernel computes in the precision of its input, so a
+    single-precision one takes the starting index from the float32-rounded
+    coordinate and the weights from the float64 one, and float32 coordinates
+    are rounded by up to half a float32 spacing. Pinned to the CPU: the test
+    is about what reaches cupyx, which does not depend on the device, with
+    SciPy's map_coordinates in place of cupyx's."""
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    expected = _spline_interpolate(array, entry)
+
+    seen = []
+
+    def spy(input, coordinates, **kwargs):
+        seen.append((input.dtype, coordinates.dtype))
+        return scipy.ndimage.map_coordinates(input, coordinates, **kwargs)
+
+    monkeypatch.setattr(abtem.measurements, "cp", np)
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    result = _spline_interpolate(array, entry)
+
+    assert seen
+    assert set(seen) == {(np.dtype(np.float64),) * 2}
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_spline_interpolation_of_single_precision_data_matches_numpy(entry, dtype):
+    """On the GPU, single-precision data interpolate to within a few float32
+    roundings of the NumPy result, which SciPy computes in float64. The
+    coordinates reach about 1000 pixels, where rounding them to float32 costs
+    about 6e-5 of the maximum."""
+    rng = np.random.default_rng(5)
+    array = rng.random((1024, 768))
+    if dtype == np.complex64:
+        array = array + 1j * rng.random(array.shape)
+    array = array.astype(dtype)
+
+    expected = _spline_interpolate(array, entry)
+    result = asnumpy(_spline_interpolate(copy_to_device(array, "gpu"), entry))
+
+    assert result.dtype == dtype
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("delta", [1e-12, 2e-5])
+def test_cupy_interpolation_just_below_far_grid_nodes(delta):
+    """Far from the origin, where half a float32 spacing (3e-5 pixels near 1000)
+    exceeds delta, a coordinate k - delta rounds to k in float32. The result
+    must still be the NumPy one: neither the value at node k + 1, nor a value
+    shifted by the rounded coordinate."""
+    array = np.random.default_rng(7).random((1024, 768)).astype(np.float32)
+    k = np.arange(900, 1000)
+    positions = np.stack([k - delta, np.linspace(700.0, 760.0, len(k))], axis=-1)
+
+    expected = _interpolate_stack(array, positions, mode="wrap", order=3)
+    result = _interpolate_stack(
+        copy_to_device(array, "gpu"),
+        copy_to_device(positions, "gpu"),
+        mode="wrap",
+        order=3,
+    )
+
+    np.testing.assert_allclose(
+        asnumpy(result), expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
     """Regression: interpolate_line's lazy path computed drop_axis/new_axis
     as if the base (spatial) axes were the *first* axes of the array
