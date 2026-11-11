@@ -742,7 +742,7 @@ Bugfixes:
   On CuPy, the prefilter, the index and the weights are now computed in double precision and the sum in the
   precision of the data, so the results agree with the NumPy results to float32 rounding. On earlier CuPy
   versions the results change by float32 rounding only. NumPy, Metal and float64 CuPy results are unchanged
-  ([PR #NNN](https://github.com/abTEM/abTEM/pull/NNN))
+  ([PR #680](https://github.com/abTEM/abTEM/pull/680))
 
 Documentation:
 
