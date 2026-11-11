@@ -460,7 +460,7 @@ class BaseStructureFactor(metaclass=ABCMeta):
         self._inversion_center = (
             None if inversion_center is None else np.asarray(inversion_center, float)
         )
-        self._hkl = hkl
+        self._hkl = np.asarray(hkl, dtype=int)
         self._g_max = g_max
         super().__init__(*args, **kwargs)
 
@@ -755,11 +755,11 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
     ----------
     array : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : numpy.ndarray
-        The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
-        same as the length of the structure factor.
-    cell : Cell
-        The unit cell.
+    hkl : array_like of int
+        The reciprocal space vectors as Miller indices as a (N, 3) array, stored as an
+        integer array. N must be the same as the length of the structure factor.
+    cell : Cell or array_like
+        The unit cell, stored as a Cell. A (3, 3) array or nested list is converted.
     g_max : float
         Maximum scattering vector length [1/Å].
     centering : str
@@ -794,10 +794,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 " of hkl vectors",
             )
 
-        if isinstance(cell, np.ndarray):
-            cell = Cell(cell)
-
-        self._cell = cell
+        self._cell = Cell.ascell(cell)
 
         super().__init__(
             hkl=hkl,
@@ -821,14 +818,6 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         metadata: dict,
     ) -> StructureFactorArray:
         raise NotImplementedError
-
-    @classmethod
-    def _unpack_kwargs(cls, attrs):
-        # zarr attributes hold the Miller indices and the cell as nested lists
-        kwargs = super()._unpack_kwargs(attrs)
-        kwargs["hkl"] = np.array(kwargs["hkl"], dtype=int)
-        kwargs["cell"] = np.array(kwargs["cell"], dtype=float)
-        return kwargs
 
     @property
     def gpts(self) -> tuple[int, int, int]:

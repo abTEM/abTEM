@@ -9,7 +9,7 @@ from ase.build import bulk, graphene
 from ase.spacegroup import crystal
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from utils import gpu, requires_gpu
+from utils import assert_array_objects_equal, gpu, requires_gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
@@ -484,6 +484,38 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     for potential in potentials.values():
         assert potential.slice_thickness == potentials[False].slice_thickness
         np.testing.assert_allclose(potential.compute().array, expected, atol=1e-6)
+
+
+def test_a_structure_factor_array_built_from_lists_gives_the_same_patterns():
+    """The Miller indices and the cell are converted in the constructor, so a
+    `StructureFactorArray` built from nested lists holds an integer `ndarray`
+    and a `Cell` and gives the diffraction patterns of the original.
+
+    CPU only: `hkl` and `cell` are host data on every device.
+    """
+    from ase.cell import Cell
+
+    from abtem.bloch.dynamical import StructureFactorArray
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0).build(
+        lazy=False
+    )
+    kwargs = structure_factor._copy_kwargs(exclude=("array",))
+    kwargs.update(
+        hkl=structure_factor.hkl.tolist(),
+        cell=np.asarray(structure_factor.cell).tolist(),
+    )
+    from_lists = StructureFactorArray(structure_factor.array.copy(), **kwargs)
+
+    assert isinstance(from_lists.hkl, np.ndarray)
+    assert from_lists.hkl.dtype == structure_factor.hkl.dtype
+    assert isinstance(from_lists.cell, Cell)
+
+    def patterns(structure_factor):
+        bloch_waves = BlochWaves(structure_factor, energy=100e3, sg_max=0.05)
+        return bloch_waves.calculate_diffraction_patterns(10.0, lazy=False)
+
+    assert_array_objects_equal(patterns(from_lists), patterns(structure_factor))
 
 
 @settings(max_examples=5)
