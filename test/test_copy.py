@@ -4,7 +4,7 @@ import pytest
 import strategies as abtem_st
 from dask.base import is_dask_collection
 from hypothesis import given
-from utils import assert_array_objects_equal, si_cubic_atoms
+from utils import assert_array_objects_equal, devices, si_cubic_atoms
 
 from abtem.array import ArrayObject
 from abtem.core.backend import asnumpy
@@ -796,6 +796,24 @@ class TestEqualityDiscriminates:
 
         assert Holder(a) == Holder(b)
         assert Holder(((1, 2), (3,))) != Holder(((1, 2), (4,)))
+
+    @devices
+    def test_integer_arrays_of_different_shapes_are_different_on_any_device(
+        self, device
+    ):
+        """`(3, 4)` broadcasts against `(1, 4)`, so the values alone cannot tell
+        them apart; the shapes decide, on the device's integer arrays as on the
+        host's."""
+        from abtem.measurements import Images
+
+        def images(shape):
+            array = np.zeros(shape, dtype=np.int64)
+            return Images(array, sampling=0.1).copy_to_device(device)
+
+        a, b = images((3, 4)), images((1, 4))
+        assert a != b
+        assert b != a
+        assert images((3, 4)) == images((3, 4))
 
     @pytest.mark.parametrize("kind", ["FrozenPhonons", "NoiseTransform"])
     def test_one_seed_against_two_equal_seeds_is_different(self, kind):

@@ -1681,6 +1681,7 @@ _ARRAY_FUNCTIONS.update(
 _ARRAY_UFUNCS.update(
     {
         np.matmul: matmul,
+        np.equal: _binary_ufunc("eq"),
         np.multiply: _binary_ufunc("multiply"),
         np.add: _binary_ufunc("add"),
         np.subtract: _binary_ufunc("subtract"),
