@@ -434,8 +434,7 @@ class FresnelPropagator:
         if in_place:
             waves._array = array
         else:
-            kwargs = waves._copy_kwargs(exclude=("array",))
-            waves = waves.__class__(array, **kwargs)
+            waves = waves._with_array(array)
 
         return waves
 

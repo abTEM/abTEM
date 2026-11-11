@@ -1175,9 +1175,7 @@ class Waves(BaseWaves, ArrayObject):
 
         taper = _window_taper(window, waves.base_shape, waves.array)
 
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        kwargs["array"] = waves.array * taper
-        return waves.__class__(**kwargs)
+        return waves._with_array(waves.array * taper)
 
     def ensure_reciprocal_space(self, overwrite_x: bool = False) -> Waves:
         """Transform to reciprocal space if the wave functions are represented in real
@@ -1198,10 +1196,10 @@ class Waves(BaseWaves, ArrayObject):
         if self.reciprocal_space:
             return self
 
-        d = self._copy_kwargs(exclude=("array",))
-        d["array"] = fft2(self.array, overwrite_x=overwrite_x)
-        d["reciprocal_space"] = True
-        return self.__class__(**d)
+        return self._with_array(
+            fft2(self.array, overwrite_x=overwrite_x),
+            reciprocal_space=True,
+        )
 
     def ensure_real_space(self, overwrite_x: bool = False) -> Waves:
         """Transform to real space if the wave functions are represented in reciprocal
@@ -1222,10 +1220,10 @@ class Waves(BaseWaves, ArrayObject):
         if not self.reciprocal_space:
             return self
 
-        d = self._copy_kwargs(exclude=("array",))
-        d["array"] = ifft2(self.array, overwrite_x=overwrite_x)
-        d["reciprocal_space"] = False
-        waves = self.__class__(**d)
+        waves = self._with_array(
+            ifft2(self.array, overwrite_x=overwrite_x),
+            reciprocal_space=False,
+        )
         return waves
 
     def _in_configured_precision(self) -> Waves:
@@ -1234,9 +1232,7 @@ class Waves(BaseWaves, ArrayObject):
         if self.array.dtype == dtype:
             return self
 
-        d = self._copy_kwargs(exclude=("array",))
-        d["array"] = self.array.astype(dtype)
-        return self.__class__(**d)
+        return self._with_array(self.array.astype(dtype))
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
@@ -1261,9 +1257,7 @@ class Waves(BaseWaves, ArrayObject):
             factor = np.exp(1.0j * amount).astype(array.dtype)
             return factor * array
 
-        d = self._copy_kwargs(exclude=("array",))
-        d["array"] = _phase_shift(self.array)
-        return self.__class__(**d)
+        return self._with_array(_phase_shift(self.array))
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:
         """The complex array of the wave functions at the image plane.
@@ -1687,14 +1681,14 @@ class Waves(BaseWaves, ArrayObject):
             normalization=normalization,
         )
 
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["sampling"] = (
-            waves._valid_extent[0] / gpts[0],
-            waves._valid_extent[1] / gpts[1],
+        downsampled = waves._with_array(
+            array,
+            sampling=(
+                waves._valid_extent[0] / gpts[0],
+                waves._valid_extent[1] / gpts[1],
+            ),
+            update_metadata=waves._resampling_metadata(gpts),
         )
-        kwargs["metadata"].update(waves._resampling_metadata(gpts))
-        downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()
         return downsampled

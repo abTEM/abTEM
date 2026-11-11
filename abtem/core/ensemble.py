@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import itertools
 import warnings
 from abc import abstractmethod
@@ -121,6 +122,23 @@ def partition_blocks(
     for index, slices in iterate_chunk_ranges(chunks):
         entries[index] = entry(slices)
     return partition_entries(entries, lazy)
+
+
+def _rebuild_block(*args: Any, build: Callable, ndims: int | None, **kwargs: Any):
+    return _wrap_with_array(build(*unpack_blockwise_args(args), **kwargs), ndims)
+
+
+def block_rebuilder(
+    build: Callable[..., Any], ndims: int | None = None, **kwargs: Any
+) -> Callable[..., np.ndarray]:
+    """The function that rebuilds the part of an ensemble one block holds, as
+    `_from_partitioned_args` returns it.
+
+    It unpacks the block's partitioned arguments into their entries, calls
+    ``build(*entries, **kwargs)`` and wraps the result as a block with `ndims` axes
+    (default: the number of ensemble axes of the result).
+    """
+    return functools.partial(_rebuild_block, build=build, ndims=ndims, **kwargs)
 
 
 def shared_constant_arg(x: Any, lazy: bool = True) -> np.ndarray | da.core.Array:

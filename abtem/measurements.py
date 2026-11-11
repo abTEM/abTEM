@@ -936,8 +936,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             array = self.array
 
         array = array / reduce(scale)
-        kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        return self._with_array(array)
 
     @classmethod
     @abstractmethod
@@ -1006,9 +1005,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         if isinstance(func, str):
             func = functools.partial(_array_module_function, name=func)
 
-        d = self._copy_kwargs(exclude=("array",))
-        d["metadata"] = {**d["metadata"], "label": label, "units": units}
-
         if self.is_lazy:
             # Applied per block: CuPy functions reject a dask array, unlike NumPy's,
             # which dispatch to dask. The output meta is evaluated on the input's
@@ -1016,11 +1012,11 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             # dask, the dtype would be inferred from a NumPy dummy, which CuPy
             # functions also reject.
             meta = func(da.utils.meta_from_array(self.array))
-            d["array"] = self.array.map_blocks(func, meta=meta)
+            array = self.array.map_blocks(func, meta=meta)
         else:
-            d["array"] = func(self.array)
+            array = func(self.array)
 
-        return self.__class__(**d)
+        return self._with_array(array, update_metadata={"label": label, "units": units})
 
     @property
     @abstractmethod
@@ -1678,9 +1674,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             self.array, kernel, depth, boundary=boundary, cval=cval
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     def lorentzian_filter(
         self,
@@ -1780,9 +1774,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             cval=cval,
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     def voigtian_filter(
         self,
@@ -1914,9 +1906,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         l = self.lorentzian_filter(
             lorentzian_gamma, truncate=truncate, boundary=boundary, cval=cval
         )
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = (1.0 - eta) * g.array + eta * l.array
-        return self.__class__(**kwargs)
+        return self._with_array((1.0 - eta) * g.array + eta * l.array)
 
     def interpolate_line_at_position(
         self,
@@ -2241,10 +2231,10 @@ class Images(_BaseMeasurement2D):
             sampling=self.sampling,
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["metadata"].update({"label": "iCOM", "units": "arb. unit"})
-        return self.__class__(**kwargs)
+        return self._with_array(
+            array,
+            update_metadata={"label": "iCOM", "units": "arb. unit"},
+        )
 
     def crop(
         self,
@@ -2293,9 +2283,7 @@ class Images(_BaseMeasurement2D):
             offset[1] : offset[1] + new_shape[1],
         ]
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     @staticmethod
     def _interpolate_spline(array, old_gpts, new_gpts, pad_mode, order, cval):
@@ -2422,10 +2410,7 @@ class Images(_BaseMeasurement2D):
         else:
             raise RuntimeError()
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["sampling"] = sampling
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array, sampling=sampling)
 
     def tile(self, repetitions: tuple[int, int]) -> Images:
         """
@@ -2444,11 +2429,9 @@ class Images(_BaseMeasurement2D):
         """
         if len(repetitions) != 2:
             raise RuntimeError()
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = np.tile(
-            self.array, (1,) * (len(self.array.shape) - 2) + repetitions
+        return self._with_array(
+            np.tile(self.array, (1,) * (len(self.array.shape) - 2) + repetitions)
         )
-        return self.__class__(**kwargs)
 
     def scan_noise(
         self,
@@ -2739,10 +2722,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             order=order,
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["sampling"] = sampling
-        return self.__class__(**kwargs)
+        return self._with_array(array, sampling=sampling)
 
     def show(
         self,
@@ -2885,11 +2865,8 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
             The tiled line profiles(s).
         """
 
-        kwargs = self._copy_kwargs(exclude=("array",))
         reps = (1,) * (len(self.array.shape) - 1) + (repetitions,)
-        kwargs["array"] = array_namespace(self.array).tile(self.array, reps)
-
-        return self.__class__(**kwargs)
+        return self._with_array(array_namespace(self.array).tile(self.array, reps))
 
     # def _plot_extent(self, units=None):
     #     scale = get_conversion_factor(units, "Å")
@@ -3490,8 +3467,7 @@ def _lorentzian_source_size(
         boundary="periodic",
     )
 
-    kwargs = measurements._copy_kwargs(exclude=("array",))
-    return measurements.__class__(array, **kwargs)
+    return measurements._with_array(array)
 
 
 def _voigtian_source_size(
@@ -3542,10 +3518,7 @@ def _pseudo_voigtian_source_size(
 
     g = _gaussian_source_size(measurements, gaussian_sigma)
     l = _lorentzian_source_size(measurements, lorentzian_gamma, truncate)
-    kwargs = measurements._copy_kwargs(exclude=("array",))
-    return measurements.__class__(
-        (1.0 - eta) * g.array + eta * l.array, **kwargs
-    )
+    return measurements._with_array((1.0 - eta) * g.array + eta * l.array)
 
 
 def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
@@ -3594,9 +3567,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         measurements.array, kernel, depth, boundary="periodic"
     )
 
-    kwargs = measurements._copy_kwargs(exclude=("array",))
-
-    return measurements.__class__(array, **kwargs)
+    return measurements._with_array(array)
 
 
 def _infer_lines(b, H, W, out_H, out_W, kH, kW):
@@ -3944,10 +3915,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         convert these: the unshifted (``np.fft.fftfreq``) order is not a uniform
         axis."""
         array = array_namespace(self.array).fft.fftshift(self.array, axes=(-2, -1))
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["fftshift"] = True
-        return self.__class__(**kwargs)
+        return self._with_array(array, fftshift=True)
 
     def _warn_unshifted_export(self, method: str) -> None:
         # The export shifts unshifted patterns. Patterns that are already centred
@@ -4014,9 +3982,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         # np.tile dispatches to da.tile or cupy.tile; cupy.tile rejects a dask array
         array = np.tile(self.array, tiling)
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     @staticmethod
     def _index_diffraction_spots(
@@ -4462,10 +4428,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             new_gpts=gpts,
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["sampling"] = sampling
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array, sampling=sampling)
 
     def _check_integration_limits(self, inner: float, outer: float):
         if inner > outer:
@@ -5121,9 +5084,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             angular_coordinates=self.angular_coordinates,
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     @staticmethod
     def _crop(array: np.ndarray, gpts: tuple[int, int], fftshift: bool = True):
@@ -5193,9 +5154,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self, self._crop, base_shape_out=gpts, gpts=gpts, fftshift=self.fftshift
         )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     @staticmethod
     def _azimuthal_step_row_blocks(
@@ -7891,9 +7850,7 @@ def elastic_diffuse_diffraction_patterns(
     if reduction_dtype is not None:
         complex_dtype = np.result_type(reduction_dtype, np.complex64)
         if exit_waves.array.dtype != complex_dtype:
-            kwargs = exit_waves._copy_kwargs(exclude=("array",))
-            kwargs["array"] = exit_waves.array.astype(complex_dtype)
-            exit_waves = exit_waves.__class__(**kwargs)
+            exit_waves = exit_waves._with_array(exit_waves.array.astype(complex_dtype))
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 

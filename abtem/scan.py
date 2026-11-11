@@ -18,8 +18,8 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import (
     _wrap_with_array,
+    block_rebuilder,
     partition_blocks,
-    unpack_blockwise_args,
 )
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
@@ -302,17 +302,13 @@ class CustomScan(BaseScan):
         ]
 
     @staticmethod
-    def _from_partitioned_args_func(*args, **kwargs):
-        scan = unpack_blockwise_args(args)
-        positions = scan[0]["positions"]
-        new_scan = CustomScan(positions, **kwargs)
-        new_scan = _wrap_with_array(new_scan, 1)
-        return new_scan
+    def _from_block_entry(entry):
+        return CustomScan(entry["positions"])
 
     def _from_partitioned_args(self):
         if len(self.positions) == 0:
             return lambda *args, **kwargs: _wrap_with_array(self)
-        return self._from_partitioned_args_func
+        return block_rebuilder(self._from_block_entry, 1)
 
     def _partition_args(self, chunks=None, lazy: bool = True):
         if len(self.positions) == 0:
@@ -752,13 +748,11 @@ class LineScan(BaseScan):
         raise NotImplementedError
 
     @staticmethod
-    def _from_partitioned_args_func(*args):
-        args = unpack_blockwise_args(args)
-        line_scan = args[0]
-        return _wrap_with_array(line_scan)
+    def _from_block_entry(line_scan):
+        return line_scan
 
     def _from_partitioned_args(self):
-        return self._from_partitioned_args_func
+        return block_rebuilder(self._from_block_entry)
 
     def _partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
@@ -1211,18 +1205,16 @@ class GridScan(HasGrid2DMixin, BaseScan):
     #    return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, **kwargs):
-        x_scan, y_scan = unpack_blockwise_args(args)
-        start = (x_scan["start"], y_scan["start"])
-        end = (x_scan["end"], y_scan["end"])
-        gpts = (x_scan["gpts"], y_scan["gpts"])
-        endpoint = (x_scan["endpoint"], y_scan["endpoint"])
-        new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint, **kwargs)
-        new_scan = _wrap_with_array(new_scan, 2)
-        return new_scan
+    def _from_block_entry(cls, x_scan, y_scan):
+        return cls(
+            **{
+                key: (x_scan[key], y_scan[key])
+                for key in ("start", "end", "gpts", "endpoint")
+            }
+        )
 
     def _from_partitioned_args(self):
-        return self._from_partitioned_args_func
+        return block_rebuilder(self._from_block_entry, 2)
 
     @property
     def ensemble_shape(self):

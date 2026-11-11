@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 from abc import ABCMeta, abstractmethod
-from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -33,9 +32,9 @@ from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
+    block_rebuilder,
     partition_blocks,
     shared_constant_arg,
-    unpack_blockwise_args,
 )
 from abtem.core.utils import CopyMixin, EqualityMixin, itemset
 
@@ -263,16 +262,12 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         return self._atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, args, **kwargs):
-        if hasattr(args, "item"):
-            args = args.item()
-        atoms = args
-        new_dummy_frozen_phonons = cls(atoms=atoms, **kwargs)
-        return _wrap_with_array(new_dummy_frozen_phonons, 0)
+    def _from_block_entry(cls, atoms, **kwargs):
+        return cls(atoms=atoms, **kwargs)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms",))
-        return partial(self._from_partitioned_args_func, **kwargs)
+        return block_rebuilder(self._from_block_entry, 0, **kwargs)
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         # This ensemble has no chunking: a single constant travels as one
@@ -597,17 +592,13 @@ class FrozenPhonons(BaseFrozenPhonons):
         return atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, **kwargs):
-        args = unpack_blockwise_args(args)
-        atoms, seed = args[0]
-        new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
-        new = _wrap_with_array(new, len(new.ensemble_shape))
-        return new
+    def _from_block_entry(cls, entry, **kwargs):
+        atoms, seed = entry
+        return cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms", "seed", "num_configs"))
-        output = partial(self._from_partitioned_args_func, **kwargs)
-        return output
+        return block_rebuilder(self._from_block_entry, **kwargs)
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         if chunks is None:
@@ -767,18 +758,11 @@ class AtomsEnsemble(BaseFrozenPhonons):
             trajectory = trajectory.compute()
         return (partition_blocks(chunks, lambda s: trajectory[s[0]], lazy),)
 
-    @staticmethod
-    def _from_partition_args_func(*args, **kwargs):
-        args = unpack_blockwise_args(args)
-        trajectory = args[0]
-        atoms_ensemble = AtomsEnsemble(trajectory, **kwargs)
-        return _wrap_with_array(atoms_ensemble, 1)
-
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("trajectory", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
-        return partial(self._from_partition_args_func, **kwargs)
+        return block_rebuilder(AtomsEnsemble, 1, **kwargs)
 
     def randomize(self, atoms: Atoms) -> Atoms:
         return atoms
@@ -976,13 +960,9 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         )
 
     @staticmethod
-    def _from_partition_args_func(*args, **kwargs):
-        args = unpack_blockwise_args(args)
-        snapshots_chunk, energies_chunk = args[0]
-        ensemble = EnergyResolvedAtomsEnsemble(
-            snapshots_chunk, energies_chunk, **kwargs
-        )
-        return _wrap_with_array(ensemble)
+    def _from_block_entry(entry, **kwargs):
+        snapshots_chunk, energies_chunk = entry
+        return EnergyResolvedAtomsEnsemble(snapshots_chunk, energies_chunk, **kwargs)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(
@@ -992,4 +972,4 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(
             self.ensemble_shape
         )
-        return partial(self._from_partition_args_func, **kwargs)
+        return block_rebuilder(self._from_block_entry, **kwargs)

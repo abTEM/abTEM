@@ -8,6 +8,7 @@ import pytest
 
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import (
+    block_rebuilder,
     partition_blocks,
     partition_entries,
     unpack_blockwise_args,
@@ -107,3 +108,32 @@ def test_partition_entries_shared_node_is_one_graph_node():
     entries = dask.compute(*partition.to_delayed().ravel())
     assert [_unpack(e) for e in entries] == [("shared", i) for i in range(5)]
     assert len(calls) == 1
+
+
+class _Member:
+    def __init__(self, entry, scale=1, ensemble_shape=(1, 1)):
+        self.entry, self.scale, self.ensemble_shape = entry, scale, ensemble_shape
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_block_rebuilder_round_trips_partitioned_blocks(lazy):
+    chunks = validate_chunks((4, 6), (2, 3))
+    partition = partition_blocks(chunks, lambda s: (s[0].start, s[1].start), lazy)
+    rebuild = block_rebuilder(_Member, scale=3)
+
+    blocks = partition.to_delayed() if lazy else partition
+    for index in np.ndindex(partition.shape):
+        block = blocks[index].compute() if lazy else blocks[index]
+        rebuilt = rebuild(block)
+        # wrapped with one axis per ensemble axis of the rebuilt member
+        assert rebuilt.shape == (1, 1)
+        member = rebuilt.item()
+        assert member.entry == (index[0] * 2, index[1] * 3)
+        assert member.scale == 3
+
+    assert (
+        block_rebuilder(_Member, 0)(
+            blocks[0, 0].compute() if lazy else blocks[0, 0]
+        ).shape
+        == ()
+    )

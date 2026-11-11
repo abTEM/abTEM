@@ -732,6 +732,14 @@ Bugfixes:
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
   along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
 
+Deprecations:
+
+- The `reduction_scheme` argument of `SMatrix.scan`, `SMatrix.reduce` and `SMatrixArray.reduce`, and the
+  `rechunk` argument of `SMatrixArray.scan`, are deprecated and give a `FutureWarning`. They had no effect:
+  a lazy S-matrix has always been reduced without rechunking, whatever the scheme. The one exception was
+  `reduction_scheme="no-chunks"` with an interpolation of 1, which raised `NotImplementedError` and now
+  reduces like any other ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+
 Internal:
 
 - New module `abtem.core.blockwise` for running array functions on lazy or eager arrays alike:
@@ -739,16 +747,24 @@ Internal:
   derives the dask chunks, dropped and new axes and `meta` from the output shape and dtype;
   `map_overlapping_kernel` runs filters on chunks with an overlap; `array_namespace` picks `dask.array` or
   the array module for functions such as `tile` and `moveaxis`. The measurement methods, the
-  wave-function resampling and diffraction patterns, the Bloch-wave structure factors and the plasmon
-  ensembles use them instead of separate lazy and eager branches, which removes about 370 lines; results
+  wave-function resampling and diffraction patterns, the Bloch-wave structure factors, structure and
+  scattering matrices and beam padding, and the plasmon ensembles use them instead of separate lazy and
+  eager branches; results
   are unchanged. Every base-axis function now gets whole base arrays, also where the base axes of a lazy
   array were split into several chunks (e.g. after a reload from zarr) ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 - New helpers `partition_blocks` and `partition_entries` in `abtem.core.ensemble` package the blocks of an
   ensemble for its tasks, lazy or eager alike: one entry per block, evaluated in the graph when it holds
   dask collections (such as a node shared by every block). The scans, frozen phonons, atoms ensembles,
   plasmon scattering events, distributions, and the GPAW and charge-density potentials use them instead
-  of building the object arrays, `from_delayed` blocks and concatenations themselves; results are
-  unchanged ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+  of building the object arrays, `from_delayed` blocks and concatenations themselves; `block_rebuilder`
+  rebuilds the scans and frozen phonons from their blocks. Results are unchanged
+  ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+- `ArrayObject._with_array(array, **changes)` makes a copy that holds a new array, replacing the
+  copy-the-keyword-arguments-and-rebuild sequence at about 35 places
+  ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+- The PRISM reductions that rechunked the S-matrix (`_multiple_rechunk_reduce`, `_single_rechunk_reduce`
+  and their helpers, about 470 lines) are removed: nothing had called them since the lazy reduction moved
+  to `_no_chunks_reduce` ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 
 Documentation:
 
