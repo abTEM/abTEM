@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import itertools
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Union
 
-import dask.array as da
 import numpy as np
 from ase import Atom, Atoms
 from matplotlib.axes import Axes
@@ -16,10 +16,14 @@ from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, PositionsAxis, ScanAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
-from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    _wrap_with_array,
+    partition_blocks,
+    unpack_blockwise_args,
+)
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
-from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -315,19 +319,11 @@ class CustomScan(BaseScan):
             return ()
 
         chunks = self._validate_ensemble_chunks(chunks)
-        cumchunks = tuple(np.cumsum(chunks[0]))
-        positions = np.empty(len(chunks[0]), dtype=object)
-        for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            itemset(
-                positions,
-                i,
-                {"positions": self._positions[start_chunk : start_chunk + chunk]},
-            )
-
-        if lazy:
-            positions = da.from_array(positions, chunks=1)
-
-        return (positions,)
+        return (
+            partition_blocks(
+                chunks, lambda s: {"positions": self._positions[s[0]]}, lazy
+            ),
+        )
 
     def _sort_into_extents(self, extents):
         new_positions = np.zeros_like(self.positions)
@@ -775,29 +771,14 @@ class LineScan(BaseScan):
         if length > 0:
             direction = direction / length
 
-        cumchunks = tuple(np.cumsum(chunks[0]))
+        def line_scan(slices):
+            members = slices[0]
+            start = np.array(self.start) + members.start * self.sampling * direction
+            gpts = members.stop - members.start
+            end = start + self.sampling * gpts * direction
+            return LineScan(start=start, end=end, gpts=gpts, endpoint=False)
 
-        blocks = []
-        for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            start = np.array(self.start) + start_chunk * self.sampling * direction
-
-            end = start + self.sampling * chunk * direction
-
-            block = _wrap_with_array(
-                LineScan(start=start, end=end, gpts=chunk, endpoint=False)
-            )
-
-            if lazy:
-                block = da.from_array(block, chunks=1)
-
-            blocks.append(block)
-
-        if lazy:
-            blocks = da.concatenate(blocks)
-        else:
-            blocks = np.concatenate(blocks)
-
-        return (blocks,)
+        return (partition_blocks(chunks, line_scan, lazy),)
 
     def get_positions(
         self, chunks: int | None = None, lazy: bool = False
@@ -1254,26 +1235,24 @@ class GridScan(HasGrid2DMixin, BaseScan):
     def _partition_args(self, chunks=None, lazy=True):
         self.grid.check_is_defined()
         chunks = self._validate_ensemble_chunks(chunks)
-        blocks = ()
-        for i in range(2):
-            cumchunks = tuple(np.cumsum(chunks[i]))
-            block = np.empty(len(chunks[i]), dtype=object)
-            for j, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[i])):
-                start = self.start[i] + start_chunk * self.sampling[i]
-                end = start + self.sampling[i] * chunk
-                block[j] = {
-                    "start": start,
-                    "end": end,
-                    "gpts": chunk,
-                    "endpoint": False,
-                }
 
-            if lazy:
-                blocks += (da.from_array(block, chunks=1),)
-            else:
-                blocks += (block,)
+        # one partition per axis: the blocks of a grid are the products of the
+        # blocks of its axes
+        def axis_scan(axis, slices):
+            members = slices[0]
+            start = self.start[axis] + members.start * self.sampling[axis]
+            gpts = members.stop - members.start
+            return {
+                "start": start,
+                "end": start + self.sampling[axis] * gpts,
+                "gpts": gpts,
+                "endpoint": False,
+            }
 
-        return blocks
+        return tuple(
+            partition_blocks((chunks[axis],), functools.partial(axis_scan, axis), lazy)
+            for axis in range(2)
+        )
 
     def add_to_plot(
         self,

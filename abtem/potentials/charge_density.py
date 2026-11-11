@@ -6,7 +6,6 @@ from __future__ import annotations
 from functools import partial
 from typing import Tuple, Union
 
-import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -16,9 +15,9 @@ from scipy.ndimage import map_coordinates
 from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
-from abtem.core.ensemble import _wrap_with_array
+from abtem.core.ensemble import _wrap_with_array, partition_entries
 from abtem.core.fft import fft_crop
-from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -497,24 +496,17 @@ class ChargeDensityPotential(_PotentialBuilder):
         elif len(charge_densities.shape) != 4:
             raise RuntimeError()
 
-        def wrap_args(charge_density, frozen_phonon):
-            return np.array(
-                [{"charge_density": charge_density, "atoms": frozen_phonon}],
-                dtype=object,
-            )
+        def entry(charge_density, frozen_phonon):
+            return {"charge_density": charge_density, "atoms": frozen_phonon}
 
         if len(self.ensemble_shape) == 0:
             # No ensemble dimension (DummyFrozenPhonons, single config)
-            if lazy:
-                if not isinstance(charge_densities, da.core.Array):
-                    charge_densities = da.from_array(
-                        charge_densities, chunks=(1, -1, -1, -1)
-                    )
-                block = dask.delayed(wrap_args)(charge_densities[0], None)
-                array = da.from_delayed(block, shape=(), dtype=object)
-            else:
-                array = wrap_args(charge_densities[0], None)
-                array = _wrap_with_array(array, ndims=0)
+            if lazy and not isinstance(charge_densities, da.core.Array):
+                charge_densities = da.from_array(
+                    charge_densities, chunks=(1, -1, -1, -1)
+                )
+            entries = np.empty((), dtype=object)
+            entries[()] = entry(charge_densities[0], None)
         else:
             # Ensemble case (FrozenPhonons or AtomsEnsemble)
             n_ensemble = self.ensemble_shape[0]
@@ -545,22 +537,11 @@ class ChargeDensityPotential(_PotentialBuilder):
                 # delayed blocks of to_delayed() compose correctly.
                 frozen_phonon_blocks = frozen_phonon_blocks.to_delayed().ravel()
 
-            array = np.zeros((len(chunks[0]),), dtype=object)
-            for i, (cd, fp) in enumerate(
-                zip(charge_densities, frozen_phonon_blocks)
-            ):
-                if lazy:
-                    block = dask.delayed(wrap_args)(cd, fp)
-                    itemset(
-                        array, i, da.from_delayed(block, shape=(1,), dtype=object)
-                    )
-                else:
-                    itemset(array, i, wrap_args(cd, fp))
+            entries = [
+                entry(cd, fp) for cd, fp in zip(charge_densities, frozen_phonon_blocks)
+            ]
 
-            if lazy:
-                array = da.concatenate(list(array))
-
-        return (array,)
+        return (partition_entries(entries, lazy),)
 
     # The box was reported when the user left it to abTEM.
     @staticmethod

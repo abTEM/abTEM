@@ -53,6 +53,11 @@ from abtem.core.backend import (
     get_ndimage_module,
     get_scipy_module,
 )
+from abtem.core.blockwise import (
+    array_namespace,
+    map_kernel,
+    map_overlapping_kernel,
+)
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
@@ -136,11 +141,7 @@ def _reduced_scanned_images_or_line_profiles(
     ]
 
     if source != destination:
-        xp = get_array_module(new_array)
-        if old_measurement.is_lazy:
-            new_array = da.moveaxis(new_array, source, destination)
-        else:
-            new_array = xp.moveaxis(new_array, source, destination)
+        new_array = array_namespace(new_array).moveaxis(new_array, source, destination)
 
     sampling: float | tuple[float, ...]
     if len(scan_axes_metadata) == 1:
@@ -221,25 +222,6 @@ def _scan_extent(measurement):
     for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
         extent += (metadata.sampling * n,)
     return extent
-
-
-def _array_module_fn(array, xp: ModuleType, name: str):
-    """Return the array-module function ``name`` (e.g. ``"concatenate"``),
-    routed through dask's own implementation whenever ``array`` is still a
-    lazy dask array, regardless of device.
-
-    NumPy dispatches a top-level call like ``numpy.concatenate([dask_array])``
-    to dask automatically via ``__array_function__``, but CuPy does not: its
-    functions raise ``TypeError`` when given a ``dask.array.core.Array``
-    rather than a genuine ``cupy.ndarray``. Any code that resolves ``xp`` via
-    :func:`get_array_module` and then calls ``xp.<name>(...)`` directly on an
-    array that might still be lazy (e.g. because it was built from
-    ``exit_waves.array``/``dp.array`` without forcing computation) must go
-    through this helper instead of calling ``xp.<name>`` unconditionally.
-    """
-    if isinstance(array, da.core.Array):
-        return getattr(da, name)
-    return getattr(xp, name)
 
 
 def _on_device_of(array, like):
@@ -911,7 +893,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         # `abs` (rather than `xp.abs`) keeps a lazy CuPy array away from a CuPy
         # function. Dividing by 1 outside `valid` avoids warnings from entries
         # that are then discarded.
-        where = da.where if difference.is_lazy else get_array_module(self.array).where
+        where = array_namespace(difference.array).where
         valid = abs(self.array) >= min_relative_tol * self.array.max()
         ratio = difference.array / where(valid, self.array, 1)
         difference._array = where(valid, ratio, np.nan) * 100.0
@@ -1565,44 +1547,15 @@ class _BaseMeasurement2D(BaseMeasurements):
             )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
-        if self.is_lazy:
-            # raise NotImplementedError("Lazy interpolation not implemented.")
-            # TDOO: Implement lazy interpolation
-
-            # The base (spatial) axes are the *last* len(self.base_shape) axes
-            # of self.array -- any ensemble axes come first. da.map_blocks's
-            # drop_axis must name their actual positions; previously this used
-            # range(len(self.base_shape)) == (0, 1), i.e. the *first* two axes,
-            # which is only correct for a bare 2D array with no ensemble axes.
-            # With any ensemble axis present this silently mismatches dask's
-            # block bookkeeping: it doesn't raise, but produces wrong output
-            # (extra, duplicated blocks) the moment an ensemble axis has more
-            # than one chunk, or wrong values once BOTH base axes have more
-            # than one chunk each (confirmed by direct reproduction -- e.g. a
-            # DiffractionPatterns array whose spatial axes were chunked by a
-            # sufficiently large zarr save/reload).
-            n_base = len(self.base_shape)
-            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
-            chunks = self.array.chunks[:-n_base] + (positions.shape[0],)
-            new_axis = (base_axes[0],)
-
-            if width:
-                new_axis = new_axis + (new_axis[0] + 1,)
-                chunks = chunks + (1,)
-
-            array = da.map_blocks(
-                _interpolate_stack,
-                self.array,
-                positions=positions,
-                mode="wrap",
-                order=order,
-                drop_axis=base_axes,
-                new_axis=new_axis,
-                chunks=chunks,
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = _interpolate_stack(self.array, positions, mode="wrap", order=order)
+        # one value per position: (line,), or (line, width) when averaging
+        array = map_kernel(
+            self,
+            _interpolate_stack,
+            base_shape_out=positions.shape[:-1],
+            positions=positions,
+            mode="wrap",
+            order=order,
+        )
 
         metadata = copy.copy(self.metadata)
         metadata.update(scan.metadata)
@@ -1682,12 +1635,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         else:
             raise ValueError()
 
-        # dask.array.map_overlap's own `boundary` only understands
-        # 'reflect'/'periodic'/'nearest'/'none' or a numeric fill value --
-        # not the string "constant" -- so translate that one case to the
-        # actual fill value it expects.
-        dask_boundary = cval if boundary == "constant" else boundary
-
         if np.isscalar(sigma):
             sigma = (sigma,) * 2
 
@@ -1696,29 +1643,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         )
 
         if xp is np:
-            gaussian_filter = get_ndimage_module(self.array).gaussian_filter
-
-            if self.is_lazy:
-                depth = tuple(
-                    min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
-                )
-
-                array = da.map_overlap(
-                    gaussian_filter,
-                    self.array,
-                    sigma=sigma,
-                    boundary=dask_boundary,
-                    mode=mode,
-                    cval=cval,
-                    depth=depth,
-                    # `meta` must follow the input dtype, not the configured
-                    # precision: a complex measurement declared as real gets
-                    # its imaginary part silently discarded when dask
-                    # concatenates the blocks into the output buffer.
-                    meta=xp.array((), dtype=self.array.dtype),
-                )
-            else:
-                array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
+            kernel = functools.partial(
+                get_ndimage_module(self.array).gaussian_filter,
+                sigma=sigma,
+                mode=mode,
+                cval=cval,
+            )
         else:
             # cupyx.scipy.ndimage.gaussian_filter bakes each axis's kernel
             # radius (radius = int(truncate * sigma + 0.5)) into an unrolled,
@@ -1731,42 +1661,22 @@ class _BaseMeasurement2D(BaseMeasurements):
             # the FFT-based convolution already used by lorentzian_filter,
             # which only depends on array shape (cuFFT plans are cheaply
             # cached) and not on the kernel radius.
-            axes = (self.array.ndim - 2, self.array.ndim - 1)
-            kernels_1d = _gaussian_kernels_1d(sigma[-2:])
-            pad_mode = {
-                "wrap": "wrap",
-                "reflect": "symmetric",
-                "constant": "constant",
-            }[mode]
+            kernel = functools.partial(
+                _apply_convolve_2d_on_axes,
+                kernel_2d=None,
+                kernels_1d=_gaussian_kernels_1d(sigma[-2:]),
+                axes=(self.array.ndim - 2, self.array.ndim - 1),
+                mode={"wrap": "wrap", "reflect": "symmetric", "constant": "constant"}[
+                    mode
+                ],
+                cval=cval,
+            )
 
-            if self.is_lazy:
-                depth = tuple(
-                    min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
-                )
-
-                array = da.map_overlap(
-                    functools.partial(
-                        _apply_convolve_2d_on_axes,
-                        kernel_2d=None,
-                        kernels_1d=kernels_1d,
-                        axes=axes,
-                        mode=pad_mode,
-                        cval=cval,
-                    ),
-                    self.array,
-                    depth=depth,
-                    boundary=dask_boundary,
-                    meta=xp.array((), dtype=self.array.dtype),
-                )
-            else:
-                array = _apply_convolve_2d_on_axes(
-                    self.array,
-                    None,
-                    axes=axes,
-                    mode=pad_mode,
-                    cval=cval,
-                    kernels_1d=kernels_1d,
-                )
+        # scipy.ndimage truncates the Gaussian at 4 sigma
+        depth = {axis: int(np.ceil(4.0 * s)) for axis, s in enumerate(sigma) if s}
+        array = map_overlapping_kernel(
+            self.array, kernel, depth, boundary=boundary, cval=cval
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -1826,8 +1736,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         width parameter. For the same FWHM one needs γ = FWHM / 2 whereas
         σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
         """
-        xp = get_array_module(self.array)
-
         # 'reflect' is about the edge of the last pixel, the edge sample being
         # repeated, as in gaussian_filter (scipy.ndimage's 'reflect'). That is
         # numpy.pad's 'symmetric' and dask's map_overlap 'reflect'; numpy.pad's
@@ -1854,39 +1762,23 @@ class _BaseMeasurement2D(BaseMeasurements):
         axes = (self.array.ndim - 2, self.array.ndim - 1)
         kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
-        if self.is_lazy:
-            depth = [0] * self.array.ndim
-            depth[axes[0]] = min(kernel_2d.shape[0] // 2, self.shape[axes[0]])
-            depth[axes[1]] = min(kernel_2d.shape[1] // 2, self.shape[axes[1]])
-
-            # dask.array.map_overlap's own `boundary` only understands
-            # 'reflect'/'periodic'/'nearest'/'none' or a numeric fill value --
-            # not the string "constant" -- so translate that one case to the
-            # actual fill value it expects.
-            dask_boundary = cval if boundary == "constant" else boundary
-
-            array = da.map_overlap(
-                functools.partial(
-                    _apply_convolve_2d_on_axes,
-                    kernel_2d=kernel_2d,
-                    axes=axes,
-                    mode=mode,
-                    cval=cval,
-                ),
-                self.array,
-                depth=tuple(depth),
-                boundary=dask_boundary,
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            # Use FFT-based convolution: cost is independent of kernel size,
-            # which matters because the heavy-tailed Lorentzian kernel can
-            # easily be comparable in size to the image itself. The helper
-            # dispatches to scipy.signal or cupyx.scipy.signal based on the
-            # array's backend.
-            array = _apply_convolve_2d_on_axes(
-                self.array, kernel_2d, axes=axes, mode=mode, cval=cval
-            )
+        # Use FFT-based convolution: cost is independent of kernel size, which
+        # matters because the heavy-tailed Lorentzian kernel can easily be
+        # comparable in size to the image itself. The helper dispatches to
+        # scipy.signal or cupyx.scipy.signal based on the array's backend.
+        array = map_overlapping_kernel(
+            self.array,
+            functools.partial(
+                _apply_convolve_2d_on_axes,
+                kernel_2d=kernel_2d,
+                axes=axes,
+                mode=mode,
+                cval=cval,
+            ),
+            depth={axis: n // 2 for axis, n in zip(axes, kernel_2d.shape)},
+            boundary=boundary,
+            cval=cval,
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -2340,21 +2232,14 @@ class Images(_BaseMeasurement2D):
             The integrated gradient.
         """
         self._check_is_complex()
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = self.no_base_chunks().array
-            array = array.map_blocks(
-                _integrate_gradient_2d,
-                sampling=self.sampling,
-                # Real on purpose, unlike the dtype-preserving map_blocks
-                # elsewhere: the input is required to be complex (its real and
-                # imaginary parts are the two gradient components) and
-                # _integrate_gradient_2d returns xp.real(...) of the result,
-                # in the precision of the gradient.
-                meta=xp.array((), dtype=np.finfo(self.array.dtype).dtype),
-            )
-        else:
-            array = _integrate_gradient_2d(self.array, sampling=self.sampling)
+        # The real and imaginary parts are the two gradient components; the
+        # result is real, in the precision of the gradient.
+        array = map_kernel(
+            self,
+            _integrate_gradient_2d,
+            dtype=np.finfo(self.array.dtype).dtype,
+            sampling=self.sampling,
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -2508,54 +2393,33 @@ class Images(_BaseMeasurement2D):
         else:
             raise ValueError()
 
-        xp = get_array_module(self.array)
-
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         if boundary == "periodic":
             boundary = "grid-wrap"
 
-        array = None
-        if self.is_lazy:
-            array = self.no_base_chunks().array
-            if method == "fft":
-                array = array.map_blocks(
-                    fft_interpolate,
-                    new_shape=gpts,
-                    normalization=normalization,
-                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                    # fft_interpolate works in the configured precision
-                    meta=xp.array(
-                        (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
-                    ),
-                )
-
-            elif method == "spline":
-                array = array.map_blocks(
-                    self._interpolate_spline,
-                    old_gpts=self.shape[-2:],
-                    new_gpts=gpts,
-                    order=order,
-                    cval=cval,
-                    pad_mode=boundary,
-                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                    meta=xp.array((), dtype=self.array.dtype),
-                )
-
+        if method == "fft":
+            array = map_kernel(
+                self,
+                fft_interpolate,
+                base_shape_out=gpts,
+                # fft_interpolate works in the configured precision
+                dtype=get_dtype(complex=np.iscomplexobj(self.array)),
+                new_shape=gpts,
+                normalization=normalization,
+            )
+        elif method == "spline":
+            array = map_kernel(
+                self,
+                self._interpolate_spline,
+                base_shape_out=gpts,
+                old_gpts=self.shape[-2:],
+                new_gpts=gpts,
+                pad_mode=boundary,
+                order=order,
+                cval=cval,
+            )
         else:
-            if method == "fft":
-                array = fft_interpolate(self.array, gpts, normalization=normalization)
-            elif method == "spline":
-                array = self._interpolate_spline(
-                    self.array,
-                    old_gpts=self.shape[-2:],
-                    new_gpts=gpts,
-                    pad_mode=boundary,
-                    order=order,
-                    cval=cval,
-                )
-
-        if array is None:
             raise RuntimeError()
 
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -2642,20 +2506,13 @@ class Images(_BaseMeasurement2D):
         diffractograms : DiffractionPatterns
             Diffractograms of image(s).
         """
-        xp = get_array_module(self.array)
-
-        if self.is_lazy:
-            array = self.no_base_chunks().array
-            # Real on purpose, unlike the dtype-preserving map_blocks
-            # elsewhere: _diffractograms returns xp.abs(...), so the output is
-            # a power spectrum even when the image itself is complex, with the
-            # precision of the image's FFT.
-            array = array.map_blocks(
-                self._diffractograms,
-                meta=xp.array((), dtype=np.finfo(_fft_dtype(self.array.dtype)).dtype),
-            )
-        else:
-            array = self._diffractograms(self.array)
+        # A power spectrum, real even for a complex image, in the precision of
+        # the image's FFT.
+        array = map_kernel(
+            self,
+            self._diffractograms,
+            dtype=np.finfo(_fft_dtype(self.array.dtype)).dtype,
+        )
 
         sampling = 1 / self.extent[0], 1 / self.extent[1]
         return DiffractionPatterns(
@@ -2795,19 +2652,15 @@ class _BaseMeasurement1D(BaseMeasurements):
         width : float
             The calculated width.
         """
-
-        if self.is_lazy:
-            return self.array.map_blocks(
-                self._calculate_widths,
-                drop_axis=(len(self.array.shape) - 1,),
-                # A width is real whatever the profile is, but it still has
-                # to follow the configured precision.
-                dtype=get_dtype(complex=False),
-                sampling=self.sampling,
-                height=height,
-            )
-        else:
-            return self._calculate_widths(self.array, self.sampling, height)
+        # A width is real whatever the profile is, in the configured precision.
+        return map_kernel(
+            self,
+            self._calculate_widths,
+            base_shape_out=(),
+            dtype=get_dtype(complex=False),
+            sampling=self.sampling,
+            height=height,
+        )
 
     @staticmethod
     def _interpolate(array, gpts, endpoint, order):
@@ -2865,9 +2718,6 @@ class _BaseMeasurement1D(BaseMeasurements):
         interpolated_profiles : RealSpaceLineProfiles
             The interpolated line profile(s).
         """
-
-        xp = get_array_module(self.array)
-
         if (gpts is not None) and (sampling is not None):
             raise RuntimeError()
 
@@ -2880,18 +2730,14 @@ class _BaseMeasurement1D(BaseMeasurements):
         if sampling is None:
             sampling = self.extent / gpts
 
-        if self.is_lazy:
-            array = self.no_base_chunks().array
-            array = array.map_blocks(
-                self._interpolate,
-                gpts=gpts,
-                endpoint=endpoint,
-                order=order,
-                chunks=array.chunks[:-1] + (gpts,),
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = self._interpolate(self.array, gpts, endpoint, order)
+        array = map_kernel(
+            self,
+            self._interpolate,
+            base_shape_out=(gpts,),
+            gpts=gpts,
+            endpoint=endpoint,
+            order=order,
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -3040,13 +2886,8 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
         """
 
         kwargs = self._copy_kwargs(exclude=("array",))
-        xp = get_array_module(self.array)
         reps = (1,) * (len(self.array.shape) - 1) + (repetitions,)
-
-        if self.is_lazy:
-            kwargs["array"] = da.tile(self.array, reps)
-        else:
-            kwargs["array"] = xp.tile(self.array, reps)
+        kwargs["array"] = array_namespace(self.array).tile(self.array, reps)
 
         return self.__class__(**kwargs)
 
@@ -3631,8 +3472,6 @@ def _lorentzian_source_size(
     if np.isscalar(half_width):
         half_width = (half_width,) * 2
 
-    xp = get_array_module(measurements.array)
-
     scan_sampling = _scan_sampling(measurements)
     hw_pixels = (
         _width_in_pixels(half_width[0], scan_sampling[0]),
@@ -3642,26 +3481,14 @@ def _lorentzian_source_size(
 
     axes = (scan_axes[0], scan_axes[1])
 
-    if measurements.is_lazy:
-        depth = [0] * measurements.array.ndim
-        depth[axes[0]] = min(kernel_2d.shape[0] // 2, measurements.shape[axes[0]])
-        depth[axes[1]] = min(kernel_2d.shape[1] // 2, measurements.shape[axes[1]])
-
-        array = measurements.array.map_overlap(
-            functools.partial(
-                _apply_convolve_2d_on_axes,
-                kernel_2d=kernel_2d,
-                axes=axes,
-                mode="wrap",
-            ),
-            depth=tuple(depth),
-            boundary="periodic",
-            meta=xp.array((), dtype=measurements.array.dtype),
-        )
-    else:
-        array = _apply_convolve_2d_on_axes(
-            measurements.array, kernel_2d, axes=axes, mode="wrap"
-        )
+    array = map_overlapping_kernel(
+        measurements.array,
+        functools.partial(
+            _apply_convolve_2d_on_axes, kernel_2d=kernel_2d, axes=axes, mode="wrap"
+        ),
+        depth={axis: n // 2 for axis, n in zip(axes, kernel_2d.shape)},
+        boundary="periodic",
+    )
 
     kwargs = measurements._copy_kwargs(exclude=("array",))
     return measurements.__class__(array, **kwargs)
@@ -3733,72 +3560,39 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
 
     xp = get_array_module(measurements.array)
 
-    ensemble_axes = tuple(range(len(measurements.ensemble_shape)))
-    padded_sigma = ()
-    depth = ()
-    i = 0
-    for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
-        if axis in _scan_axes(measurements):
-            scan_sampling = _scan_sampling(measurements)[i]
-            sigma_pixels = _width_in_pixels(sigma[i], scan_sampling)
-            padded_sigma += (sigma_pixels,)
-            depth += (min(int(np.ceil(4.0 * sigma_pixels)), n),)
-            i += 1
-        else:
-            padded_sigma += (0.0,)
-            depth += (0,)
-
-    padded_sigma += (0.0,) * 2
-    depth += (0,) * 2
+    scan_axes = _scan_axes(measurements)
+    scan_sampling = _scan_sampling(measurements)
+    padded_sigma = [0.0] * measurements.array.ndim
+    for i, axis in enumerate(scan_axes):
+        padded_sigma[axis] = _width_in_pixels(sigma[i], scan_sampling[i])
+    padded_sigma = tuple(padded_sigma)
 
     if xp is np:
-        gaussian_filter = get_ndimage_module(measurements._array).gaussian_filter
-
-        if measurements.is_lazy:
-            array = measurements.array.map_overlap(
-                gaussian_filter,
-                sigma=padded_sigma,
-                mode="wrap",
-                depth=depth,
-                boundary="periodic",
-                meta=xp.array((), dtype=measurements.array.dtype),
-            )
-        else:
-            array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
+        kernel = functools.partial(
+            get_ndimage_module(measurements._array).gaussian_filter,
+            sigma=padded_sigma,
+            mode="wrap",
+        )
     else:
         # See the matching comment in Images.gaussian_filter: avoid
         # cupyx.scipy.ndimage.gaussian_filter's per-(sigma, shape) NVRTC
         # recompilation by using an FFT-based separable convolution instead.
-        axes = _scan_axes(measurements)
-        kernels_1d = _gaussian_kernels_1d(
-            (padded_sigma[axes[0]], padded_sigma[axes[1]])
+        kernel = functools.partial(
+            _apply_convolve_2d_on_axes,
+            kernel_2d=None,
+            kernels_1d=_gaussian_kernels_1d(
+                (padded_sigma[scan_axes[0]], padded_sigma[scan_axes[1]])
+            ),
+            axes=scan_axes,
+            mode="wrap",
+            cval=0.0,
         )
 
-        if measurements.is_lazy:
-            # `boundary="periodic"` makes the overlap wrap at the true array
-            # edges, matching the eager path's `mode="wrap"`.
-            array = measurements.array.map_overlap(
-                functools.partial(
-                    _apply_convolve_2d_on_axes,
-                    kernel_2d=None,
-                    kernels_1d=kernels_1d,
-                    axes=axes,
-                    mode="wrap",
-                    cval=0.0,
-                ),
-                depth=depth,
-                boundary="periodic",
-                meta=xp.array((), dtype=measurements.array.dtype),
-            )
-        else:
-            array = _apply_convolve_2d_on_axes(
-                measurements.array,
-                None,
-                axes=axes,
-                mode="wrap",
-                cval=0.0,
-                kernels_1d=kernels_1d,
-            )
+    # scipy.ndimage truncates the Gaussian at 4 sigma
+    depth = {axis: int(np.ceil(4.0 * padded_sigma[axis])) for axis in scan_axes}
+    array = map_overlapping_kernel(
+        measurements.array, kernel, depth, boundary="periodic"
+    )
 
     kwargs = measurements._copy_kwargs(exclude=("array",))
 
@@ -4149,10 +3943,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centre, so that the coordinates of the base axes increase. The exports
         convert these: the unshifted (``np.fft.fftfreq``) order is not a uniform
         axis."""
-        if self.is_lazy:
-            array = da.fft.fftshift(self.array, axes=(-2, -1))
-        else:
-            array = get_array_module(self.array).fft.fftshift(self.array, axes=(-2, -1))
+        array = array_namespace(self.array).fft.fftshift(self.array, axes=(-2, -1))
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["fftshift"] = True
@@ -4428,64 +4219,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 orientation_matrices=orientation_matrices,
             )
 
-        if self.is_lazy:
-            array = self.no_base_chunks().array
+        # one orientation matrix, and for an energy ensemble one energy, per
+        # member; the energies (if any) arrive positionally, third
+        member_args = (orientation_matrices,)
+        if energies is not None:
+            member_args += (energies[..., None, None],)
 
-            def block_chunks(shape):
-                return tuple(
-                    c if n == sum(c) else 1 for n, c in zip(shape, array.chunks[:-2])
-                )
-
-            lazy_args = [
-                da.from_array(
-                    orientation_matrices,
-                    chunks=block_chunks(orientation_matrices.shape) + (3, 3),
-                )
-            ]
-            if energies is not None:
-                lazy_args.append(
-                    da.from_array(
-                        energies[..., None, None],
-                        chunks=block_chunks(energies.shape) + (1, 1),
-                    )
-                )
-
-            # map_blocks passes the energy block (if any) positionally, third
-            def index_block(array, orientation_matrices, energy=energy, **kwargs):
-                return DiffractionPatterns._index_diffraction_spots(
-                    array, orientation_matrices, energy=energy, **kwargs
-                )
-
-            intensities = da.map_blocks(
-                index_block,
-                array,
-                *lazy_args,
-                hkl=hkl,
-                mask_all=mask,
-                sampling=self.sampling,
-                cell=cell,
-                sg_max=sg_max,
-                g_max=g_max,
-                centering=centering,
-                radius=radius,
-                drop_axis=len(self.array.shape) - 1,
-                chunks=array.chunks[:-2] + (mask.sum(),),
-                meta=get_array_module(self.array).array((), dtype=self.dtype),
+        def index_members(array, orientation_matrices, energy=energy, **kwargs):
+            return DiffractionPatterns._index_diffraction_spots(
+                array, orientation_matrices, energy=energy, **kwargs
             )
-        else:
-            intensities = self._index_diffraction_spots(
-                array=self.array,
-                orientation_matrices=orientation_matrices,
-                hkl=hkl,
-                mask_all=mask,
-                sampling=self.sampling,
-                cell=cell,
-                sg_max=sg_max,
-                g_max=g_max,
-                centering=centering,
-                energy=energy if energies is None else energies[..., None, None],
-                radius=radius,
-            )
+
+        intensities = map_kernel(
+            self,
+            index_members,
+            *member_args,
+            base_shape_out=(int(mask.sum()),),
+            hkl=hkl,
+            mask_all=mask,
+            sampling=self.sampling,
+            cell=cell,
+            sg_max=sg_max,
+            g_max=g_max,
+            centering=centering,
+            radius=radius,
+        )
 
         reciprocal_lattice_vectors = np.matmul(
             cell.reciprocal(),
@@ -4688,28 +4446,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
-        array = self.no_base_chunks().array
+        array = self.array
         if np.issubdtype(array.dtype, np.integer):
             # counts, e.g. from a detector, are interpolated in the configured
             # precision
             array = array.astype(get_dtype(complex=False))
 
-        if self.is_lazy:
-            array = array.map_blocks(
-                self._batch_interpolate_bilinear,
-                sampling=self.sampling,
-                new_sampling=sampling,
-                new_gpts=gpts,
-                chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                # explicit: inference calls the function on a zero-size block,
-                # which it cannot interpolate, and would fall back to a NumPy
-                # meta, so a CuPy result would report its device as "cpu"
-                meta=get_array_module(array).array((), dtype=array.dtype),
-            )
-        else:
-            array = self._batch_interpolate_bilinear(
-                array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
-            )
+        array = map_kernel(
+            array,
+            self._batch_interpolate_bilinear,
+            base_ndim=2,
+            base_shape_out=gpts,
+            sampling=self.sampling,
+            new_sampling=sampling,
+            new_gpts=gpts,
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["sampling"] = sampling
@@ -5077,45 +4828,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
             outer = min(self.max_angles)
 
         self._check_integration_limits(inner, outer)
-        xp = get_array_module(self.array)
 
-        if self.is_lazy:
-            array = self.array.map_blocks(
-                self._radial_binning,
-                nbins_radial=nbins_radial,
-                nbins_azimuthal=nbins_azimuthal,
-                sampling=self.angular_sampling,
-                inner=inner,
-                outer=outer,
-                fftshift=self.fftshift,
-                rotation=rotation,
-                offset=offset,
-                sensitivity=sensitivity,
-                drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                chunks=self.array.chunks[:-2]
-                + (
-                    (nbins_radial,),
-                    (nbins_azimuthal,),
-                ),
-                new_axis=(
-                    len(self.shape) - 2,
-                    len(self.shape) - 1,
-                ),
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = self._radial_binning(
-                self.array,
-                nbins_radial=nbins_radial,
-                nbins_azimuthal=nbins_azimuthal,
-                sampling=self.angular_sampling,
-                inner=inner,
-                outer=outer,
-                fftshift=self.fftshift,
-                rotation=rotation,
-                offset=offset,
-                sensitivity=sensitivity,
-            )
+        array = map_kernel(
+            self,
+            self._radial_binning,
+            base_shape_out=(nbins_radial, nbins_azimuthal),
+            nbins_radial=nbins_radial,
+            nbins_azimuthal=nbins_azimuthal,
+            sampling=self.angular_sampling,
+            inner=inner,
+            outer=outer,
+            fftshift=self.fftshift,
+            rotation=rotation,
+            offset=offset,
+            sensitivity=sensitivity,
+        )
 
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
@@ -5254,30 +4981,17 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         self._check_integration_limits(inner, outer)
 
-        xp = get_array_module(self.array)
-
-        if self.is_lazy:
-            integrated_intensity = self.array.map_blocks(
-                self._integrate_fourier_space,
-                sampling=self.angular_sampling,
-                inner=inner,
-                outer=outer,
-                fftshift=self.fftshift,
-                offset=offset,
-                sensitivity=sensitivity,
-                drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            integrated_intensity = self._integrate_fourier_space(
-                self.array,
-                sampling=self.angular_sampling,
-                inner=inner,
-                outer=outer,
-                fftshift=self.fftshift,
-                offset=offset,
-                sensitivity=sensitivity,
-            )
+        integrated_intensity = map_kernel(
+            self,
+            self._integrate_fourier_space,
+            base_shape_out=(),
+            sampling=self.angular_sampling,
+            inner=inner,
+            outer=outer,
+            fftshift=self.fftshift,
+            offset=offset,
+            sensitivity=sensitivity,
+        )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
 
@@ -5351,22 +5065,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
         x = xp.asarray(x, dtype=coordinate_dtype)
         y = xp.asarray(y, dtype=coordinate_dtype)
 
-        if self.is_lazy:
-            base_axes = tuple(
-                range(
-                    len(self.ensemble_shape),
-                    len(self.base_shape) + len(self.ensemble_shape),
-                )
-            )
-            array = self.array.map_blocks(
-                self._com,
-                x=x,
-                y=y,
-                drop_axis=base_axes,
-                dtype=np.result_type(x.dtype, y.dtype, np.complex64),
-            )
-        else:
-            array = self._com(self.array, x=x, y=y)
+        array = map_kernel(
+            self,
+            self._com,
+            base_shape_out=(),
+            dtype=np.result_type(x.dtype, y.dtype, np.complex64),
+            x=x,
+            y=y,
+        )
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
@@ -5407,18 +5113,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         band-limited_diffraction_patterns : DiffractionPatterns
             The band-limited diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-
-        if self.is_lazy:
-            array = self.no_base_chunks().array.map_blocks(
-                self._bandlimit,
-                inner=inner,
-                outer=outer,
-                angular_coordinates=self.angular_coordinates,
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = self._bandlimit(self.array, inner, outer, self.angular_coordinates)
+        array = map_kernel(
+            self,
+            self._bandlimit,
+            inner=inner,
+            outer=outer,
+            angular_coordinates=self.angular_coordinates,
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -5488,18 +5189,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if gpts is None:
             raise ValueError()
 
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = self.no_base_chunks().array
-            array = array.map_blocks(
-                self._crop,
-                gpts=gpts,
-                fftshift=self.fftshift,
-                chunks=array.chunks[:-2] + gpts,
-                meta=xp.array((), dtype=self.dtype),
-            )
-        else:
-            array = self._crop(self.array, gpts=gpts, fftshift=self.fftshift)
+        array = map_kernel(
+            self, self._crop, base_shape_out=gpts, gpts=gpts, fftshift=self.fftshift
+        )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -5764,7 +5456,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
             raise ValueError("weighting function must be 'step' or 'gaussian'")
 
         unit = min(self.angular_sampling)
-        xp = get_array_module(self.array)
         coordinates = tuple(
             np.rint(np.asarray(k) / d) * (a / unit)
             for k, d, a in zip(self.coordinates, self.sampling, self.angular_sampling)
@@ -5814,32 +5505,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
-        if self.is_lazy:
-            base_axes = tuple(
-                range(
-                    len(self.ensemble_shape),
-                    len(self.ensemble_shape) + len(self.base_shape),
-                )
-            )
-            array = self.array.map_blocks(
-                self._azimuthal_average,
-                centers=centers,
-                weighting_function=weighting_function,
-                width=width,
-                **kwargs,
-                drop_axis=base_axes,
-                new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (len(centers),),
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = self._azimuthal_average(
-                self.array,
-                centers=centers,
-                weighting_function=weighting_function,
-                width=width,
-                **kwargs,
-            )
+        array = map_kernel(
+            self,
+            self._azimuthal_average,
+            base_shape_out=(len(centers),),
+            centers=centers,
+            weighting_function=weighting_function,
+            width=width,
+            **kwargs,
+        )
 
         wavelength = energy2wavelength(self._get_energy())
 
@@ -6519,20 +6193,14 @@ class PolarMeasurements(BaseMeasurements):
         else:
             dtype = np.finfo(self.array.dtype).dtype
 
-        if self.is_lazy:
-            # per block, over whole polar bins, so the graph runs once and the
-            # result stays lazy
-            array = self.no_base_chunks().array
-            xp = get_array_module(array)
-            new_array = array.map_blocks(
-                _polar_bins_to_grid,
-                regions=regions,
-                real_dtype=dtype,
-                chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
-                meta=xp.array((), dtype=dtype),
-            )
-        else:
-            new_array = _polar_bins_to_grid(self.array, regions, dtype)
+        new_array = map_kernel(
+            self,
+            _polar_bins_to_grid,
+            base_shape_out=regions.shape,
+            dtype=dtype,
+            regions=regions,
+            real_dtype=dtype,
+        )
 
         wavelength = energy2wavelength(self._get_energy())
         sampling = (
@@ -7962,8 +7630,8 @@ def _thermal_weight_tds(
 
     xp = get_array_module(I_tds)
     is_lazy = isinstance(I_tds, da.core.Array)
-    concatenate = _array_module_fn(I_tds, xp, "concatenate")
-    flip = _array_module_fn(I_tds, xp, "flip")
+    concatenate = array_namespace(I_tds).concatenate
+    flip = array_namespace(I_tds).flip
 
     nonzero_e = e_values[1:]
     k_t = units.kB * _validate_temperature(temperature)
@@ -8248,8 +7916,7 @@ def elastic_diffuse_diffraction_patterns(
         ax for i, ax in enumerate(exit_waves.ensemble_axes_metadata) if i != fp_axis_idx
     ]
     if stacked:
-        xp = get_array_module(parts[0])
-        stack_fn = _array_module_fn(parts[0], xp, "stack")
+        stack_fn = array_namespace(parts[0]).stack
         array = stack_fn(parts, axis=0)
         ensemble_axes_metadata = [
             OrdinalAxis(label="component", values=names)
@@ -8354,8 +8021,7 @@ def _frozen_phonon_components_from_moments(
 
     ensemble_axes_metadata = list(mean.ensemble_axes_metadata)
     if info["stacked"]:
-        xp = get_array_module(parts[0])
-        array = _array_module_fn(parts[0], xp, "stack")(parts, axis=0)
+        array = array_namespace(parts[0]).stack(parts, axis=0)
         ensemble_axes_metadata = [
             OrdinalAxis(label="component", values=names)
         ] + ensemble_axes_metadata
@@ -8682,7 +8348,7 @@ def momentum_resolved_spectrum(
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
-        moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
+        moveaxis = array_namespace(line_profiles.array).moveaxis
         spectrum_array = moveaxis(
             line_profiles.array * samples_to_sum, energy_axis_idx, -1
         )
@@ -8743,7 +8409,7 @@ def momentum_resolved_spectrum(
         )
 
         # Single batched contraction: (...ens, gy, gx) × (n_q, gy, gx) → (...ens, n_q)
-        tensordot = _array_module_fn(dp.array, xp, "tensordot")
+        tensordot = array_namespace(dp.array).tensordot
         # dask (as of 2025.11.0) silently computes the wrong result for
         # da.tensordot with negative axis indices -- declared shape is
         # correct but the actual data is not. Positive indices are
@@ -8752,7 +8418,7 @@ def momentum_resolved_spectrum(
         dp_axes = (dp.array.ndim - 2, dp.array.ndim - 1)
         mask_axes = (masks.ndim - 2, masks.ndim - 1)
         spectrum_array = tensordot(dp.array, masks, axes=(dp_axes, mask_axes))
-        moveaxis = _array_module_fn(spectrum_array, xp, "moveaxis")
+        moveaxis = array_namespace(spectrum_array).moveaxis
         spectrum_array = moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
 
     else:

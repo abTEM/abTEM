@@ -732,6 +732,24 @@ Bugfixes:
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
   along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
 
+Internal:
+
+- New module `abtem.core.blockwise` for running array functions on lazy or eager arrays alike:
+  `map_kernel` applies a function that acts on the base axes of every member (a generalized ufunc) and
+  derives the dask chunks, dropped and new axes and `meta` from the output shape and dtype;
+  `map_overlapping_kernel` runs filters on chunks with an overlap; `array_namespace` picks `dask.array` or
+  the array module for functions such as `tile` and `moveaxis`. The measurement methods, the
+  wave-function resampling and diffraction patterns, the Bloch-wave structure factors and the plasmon
+  ensembles use them instead of separate lazy and eager branches, which removes about 370 lines; results
+  are unchanged. Every base-axis function now gets whole base arrays, also where the base axes of a lazy
+  array were split into several chunks (e.g. after a reload from zarr)
+- New helpers `partition_blocks` and `partition_entries` in `abtem.core.ensemble` package the blocks of an
+  ensemble for its tasks, lazy or eager alike: one entry per block, evaluated in the graph when it holds
+  dask collections (such as a node shared by every block). The scans, frozen phonons, atoms ensembles,
+  plasmon scattering events, distributions, and the GPAW and charge-density potentials use them instead
+  of building the object arrays, `from_delayed` blocks and concatenations themselves; results are
+  unchanged
+
 Documentation:
 
 - `sampling="auto"`/`slice_thickness="auto"` documented in detail in the potentials walkthrough, including a

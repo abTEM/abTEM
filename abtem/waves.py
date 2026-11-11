@@ -31,6 +31,7 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
+from abtem.core.blockwise import array_namespace, map_kernel
 from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
@@ -221,6 +222,22 @@ def _prebuild_reused_potential(
         potential = potential.build()
 
     return potential
+
+
+def _one_chunk_per_energy(waves: Waves) -> Waves:
+    """Give each energy of a lazy energy ensemble its own dask chunk, so the
+    energies are propagated as separate tasks rather than one after another within
+    a task (see abtem.array._calculate_new_array_per_energy)."""
+    from abtem.core.axes import EnergyAxis
+
+    if not waves.is_lazy:
+        return waves
+    for i, axis in enumerate(waves.ensemble_axes_metadata):
+        if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+            chunks = list(waves._lazy_array.chunks)
+            chunks[i] = (1,) * len(axis.values)
+            return waves.rechunk(tuple(chunks))
+    return waves
 
 
 def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
@@ -1012,17 +1029,12 @@ class Waves(BaseWaves, ArrayObject):
             The tiled wave functions.
         """
 
-        xp = get_array_module(self.device)
-
         if self.reciprocal_space:
             raise NotImplementedError
 
-        if self.is_lazy:
-            tile_func = da.tile
-        else:
-            tile_func = xp.tile
-
-        array = tile_func(self.array, (1,) * len(self.ensemble_shape) + repetitions)
+        array = array_namespace(self.array).tile(
+            self.array, (1,) * len(self.ensemble_shape) + repetitions
+        )
 
         if hasattr(array, "rechunk"):
             array = array.rechunk(array.chunks[:-2] + (-1, -1))
@@ -1661,25 +1673,19 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        waves = self.ensure_real_space().no_base_chunks()
-        xp = get_array_module(waves.array)
+        waves = self.ensure_real_space()
 
         if gpts is None:
             gpts = waves._gpts_within_angle(max_angle)
 
-        if waves.is_lazy:
-            array = da.map_blocks(
-                fft_interpolate,
-                waves.array,
-                new_shape=gpts,
-                normalization=normalization,
-                chunks=waves._lazy_array.chunks[:-2] + gpts,
-                meta=xp.array((), dtype=get_dtype(complex=True)),
-            )
-        else:
-            array = fft_interpolate(
-                waves._eager_array, new_shape=gpts, normalization=normalization
-            )
+        array = map_kernel(
+            waves,
+            fft_interpolate,
+            base_shape_out=gpts,
+            dtype=get_dtype(complex=True),
+            new_shape=gpts,
+            normalization=normalization,
+        )
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -1864,7 +1870,6 @@ class Waves(BaseWaves, ArrayObject):
         """The diffraction patterns cropped to `new_gpts` pixels around the zero
         frequency, without blocking the direct beam (see `diffraction_patterns`).
         """
-        xp = get_array_module(self.array)
 
         metadata = copy(self.metadata)
         metadata["label"] = "intensity"
@@ -1877,23 +1882,20 @@ class Waves(BaseWaves, ArrayObject):
             # as in the eager branch: complex128 waves give float64 patterns
             # under a float32 configuration. A declared dtype below the blocks'
             # would make later dask reductions (e.g. sum) accumulate in it.
-            dtype = (
-                self.array.dtype
-                if return_complex
-                else np.finfo(self.array.dtype).dtype
-            )
-
-            array = self.no_base_chunks()._lazy_array
-            pattern = da.map_blocks(
+            pattern = map_kernel(
+                self,
                 self._diffraction_pattern,
-                array,
+                base_shape_out=new_gpts,
+                dtype=(
+                    self.array.dtype
+                    if return_complex
+                    else np.finfo(self.array.dtype).dtype
+                ),
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
                 reciprocal_space=self.reciprocal_space,
-                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
-                meta=xp.array((), dtype=dtype),
             )
         else:
             # Reuse the FFT precomputed for this exact ``self`` by an
@@ -2821,17 +2823,7 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
-        # Give each energy its own dask chunk, so the energies are propagated as
-        # separate tasks rather than one after another within a task (see
-        # abtem.array._calculate_new_array_per_energy).
-        if waves.is_lazy:
-            from abtem.core.axes import EnergyAxis
-            for i, ax in enumerate(waves.ensemble_axes_metadata):
-                if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
-                    chunks = list(waves._lazy_array.chunks)
-                    chunks[i] = (1,) * len(ax.values)
-                    waves = waves.rechunk(tuple(chunks))
-                    break
+        waves = _one_chunk_per_energy(waves)
 
         multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
@@ -3195,20 +3187,10 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-        # Give each energy its own dask chunk, so the energies are propagated as
-        # separate tasks rather than one after another within a task (see
-        # abtem.array._calculate_new_array_per_energy). Do this before
-        # _prebuild_reused_potential below, so it sees the true final chunk
-        # count (and therefore how many times the potential will actually be
-        # reused) rather than the pre-rechunk chunking.
-        if waves.is_lazy:
-            from abtem.core.axes import EnergyAxis
-            for i, ax in enumerate(waves.ensemble_axes_metadata):
-                if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
-                    chunks = list(waves._lazy_array.chunks)
-                    chunks[i] = (1,) * len(ax.values)
-                    waves = waves.rechunk(tuple(chunks))
-                    break
+        # Before _prebuild_reused_potential below, so it sees the true final
+        # chunk count (and therefore how many times the potential will actually
+        # be reused) rather than the pre-rechunk chunking.
+        waves = _one_chunk_per_energy(waves)
 
         potential = _prebuild_reused_potential(potential, waves)
 

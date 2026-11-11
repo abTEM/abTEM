@@ -4,14 +4,20 @@ import itertools
 import warnings
 from abc import abstractmethod
 from itertools import accumulate
-from typing import Any, Callable, Generator, Optional, Union
+from typing import Any, Callable, Generator, Optional, Sequence, Union
 
 import dask
 import dask.array as da
 import numpy as np
 
 from abtem.core.axes import AxesMetadataList, AxisMetadata
-from abtem.core.chunks import Chunks, ValidatedChunks, chunk_ranges, validate_chunks
+from abtem.core.chunks import (
+    Chunks,
+    ValidatedChunks,
+    chunk_ranges,
+    iterate_chunk_ranges,
+    validate_chunks,
+)
 from abtem.core.utils import interleave, itemset
 
 
@@ -27,6 +33,94 @@ def _wrap_with_array(x: Any, ndims: int | None = None) -> np.ndarray:
 def unpack_blockwise_args(args) -> tuple:
     unpacked = tuple(arg.item() if hasattr(arg, "item") else arg for arg in args)
     return unpacked
+
+
+def _holds_dask_collections(x: Any) -> bool:
+    if dask.is_dask_collection(x):
+        return True
+    if isinstance(x, (list, tuple)):
+        return any(_holds_dask_collections(item) for item in x)
+    if isinstance(x, dict):
+        return any(_holds_dask_collections(item) for item in x.values())
+    return False
+
+
+def partition_entries(
+    entries: np.ndarray | Sequence[Any], lazy: bool
+) -> np.ndarray | da.core.Array:
+    """Package one entry per block of the ensemble axes as a partitioned argument.
+
+    `entries` is an object array with one entry per block, e.g. the positions or
+    the parameters of the members of the block, or a sequence of them for one
+    ensemble axis. Every entry reaches the task (or
+    the eager block) as an object array of shape ``(1,) * entries.ndim`` holding
+    it, which :func:`unpack_blockwise_args` unpacks.
+
+    For a lazy partition, an entry holding dask collections -- a `dask.delayed`
+    object, e.g. a node shared by every block, or a dask array -- is evaluated in
+    the graph, as a dependency of its task. Any other entry is stored in the graph
+    as it is.
+
+    Parameters
+    ----------
+    entries : numpy.ndarray of objects or sequence
+        One entry per block, with one axis per partitioned ensemble axis.
+    lazy : bool
+        If True, return a dask array with one chunk per entry.
+    """
+    # Assigned by index tuple throughout, which stores any object as it is (an
+    # entry may itself be a tuple or an array); `[...] =` would broadcast it.
+    if not isinstance(entries, np.ndarray):
+        sequence = entries
+        entries = np.empty(len(sequence), dtype=object)
+        for i, entry in enumerate(sequence):
+            entries[(i,)] = entry
+    ndim = entries.ndim
+
+    if not lazy:
+        wrapped = np.empty(entries.shape, dtype=object)
+        for index in np.ndindex(entries.shape):
+            wrapped[index] = _wrap_with_array(entries[index], ndim)
+        return wrapped
+
+    if not any(_holds_dask_collections(entry) for entry in entries.flat):
+        return da.from_array(entries, chunks=1)
+
+    blocks = np.empty(entries.shape, dtype=object)
+    for index in np.ndindex(entries.shape):
+        blocks[index] = da.from_delayed(
+            dask.delayed(_wrap_with_array)(entries[index], ndim),
+            shape=(1,) * ndim,
+            dtype=object,
+        )
+    if ndim == 0:
+        return blocks[()]
+    return da.block(blocks.tolist())
+
+
+def partition_blocks(
+    chunks: ValidatedChunks, entry: Callable[[tuple[slice, ...]], Any], lazy: bool
+) -> np.ndarray | da.core.Array:
+    """Partition ensemble axes into blocks, with one entry per block.
+
+    `entry` is called with the slices that index the members of a block along
+    each axis, and returns what the block's task needs to rebuild its part of the
+    ensemble, e.g. ``lambda slices: {"positions": positions[slices[0]]}``. See
+    :func:`partition_entries` for how the entries reach the tasks.
+
+    Parameters
+    ----------
+    chunks : tuple of tuple of int
+        Validated chunks of the partitioned ensemble axes.
+    entry : callable
+        Returns the entry of the block indexed by the given slices.
+    lazy : bool
+        If True, return a dask array with one chunk per block.
+    """
+    entries = np.empty(tuple(len(c) for c in chunks), dtype=object)
+    for index, slices in iterate_chunk_ranges(chunks):
+        entries[index] = entry(slices)
+    return partition_entries(entries, lazy)
 
 
 def shared_constant_arg(x: Any, lazy: bool = True) -> np.ndarray | da.core.Array:

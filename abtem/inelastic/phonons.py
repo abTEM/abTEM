@@ -29,10 +29,11 @@ from abtem.core.axes import (
     FrozenPhononsAxis,
     UnknownAxis,
 )
-from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
+from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
+    partition_blocks,
     shared_constant_arg,
     unpack_blockwise_args,
 )
@@ -612,25 +613,10 @@ class FrozenPhonons(BaseFrozenPhonons):
         if chunks is None:
             chunks = 1
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        if lazy:
-            arrays = []
-            # One graph node shared by every chunk; created inside the loop,
-            # each chunk would get its own copy under a fresh UUID key.
-            lazy_atoms = dask.delayed(self.atoms)
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                seeds = self.seed[start:stop]
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
-                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-                arrays.append(lazy_array)
-
-            array = da.concatenate(arrays)
-        else:
-            atoms = self.atoms
-            array = np.zeros((len(chunks[0]),), dtype=object)
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                itemset(array, i, (atoms, self.seed[start:stop]))
-
-        return (array,)
+        # One graph node shared by every chunk; created per chunk, each chunk
+        # would get its own copy under a fresh UUID key.
+        atoms = dask.delayed(self.atoms) if lazy else self.atoms
+        return (partition_blocks(chunks, lambda s: (atoms, self.seed[s[0]]), lazy),)
 
     def to_atoms_ensemble(self):
         """
@@ -776,25 +762,10 @@ class AtomsEnsemble(BaseFrozenPhonons):
         if chunks is None:
             chunks = 1
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        if lazy:
-            arrays = []
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                trajectory = self.trajectory[start:stop]
-                lazy_args = dask.delayed(_wrap_with_array)(trajectory, ndims=1)
-                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-                arrays.append(lazy_array)
-
-            array = da.concatenate(arrays)
-        else:
-            trajectory = self.trajectory
-            if isinstance(trajectory, da.core.Array):
-                trajectory = trajectory.compute()
-
-            array = np.zeros((len(chunks[0]),), dtype=object)
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                itemset(array, i, _wrap_with_array(trajectory[start:stop], 1))
-
-        return (array,)
+        trajectory = self.trajectory
+        if not lazy and isinstance(trajectory, da.core.Array):
+            trajectory = trajectory.compute()
+        return (partition_blocks(chunks, lambda s: trajectory[s[0]], lazy),)
 
     @staticmethod
     def _from_partition_args_func(*args, **kwargs):
@@ -995,38 +966,14 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         if chunks is None:
             chunks = 1
         chunks = validate_chunks(self.ensemble_shape, chunks)
-
-        if lazy:
-            array = np.empty(tuple(len(c) for c in chunks), dtype=object)
-            for index, slic in iterate_chunk_ranges(chunks):
-                snapshots_chunk = self._snapshots[slic]
-                energies_chunk = self._energies[slic[0]]
-                lazy_args = dask.delayed(_wrap_with_array)(
-                    (snapshots_chunk, energies_chunk), ndims=1
-                )
-                lazy_array = da.from_delayed(
-                    lazy_args, shape=(1,), dtype=object
-                )
-                itemset(array, index, lazy_array)
-
-            shape = array.shape
-            array = da.concatenate(array.flatten()).reshape(shape)
-        else:
-            snapshots = self._snapshots
-            if isinstance(snapshots, da.core.Array):
-                snapshots = snapshots.compute()
-
-            array = np.empty(tuple(len(c) for c in chunks), dtype=object)
-            for index, slic in iterate_chunk_ranges(chunks):
-                snapshots_chunk = snapshots[slic]
-                energies_chunk = self._energies[slic[0]]
-                itemset(
-                    array,
-                    index,
-                    _wrap_with_array((snapshots_chunk, energies_chunk), 1),
-                )
-
-        return (array,)
+        snapshots = self._snapshots
+        if not lazy and isinstance(snapshots, da.core.Array):
+            snapshots = snapshots.compute()
+        return (
+            partition_blocks(
+                chunks, lambda s: (snapshots[s], self._energies[s[0]]), lazy
+            ),
+        )
 
     @staticmethod
     def _from_partition_args_func(*args, **kwargs):

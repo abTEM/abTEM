@@ -57,6 +57,7 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
+from abtem.core.blockwise import map_kernel
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -842,19 +843,14 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         numpy.ndarray
             The 3D structure factors.
         """
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = da.map_blocks(
-                structure_factor_1d_to_3d,
-                self._lazy_array,
-                da.from_array(self.hkl, chunks=-1),
-                gpts=self.gpts,
-                chunks=self.gpts,
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = structure_factor_1d_to_3d(self._eager_array, self.hkl, self.gpts)
-        return array
+        return map_kernel(
+            self.array,
+            structure_factor_1d_to_3d,
+            base_ndim=1,
+            base_shape_out=self.gpts,
+            hkl=self.hkl,
+            gpts=self.gpts,
+        )
 
     def get_potential_3d(self) -> np.ndarray:
         """Calculate the 3D potential from the structure factors.
@@ -864,20 +860,15 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         numpy.ndarray
             The 3D potential.
         """
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = da.map_blocks(
-                structure_factor_to_potential,
-                self._lazy_array,
-                da.from_array(self.hkl, chunks=-1),
-                gpts=self.gpts,
-                chunks=self.gpts,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
-            )
-        else:
-            array = structure_factor_to_potential(
-                self._eager_array, self.hkl, self.gpts
-            )
+        array = map_kernel(
+            self.array,
+            structure_factor_to_potential,
+            base_ndim=1,
+            base_shape_out=self.gpts,
+            dtype=get_dtype(complex=False),
+            hkl=self.hkl,
+            gpts=self.gpts,
+        )
         return array
 
     def get_projected_potential(
@@ -960,24 +951,15 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 "increase `g_max` or the slice thickness",
             )
 
-        if self.is_lazy:
-            xp = get_array_module(potential_3d)
-            potential_sliced = da.map_blocks(
-                slice_potential,
-                potential_3d,
-                slice_chunks=slice_chunks,
-                slice_thicknesses=validated_slice_thickness,
-                gpts=validated_gpts,
-                chunks=(len(slice_chunks),) + validated_gpts,
-                meta=xp.array((), dtype=potential_3d.dtype),
-            )
-        else:
-            potential_sliced = slice_potential(
-                potential_3d,
-                slice_chunks=slice_chunks,
-                slice_thicknesses=validated_slice_thickness,
-                gpts=validated_gpts,
-            )
+        potential_sliced = map_kernel(
+            potential_3d,
+            slice_potential,
+            base_ndim=3,
+            base_shape_out=(len(slice_chunks),) + validated_gpts,
+            slice_chunks=slice_chunks,
+            slice_thicknesses=validated_slice_thickness,
+            gpts=validated_gpts,
+        )
 
         sampling = (
             extent[0] / potential_sliced.shape[-2],
