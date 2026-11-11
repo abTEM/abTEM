@@ -766,12 +766,13 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
 def test_radial_detector_show_can_be_drawn(detector):
     """show() of a radial detector renders, not only builds the figure: the
     one-region AnnularDetector made a one-colour colormap that matplotlib refused
-    when drawing it ("data mapping points must start with x=0 and end with x=1")."""
+    when drawing it ("data mapping points must start with x=0 and end with x=1").
+    The figure is closed by the autouse `_close_figures` fixture of conftest.py,
+    also when drawing it fails."""
     import matplotlib.pyplot as plt
 
     detector.show(energy=100e3, gpts=64, sampling=0.05)
     plt.gcf().canvas.draw()
-    plt.close("all")
 
 
 @pytest.mark.parametrize("num_colors", [1, 2, 5, 10, 13])
