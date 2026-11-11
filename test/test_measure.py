@@ -2099,22 +2099,27 @@ def test_cupy_spline_interpolation_of_single_precision_data_matches_numpy(entry,
 
 
 @requires_gpu
+@pytest.mark.parametrize("order", [1, 3])
 @pytest.mark.parametrize("delta", [1e-12, 2e-5])
-def test_cupy_interpolation_just_below_far_grid_nodes(delta):
+def test_cupy_interpolation_just_below_far_grid_nodes(delta, order):
     """Far from the origin, where half a float32 spacing (3e-5 pixels near 1000)
     exceeds delta, a coordinate k - delta rounds to k in float32. The result
     must still be the NumPy one: neither the value at node k + 1, nor a value
-    shifted by the rounded coordinate."""
+    shifted by the rounded coordinate. The y positions are multiples of 1/64,
+    exact in float32, so that only the x coordinate carries the offset. For
+    order 1 and delta = 1e-12 the unrounded index gives the right value to
+    within 1e-12 too, so only delta = 2e-5 tells the old result apart."""
     array = np.random.default_rng(7).random((1024, 768)).astype(np.float32)
     k = np.arange(900, 1000)
-    positions = np.stack([k - delta, np.linspace(700.0, 760.0, len(k))], axis=-1)
+    y = np.round(np.linspace(700.0, 760.0, len(k)) * 64) / 64
+    positions = np.stack([k - delta, y], axis=-1)
 
-    expected = _interpolate_stack(array, positions, mode="wrap", order=3)
+    expected = _interpolate_stack(array, positions, mode="wrap", order=order)
     result = _interpolate_stack(
         copy_to_device(array, "gpu"),
         copy_to_device(positions, "gpu"),
         mode="wrap",
-        order=3,
+        order=order,
     )
 
     np.testing.assert_allclose(
