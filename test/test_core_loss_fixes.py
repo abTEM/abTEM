@@ -2007,19 +2007,31 @@ class TestTransitionPotentialDeviceMemo:
         assert a.array is b.array, "the array data itself should be memoized"
         assert a._local_potential is b._local_potential
 
-    def test_compute_drops_the_copies_cached_while_lazy(self):
-        tp = self._make()
+    @devices
+    def test_compute_drops_the_copies_cached_while_lazy(self, device):
+        tp = self._make().copy_to_device(device)
         lazy = tp.ensure_lazy()
-        lazy.copy_to_device("cpu")  # caches the lazy array and local potential
+        lazy.copy_to_device(device)  # caches the lazy array and local potential
         lazy.compute()
 
-        on_cpu = lazy.copy_to_device("cpu")
-        assert not on_cpu.is_lazy
-        np.testing.assert_array_equal(on_cpu.array, tp.array)
-        np.testing.assert_array_equal(on_cpu._local_potential, tp._local_potential)
+        on_device = lazy.copy_to_device(device)
+        assert not on_device.is_lazy
+        np.testing.assert_array_equal(
+            to_host_array(on_device.array), to_host_array(tp.array)
+        )
+        # tp's local potential was derived on the host and copied over; the
+        # computed one is derived on the device, by another FFT.
+        expected = to_host_array(tp._local_potential)
+        np.testing.assert_allclose(
+            to_host_array(on_device._local_potential),
+            expected,
+            rtol=0,
+            atol=1e-5 * np.abs(expected).max(),
+        )
 
-    def test_setting_the_array_derives_the_local_potential_from_it(self):
-        tp = self._make()
+    @devices
+    def test_setting_the_array_derives_the_local_potential_from_it(self, device):
+        tp = self._make().copy_to_device(device)
         doubled = 2 * tp.array
         tp.array = doubled
 
@@ -2030,7 +2042,9 @@ class TestTransitionPotentialDeviceMemo:
             extent=(8.0, 8.0),
             ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
         )
-        np.testing.assert_array_equal(tp._local_potential, expected._local_potential)
+        np.testing.assert_array_equal(
+            to_host_array(tp._local_potential), to_host_array(expected._local_potential)
+        )
 
     def test_mutating_one_wrapper_does_not_corrupt_the_cache(self):
         """The defect this guards against: if the memo cached the *wrapper*
