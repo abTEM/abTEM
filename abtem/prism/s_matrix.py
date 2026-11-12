@@ -50,7 +50,7 @@ from abtem.core.chunks import (
 )
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.energy import Accelerator, energy2wavelength
+from abtem.core.energy import Accelerator, energy2wavelength, to_grid_angle
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
@@ -199,23 +199,31 @@ def _finalize_lazy_measurements(
     return measurements
 
 
+def _on_grid(angle):
+    """An angle [mrad] that you give, on the angular grid where the blend cut is."""
+    if angle is None or not np.isfinite(angle):
+        return angle
+    return float(to_grid_angle(angle))
+
+
 def _collected_angle_bounds(detector, margin: float = 0.0):
-    """Bounds (low, high) [mrad] on the angles a radial detector collects.
+    """Bounds (low, high) on the angular grid [mrad] of the beams a radial detector
+    collects.
 
     A centred detector collects ``inner <= alpha < outer``. An offset one
     collects an annulus about its offset centre, which lies within
-    ``[max(inner - r, 0), outer + r]`` of k = 0 for ``r = |offset| + margin``,
-    where ``margin`` covers the nearest-pixel rounding of the offset. A bound
+    ``[max(inner - |offset|, 0), outer + |offset|]`` of k = 0, and ``margin``
+    [mrad on the grid] covers the nearest-pixel rounding of the offset. A bound
     the detector does not have is None.
     """
     inner, outer = detector.inner, detector.outer
     offset = getattr(detector, "_offset", None)
     if offset is None or not np.any(np.asarray(offset) != 0.0):
-        return inner, outer
+        return _on_grid(inner), _on_grid(outer)
 
-    r = float(np.hypot(*offset)) + margin
-    low = None if inner is None else max(inner - r, 0.0)
-    high = None if outer is None else outer + r
+    r = float(np.hypot(*offset))
+    low = None if inner is None else max(_on_grid(max(inner - r, 0.0)) - margin, 0.0)
+    high = None if outer is None else _on_grid(outer + r) + margin
     return low, high
 
 
@@ -2283,7 +2291,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         The boundaries of an offset annular or segmented detector are the
         bounds of the angles it covers (see `_collected_angle_bounds`, which
-        ``margin`` is passed to).
+        ``margin`` is passed to). Boundaries are taken on the angular grid,
+        where the cut is applied.
         """
         if blend_angle is None or isinstance(blend_angle, str):
             return blend_angle
@@ -2291,7 +2300,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         if isinstance(detector, (AnnularDetector, SegmentedDetector)):
             bounds = _collected_angle_bounds(detector, margin)
         else:
-            bounds = tuple(getattr(detector, name, None) for name in ("inner", "outer"))
+            bounds = tuple(
+                _on_grid(getattr(detector, name, None)) for name in ("inner", "outer")
+            )
         inner, outer = (
             float(value) if value is not None and np.isfinite(value) else None
             for value in bounds
@@ -3701,7 +3712,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             divisible = all(g % i == 0 for g, i in zip(self.gpts, self._interpolation))
             if tuple(self.window_gpts) == tuple(self.gpts):
                 # the patterns are already on the simulation grid
-                if isinstance(max_angle, (int, float)) and max_angle <= cut - taper:
+                if (
+                    isinstance(max_angle, (int, float))
+                    and _on_grid(max_angle) <= cut - taper
+                ):
                     return "low"
                 return None
             if detector.reciprocal_space and not detector.resample and divisible:
