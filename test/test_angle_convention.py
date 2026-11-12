@@ -6,6 +6,8 @@ The oracle is a wave of plane waves at chosen spatial frequencies: which of them
 detector, aperture or crop includes follows from sin(angle) = wavelength * k by hand.
 """
 
+import os
+
 import numpy as np
 import pytest
 from utils import gpu
@@ -71,6 +73,83 @@ def test_the_exact_angle_beyond_90_degrees_and_beams_beyond_1_are_limits():
         # an evanescent beam has no scattering angle, but a limit stays a limit
         assert np.isnan(to_scattering_angle(1200.0))
         assert to_scattering_angle_limit(1200.0) == pytest.approx(1e3 * np.pi / 2)
+
+
+def test_the_limits_of_a_pattern_beyond_90_degrees_are_90_degrees_on_both_sides():
+    # the pattern reaches wavelength * k = ±2.08
+    patterns = plane_waves().diffraction_patterns(max_angle="full")
+    with abtem.config.set({"angles": "exact"}):
+        assert to_scattering_angle_limit(-1200.0) == pytest.approx(-1e3 * np.pi / 2)
+        limits = patterns.angular_limits
+    np.testing.assert_allclose(limits, [(-1e3 * np.pi / 2, 1e3 * np.pi / 2)] * 2)
+
+
+def test_the_large_angle_warning_points_at_the_line_that_gives_the_angle():
+    # each call reaches the check at a different depth inside abTEM
+    patterns = plane_waves().diffraction_patterns(max_angle="full")
+    calls = (
+        lambda: abtem.AnnularDetector(inner=300.0, outer=500.0),
+        lambda: abtem.PixelatedDetector(max_angle=400.0),
+        lambda: abtem.Probe(energy=ENERGY, semiangle_cutoff=300.0),
+        lambda: patterns.crop(max_angle=400.0),
+    )
+    with abtem.config.set({"angles": "paraxial"}):
+        for give_an_angle in calls:
+            with pytest.warns(UserWarning, match="'angles' configuration") as record:
+                give_an_angle()
+            for warning in record:
+                if "'angles' configuration" in str(warning.message):
+                    assert os.path.samefile(warning.filename, __file__)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_exact_convention_detects_on_every_device(device):
+    # the masks take the arcsin with the device's array module
+    waves = plane_waves().copy_to_device(device)
+
+    def measure(detector):
+        return np.asarray(asnumpy(detector.detect(waves).array)).item()
+
+    with abtem.config.set({"angles": "exact"}):
+        propagating = measure(abtem.AnnularDetector(inner=0.0))
+        ring = measure(abtem.AnnularDetector(inner=500.0, outer=1000.0))
+        weighted = measure(
+            abtem.AnnularDetector(
+                inner=500.0, outer=1000.0, sensitivity=lambda alpha: alpha / 1e3
+            )
+        )
+    # of the propagating beams (amplitudes 1, 2, 3) only the second is in the ring
+    angle = np.arcsin(energy2wavelength(ENERGY) * 30 / EXTENT)
+    assert ring == pytest.approx(propagating * 4 / 14, rel=1e-4)
+    assert weighted == pytest.approx(ring * angle, rel=1e-4)
+
+
+def test_the_angles_of_an_ebsd_detector_grid_are_the_exact_angles():
+    # the grid is uniform in sin(angle), so a pixel is at arcsin(wavelength * |k|)
+    from abtem.ebsd import BackscatterDetector
+
+    energy = 20e3
+    with abtem.config.set({"angles": "exact"}):
+        detector = BackscatterDetector(max_angle=700.0, gpts=31)
+    patterns = abtem.DiffractionPatterns(
+        np.zeros((31, 31), dtype=np.float32),
+        sampling=detector.reciprocal_sampling(energy),
+        fftshift=True,
+        metadata={"energy": energy},
+    )
+    polar = 1e3 * np.arccos(detector.directions[:, 2].reshape(31, 31))
+
+    # coordinates in the configured precision: to 1 µrad
+    x, y = patterns.scattering_angles()
+    np.testing.assert_allclose(np.abs(x), polar[:, 15], atol=1e-3)
+    np.testing.assert_allclose(np.abs(y), polar[15, :], atol=1e-3)
+
+    grid_x, grid_y = patterns.angular_coordinates
+    radius = np.hypot(grid_x[:, None], grid_y[None])
+    np.testing.assert_allclose(1e3 * np.arcsin(radius / 1e3), polar, atol=1e-3)
+
+    with abtem.config.set({"angles": "exact"}):
+        assert max(patterns.max_angles) == pytest.approx(polar[0, 15], abs=1e-3)
 
 
 def test_an_unknown_convention_is_refused():

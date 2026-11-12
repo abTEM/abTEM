@@ -157,12 +157,16 @@ def warn_if_paraxial_angle_is_large(*angles) -> None:
     values = np.array(values)
     values = values[np.isfinite(values)]
     if values.size and values.max() > _LARGE_ANGLE:
+        # not at the top: abtem.core does not import the top-level modules
+        from abtem.atoms import _stacklevel_outside_package
+
         warnings.warn(
             f"An angle above {_LARGE_ANGLE:g} mrad is taken as wavelength * k, which "
             "differs from the scattering angle by more than 1 % there. Set the "
             "'angles' configuration to 'exact' to give scattering angles instead.",
             UserWarning,
-            stacklevel=3,
+            # callers reach this at different depths inside abTEM
+            stacklevel=_stacklevel_outside_package(),
         )
 
 
@@ -272,9 +276,9 @@ def to_scattering_angle_limit(grid_angle, convention: Optional[str] = None):
     The limit of the angular grid, as an angle in the configured convention.
 
     The same as :func:`to_scattering_angle`, but beyond the largest scattering angle
-    (``1e3 * wavelength * k > 1e3``) the result is 90 degrees, so that a limit which
-    reaches into the evanescent region stays a limit that holds every propagating
-    beam.
+    (``|1e3 * wavelength * k| > 1e3``) the result is ±90 degrees, so that a limit
+    which reaches into the evanescent region stays a limit that holds every
+    propagating beam.
 
     Parameters
     ----------
@@ -290,7 +294,7 @@ def to_scattering_angle_limit(grid_angle, convention: Optional[str] = None):
     """
     if (convention or angle_convention()) == "paraxial":
         return grid_angle
-    return float(1e3 * np.arcsin(min(grid_angle / 1e3, 1.0)))
+    return float(1e3 * np.arcsin(np.clip(grid_angle / 1e3, -1.0, 1.0)))
 
 
 class EnergyUndefinedError(Exception):
