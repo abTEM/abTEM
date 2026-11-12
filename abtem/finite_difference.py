@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 import numpy as np
 import scipy.ndimage  # type: ignore
 from numba import njit, prange  # type: ignore
+from scipy.special import binom  # type: ignore
 
 from abtem.antialias import AntialiasAperture
 from abtem.core._numba_threads import numba_thread_cap
@@ -616,6 +617,17 @@ def conventional_operator(
     return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
 
 
+def _series_prefactor(i: int, wavelength: float) -> float:
+    """
+    Coefficient of C^i (i >= 1) in the Taylor series of K (sqrt(1 + 2 C / K) - 1),
+    with K = 2 pi / wavelength, which is binom(1/2, i) 2^i K^(1 - i): 1, -1/(2K),
+    1/(2K^2), -5/(8K^3), ...
+    """
+    # a Python float: a NumPy float64 scalar would make `temp * prefactor`
+    # double precision for single-precision waves
+    return float(binom(0.5, i) * 2**i * (wavelength / (2.0 * np.pi)) ** (i - 1))
+
+
 def propagator_taylor_series(
     waves: np.ndarray | da.core.Array,
     order: int,
@@ -644,7 +656,7 @@ def propagator_taylor_series(
     temp = laplace_waves.copy()
 
     for i in range(2, order + 1):
-        prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
+        prefactor = _series_prefactor(i, wavelength)
         temp = laplace(temp) / (4 * np.pi * K0)
         series += temp * prefactor
 
@@ -672,7 +684,7 @@ def full_series(
                 i - 1
             ]  # Note that the first prefactor always gets skipped and is always 1
         else:
-            prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
+            prefactor = _series_prefactor(i, wavelength)
         temp = conventional_operator(temp, laplace, transmission_function, wavelength)
         series += temp * prefactor
     return series * 1.0j * thickness
