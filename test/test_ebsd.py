@@ -555,7 +555,12 @@ class TestDetectorGeometry:
             detector.reciprocal_sampling(30e3)
 
     def test_rejects_bad_detectors(self):
-        with pytest.warns(UserWarning, match="small-angle approximation"):
+        with abtem.config.set({"angles": "paraxial"}):
+            with pytest.warns(UserWarning, match="small-angle approximation"):
+                BackscatterDetector(max_angle=700, gpts=5)
+        # the exact angles calibrate the grid without the approximation
+        with abtem.config.set({"angles": "exact"}), warnings.catch_warnings():
+            warnings.simplefilter("error")
             BackscatterDetector(max_angle=700, gpts=5)
         for kwargs, match in [
             ({}, "give either"),
