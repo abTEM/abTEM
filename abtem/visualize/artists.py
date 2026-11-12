@@ -539,17 +539,12 @@ def _angle_plane_mesh_of(measurement, units, origin="lower"):
     image: with the paraxial convention, in units that are not angles, for axes in
     real space, or for another origin than "lower"."""
     from abtem.core.axes import ReciprocalSpaceAxis
-    from abtem.core.energy import angle_convention
 
-    if angle_convention() != "exact" or origin != "lower" or units is None:
-        return None
-    if units_type.get(units) != "angular":
+    energy = measurement.metadata.get("energy", None)
+    if origin != "lower" or not _draws_on_angle_plane(units, energy):
         return None
     axes = measurement.base_axes_metadata[:2]
     if not all(isinstance(axis, ReciprocalSpaceAxis) for axis in axes):
-        return None
-    energy = measurement.metadata.get("energy", None)
-    if energy is None:
         return None
 
     # the grid in mrad, which get_extent gives in `units`
@@ -559,6 +554,19 @@ def _angle_plane_mesh_of(measurement, units, origin="lower"):
     sampling = ((right - left) / shape[0], (top - bottom) / shape[1])
     x, y, evanescent = angle_plane_mesh(shape, (left, bottom), sampling)
     return x / to_mrad, y / to_mrad, evanescent
+
+
+def _draws_on_angle_plane(units, energy) -> bool:
+    """Whether a plot in `units` is drawn on scattering angles: with the exact angle
+    convention, in angular units and with a known energy."""
+    from abtem.core.energy import angle_convention
+
+    return (
+        angle_convention() == "exact"
+        and units is not None
+        and units_type.get(units) == "angular"
+        and energy is not None
+    )
 
 
 def _angle_plane_labels(units):
@@ -976,13 +984,15 @@ class ScatterArtist(Artist2D):
         self._unit_conversion = get_conversion_factor(
             units, old_units="1/Å", energy=energy
         )
+        self._units = units
+        self._on_angle_plane = _draws_on_angle_plane(units, energy)
 
         cmap = validate_cmap(cmap, measurement)
 
         self._circles = ScaledCircleCollection(
             array=measurement.array,
             cmap=cmap,
-            offsets=measurement.positions[:, :2] * self._unit_conversion,
+            offsets=self._offsets(measurement),
             transOffset=ax.transData,
             norm=norm,
             scale=scale,
@@ -996,11 +1006,15 @@ class ScatterArtist(Artist2D):
 
         units = "1/Å" if units is None else units
 
-        x_axis = LinearAxis(label="k_x", units=units, tex_label="$k_x$")
-        y_axis = LinearAxis(label="k_y", units=units, tex_label="$k_y$")
+        if self._on_angle_plane:
+            xlabel, ylabel = _angle_plane_labels(units)
+        else:
+            x_axis = LinearAxis(label="k_x", units=units, tex_label="$k_x$")
+            y_axis = LinearAxis(label="k_y", units=units, tex_label="$k_y$")
+            xlabel, ylabel = x_axis.format_label(units), y_axis.format_label(units)
 
-        self.set_xlabel(x_axis.format_label(units))
-        self.set_ylabel(y_axis.format_label(units))
+        self.set_xlabel(xlabel)
+        self.set_ylabel(ylabel)
 
         if annotations:
             annotations = []
@@ -1070,10 +1084,20 @@ class ScatterArtist(Artist2D):
         else:
             return 1.0
 
+    def _offsets(self, measurement) -> np.ndarray:
+        offsets = measurement.positions[:, :2] * self._unit_conversion
+        if not self._on_angle_plane:
+            return offsets
+        # the spots at their scattering angles, where patterns in angles are drawn
+        from abtem.core.energy import to_angle_plane
+
+        to_mrad = 1.0 / _conversion_factors[self._units]
+        x, y = to_angle_plane(offsets[:, 0] * to_mrad, offsets[:, 1] * to_mrad, "exact")
+        return np.column_stack([x, y]) / to_mrad
+
     def set_data(self, measurement: np.ndarray):
-        positions = measurement.positions[:, :2] * self._unit_conversion
         intensities = measurement.array
-        self._circles.set_data(intensities, positions)
+        self._circles.set_data(intensities, self._offsets(measurement))
 
     def set_annotation_kwargs(self, **kwargs):
         if self._annotations is None:

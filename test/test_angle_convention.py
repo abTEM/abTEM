@@ -703,6 +703,43 @@ def test_a_complex_pattern_in_angles_is_drawn_on_its_scattering_angles():
         plt.close("all")
 
 
+def test_indexed_spots_in_angles_are_drawn_on_their_scattering_angles():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from abtem.measurements import IndexedDiffractionPatterns
+
+    # spots along x at k = 0.25, 0.5 and 0.75 / Å: wavelength * k = 0.217, 0.434 and
+    # 0.650, so at the scattering angles 218.6, 448.8 and 708.8 mrad
+    spots = IndexedDiffractionPatterns(
+        np.array([1.0, 2.0, 3.0]),
+        miller_indices=np.array([[1, 0, 0], [2, 0, 0], [3, 0, 0]]),
+        reciprocal_lattice_vectors=np.eye(3) / 4.0,
+        metadata={"energy": ENERGY},
+    )
+    grid = energy2wavelength(ENERGY) * np.array([0.25, 0.5, 0.75])
+    for convention, expected in (
+        ("paraxial", 1e3 * grid),
+        ("exact", 1e3 * np.arcsin(grid)),
+    ):
+        with abtem.config.set({"angles": convention}):
+            artist = spots.show(units="mrad").artists.ravel()[0]
+        np.testing.assert_allclose(artist.get_offsets()[:, 0], expected, rtol=1e-6)
+        label = artist._ax.get_xlabel()
+        if convention == "exact":
+            assert label.startswith("scattering angle x")
+        else:
+            assert "k_x" in label
+        plt.close("all")
+    # in 1/Å the spots stay on their spatial frequencies
+    with abtem.config.set({"angles": "exact"}):
+        artist = spots.show().artists.ravel()[0]
+    np.testing.assert_allclose(artist.get_offsets()[:, 0], [0.25, 0.5, 0.75])
+    plt.close("all")
+
+
 def test_the_slit_is_drawn_on_the_scattering_angles():
     import matplotlib
 
