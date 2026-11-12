@@ -267,6 +267,9 @@ Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
+- The `mps` extra requires torch 2.14 (was 2.4). On torch 2.10 to 2.13, Metal has no `linalg.eigh`, and an FFT over
+  an axis before the last four (such as `gaussian_source_size` of a scan with a further ensemble axis) aborts the
+  process
 
 Bugfixes:
 
