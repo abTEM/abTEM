@@ -481,6 +481,36 @@ def test_the_slit_spectrum_is_labelled_with_the_scattering_angle(device):
     assert steps[-1] > 2 * steps[0]
 
 
+def test_the_slit_spectrum_bins_are_q_sampling_wide_in_the_scattering_angle():
+    # the samples are uniform on the grid, so a fixed number of them per bin would
+    # widen the bins towards large angles
+    from abtem.core.axes import EnergyLossAxis
+
+    gpts, grid_sampling = 480, 5.0
+    patterns = abtem.DiffractionPatterns(
+        np.ones((1, gpts, gpts), dtype=get_dtype()),
+        sampling=grid_sampling / energy2wavelength(ENERGY) / 1e3,
+        fftshift=True,
+        ensemble_axes_metadata=[EnergyLossAxis(values=(0.05,), units="eV")],
+        metadata={"energy": ENERGY},
+    )
+    binned = abtem.SpectralSlitDetector(
+        width=50.0, q_min=0.0, q_max=1210.0, q_sampling=50.0
+    )
+    unbinned = abtem.SpectralSlitDetector(width=50.0, q_min=0.0, q_max=1210.0)
+    with abtem.config.set({"angles": "exact"}):
+        spectrum = abtem.momentum_resolved_spectrum(patterns, binned)
+        fine = abtem.momentum_resolved_spectrum(patterns, unbinned)
+    q = np.asarray(spectrum.q_values)
+    np.testing.assert_allclose(q, np.arange(25, 1200, 50))
+    # the bins hold every fine sample below 1200 mrad
+    in_bins = np.asarray(fine.q_values) < 1200.0
+    fine_values = np.asarray(fine.array, dtype=float)[in_bins].sum()
+    assert np.asarray(spectrum.array, dtype=float).sum() == pytest.approx(
+        fine_values, rel=1e-5
+    )
+
+
 def test_the_prism_eels_collection_angle_is_in_the_configured_convention():
     """``collection_angle`` is an angle that you give: the guard that refuses one
     smaller than the detector compares both in the configured convention."""

@@ -8836,7 +8836,21 @@ def momentum_resolved_spectrum(
             q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 
         # Optionally bin along q to reduce the number of points
-        if detector.q_sampling is not None:
+        if detector.q_sampling is not None and exact:
+            # the samples are uniform on the grid, not in q: bin them by their q
+            q_sampling_mrad = detector.q_sampling
+            q_span = q_values_fine[-1] - q_values_fine[0]
+            # a last sample at q_max may round to just below a bin edge
+            n_q_binned = max(1, int(np.floor(q_span / q_sampling_mrad + 1e-6)))
+            index = (q_values_fine - q_values_fine[0]) // q_sampling_mrad
+            membership = index[None, :] == np.arange(n_q_binned)[:, None]
+            spectrum_array = (
+                xp.asarray(membership, dtype=spectrum_array.dtype) @ spectrum_array
+            )
+            q_values = (
+                q_values_fine[0] + (np.arange(n_q_binned) + 0.5) * q_sampling_mrad
+            )
+        elif detector.q_sampling is not None:
             q_sampling_mrad = detector.q_sampling
             native_step = (detector.q_max - detector.q_min) / max(N - 1, 1)
             bin_size = max(1, int(round(q_sampling_mrad / native_step)))
