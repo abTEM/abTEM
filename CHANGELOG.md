@@ -754,6 +754,27 @@ Bugfixes:
   with `upsample=True` now batch the plane waves when a caller passes `max_batch_multislice`, which they ignored
   before; (ii) `max_batch_multislice=None` or a NumPy integer, which these paths and the eager reduction ignored,
   now raise `ValueError: limit must be an integer or a string`, as the lazy reduction in chunks already did
+- Spline interpolation on CuPy 14.1 and later of float32 or complex64 data returned the wrong value for a
+  coordinate within half a float32 spacing below a grid node, as the positions of `interpolate_line` often are:
+  cupyx took the starting index from the float32-rounded coordinate and the weights from the float64 one. For
+  `order >= 2` the result was the value at the next grid node; for `order=1` it was extrapolated linearly from
+  the next segment, off by at most the distance to the node times a second difference. This affected
+  `Images.interpolate(method="spline")`, `interpolate_line` and `interpolate_line_at_position` of `Images` and
+  `DiffractionPatterns` (so also `Probe.profiles` and `momentum_resolved_spectrum` with a
+  `SpectralSlitDetector`), and `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate`.
+  On CuPy, the prefilter, the index and the weights are now computed in double precision and the sum in the
+  precision of the data, so the results agree with the NumPy results to float32 rounding. On earlier CuPy
+  versions the results change by float32 rounding only. **Behaviour change:** at the default float32 precision,
+  the pixel positions of the line in `interpolate_line` and `interpolate_line_at_position` were Å values
+  rounded to float32 (by up to 3.8e-5 pixels at 0.1 Å sampling near 100 Å). On NumPy and CuPy they are now built
+  in float64 (`LineScan.get_positions` takes an optional `dtype`, by default the configured precision as before),
+  which changes the values of these functions and of what builds on them (`Probe.profiles`,
+  `momentum_resolved_spectrum`) slightly, by 5e-6 to 4e-5 of the maximum for random data in the cases checked;
+  at float64 precision they are unchanged. Metal keeps float32 pixel positions, so its line values shift by
+  float32 noise (up to 7e-5 of the maximum in the cases checked) without becoming more accurate. The results of
+  `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
+  NumPy, Metal and float64 CuPy are unchanged
+  ([PR #680](https://github.com/abTEM/abTEM/pull/680))
 
 Documentation:
 
