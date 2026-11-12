@@ -4716,15 +4716,16 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def scattering_angles(self) -> tuple[np.ndarray, np.ndarray]:
         """
-        The scattering angle of every pixel along `x` and `y` [mrad], arcsin of
-        ``wavelength * k`` whatever the ``angles`` configuration is. Beams with
-        ``wavelength * k > 1`` are evanescent and have no scattering angle: they
-        are NaN. For diffraction patterns of several energies, those of the highest
-        energy (see `angular_sampling`).
+        The scattering angles of the pixels on the `x` and `y` axes [mrad],
+        ``arcsin(wavelength * k)`` whatever the ``angles`` configuration is, and NaN
+        for evanescent beams. A pixel off the axes is at
+        ``arcsin(wavelength * |k|)``, not at either of these. For diffraction
+        patterns of several energies, those of the highest energy (see
+        `angular_sampling`).
 
-        The axes of the diffraction patterns are uniform in ``wavelength * k``
-        (see `angular_coordinates`), so the scattering angles are not uniformly
-        spaced.
+        For a wave travelling against the beam, such as the backscattered wave of
+        ``RealSpaceMultislice(expansion_scope="full")``, the angle is from the
+        reversed beam direction.
         """
         alpha_x, alpha_y = self.angular_coordinates
         return (
