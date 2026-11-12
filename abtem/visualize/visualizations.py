@@ -47,10 +47,16 @@ def default_ensemble_index(axis_metadata: AxisMetadata, length: int) -> int:
 
 
 def discrete_cmap(num_colors, base_cmap):
+    """A colormap of the first `num_colors` colours of `base_cmap`, one per region.
+
+    A listed colormap: a colormap interpolated between the colours, as
+    LinearSegmentedColormap.from_list makes, cannot be made of a single colour, which
+    a one-region detector (AnnularDetector) needs.
+    """
     if isinstance(base_cmap, str):
         base_cmap = plt.get_cmap(base_cmap)
     colors = base_cmap(range(0, num_colors))
-    return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
+    return matplotlib.colors.ListedColormap(colors)
 
 
 def _validate_axes_types(overlay, explode, ensemble_dims):

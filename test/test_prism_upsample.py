@@ -1,5 +1,7 @@
 """Tests of the upsampled (C-PRISM) scattering matrix, ``SMatrix(upsample=True)``."""
 
+import functools
+
 import numpy as np
 import pytest
 from ase.build import bulk
@@ -697,64 +699,66 @@ def test_reductions_on_different_grids_share_a_ctf_without_mixing_their_grids(
         assert evaluated[ident][0] == gpts
 
 
-def _padded_waves_patterns(waves, s_matrix):
-    """The diffraction patterns of window waves zero-padded to the downsampled grid,
-    scaled to the power convention of that grid, as an oracle independent of the
-    detector that pads."""
-    xp = get_array_module(waves.array)
-    gpts = tuple(s_matrix.downsampled_gpts)
-    padded = xp.zeros(waves.array.shape[:-2] + gpts, dtype=waves.array.dtype)
-    padded[..., : waves.gpts[0], : waves.gpts[1]] = waves.array * np.sqrt(
-        np.prod(waves.gpts) / np.prod(gpts)
-    ).astype(waves.array.real.dtype)
-    return abtem.Waves(
-        padded,
-        sampling=waves.sampling,
-        energy=waves.energy,
-        ensemble_axes_metadata=waves.ensemble_axes_metadata,
-    ).diffraction_patterns(max_angle="full")
+def _run_upsample_scan(detectors, blend_angle, downsample, lazy, device):
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    s_matrix = _window_s_matrix(
+        potential, device, downsample=downsample, blend_angle=blend_angle
+    )
+    result = s_matrix.scan(scan=_window_scan(potential), detectors=detectors, lazy=lazy)
+    return result.compute() if lazy else result
+
+
+@functools.lru_cache(maxsize=None)
+def _pattern_scanned_alone(blend_angle, downsample, lazy, device):
+    """The pattern of the upsampled window scanned alone: it does not depend on
+    the companion detector of the test, so every companion shares it."""
+    detector = abtem.PixelatedDetector(max_angle="cutoff")
+    return _run_upsample_scan(detector, blend_angle, downsample, lazy, device)
 
 
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("downsample", [False, "cutoff"])
-@pytest.mark.parametrize("companion", ["flexible", "waves"])
-@pytest.mark.parametrize("blend_angle", [250, 80])
+@pytest.mark.parametrize(
+    "companion, blend_angle",
+    [
+        # a detector that cannot be routed through the blended reduction, and the
+        # band of an annular detector, act through the blend angle
+        ("flexible", 250),
+        ("flexible", 80),
+        ("annular", 250),
+        ("annular", 80),
+        # the wave readers are not routable either and take the same unrouted
+        # reduction as the flexible detector, so one blend angle covers them
+        ("waves", 80),
+        ("real_space", 80),
+    ],
+)
 def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     blend_angle, companion, downsample, lazy, device
 ):
-    # A detector that cannot be routed through the blended reduction does not
-    # move the pattern to the window's coarser grid. Below the blend angle the
-    # patterns agree; 250 mrad lies beyond every detected angle.
-    potential = _window_potential(_WINDOW_ATOMS, device)
-    scan = _window_scan(potential)
-    s_matrix = _window_s_matrix(
-        potential, device, downsample=downsample, blend_angle=blend_angle
-    )
+    # Neither a detector that cannot be routed through the blended reduction, nor
+    # one that reads the wave, nor the band of an annular detector changes the
+    # pattern. Below the blend angle the patterns agree; 250 mrad lies beyond
+    # every detected angle.
     others = {
         "flexible": abtem.FlexibleAnnularDetector,
         "waves": abtem.WavesDetector,
+        "real_space": lambda: abtem.PixelatedDetector(reciprocal_space=False),
+        "annular": lambda: abtem.AnnularDetector(inner=50),
     }
 
-    def run(detectors):
-        result = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
-        return result.compute() if lazy else result
-
-    alone = run(abtem.PixelatedDetector(max_angle="cutoff"))
-    shared, other = run(
-        [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()]
+    alone = _pattern_scanned_alone(blend_angle, downsample, lazy, device)
+    shared, _ = _run_upsample_scan(
+        [abtem.PixelatedDetector(max_angle="cutoff"), others[companion]()],
+        blend_angle,
+        downsample,
+        lazy,
+        device,
     )
 
     assert shared.shape == alone.shape
     assert shared.angular_sampling == pytest.approx(alone.angular_sampling)
-    if companion == "waves":
-        # Next to a WavesDetector the pattern is that of the returned window waves,
-        # zero-padded to the downsampled grid (scaled to the power convention of
-        # that grid), and cropped to the pattern; it differs from the pattern of a
-        # scan without it by about 1.6e-2 of the maximum.
-        reference = _padded_waves_patterns(other, s_matrix)
-        _assert_close_to(shared.array, reference.crop(gpts=shared.shape[-2:]).array)
-        return
     angles = [
         np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * sampling
         for n, sampling in zip(alone.shape[-2:], alone.angular_sampling)
@@ -766,23 +770,208 @@ def test_upsample_pattern_does_not_depend_on_the_other_detectors(
     )
 
 
+_DETECTOR_LISTS = {
+    # target, companion: a companion that cannot be routed through the blended
+    # reduction (the wave and flexible readers), and one whose band snaps the
+    # blend angle below the target's band
+    "annular70+waves": (
+        lambda: abtem.AnnularDetector(inner=70),
+        abtem.WavesDetector,
+    ),
+    "annular70+flexible": (
+        lambda: abtem.AnnularDetector(inner=70),
+        abtem.FlexibleAnnularDetector,
+    ),
+    "annular50+waves": (
+        lambda: abtem.AnnularDetector(inner=50),
+        abtem.WavesDetector,
+    ),
+    "annular50-100+annular60-70": (
+        lambda: abtem.AnnularDetector(inner=50, outer=100),
+        lambda: abtem.AnnularDetector(inner=60, outer=70),
+    ),
+}
+
+
+@devices
+@pytest.mark.parametrize(
+    "pair, window_gpts, blend_angle, reduction",
+    [
+        (pair, *case)
+        for pair in _DETECTOR_LISTS
+        for case in (
+            # the scan, at the default ('auto') blend and at a blend angle set
+            # on the SMatrix, on the full window and on a cropped one, and the
+            # mode contraction of the full window: an unroutable companion
+            # reads the plain interpolated reduction
+            (None, None, "scan"),
+            ((24, 32), None, "scan"),
+            ((24, 32), 80, "scan"),
+            ((24, 32), "aperture", "scan"),
+            (None, None, "modes"),
+            # a blend angle passed to reduce, which an unroutable companion
+            # reads as the Fourier-weighted blend, also with a taper
+            ((24, 32), 80, "reduce"),
+            ((24, 32), "aperture", "reduce"),
+            ((24, 32), 80, "reduce-taper"),
+        )
+        # at the aperture blend both bands lie above the cut, with nothing to
+        # snap to
+        if not (pair.startswith("annular50-100") and case[1] == "aperture")
+    ]
+    # the composite blend of an explicit plane-wave window adds intensities,
+    # hence takes annular detectors only
+    + [("annular50-100+annular60-70", (24, 32), 80, "composite")],
+)
+def test_upsample_detector_value_does_not_depend_on_the_other_detectors(
+    pair, window_gpts, blend_angle, reduction, device
+):
+    # A detector reads the same value in a list as scanned alone: it is routed
+    # to its branch, and the blend angle is snapped to its band, whatever the
+    # other detectors of the list. The automatic blend angle of this cell is
+    # 62.5 mrad, so the default blend routes the bands above it.
+    target, companion = _DETECTOR_LISTS[pair]
+    potential = _window_potential(bulk("Si", cubic=True) * (1, 1, 8), device)
+    kwargs = {} if window_gpts is None else {"window_gpts": window_gpts}
+    if blend_angle is not None and not reduction.startswith("reduce"):
+        kwargs["blend_angle"] = blend_angle
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        device=device,
+        **kwargs,
+    )
+    scan = _window_scan(potential)
+
+    if reduction == "scan":
+
+        def measure(detectors):
+            return s_matrix.scan(scan=scan, detectors=detectors, lazy=False)
+
+    else:
+        built = s_matrix.build(lazy=False)
+        options = {
+            "modes": {"method": "modes"},
+            "composite": {"blend_window_gpts": "period"},
+            "reduce": {"blend_angle": blend_angle},
+            "reduce-taper": {"blend_angle": blend_angle, "blend_taper": 10.0},
+        }[reduction]
+
+        def measure(detectors):
+            return built.reduce(scan=scan, detectors=detectors, **options)
+
+    alone = measure([target()])
+    shared = measure([target(), companion()])[0]
+
+    assert shared.shape == alone.shape
+    _assert_close_to(shared.array, alone.array)
+
+
+@devices
+def test_upsample_window_waves_propagate_on_the_full_grid(device):
+    # The waves of a cropped window are propagated to the exit surface as their
+    # zero-padding onto the full grid would be, then cropped back: the window's
+    # own grid is not periodic, and a propagation on it would wrap the probe
+    # tails around the window.
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    built = _window_s_matrix(potential, device).build(lazy=False)
+    assert built.reference_depth > 0.0
+    window, gpts = tuple(built.window_gpts), tuple(built.gpts)
+
+    rng = np.random.default_rng(3)
+    # more waves than one padded batch holds, so the propagation takes several
+    waves = rng.standard_normal((2, 5) + window) + 1j * rng.standard_normal(
+        (2, 5) + window
+    )
+    xp = get_array_module(built.u)
+    waves = xp.asarray(waves.astype(np.dtype(built.u.dtype)))
+    padded = xp.zeros(waves.shape[:-2] + gpts, dtype=waves.dtype)
+    padded[..., : window[0], : window[1]] = waves
+
+    expected = built._to_exit_reference(padded)[..., : window[0], : window[1]]
+    _assert_close_to(built._to_exit_reference(waves), expected)
+
+
+@devices
+def test_upsample_window_waves_follow_the_full_window(device):
+    # On a cell thick enough that the probe spreads across the window between
+    # the reference depth and the exit surface, the exit waves of a cropped
+    # window follow the full-window waves cropped to the same pixels. The
+    # remaining difference is the truncation of the window; a propagation that
+    # wraps around the window triples it (1.1e-1 of the maximum intensity
+    # against 3.4e-2).
+    potential = _window_potential(bulk("Si", cubic=True) * (1, 1, 8), device)
+    pixels = np.array([[10, 20], [28, 32], [3, 60]])
+    scan = CustomScan(pixels * np.array(potential.sampling))
+    kwargs = dict(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        downsample=False,
+        device=device,
+    )
+    window = (32, 40)
+    full = to_host_array(
+        SMatrix(**kwargs)
+        .scan(scan=scan, detectors=abtem.WavesDetector(), lazy=False)
+        .array
+    )
+    cropped = to_host_array(
+        SMatrix(window_gpts=window, **kwargs)
+        .scan(scan=scan, detectors=abtem.WavesDetector(), lazy=False)
+        .array
+    )
+
+    gpts = potential.gpts
+    # a unit probe carries a real-space power of 1 / grid size
+    scale = np.sqrt(np.prod(gpts) / np.prod(window))
+    expected = (
+        np.array(
+            [
+                full[n][
+                    np.ix_(
+                        (x - window[0] // 2 + np.arange(window[0])) % gpts[0],
+                        (y - window[1] // 2 + np.arange(window[1])) % gpts[1],
+                    )
+                ]
+                for n, (x, y) in enumerate(pixels)
+            ]
+        )
+        * scale
+    )
+
+    intensity = np.abs(expected) ** 2
+    error = np.abs(np.abs(cropped) ** 2 - intensity).max() / intensity.max()
+    assert error < 5e-2
+
+
 @devices
 def test_upsample_frozen_phonon_patterns_are_the_mean_of_the_member_patterns(device):
     # next to a WavesDetector, which returns the window waves of every member, the
-    # pattern of the ensemble is the mean of the patterns of the padded member waves
+    # pattern of the ensemble is the mean of the patterns of the members
     frozen = abtem.FrozenPhonons(_WINDOW_ATOMS, **_WINDOW_FROZEN_PHONONS)
     potential = _window_potential(frozen, device)
-    s_matrix = _window_s_matrix(potential, device)
+    scan = _window_scan(potential)
 
-    shared, waves = s_matrix.scan(
-        scan=_window_scan(potential),
+    shared, waves = _window_s_matrix(potential, device).scan(
+        scan=scan,
         detectors=[abtem.PixelatedDetector(max_angle="cutoff"), abtem.WavesDetector()],
         lazy=False,
     )
 
-    members = _padded_waves_patterns(waves, s_matrix)
-    assert members.shape[0] == _WINDOW_FROZEN_PHONONS["num_configs"]
-    mean = members.crop(gpts=shared.shape[-2:]).array.mean(axis=0)
+    assert waves.shape[0] == _WINDOW_FROZEN_PHONONS["num_configs"]
+    members = [
+        _window_s_matrix(_window_potential(atoms, device), device).scan(
+            scan=scan, detectors=abtem.PixelatedDetector(max_angle="cutoff"), lazy=False
+        )
+        for atoms in frozen
+    ]
+    mean = np.mean([to_host_array(member.array) for member in members], axis=0)
     _assert_close_to(shared.array, mean)
 
 
@@ -1081,11 +1270,50 @@ def test_upsample_streamed_expansion_validation():
     assert copied.max_batch_expansion == 8
     assert copied.window_gpts == s_matrix.window_gpts
 
-    s_matrix_array = SMatrix(
-        **kwargs, interpolation=2, upsample=True, window_gpts=32
-    ).build(lazy=False)
-    with pytest.raises(ValueError, match="window_gpts"):
-        s_matrix_array.reduce(max_batch_expansion=8)
+
+
+@devices
+def test_upsample_cropped_window_ignores_max_batch_expansion(device):
+    # a cropped window contracts the modes and has no expansion to stream, so
+    # max_batch_expansion is ignored there, also when it is set on the SMatrix
+    # and the automatic window happens to be cropped, and whichever blend is
+    # requested; it used to raise in those cases
+    potential = _small_potential(gpts=128, repetitions=(4, 4, 1), device=device)
+    kwargs = dict(
+        potential=potential,
+        energy=200e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-2,
+        device=device,
+    )
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    detector = abtem.AnnularDetector(inner=0, outer=25)
+
+    s_matrix = SMatrix(**kwargs, max_batch_expansion=8)
+    assert tuple(s_matrix.window_gpts) != tuple(s_matrix.downsampled_gpts)
+    built = s_matrix.build(lazy=False)
+    for blend_angle in (None, 0.0, 30.0):
+        expected = to_host_array(
+            built.reduce(
+                scan=scan,
+                detectors=detector,
+                blend_angle=blend_angle,
+                max_batch_expansion="auto",
+            )
+        )
+        # the value set on the SMatrix, then the value passed to reduce
+        for max_batch_expansion in (None, 8):
+            measured = to_host_array(
+                built.reduce(
+                    scan=scan,
+                    detectors=detector,
+                    blend_angle=blend_angle,
+                    max_batch_expansion=max_batch_expansion,
+                )
+            )
+            np.testing.assert_array_equal(measured, expected)
 
 
 @devices
@@ -1529,28 +1757,33 @@ def test_upsample_lattice_detection_chunking(device):
 
 def test_upsample_blend_snapping():
     # snapping the blend angle onto a detector boundary is pure angular
-    # arithmetic: device-independent
+    # arithmetic: device-independent. Only a band that straddles the blend
+    # angle is snapped, to its own inner boundary; a band wholly below or
+    # above keeps the blend angle
     from abtem.prism.s_matrix import CompressedSMatrixArray as C
 
-    detectors = [
-        abtem.AnnularDetector(inner=0, outer=15),
-        abtem.AnnularDetector(inner=21, outer=50),
-        abtem.AnnularDetector(inner=50, outer=90),
-    ]
-    assert C._snapped_blend_angle(37.5, detectors) == 21.0
-    assert C._snapped_blend_angle(60.0, detectors) == 50.0
-    assert C._snapped_blend_angle(10.0, detectors) == 10.0   # no boundary below
-    assert C._snapped_blend_angle("aperture", detectors) == "aperture"
-    assert C._snapped_blend_angle(None, detectors) is None
-    assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
+    bright = abtem.AnnularDetector(inner=0, outer=15)
+    middle = abtem.AnnularDetector(inner=21, outer=50)
+    outer = abtem.AnnularDetector(inner=50, outer=90)
+    assert C._snapped_blend_angle(37.5, middle) == 21.0  # straddles
+    assert C._snapped_blend_angle(60.0, outer) == 50.0  # straddles
+    assert C._snapped_blend_angle(37.5, bright) == 37.5  # wholly below
+    assert C._snapped_blend_angle(60.0, middle) == 60.0  # wholly below
+    assert C._snapped_blend_angle(37.5, outer) == 37.5  # wholly above
+    assert C._snapped_blend_angle(50.0, middle) == 50.0  # outer edge at the cut
+    assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=0)) == 10.0
+    assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=5)) == 5.0
+    assert C._snapped_blend_angle("aperture", middle) == "aperture"
+    assert C._snapped_blend_angle(None, middle) is None
 
     # an offset detector's boundaries are the bounds of the angles it covers,
-    # widened by |offset| plus the rounding margin
+    # widened by |offset| plus the rounding margin: here [15, 56]
     offset_detector = abtem.SegmentedDetector(
         nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
     )
-    assert C._snapped_blend_angle(60.0, [offset_detector], margin=1.0) == 56.0
-    assert C._snapped_blend_angle(30.0, [offset_detector], margin=1.0) == 15.0
+    assert C._snapped_blend_angle(30.0, offset_detector, margin=1.0) == 15.0
+    assert C._snapped_blend_angle(53.0, offset_detector, margin=1.0) == 15.0
+    assert C._snapped_blend_angle(60.0, offset_detector, margin=1.0) == 60.0
 
 
 @devices
@@ -1590,19 +1823,25 @@ def test_upsample_blend_snaps_to_detector_boundary(device):
 def test_upsample_plane_wave_branch_is_prism(device):
     # the plane-wave branch reduced on one interpolation period must BE the
     # PRISM reduction, at any tolerance: the compression retains the row space
-    # of the built beams whole rather than by singular value
+    # of the built beams whole rather than by singular value. The comparison is
+    # of diffracted intensities: the compressed waves are referenced to a depth
+    # inside the specimen and propagated back to the exit surface on the padded
+    # grid, which a wave function would see and an intensity in q does not
     potential = _small_potential(repetitions=(2, 2, 6), device=device)
     kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
                   interpolation=2, device=device)
     prism = SMatrix(**kwargs).build(lazy=False)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
-    expected = to_host_array(prism.reduce(scan=scan))
+    detector = abtem.FlexibleAnnularDetector()
+    expected = to_host_array(prism.reduce(scan=scan, detectors=detector))
 
     for tolerance in (1e-1, 1e-2, 1e-3):
         compressed = SMatrix(**kwargs, upsample=True, tolerance=tolerance,
                              window_gpts=int(prism.window_gpts[0])).build(lazy=False)
         # a vanishing blend angle leaves the plane-wave branch alone
-        branch = to_host_array(compressed.reduce(scan=scan, blend_angle=1e-6))
+        branch = to_host_array(
+            compressed.reduce(scan=scan, detectors=detector, blend_angle=1e-6)
+        )
         error = np.abs(branch - expected).max() / np.abs(expected).max()
         assert error < 1e-4, f"tolerance {tolerance}: {error}"
 
@@ -1633,6 +1872,14 @@ def test_upsample_blend_taper_routing(device):
     # outside the zone the taper changes nothing
     assert np.allclose(to_host_array(tapered[0]), to_host_array(sharp[0]), rtol=1e-5)
     assert np.allclose(to_host_array(tapered[2]), to_host_array(sharp[2]), rtol=1e-5)
+
+    # each ring reads the same scanned alone: a band wholly below the cut is not
+    # snapped to its own outer edge, which would put it inside the taper
+    for ring, value in zip(rings, tapered):
+        alone = built.scan(
+            scan=scan, detectors=ring, blend_angle=cut, blend_taper=taper
+        )
+        assert np.allclose(to_host_array(alone), to_host_array(value), rtol=1e-5)
 
     # inside the zone the value lies between the two pure branches
     low = to_host_array(built.scan(scan=scan, detectors=rings[1], blend_angle=0))
@@ -1738,7 +1985,7 @@ def test_upsample_pixelated_detector_is_stitched(device):
     scan = GridScan.commensurate(built, gpts=4)
     detector = abtem.PixelatedDetector(max_angle=None)
     cut = 40.0
-    assert built._routing_sides(cut, [detector]) == ["pattern"]
+    assert built._routing_side(cut, detector) == "pattern"
 
     stitched = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
     stitched_array = to_host_array(stitched)
@@ -1797,7 +2044,7 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     cut = 60.0
     for max_angle in (None, 30.0):  # below the cut, and straddling it
         detector = abtem.PixelatedDetector(max_angle=max_angle)
-        assert built._routing_sides(cut, [detector]) == ["pattern"]
+        assert built._routing_side(cut, detector) == "pattern"
         patterns = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
         assert np.allclose(patterns.angular_sampling,
                            reference.angular_sampling)
@@ -1824,36 +2071,41 @@ def test_upsample_offset_detectors_route_on_the_angles_they_cover():
     offset = (3.0, 4.0)  # |offset| = 5 mrad
     r = 5.0 + built._offset_rounding_margin
 
-    def sides(detector):
-        return built._routing_sides(cut, [detector])
+    def side(detector):
+        return built._routing_side(cut, detector)
 
     # wholly below / above the cut, with or without an offset
     below = abtem.AnnularDetector(inner=0, outer=cut - r - 1, offset=offset)
     above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
-    assert sides(below) == ["low"]
-    assert sides(above) == ["high"]
-    assert sides(
-        abtem.SegmentedDetector(
-            nbins_radial=1,
-            nbins_azimuthal=4,
-            inner=cut + r + 1,
-            outer=150,
-            offset=offset,
+    assert side(below) == "low"
+    assert side(above) == "high"
+    assert (
+        side(
+            abtem.SegmentedDetector(
+                nbins_radial=1,
+                nbins_azimuthal=4,
+                inner=cut + r + 1,
+                outer=150,
+                offset=offset,
+            )
         )
-    ) == ["high"]
+        == "high"
+    )
     # outer <= cut, but the offset region reaches across it
-    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
-    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
+    assert side(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
+    assert side(abtem.AnnularDetector(inner=0, outer=cut - 1)) == "low"
     # inner >= cut, but the offset region reaches below it
-    assert sides(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
+    assert side(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
     # a q-sweep of disks is not an angular band
-    assert sides(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
+    assert side(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
 
-    # snapping puts the cut on the covered bounds of an offset detector
+    # snapping puts the cut on the covered bounds of an offset detector: a
+    # blend angle inside them moves to the covered inner bound, one beyond
+    # them stays
     detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
-    assert built._snapped_blend_angle(
-        40 + r + 1, [detector], built._offset_rounding_margin
-    ) == pytest.approx(40 + r)
+    margin = built._offset_rounding_margin
+    assert built._snapped_blend_angle(40, detector, margin) == pytest.approx(20 - r)
+    assert built._snapped_blend_angle(40 + r + 1, detector, margin) == 40 + r + 1
 
 
 def _defocus_mean_reference(built, scan, detector, defoci, **kwargs):
