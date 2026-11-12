@@ -284,6 +284,9 @@ Dependencies:
 
 Bugfixes:
 
+- `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
+  rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
+  regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
 - PRISM with a downsampled S-matrix (`downsample="cutoff"`, the default, or an angle) keeps the full grid's
   antialias cutoff. **Behaviour change:** at `interpolation=1`, `PixelatedDetector` with `max_angle="cutoff"` or
   `"valid"` (the default) returns the pattern size that multislice returns, and the dummy probes of the
@@ -338,6 +341,61 @@ Bugfixes:
   to 125.0 mrad instead of 90.9 mrad). Core-loss PRISM with `interpolation=2` on an 8 x 6 Å cell has the sizes of
   the full window, (16, 12) and (12, 8) pixels and 74 bins instead of (10, 8), (8, 6) and 46 bins. Plain PRISM and
   C-PRISM with a window that spans the downsampled grid already detected their patterns on that grid
+- C-PRISM (`upsample=True`) with a window smaller than the downsampled grid gives a `PixelatedDetector` the same
+  diffraction patterns below the blend angle whichever other detectors share the scan. Before, next to a
+  `WavesDetector` or a real-space `PixelatedDetector` the patterns were taken from the window propagated from the
+  reference depth to the exit surface on the window's own periodic grid, and differed by 2.3 % of their maximum
+  (cubic Si cell on a 56 x 64 grid at 100 keV, `interpolation=2`, `window_gpts=(24, 32)`, `downsample=False`).
+  Next to an `AnnularDetector` or `SegmentedDetector` the patterns were stitched to the plane-wave reduction at
+  that detector's band edge instead of at the blend angle. That moved them by 2.6e-4 of the maximum next to
+  `AnnularDetector(inner=50)` at the default blend and 2.6e-3 with `blend_angle=80`, by 0.81 (`GridScan`) to 0.91
+  (`CustomScan`) of the maximum next to a bright-field `AnnularDetector(inner=0, outer=15)`, and by 2.4 times the
+  maximum next to `SegmentedDetector(2, 4, 10, 50)` with `blend_angle="aperture"`. Any other detector next to one
+  that reads the wave (a `WavesDetector` or a real-space `PixelatedDetector`) changes at rounding level, about
+  1e-15 of its maximum in float64 and a few 1e-7 in float32 (at most 1.3e-15 and 4.4e-7 measured), in a cropped
+  window and, with `method="modes"` (the default on a GPU) or a `max_batch_expansion` number, on the full window
+- C-PRISM (`upsample=True`) gives every detector the value it has when scanned alone, whichever other detectors
+  share the scan ([#664](https://github.com/abTEM/abTEM/issues/664)). The blended reduction routed the detectors
+  of a list all or nothing: one detector it could not route (a `WavesDetector`, a `FlexibleAnnularDetector`, a
+  real-space `PixelatedDetector`) sent every detector to the unrouted reduction, which at the default blend is the
+  plain interpolated one. And the blend angle was snapped to the largest band edge of any detector of the list
+  below it, so one detector's band moved the cut of every other. Now each detector is routed on its own, and only
+  a band that straddles the blend angle is snapped, to its own inner edge. Detectors that read the same reduction
+  share it: the bands below the cut and the unroutable detectors at the default blend, and all the bands above the
+  cut. On cubic Si (1, 1, 8) on a 56 x 64 grid at 100 keV with `interpolation=2` (automatic blend angle
+  62.5 mrad), `AnnularDetector(inner=70)` next to a `WavesDetector` or a `FlexibleAnnularDetector` moved by 0.18
+  of its maximum, on the full window and with `window_gpts=(24, 32)`; with that window and `blend_angle=80`,
+  `AnnularDetector(50, 100)` next to `AnnularDetector(60, 70)` moved by 0.24, and a
+  `PixelatedDetector(max_angle="cutoff")` next to a `WavesDetector` by 2.8e-3 above the blend angle (0.29 with
+  `blend_angle="aperture"`). On Si (1, 1, 2), `reduce(method="modes")` of `AnnularDetector(inner=50)` next to a
+  `WavesDetector` moved by 2.5e-2. Every single-detector scan without a `blend_taper` is unchanged. With a
+  `blend_taper`, a band that lies wholly below the blend angle was snapped to its own outer edge when scanned
+  alone, which put it inside the taper; it now keeps the blend angle, so the taper ends at the blend angle as
+  documented. On the same Si (1, 1, 8) cell with `blend_angle=80` and `blend_taper=10`, `AnnularDetector(60, 70)`
+  scanned alone changes by 0.55 (full window) to 0.58 (`window_gpts=(24, 32)`) of its maximum, and
+  `AnnularDetector(0, 30)` by 2.8e-2 to 4.5e-2. A list of detectors that read different branches now takes one
+  reduction per branch instead of one for the whole list
+- The wave functions (`WavesDetector`) and real-space intensities (`PixelatedDetector(reciprocal_space=False)`)
+  of a C-PRISM window smaller than the downsampled grid, including the automatic window (for example 112 x 112
+  of the 128 x 128 downsampled grid for Si (4, 4, 8) on 192 x 192 at 200 keV with `interpolation=4`), are
+  propagated from the reference depth to the exit surface on the zero-padded full grid and cropped back to the
+  window ([#665](https://github.com/abTEM/abTEM/issues/665)). Before, the propagation ran on the window's own
+  grid, which is periodic with the window, so the probe tails it moved past one edge of the window re-entered at
+  the opposite edge. Both branches of a blend with an explicit `blend_angle` are propagated this way. On windows
+  smaller than the probe, the largest error of the real-space intensity against the waves of the full window
+  cropped to the same pixels, as a fraction of its maximum, falls from 1.1e-1 to 3.4e-2 for Si (1, 1, 8) (43 Å) on
+  a 56 x 64 grid at 100 keV, `interpolation=2`, `window_gpts=(32, 40)`, from 2.3e-2 to 1.1e-2 with
+  `window_gpts=(40, 48)`, and from 3.3e-1 to 9.1e-2 for Si (1, 1, 16) (87 Å) with `window_gpts=(32, 40)`. On
+  windows that cover the probe the change is small. The tails that leave the window are now lost, as the tails
+  beyond the window already were when the matrix was cropped, so a diffraction pattern computed from the
+  returned wave of a window smaller than the probe carries less of the bright-field disk than before. For
+  diffraction patterns use a `PixelatedDetector`, which is detected from the window at the reference depth and is
+  not affected. The waves of a window that spans the downsampled grid are bitwise unchanged
+- C-PRISM ignores `max_batch_expansion` whenever the reduced wave functions are cropped, as the docstrings
+  said. `SMatrix(upsample=True, max_batch_expansion=...)` raised a `ValueError` on every scan when the automatic
+  window came out smaller than the downsampled grid (for example 80 x 80 of 88 x 88 for Si (4, 4, 2) on
+  128 x 128 at 200 keV with `interpolation=2`), and so did `reduce(max_batch_expansion=...)` on a cropped window
+  with a `blend_angle`. Passing it together with a cropping `window_gpts` to `SMatrix` still raises
 - PRISM averages a `CTF` ensemble with `ensemble_mean=True` once, over the result. The eager `SMatrix.reduce` and
   `SMatrix.scan` with a potential ensemble, exit planes and such a CTF returned the values of the wrong exit
   plane, or raised a broadcast `ValueError` when the number of defoci differed from the number of exit planes,
@@ -681,6 +739,56 @@ Bugfixes:
 - `BlochWaves` with a `g_max` above half the structure factor's runs, with the couplings between beams
   more than that g_max apart set to zero as its warning says, where building the structure matrix raised
   `ValueError: invalid entry in coordinates array` ([PR #635](https://github.com/abTEM/abTEM/pull/635))
+- `DiffractionPatterns.index_diffraction_spots` with one orientation matrix per member (for example
+  `(n, 3, 3)` matrices for `n` patterns, or `(n, 1, 3, 3)` for a rotation series with a second ensemble
+  axis) raised a bare `AssertionError` for eager patterns, and for lazy patterns with more than one member
+  per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
+  also together with the energies of an energy ensemble. Matrices with more members than the patterns
+  along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
+- `RealSpaceMultislice(order=n)` for `n` of 4 or more uses the binomial coefficients of the Taylor series of the
+  forward wavenumber, $K(\sqrt{1 + 2C/K} - 1)$ with $K = 2\pi/\lambda$ and $C$ the slice operator, in both
+  expansion scopes. The coefficients of the operator powers were geometric, $-1/(2K), 1/(2K^2), -1/(2K^3), \dots$,
+  which agree with the binomial ones, $-1/(2K), 1/(2K^2), -5/(8K^3), 7/(8K^4), \dots$, through order 3 only, so
+  raising the order past 3 stopped improving the result and the series converged to $C(2K + C)/(2(K + C))$ instead
+  of the square root. For a 300 mrad plane wave at 30 keV in vacuum, the error of the phase advance per ångström
+  stalled at $4.7 \times 10^{-5}$ rad from order 5 on; it now falls to $6 \times 10^{-8}$ rad at order 6.
+  **Behaviour change:** results at `order` 4 and higher change; orders 1 to 3, and the default `order=1`, are unchanged
+- `PixelatedDetector(max_angle=...)` raises a `ValueError` for a number of 0 or below. A `max_angle` of 0 was declared
+  as the uncropped pattern and detected as the few central pixels, so every scan raised
+  `ValueError: could not broadcast input array`; a negative number gave only the few central pixels, without an error.
+  **Behaviour change:** both now raise at construction with a clear message, so a negative `max_angle`, which used to
+  run, no longer does; `None`, `'cutoff'`, `'valid'` and `'full'` are unchanged
+- `SMatrix.reduce(lazy=False)` and `SMatrix.scan(lazy=False)` honour `max_batch_multislice`: the plane waves of the
+  S-matrix are propagated in batches of that size, as `SMatrix.build(lazy=False, max_batch=...)` does, where the
+  eager reduction always used the `'auto'` batch. The same holds for a lazy reduction with
+  `disable_s_matrix_chunks=True` (the default on a GPU and with `upsample=True`). The default `'auto'` batch is
+  unchanged. A smaller batch bounds the memory of the propagation but generates the slices of a streamed potential once
+  per batch. The `max_batch_multislice` docstrings describe the batch of plane waves rather than the Dask chunks.
+  **Behaviour change:** (i) a lazy reduction with `disable_s_matrix_chunks=True` (the default on a GPU) and any call
+  with `upsample=True` now batch the plane waves when a caller passes `max_batch_multislice`, which they ignored
+  before; (ii) `max_batch_multislice=None` or a NumPy integer, which these paths and the eager reduction ignored,
+  now raise `ValueError: limit must be an integer or a string`, as the lazy reduction in chunks already did
+- Spline interpolation on CuPy 14.1 and later of float32 or complex64 data returned the wrong value for a
+  coordinate within half a float32 spacing below a grid node, as the positions of `interpolate_line` often are:
+  cupyx took the starting index from the float32-rounded coordinate and the weights from the float64 one. For
+  `order >= 2` the result was the value at the next grid node; for `order=1` it was extrapolated linearly from
+  the next segment, off by at most the distance to the node times a second difference. This affected
+  `Images.interpolate(method="spline")`, `interpolate_line` and `interpolate_line_at_position` of `Images` and
+  `DiffractionPatterns` (so also `Probe.profiles` and `momentum_resolved_spectrum` with a
+  `SpectralSlitDetector`), and `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate`.
+  On CuPy, the prefilter, the index and the weights are now computed in double precision and the sum in the
+  precision of the data, so the results agree with the NumPy results to float32 rounding. On earlier CuPy
+  versions the results change by float32 rounding only. **Behaviour change:** at the default float32 precision,
+  the pixel positions of the line in `interpolate_line` and `interpolate_line_at_position` were Å values
+  rounded to float32 (by up to 3.8e-5 pixels at 0.1 Å sampling near 100 Å). On NumPy and CuPy they are now built
+  in float64 (`LineScan.get_positions` takes an optional `dtype`, by default the configured precision as before),
+  which changes the values of these functions and of what builds on them (`Probe.profiles`,
+  `momentum_resolved_spectrum`) slightly, by 5e-6 to 4e-5 of the maximum for random data in the cases checked;
+  at float64 precision they are unchanged. Metal keeps float32 pixel positions, so its line values shift by
+  float32 noise (up to 7e-5 of the maximum in the cases checked) without becoming more accurate. The results of
+  `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
+  NumPy, Metal and float64 CuPy are unchanged
+  ([PR #680](https://github.com/abTEM/abTEM/pull/680))
 
 Documentation:
 
