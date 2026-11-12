@@ -1,3 +1,4 @@
+import functools
 import math
 import operator
 import pickle
@@ -30,7 +31,7 @@ from utils import (
 )
 
 import abtem
-from abtem.core.axes import OrdinalAxis, ScanAxis
+from abtem.core.axes import EnergyAxis, OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype, safe_ceiling_int
@@ -2018,6 +2019,194 @@ def test_interpolate_stack_just_below_grid_nodes(device, order):
     np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
 
 
+_EPS32 = np.finfo(np.float32).eps
+
+
+def _spline_interpolate(array, entry):
+    """Spline-interpolate a 2D array (possibly on the GPU) by one of the three
+    public entry points that reach map_coordinates: to 1.31 times the points
+    for the images, to twice the number of rows along the diagonal for the
+    line, and to 1.31 times the points of the first two rows, joined into one
+    profile, for the profile."""
+    if entry == "profile":
+        profiles = RealSpaceLineProfiles(array[:2].reshape(-1), sampling=0.1)
+        return profiles.interpolate(gpts=int(profiles.shape[-1] * 1.31)).array
+    images = Images(array, sampling=(0.1, 0.1))
+    if entry == "line":
+        return images.interpolate_line(
+            start=(0.0, 0.0), end=images.extent, gpts=2 * array.shape[0]
+        ).array
+    gpts = (int(array.shape[0] * 1.31), int(array.shape[1] * 1.31))
+    return images.interpolate(gpts=gpts, method="spline").array
+
+
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_branch_hands_map_coordinates_double_precision(entry, monkeypatch):
+    """The CuPy branch gives map_coordinates a double-precision input and
+    coordinates. cupyx's kernel computes in the precision of its input, so a
+    single-precision one takes the starting index from the float32-rounded
+    coordinate and the weights from the float64 one, and float32 coordinates
+    are rounded by up to half a float32 spacing. Pinned to the CPU: the test
+    is about what reaches cupyx, which does not depend on the device, with
+    SciPy's map_coordinates in place of cupyx's."""
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    expected = _spline_interpolate(array, entry)
+
+    seen = []
+
+    def spy(input, coordinates, **kwargs):
+        seen.append((input.dtype, coordinates.dtype))
+        return scipy.ndimage.map_coordinates(input, coordinates, **kwargs)
+
+    monkeypatch.setattr(abtem.measurements, "cp", np)
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    result = _spline_interpolate(array, entry)
+
+    assert seen
+    assert set(seen) == {(np.dtype(np.float64),) * 2}
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_spline_interpolation_of_single_precision_data_matches_numpy(entry, dtype):
+    """On the GPU, single-precision data interpolate to within a few float32
+    roundings of the NumPy result, which SciPy computes in float64. The
+    coordinates reach about 1000 pixels, where rounding them to float32 costs
+    about 6e-5 of the maximum."""
+    rng = np.random.default_rng(5)
+    array = rng.random((1024, 768))
+    if dtype == np.complex64:
+        array = array + 1j * rng.random(array.shape)
+    array = array.astype(dtype)
+
+    expected = _spline_interpolate(array, entry)
+    result = asnumpy(_spline_interpolate(copy_to_device(array, "gpu"), entry))
+
+    assert result.dtype == dtype
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("order", [1, 3])
+@pytest.mark.parametrize("delta", [1e-12, 2e-5])
+def test_cupy_interpolation_just_below_far_grid_nodes(delta, order):
+    """Far from the origin, where half a float32 spacing (3e-5 pixels near 1000)
+    exceeds delta, a coordinate k - delta rounds to k in float32. The result
+    must still be the NumPy one: neither the value at node k + 1, nor a value
+    shifted by the rounded coordinate. The y positions are multiples of 1/64,
+    exact in float32, so that only the x coordinate carries the offset. For
+    order 1 and delta = 1e-12 the unrounded index gives the right value to
+    within 1e-12 too, so only delta = 2e-5 tells the old result apart."""
+    array = np.random.default_rng(7).random((1024, 768)).astype(np.float32)
+    k = np.arange(900, 1000)
+    y = np.round(np.linspace(700.0, 760.0, len(k)) * 64) / 64
+    positions = np.stack([k - delta, y], axis=-1)
+
+    expected = _interpolate_stack(array, positions, mode="wrap", order=order)
+    result = _interpolate_stack(
+        copy_to_device(array, "gpu"),
+        copy_to_device(positions, "gpu"),
+        mode="wrap",
+        order=order,
+    )
+
+    np.testing.assert_allclose(
+        asnumpy(result), expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+def _line_pixel_positions(start, end, gpts, sampling, margin=0.0):
+    """The pixel coordinates of gpts points along a line from start to end [Å],
+    built in float64. A margin extends the line at both ends and, as a scan keeps
+    its sampling, adds the points that fill it."""
+    start, end = np.array(start), np.array(end)
+    length = np.linalg.norm(end - start)
+    direction = (end - start) / length
+    start, end = start - margin * direction, end + margin * direction
+    gpts = int(np.ceil((length + 2 * margin) / (length / gpts)))
+    line = np.stack(
+        [np.linspace(a, b, gpts, endpoint=False) for a, b in zip(start, end)], axis=-1
+    )
+    return line / np.array(sampling)
+
+
+@pytest.mark.parametrize(
+    "width, margin", [(0.0, 0.0), (0.3, 0.0), (0.0, 0.5), (0.3, 0.5)]
+)
+def test_interpolate_line_positions_are_float64(width, margin, monkeypatch):
+    """interpolate_line hands map_coordinates positions that are exact in float64,
+    not rounded to the float32 of a scan's positions, which is up to
+    ulp32(position) / 2 / sampling pixels (3.8e-5 pixels near 100 Å at 0.1 Å).
+    SciPy's map_coordinates records the coordinates. Pinned to NumPy: the
+    positions of NumPy and CuPy are the same, and Metal stores them in float32."""
+    sampling = (0.1, 0.07)
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    start, end, gpts = (1.3, 2.1), (30.7, 14.9), 503
+
+    seen = []
+
+    def spy(input, coordinates, **kwargs):
+        seen.append(coordinates)
+        return scipy.ndimage.map_coordinates(input, coordinates, **kwargs)
+
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    Images(array, sampling=sampling).interpolate_line(
+        start=start, end=end, gpts=gpts, width=width, margin=margin
+    )
+
+    (coordinates,) = seen
+    assert coordinates.dtype == np.float64
+    expected = _line_pixel_positions(start, end, gpts, sampling, margin)
+    # The padding of 2 * order pixels shifts the coordinates. The samples across
+    # the width are placed symmetrically about the line, so they average to it.
+    mean = coordinates.T.reshape(len(expected), -1, 2).mean(axis=1) - 6
+    np.testing.assert_allclose(mean, expected, rtol=0, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("gpu", marks=requires_gpu.marks)]
+)
+def test_interpolate_line_matches_float64_reference(device):
+    """Along a line reaching about 1000 pixels along the first axis and 750
+    along the second, the interpolated values of single-precision data match
+    SciPy's cubic spline at positions built in float64, to a few float32
+    roundings. Positions rounded to float32 are off by up to 3.8e-5 pixels,
+    which moves random data by 3.8e-5 of the maximum. NumPy and CuPy only: the
+    Metal layer stores the positions in float32."""
+    start, end = (1.7, 1.1), (100.9, 52.3)
+    sampling = (0.1, 0.07)
+    gpts = 2048
+    array = np.random.default_rng(5).random((1024, 768)).astype(np.float32)
+    positions = _line_pixel_positions(start, end, gpts, sampling)
+    padded = np.pad(array.astype(np.float64), 6, mode="wrap")
+    expected = scipy.ndimage.map_coordinates(padded, (positions + 6).T, order=3)
+
+    images = Images(copy_to_device(array, device), sampling=sampling)
+    result = asnumpy(images.interpolate_line(start, end, gpts=gpts, order=3).array)
+
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
     """Regression: interpolate_line's lazy path computed drop_axis/new_axis
     as if the base (spatial) axes were the *first* axes of the array
@@ -3360,6 +3549,132 @@ class TestDiffractionPatternsCrop:
             for my, j in new[1].items():
                 expected[i, j] = arr[old[0][mx], old[1][my]]
         np.testing.assert_array_equal(cropped.array, expected)
+
+
+class TestDiffractionPatternsIndexOrientations:
+    """index_diffraction_spots with one orientation matrix per member indexes
+    each member with its own matrix, eagerly and with any number of members
+    per dask chunk: each member equals that member indexed on its own."""
+
+    # 4 x 3 patterns, so no two ensemble axes have the same length
+    SHAPE = (4, 3)
+    ENERGIES = (60e3, 100e3, 200e3, 300e3)
+
+    @staticmethod
+    def _matrices(n, seed):
+        from scipy.spatial.transform import Rotation
+
+        return Rotation.random(n, random_state=seed).as_matrix()
+
+    @staticmethod
+    def _array():
+        # float32 on every device (Metal stores float32), so the values compare
+        # exactly: indexing without a radius only picks and masks pixels
+        return np.random.default_rng(0).random(
+            TestDiffractionPatternsIndexOrientations.SHAPE + (17, 21), np.float32
+        )
+
+    @staticmethod
+    def _energy_axis_values(energy_axis):
+        shape = TestDiffractionPatternsIndexOrientations.SHAPE
+        energies = np.full(shape, 100e3)
+        if energy_axis is not None:
+            n = shape[energy_axis]
+            values = TestDiffractionPatternsIndexOrientations.ENERGIES[:n]
+            energies = np.take(values, np.indices(shape)[energy_axis])
+        return energies
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _members_alone(matrices_shape, energy_axis):
+        """Each member indexed on its own, per index: (miller indices, array).
+        It depends on the layout of the matrices and energies only, not on the
+        chunking or the device."""
+        cls = TestDiffractionPatternsIndexOrientations
+        array = cls._array()
+        matrices = cls._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        energies = cls._energy_axis_values(energy_axis)
+        alone = {}
+        for index in np.ndindex(cls.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": energies[index]}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, matrices_shape))
+                ],
+            )
+            alone[index] = ([tuple(h) for h in single.miller_indices], single.array)
+        return alone
+
+    @devices
+    @pytest.mark.parametrize(
+        "matrices_shape, energy_axis",
+        [
+            # varying on one axis, broadcast on the other
+            ((4, 1), None),
+            ((1, 3), None),
+            # varying on both axes
+            ((4, 3), None),
+            # orientation and energy varying on the same axis, and on different axes
+            ((4, 1), 0),
+            ((4, 1), 1),
+        ],
+    )
+    # eager; one member per chunk; every member in one chunk; uneven on both axes
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 3), (3, 2)])
+    def test_members_match_each_member_indexed_alone(
+        self, device, matrices_shape, energy_axis, chunks
+    ):
+        matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
+        metadata = {"energy": 100e3}
+        if energy_axis is not None:
+            n = self.SHAPE[energy_axis]
+            axes[energy_axis] = EnergyAxis(values=self.ENERGIES[:n])
+            metadata = {}
+        data = copy_to_device(self._array(), device)
+        if chunks is not None:
+            data = da.from_array(data, chunks=chunks + (-1, -1))
+        patterns = DiffractionPatterns(
+            data, sampling=0.5, metadata=metadata, ensemble_axes_metadata=axes
+        )
+
+        indexed = patterns.index_diffraction_spots(
+            cell=4.0, orientation_matrices=matrices
+        )
+        assert indexed.is_lazy == (chunks is not None)
+        values = asnumpy(indexed.compute().array)
+
+        column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        alone = self._members_alone(matrices_shape, energy_axis)
+        for index in np.ndindex(self.SHAPE):
+            millers, expected = alone[index]
+            columns = [column[h] for h in millers]
+            others = np.setdiff1d(np.arange(len(column)), columns)
+            np.testing.assert_array_equal(values[index][columns], expected)
+            assert np.all(values[index][others] == 0)
+
+    @lazy_params
+    def test_more_matrices_than_patterns_raises(self, lazy):
+        """One pattern cannot be indexed with three matrices: the result has
+        one member per pattern."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random((1, 17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        with pytest.raises(ValueError, match="length 1 or the length"):
+            patterns.index_diffraction_spots(
+                cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
 
 
 # ---------------------------------------------------------------------------
