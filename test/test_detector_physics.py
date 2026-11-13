@@ -44,7 +44,14 @@ axis) so that swapped or mis-scaled x/y handling shows up.
 import ase.build
 import numpy as np
 import pytest
-from utils import gpu
+from utils import (
+    angle_by_hand,
+    angles_about_by_hand,
+    both_angle_conventions,  # noqa: F401 (a fixture)
+    gpu,
+    grid_angle_by_hand,
+    is_exact_angles,
+)
 
 import abtem
 from abtem.core.axes import EnergyLossAxis
@@ -52,6 +59,10 @@ from abtem.core.backend import asnumpy
 from abtem.core.utils import get_dtype
 from abtem.measurements import DiffractionPatterns, momentum_resolved_spectrum
 from abtem.waves import Waves
+
+# Every test runs in both conventions of the angles configuration: the hand-built
+# expectations take the angle of a pixel from `angles_about_by_hand`.
+pytestmark = pytest.mark.usefixtures("both_angle_conventions")
 
 ENERGY = 200e3  # [eV]
 GPTS = (160, 147)  # even x odd, non-square
@@ -177,7 +188,7 @@ def test_annular_detector_counts_pixels_in_annulus(device, inner, outer, offset_
     # itself under test here.
     offset = (offset_pixels[0] * _ds[0], offset_pixels[1] * _ds[1])
     ax, ay = _pixel_angles()
-    alpha = np.hypot(ax - offset[0], ay - offset[1])
+    alpha, _ = angles_about_by_hand(ax, ay, offset, _ds)
     _assert_clear_of_edges(alpha, (inner, outer))
 
     expected = np.count_nonzero((alpha >= inner) & (alpha < outer))
@@ -198,8 +209,8 @@ def test_annular_detector_single_bright_pixel_with_offset(device, pixel):
     inner, outer = 10.4, 30.2
     offset_pixels = (-4, 5)
     offset = (offset_pixels[0] * _ds[0], offset_pixels[1] * _ds[1])
-    distance = np.hypot(
-        (pixel[0] - offset_pixels[0]) * _ds[0], (pixel[1] - offset_pixels[1]) * _ds[1]
+    distance, _ = angles_about_by_hand(
+        pixel[0] * _ds[0], pixel[1] * _ds[1], offset, _ds
     )
     _assert_clear_of_edges(distance, (inner, outer))
     inside = inner <= distance < outer
@@ -248,8 +259,9 @@ def test_adjacent_annuli_partition_exactly(device):
 # ---------------------------------------------------------------------------
 
 FLEXIBLE_CASES = [
-    # (step, inner, outer)
-    (2.0, 4.0, 40.0),
+    # (step, inner, outer), with every pixel clear of the bin edges in both angle
+    # conventions
+    (2.0, 4.4, 40.4),
     (3.0, 5.5, 47.5),
 ]
 # outer - inner not a multiple of step: the documented step must still be the
@@ -257,7 +269,7 @@ FLEXIBLE_CASES = [
 FLEXIBLE_NON_MULTIPLE_CASES = [
     (0.5, 0.0, 10.5),  # 21 bins of 0.5, but floor() was applied before /step
     (2.0, 3.0, 40.0),  # 37 / 2 -> 18 bins covering [3, 39)
-    (1.0, 0.0, None),  # auto outer: the (non-integer) antialias cutoff angle
+    (1.5, 0.0, None),  # auto outer: the (non-integer) antialias cutoff angle
 ]
 
 
@@ -286,13 +298,13 @@ def _check_flexible_bins(device, step, inner, outer):
     assert measurement.radial_offset == pytest.approx(inner)
 
     ax, ay = _pixel_angles()
-    expected = _flexible_expected(np.hypot(ax, ay), step, inner, nbins)
+    alpha, _ = angles_about_by_hand(ax, ay)
+    expected = _flexible_expected(alpha, step, inner, nbins)
     got = _values(measurement)[:, 0]
 
     # (b) each bin holds exactly the hand-counted pixels
     np.testing.assert_array_equal(got, expected)
     # (a) conservation: nothing double-counted or lost inside the outermost edge
-    alpha = np.hypot(ax, ay)
     in_range = np.count_nonzero((alpha >= inner) & (alpha < inner + nbins * step))
     assert got.sum() == in_range
 
@@ -325,7 +337,7 @@ def test_diffraction_patterns_radial_binning_bin_width_is_step_size(
     assert measurement.shape == (nbins, 1)
     assert measurement.radial_sampling == pytest.approx(step)
     ax, ay = _pixel_angles()
-    expected = _flexible_expected(np.hypot(ax, ay), step, inner, nbins)
+    expected = _flexible_expected(angles_about_by_hand(ax, ay)[0], step, inner, nbins)
     np.testing.assert_array_equal(_values(measurement)[:, 0], expected)
 
 
@@ -334,8 +346,8 @@ def test_flexible_annular_show_draws_the_detected_bins():
     with the trailing partial step [40, 41.3) left undetected."""
     import matplotlib.pyplot as plt
 
-    step, inner, outer = 2.0, 0.0, 41.3
-    nbins = 20
+    step, inner, outer = 2.5, 0.0, 41.3
+    nbins = 16
     detector = abtem.FlexibleAnnularDetector(step_size=step, inner=inner, outer=outer)
     assert detector.nbins_radial == nbins
 
@@ -346,7 +358,7 @@ def test_flexible_annular_show_draws_the_detected_bins():
     plt.close("all")
 
     ax, ay = _pixel_angles()
-    alpha = np.fft.fftshift(np.hypot(ax, ay))
+    alpha = np.fft.fftshift(angles_about_by_hand(ax, ay)[0])
     edges = inner + step * np.arange(nbins + 1)
     _assert_clear_of_edges(alpha, edges)
     expected = np.floor((alpha - inner) / step)
@@ -366,7 +378,7 @@ def test_flexible_integrate_radial_matches_annular_detector(device, a, b):
     PolarMeasurements.integrate fix select the same bins.
     """
     ax, ay = _pixel_angles()
-    _assert_clear_of_edges(np.hypot(ax, ay), (a, b))
+    _assert_clear_of_edges(angles_about_by_hand(ax, ay)[0], (a, b))
     waves = _random_waves(device)
 
     flexible = abtem.FlexibleAnnularDetector(step_size=2.0, inner=2.0, outer=40.0)
@@ -421,7 +433,7 @@ def _segmented_geometry_is_unambiguous(alpha, phi, rotation, offset_mrad=(0, 0))
 @pytest.mark.parametrize("rotation", [0.4, -1.1])
 def test_segmented_detector_segments_match_hand_built_polar_masks(device, rotation):
     ax, ay = _pixel_angles()
-    alpha, phi = np.hypot(ax, ay), np.arctan2(ay, ax)
+    alpha, phi = angles_about_by_hand(ax, ay)
     _segmented_geometry_is_unambiguous(alpha, phi, rotation)
 
     labels = _segment_index(alpha, phi, rotation=rotation, **SEGMENTED)
@@ -448,8 +460,7 @@ def test_segmented_detector_single_bright_pixel_lands_in_expected_segment(
 ):
     rotation = 0.4
     ds = _angular_sampling()
-    kx, ky = pixel[0] * ds[0], pixel[1] * ds[1]
-    alpha, phi = np.hypot(kx, ky), np.arctan2(ky, kx)
+    alpha, phi = angles_about_by_hand(pixel[0] * ds[0], pixel[1] * ds[1])
 
     def label_for(rotation):
         return _segment_index(
@@ -490,11 +501,10 @@ def test_segmented_detector_offset_captures_pixels_beyond_centred_crop(device, p
     ds = _angular_sampling()
     offset_pixels = (5, 3)
     offset = (offset_pixels[0] * ds[0], offset_pixels[1] * ds[1])
-    kx = (pixel[0] - offset_pixels[0]) * ds[0]
-    ky = (pixel[1] - offset_pixels[1]) * ds[1]
+    alpha, phi = angles_about_by_hand(pixel[0] * ds[0], pixel[1] * ds[1], offset, ds)
     label = _segment_index(
-        np.array([np.hypot(kx, ky)]),
-        np.array([np.arctan2(ky, kx)]),
+        np.array([alpha]),
+        np.array([phi]),
         rotation=rotation,
         **SEGMENTED,
     )[0]
@@ -550,8 +560,7 @@ def test_segmented_detector_show_draws_the_offset():
     regions, _ = _shown_regions(detector, gpts=GPTS, sampling=SAMPLING, energy=ENERGY)
 
     ax, ay = _pixel_angles()
-    kx, ky = ax - offset[0], ay - offset[1]
-    alpha, phi = np.hypot(kx, ky), np.arctan2(ky, kx)
+    alpha, phi = angles_about_by_hand(ax, ay, offset, _ds)
     _segmented_geometry_is_unambiguous(alpha, phi, rotation)
     expected = np.fft.fftshift(
         _segment_index(alpha, phi, rotation=rotation, **SEGMENTED)
@@ -589,7 +598,7 @@ def test_flexible_annular_show_with_waves_matches_detection():
     np.testing.assert_array_equal(labels, np.arange(nbins))
 
     ax, ay = _shown_angles(measurement)
-    alpha = np.hypot(ax, ay)
+    alpha, _ = angles_about_by_hand(ax, ay)
     assert alpha[np.isfinite(regions)].max() < nbins * step
     clear = np.abs(alpha / step - np.round(alpha / step)) > 1e-6
     labelled = np.isfinite(regions) & clear
@@ -606,7 +615,7 @@ def test_annular_detector_show_with_waves_and_default_outer():
     regions, measurement = _shown_regions(detector, waves)
 
     ax, ay = _shown_angles(measurement)
-    alpha = np.hypot(ax, ay)
+    alpha, _ = angles_about_by_hand(ax, ay)
     drawn = np.isfinite(regions)
     assert drawn.any()
     assert alpha[drawn].min() >= inner
@@ -647,7 +656,7 @@ def test_offset_detector_reaching_past_nyquist_does_not_wrap(
     )
     ax, ay = _pixel_angles()
     _assert_clear_of_edges(
-        np.hypot(ax - offset[0], ay - offset[1]), (_PAST_NYQUIST_OUTER,)
+        angles_about_by_hand(ax, ay, offset, _ds)[0], (_PAST_NYQUIST_OUTER,)
     )
 
     detector = make_detector(_PAST_NYQUIST_OUTER, offset)
@@ -672,16 +681,21 @@ def _slit_pixel_count(angle, width, q_min, q_max, offset):
     theta = np.deg2rad(angle)
     d = np.array([np.cos(theta), np.sin(theta)])
     n = np.array([-np.sin(theta), np.cos(theta)])
-    rx, ry = ax - offset[0], ay - offset[1]
-    along = rx * d[0] + ry * d[1]
-    across = rx * n[0] + ry * n[1]
-    _assert_clear_of_edges(along, (q_min, q_max), atol=1e-6)
-    _assert_clear_of_edges(across, (-width / 2, width / 2), atol=1e-6)
+    # the coordinates of the pixels along and across the slit, on the grid, and
+    # the edges of the slit there: with the exact convention a coordinate of the
+    # slit is the angle whose sine is the direction cosine along that axis
+    along = ax * d[0] + ay * d[1]
+    across = ax * n[0] + ay * n[1]
+    o_along, o_across = np.dot(offset, d), np.dot(offset, n)
+    along_edges = grid_angle_by_hand([o_along + q_min, o_along + q_max])
+    across_edges = grid_angle_by_hand([o_across - width / 2, o_across + width / 2])
+    _assert_clear_of_edges(along, along_edges, atol=1e-6)
+    _assert_clear_of_edges(across, across_edges, atol=1e-6)
     inside = (
-        (along >= q_min)
-        & (along < q_max)
-        & (across >= -width / 2)
-        & (across < width / 2)
+        (along >= along_edges[0])
+        & (along < along_edges[1])
+        & (across >= across_edges[0])
+        & (across < across_edges[1])
     )
     return np.count_nonzero(inside)
 
@@ -693,6 +707,7 @@ def test_slit_detector_corners_count_pixels_in_rectangle(device, corners):
     kx_min <= kx < kx_max, ky_min <= ky < ky_max."""
     kx_min, kx_max, ky_min, ky_max = corners
     ax, ay = _pixel_angles()
+    kx_min, kx_max, ky_min, ky_max = grid_angle_by_hand(corners)
     _assert_clear_of_edges(ax, (kx_min, kx_max))
     _assert_clear_of_edges(ay, (ky_min, ky_max))
     expected = np.count_nonzero(
@@ -820,7 +835,7 @@ def test_momentum_resolved_spectrum_sweeps_toward_angle(make_detector):
     ds = _angular_sampling()
     kx, ky = pixel[0] * ds[0], pixel[1] * ds[1]
     angle = np.rad2deg(np.arctan2(ky, kx))
-    q0 = np.hypot(kx, ky)
+    q0 = angle_by_hand(np.hypot(kx, ky))
     dp = _single_pixel_spectral_dp(*pixel)
 
     toward = momentum_resolved_spectrum(dp, make_detector(angle))
@@ -918,7 +933,7 @@ def test_annular_flexible_pixelated_agree_on_multislice_exit_waves(si_exit_waves
     must be exactly [i, i + 1) mrad for integrate_radial(a, b) to select the
     annulus [a, b)."""
     exit_waves = si_exit_waves
-    alpha = np.hypot(
+    alpha, _ = angles_about_by_hand(
         *_pixel_angles(gpts=exit_waves.gpts, sampling=exit_waves.sampling, energy=100e3)
     )
     _assert_clear_of_edges(alpha, (a, b))

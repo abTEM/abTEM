@@ -3,7 +3,11 @@
 import ase.build
 import numpy as np
 import pytest
-from utils import synthetic_transition_potential
+from utils import (  # noqa: F401
+    angle_by_hand,
+    each_angle_convention,
+    synthetic_transition_potential,
+)
 
 import abtem
 
@@ -187,7 +191,9 @@ def test_review_focal_kernel_is_built_once_per_slice(monkeypatch):
         abtem.WavesDetector(gpts=(4, 6)),
     ],
 )
-def test_review_collection_guard_matches_detector_response(detector):
+def test_review_collection_guard_matches_detector_response(
+    detector, each_angle_convention
+):
     """Measure support using isolated Fourier beams through the actual detector."""
     from test_bipprism import _vacuum_eels_setup
 
@@ -213,7 +219,8 @@ def test_review_collection_guard_matches_detector_response(detector):
     frequencies = [np.fft.fftfreq(n, e / n) for n, e in zip(gpts, sm.extent)]
     alpha = np.hypot(frequencies[0][:, None], frequencies[1][None, :])
     alpha *= energy2wavelength(sm.energy) * 1e3
-    edge = float(alpha.ravel()[collected].max())
+    # the angle of the outermost collected beam, in the configured convention
+    edge = float(angle_by_hand(alpha.ravel()[collected].max()))
     with pytest.raises(ValueError, match="collection_angle"):
         _check_collection_angle(sm, [detector], edge - 1e-3)
     _check_collection_angle(sm, [detector], edge + 1e-3)

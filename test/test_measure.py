@@ -21,6 +21,7 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
     _gpu_count,
+    angle_by_hand,
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
@@ -1714,15 +1715,20 @@ def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_b
     """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
     centered at 2116 and half a unit from the next edge, which float32 radii of
     that size cannot resolve. Slow (a 4240 x 96 pattern in 2118 bins): it guards
-    against a return to radii in the configured precision."""
+    against a return to radii in the configured precision.
+
+    At 300 keV the pattern reaches wavelength * k = 0.834, so every beam has a
+    scattering angle, and max_angle, the angle of the edge of the 2118 bins on the
+    grid, holds them in either angle convention. (At 200 keV the pixel would be an
+    evanescent beam, wavelength * k = 1.06, without a scattering angle.)"""
     data = np.zeros((4240, 96), dtype=np.float32)
     data[2120 + 2116, 48 + 46] = 1.0
     with abtem.config.set({"precision": "float32"}):
         patterns = DiffractionPatterns(
-            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 200e3}
+            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 300e3}
         )
         profiles = patterns.azimuthal_average(
-            max_angle=2118 * patterns.angular_sampling[0]
+            max_angle=angle_by_hand(2118 * patterns.angular_sampling[0])
         )
 
     assert profiles.shape == (2118,)
@@ -2651,10 +2657,16 @@ def test_integrate_gradient_offset_is_per_member(chunks):
     np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
 
 
+@pytest.mark.parametrize("angles", ["paraxial", "exact"])
 @given(data=st.data())
 @lazy_params
 @devices
-def test_diffraction_patterns_bandlimit(data, lazy, device):
+def test_diffraction_patterns_bandlimit(angles, data, lazy, device):
+    with abtem.config.set({"angles": angles}):
+        _check_bandlimit(data, lazy, device)
+
+
+def _check_bandlimit(data, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(lazy=lazy, device=device, min_base_side=16)
     )
@@ -2664,18 +2676,22 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
     inner = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=outer))
     original = asnumpy(measurement.copy().compute().array)
 
-    # Oracle: the scattering angle of each pixel from np.fft.fftfreq (see
-    # test_diffraction_patterns_coordinates_match_fftfreq); bandlimit keeps
-    # inner < alpha < outer and zeroes the rest. Pixels within rounding of an
-    # edge could go either way and are left out of the comparison.
+    # Oracle: the coordinate of each pixel on the grid of wavelength * k from
+    # np.fft.fftfreq (see test_diffraction_patterns_coordinates_match_fftfreq), and
+    # its angle in the configured convention (NaN for an evanescent beam, which
+    # bandlimit zeroes); bandlimit keeps inner < alpha < outer and zeroes the rest.
+    # Pixels within rounding of an edge could go either way and are left out of the
+    # comparison: with the exact convention outer can be max_angles, the angle of
+    # the pixels at the edge of the grid.
     wavelength_mrad = energy2wavelength(measurement.metadata["energy"]) * 1e3
     angles = []
     for n, dk in zip(measurement.base_shape, measurement.sampling):
         k = np.fft.fftfreq(n, d=1 / (n * dk))
         angles.append((np.fft.fftshift(k) if measurement.fftshift else k))
-    alpha = np.hypot(angles[0][:, None], angles[1][None]) * wavelength_mrad
+    grid = np.hypot(angles[0][:, None], angles[1][None]) * wavelength_mrad
+    alpha = angle_by_hand(grid)
     keep = (alpha > inner) & (alpha < outer)
-    tolerance = 1e-5 * alpha.max()
+    tolerance = 1e-5 * np.nanmax(alpha)
     certain = (np.abs(alpha - inner) > tolerance) & (np.abs(alpha - outer) > tolerance)
 
     bandlimited = measurement.bandlimit(inner, outer)
@@ -2688,7 +2704,7 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
     # Without a semiangle_cutoff in the metadata, block_direct zeroes only the
     # zero-angle pixel.
     blocked = asnumpy(measurement.block_direct().compute().array)
-    np.testing.assert_array_equal(blocked, original * (alpha > 0))
+    np.testing.assert_array_equal(blocked, original * (grid > 0))
 
 
 @settings(deadline=None, max_examples=10)

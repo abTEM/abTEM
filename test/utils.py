@@ -526,3 +526,103 @@ def exactly_dividing_lengths():
             if quotient.denominator == 1:
                 pairs.append((float(length), float(step), int(quotient)))
     return pairs
+
+
+# ---- the angles configuration ----------------------------------------------------
+
+
+@pytest.fixture(scope="module", params=["paraxial", "exact"])
+def both_angle_conventions(request):
+    """Run every test of a module that uses this fixture once in each convention of
+    the ``angles`` configuration. Module scoped so that it can be combined with
+    hypothesis, which refuses function-scoped fixtures."""
+    from abtem.core import config
+
+    with config.set({"angles": request.param}):
+        yield request.param
+
+
+@pytest.fixture(params=["paraxial", "exact"])
+def each_angle_convention(request):
+    """Run a test once in each convention of the ``angles`` configuration (not with
+    hypothesis, which refuses function-scoped fixtures: see
+    `both_angle_conventions`)."""
+    from abtem.core import config
+
+    with config.set({"angles": request.param}):
+        yield request.param
+
+
+def is_exact_angles() -> bool:
+    """Whether the ``angles`` configuration is ``"exact"``."""
+    from abtem.core import config
+
+    return config.get("angles") == "exact"
+
+
+def grid_angle_by_hand(angle):
+    """The coordinate ``1e3 * wavelength * k`` [mrad] of a signed angle [mrad] in the
+    configured convention, by hand: the angle itself, or ``1e3 * sin(angle / 1e3)``
+    with the exact convention."""
+    angle = np.asarray(angle, dtype=np.float64)
+    if is_exact_angles():
+        angle = 1e3 * np.sin(np.clip(angle / 1e3, -np.pi / 2, np.pi / 2))
+    return _scalar_as_float(angle)
+
+
+def angle_by_hand(grid_angle):
+    """The angle [mrad] in the configured convention of a coordinate
+    ``1e3 * wavelength * k`` [mrad], by hand: the inverse of `grid_angle_by_hand`."""
+    grid_angle = np.asarray(grid_angle, dtype=np.float64)
+    if is_exact_angles():
+        with np.errstate(invalid="ignore"):
+            grid_angle = 1e3 * np.arcsin(grid_angle / 1e3)
+    return _scalar_as_float(grid_angle)
+
+
+def _scalar_as_float(value):
+    """A 0-d array as a float, as a scalar given to the hand conversions is
+    returned: pytest.approx refuses a 0-d array inside a list."""
+    return float(value) if np.ndim(value) == 0 else value
+
+
+def angles_about_by_hand(gx, gy, offset=(0.0, 0.0), sampling=None):
+    """The angle [mrad] of the beams at grid coordinates ``(gx, gy)`` [mrad] from the
+    centre of a detector offset by ``offset`` [mrad], and their azimuth [rad] about
+    it, in the configured convention, by hand.
+
+    Paraxially the distance from the offset on the grid. With the exact convention
+    the angle between the directions of the beam and of the centre, which is at the
+    angle ``|offset|`` from the axis (rounded to the pixel of ``sampling`` if given,
+    as the detectors round it), and the azimuth in the frame that the shortest
+    rotation of the centre onto the optical axis carries the pattern to.
+    """
+    gx = np.asarray(gx, dtype=np.float64)
+    gy = np.asarray(gy, dtype=np.float64)
+    offset = np.asarray(offset, dtype=np.float64)
+    if not is_exact_angles():
+        rx, ry = gx - offset[0], gy - offset[1]
+        return np.hypot(rx, ry), np.arctan2(ry, rx)
+
+    from scipy.spatial.transform import Rotation
+
+    radius = np.hypot(*offset)
+    centre = (
+        offset * (1e3 * np.sin(min(radius / 1e3, np.pi / 2)) / radius)
+        if radius > 0
+        else offset
+    )
+    if sampling is not None:
+        centre = np.round(centre / np.asarray(sampling)) * np.asarray(sampling)
+    c = np.append(centre / 1e3, np.sqrt(max(1 - np.sum((centre / 1e3) ** 2), 0.0)))
+
+    n = np.stack(np.broadcast_arrays(gx / 1e3, gy / 1e3), axis=-1)
+    nz = np.sqrt(1 - np.sum(n**2, axis=-1))  # NaN for evanescent beams
+    n = np.concatenate([n, nz[..., None]], axis=-1)
+
+    axis = np.cross(c, [0.0, 0.0, 1.0])
+    if np.linalg.norm(axis) > 0:
+        rotvec = axis / np.linalg.norm(axis) * np.arccos(np.clip(c[2], -1, 1))
+        n = Rotation.from_rotvec(rotvec).apply(n.reshape(-1, 3)).reshape(n.shape)
+    alpha = 1e3 * np.arctan2(np.hypot(n[..., 0], n[..., 1]), n[..., 2])
+    return alpha, np.arctan2(n[..., 1], n[..., 0])

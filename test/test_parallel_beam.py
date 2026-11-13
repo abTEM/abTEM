@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 from ase.spacegroup import crystal
 
+from utils import each_angle_convention, grid_angle_by_hand  # noqa: F401
+
 import abtem
 from abtem.core.energy import energy2wavelength
 from abtem.measurements import DiffractionPatterns
@@ -42,9 +44,10 @@ def test_nyquist_sampling_of_a_parallel_beam_raises():
         Aperture(semiangle_cutoff=0.0, energy=ENERGY).nyquist_sampling
 
 
-def test_nyquist_sampling_of_a_positive_cutoff_is_unchanged():
+def test_nyquist_sampling_of_a_positive_cutoff_is_unchanged(each_angle_convention):
     wavelength = energy2wavelength(ENERGY)
-    assert nyquist_sampling(20.0, ENERGY) == 1 / (4 * 20.0 / wavelength * 1e-3)
+    k_max = grid_angle_by_hand(20.0) / wavelength * 1e-3
+    assert nyquist_sampling(20.0, ENERGY) == pytest.approx(1 / (4 * k_max), rel=1e-15)
     np.testing.assert_array_equal(
         nyquist_sampling(np.array([10.0, 20.0]), ENERGY),
         [nyquist_sampling(10.0, ENERGY), nyquist_sampling(20.0, ENERGY)],

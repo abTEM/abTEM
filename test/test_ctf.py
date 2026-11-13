@@ -5,6 +5,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from utils import angle_by_hand, each_angle_convention, grid_angle_by_hand  # noqa: F401
+
+from abtem.core import config
 from abtem.core.energy import energy2wavelength
 from abtem.transfer import (
     Aberrations,
@@ -81,18 +84,21 @@ def test_kernel_properties(factory, is_complex):
 # Utility functions — Hypothesis for monotonicity / sign properties
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("angles", ["paraxial", "exact"])
 @given(
     semiangle=st.floats(5.0, 100.0),
     energy=st.floats(60e3, 300e3),
 )
-def test_nyquist_sampling(semiangle, energy):
+def test_nyquist_sampling(angles, semiangle, energy):
     # The Nyquist sampling resolves the largest spatial frequency an aperture of
-    # this semiangle passes, alpha / lambda, with two samples per period.
-    expected = energy2wavelength(energy) / (4 * semiangle * 1e-3)
-    assert np.isclose(nyquist_sampling(semiangle, energy), expected, rtol=1e-12)
-    assert np.isclose(
-        Aperture(semiangle, energy=energy).nyquist_sampling, expected, rtol=1e-12
-    )
+    # this semiangle passes, with two samples per period: alpha / lambda, or
+    # sin(alpha) / lambda for a scattering angle.
+    with config.set({"angles": angles}):
+        expected = energy2wavelength(energy) / (4 * grid_angle_by_hand(semiangle) * 1e-3)
+        assert np.isclose(nyquist_sampling(semiangle, energy), expected, rtol=1e-12)
+        assert np.isclose(
+            Aperture(semiangle, energy=energy).nyquist_sampling, expected, rtol=1e-12
+        )
 
 
 @given(Cs=st.floats(1e5, 1e8))
@@ -263,14 +269,15 @@ class TestCTF:
             dp.array, np.exp(-1j * chi), rtol=0, atol=1e-3
         )
 
-    def test_to_diffraction_patterns_grid_arguments(self):
+    def test_to_diffraction_patterns_grid_arguments(self, each_angle_convention):
         # An explicit gpts sets the number of pixels and max_angle the largest
         # angle, whether or not the CTF has a grid of its own; without them the
         # CTF's own gpts and sampling are used. The values are exp(-i chi) of
         # the defocus at the coordinates the patterns report.
         defocus = 100.0
         wavelength = energy2wavelength(ENERGY)
-        own_max_angle = wavelength / (2 * SAMPLING[0]) * 1e3  # 185 mrad
+        # 185 mrad on the grid; max_angles reports it in the configured convention
+        own_max_angle = angle_by_hand(wavelength / (2 * SAMPLING[0]) * 1e3)
 
         def ctf(grid):
             if grid:
