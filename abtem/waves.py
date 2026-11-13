@@ -174,7 +174,7 @@ def _max_batch_with_exit_planes(
     output_bytes = sum(
         int(np.prod(detector._out_base_shape(sized)[0]))
         * np.dtype(detector._out_dtype(sized)[0]).itemsize
-        for detector in validate_detectors(detectors, sized)
+        for detector in validate_detectors(detectors, sized, allow_reflected=True)
     )
     ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
 
@@ -3265,7 +3265,7 @@ class Probe(WavesBuilder):
             Additional keyword arguments forwarded to the inelastic multislice function
             (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
             a :class:`.FourierMultislice` (default) or a
-            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
+            :class:`.RealSpaceMultislice` taking the split step (its default).
 
         Returns
         -------

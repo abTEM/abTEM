@@ -13,10 +13,12 @@ from abtem.finite_difference import (
 )
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
-# Suppress Numba performance warnings during tests
+# Suppress Numba performance warnings during tests; the series of the full operator is
+# deprecated (and tested here until it is removed)
 pytestmark = pytest.mark.filterwarnings(
     "ignore::numba.core.errors.NumbaPerformanceWarning",
-    "ignore::UserWarning"
+    "ignore::UserWarning",
+    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
 )
 
 
@@ -397,8 +399,10 @@ class TestDetectors:
         assert len(results) == 2
 
 
-class TestBackscattering:
-    """Test backscattering calculations."""
+@pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
+class TestDeprecatedReturnBackscattered:
+    """The deprecated return_backscattered: the backscattered waves at every exit
+    plane, which need an exit plane after every slice."""
 
     def test_backscattering_requires_full_expansion(self, test_system):
         """Test that backscattering requires expansion_scope='full'."""
@@ -414,7 +418,7 @@ class TestBackscattering:
                 potential=potential_exit_planes,
                 scan=scan,
                 lazy=False,
-                algorithm=RealSpaceMultislice(order=3, expansion_scope="propagator"),
+                algorithm=RealSpaceMultislice(order=3),
                 return_backscattered=True,
             )
 
@@ -447,7 +451,7 @@ class TestBackscattering:
             exit_planes=tuple(range(6)),
         )
         with pytest.raises(ValueError, match="starting with the entrance plane -1"):
-            _multislice_arrays(potential, False)
+            _deprecated_backscattered_arrays(potential, False)
 
     # One tuple comparison checks every spelling, before the lazy/eager split;
     # the lazy case checks that the error surfaces from the dask task.
@@ -471,7 +475,7 @@ class TestBackscattering:
             exit_planes=exit_planes,
         )
         with pytest.raises(ValueError, match="after every slice"):
-            _multislice_arrays(potential, lazy)
+            _deprecated_backscattered_arrays(potential, lazy)
 
     def test_backscattering_accepts_every_exit_plane_as_a_sequence(self):
         # Three random slices on a small grid: the run is cheap, and a sequence
@@ -483,53 +487,182 @@ class TestBackscattering:
                 array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
             )
 
-        reference = _multislice_arrays(potential(1), False)[1]
+        reference = _deprecated_backscattered_arrays(potential(1), False)[1]
         assert np.abs(reference[0]).max() > 0
         for exit_planes in (tuple(range(-1, 3)), list(range(-1, 3)), np.arange(-1, 3)):
             spelled = potential(exit_planes)
             assert tuple(spelled.exit_planes) == potential(1).exit_planes
             np.testing.assert_array_equal(
-                _multislice_arrays(spelled, False)[1],
+                _deprecated_backscattered_arrays(spelled, False)[1],
                 reference,
                 err_msg=type(exit_planes).__name__,
+            )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_backscattered_wave_crosses_each_slab_slice_once(self, lazy, device):
+        # Slab over vacuum: the only source is the slab/vacuum interface at plane 3
+        # (after slice 2). A laterally uniform backward wave crossing a uniform
+        # slice of projected potential V (in V Å) turns its phase by sigma * V and
+        # keeps its modulus, so each plane above the interface differs from the one
+        # below by exactly sigma, whichever sign the backward step is given.
+        array = np.zeros((7, 24, 20), dtype=np.float32)
+        array[:3] = 1.0
+        with abtem.config.set({"device": device}):
+            potential = abtem.PotentialArray(
+                array, slice_thickness=1.0, extent=(6.0, 5.0), exit_planes=1
+            )
+            _, backscattered = _deprecated_backscattered_arrays(potential, lazy)
+
+        source = backscattered[3]
+        assert np.abs(source).min() > 0
+        for plane in range(3):
+            np.testing.assert_allclose(
+                np.abs(backscattered[plane]), np.abs(source), rtol=1e-4
+            )
+            step = np.angle(backscattered[plane] * np.conj(backscattered[plane + 1]))
+            np.testing.assert_allclose(
+                np.abs(step), abtem.core.energy.energy2sigma(100e3), rtol=1e-2
+            )
+        assert not np.any(backscattered[4:])
+
+
+def _random_slices(exit_planes):
+    # three random slices on a small grid: cheap, and every slice reflects
+    array = np.random.default_rng(0).random((3, 16, 12)).astype(np.float32)
+    return abtem.PotentialArray(
+        array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
+    )
+
+
+class TestBackscattering:
+    """The wave reflected at the entrance, measured by detectors with
+    reflected=True."""
+
+    @pytest.mark.parametrize(
+        "algorithm", [FourierMultislice(), RealSpaceMultislice(order=2)]
+    )
+    def test_reflected_detectors_need_an_algorithm_that_reflects(self, algorithm):
+        with pytest.raises(ValueError, match="needs an algorithm that reflects"):
+            abtem.PlaneWave(energy=100e3).multislice(
+                _random_slices(None),
+                detectors=abtem.WavesDetector(reflected=True),
+                algorithm=algorithm,
+            )
+
+    def test_reflected_detectors_are_refused_where_nothing_reflects(self):
+        potential = _random_slices(None)
+        s_matrix = abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
+        with pytest.raises(ValueError, match="cannot be used here"):
+            s_matrix.scan(detectors=abtem.AnnularDetector(0, 20, reflected=True))
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_the_reflected_wave_is_the_deprecated_one_at_the_entrance(self, lazy):
+        with pytest.warns(FutureWarning, match="return_backscattered is deprecated"):
+            _, old = _deprecated_backscattered_arrays(_random_slices(1), lazy)
+        transmitted, reflected = _multislice_arrays(_random_slices(None), lazy)
+        assert reflected.shape == transmitted.shape
+        assert np.abs(reflected).max() > 0
+        np.testing.assert_allclose(reflected, old[0], rtol=1e-5, atol=1e-9)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy):
+        results = abtem.PlaneWave(energy=100e3).multislice(
+            _random_slices(1),
+            detectors=[
+                abtem.WavesDetector(),
+                abtem.WavesDetector(reflected=True),
+                abtem.PixelatedDetector(reflected=True),
+            ],
+            algorithm=RealSpaceMultislice(expansion_scope="full"),
+            lazy=lazy,
+        )
+        transmitted, reflected, pattern = results
+        assert transmitted.shape == (4, 16, 12)  # the entrance and three planes
+        assert reflected.shape == (16, 12)
+        assert not reflected.ensemble_axes_metadata
+        assert reflected.metadata["reflected"] and pattern.metadata["reflected"]
+        assert "reflected" not in transmitted.metadata
+        if lazy:
+            pattern, reflected = pattern.compute(), reflected.compute()
+        np.testing.assert_allclose(
+            to_host_array(pattern.array),
+            to_host_array(abtem.PixelatedDetector().detect(reflected).array),
+            rtol=1e-5,
+            atol=1e-12,
+        )
+
+    @pytest.mark.parametrize("frozen_phonons", [False, True])
+    def test_a_reflected_annular_scan_is_lazy_as_it_is_eager(self, frozen_phonons):
+        # the reflected output drops the exit-plane axis and the wave's own axes
+        atoms = ase.build.bulk("Si", cubic=True)
+        if frozen_phonons:
+            atoms = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
+        potential = abtem.Potential(
+            atoms, gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1
+        )
+        detectors = [
+            abtem.AnnularDetector(inner=0, outer=20),
+            abtem.AnnularDetector(inner=0, outer=20, reflected=True),
+        ]
+        scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(2, 1))
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+        algorithm = RealSpaceMultislice(expansion_scope="full")
+        eager = probe.scan(
+            potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=False
+        )
+        lazy = probe.scan(
+            potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
+        )
+        assert eager[0].shape == (4, 2, 1) and eager[1].shape == (2, 1)
+        for e, measurement in zip(eager, lazy):
+            assert measurement.shape == e.shape
+            # synchronously, as the other tests here: Numba's workqueue layer aborts
+            # on parallel stencils from several threads
+            computed = measurement.compute(scheduler="synchronous", progress_bar=False)
+            np.testing.assert_allclose(
+                to_host_array(computed.array), to_host_array(e.array), rtol=1e-5
             )
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.slow
     def test_backscattering_with_detectors(self, test_system):
-        """The backscattered waves follow the detectors' measurements, which are
-        those of the transmitted waves."""
+        """Detectors of the transmitted and of the reflected wave in one run measure
+        each what they would measure of that wave alone."""
         probe = test_system["probe"]
         potential_exit_planes = test_system["potential_exit_planes"]
         scan = test_system["single_point_scan"]
 
-        detectors = [
-            abtem.PixelatedDetector(),
-            abtem.AnnularDetector(inner=30, outer=100),
-            abtem.WavesDetector(),
-        ]
+        def detectors(reflected):
+            return [
+                abtem.PixelatedDetector(reflected=reflected),
+                abtem.AnnularDetector(inner=30, outer=100, reflected=reflected),
+                abtem.WavesDetector(reflected=reflected),
+            ]
+
         results = probe.multislice(
             potential=potential_exit_planes,
             scan=scan,
-            detectors=detectors,
+            detectors=detectors(False) + detectors(True),
             lazy=False,
             algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
-            return_backscattered=True,
         )
 
-        # N detectors + 1 backscattered waves
         assert isinstance(results, (list, tuple))
-        assert len(results) == len(detectors) + 1
-        *measurements, transmitted, backscattered = results
-        assert isinstance(backscattered, abtem.Waves)
-        assert backscattered.shape == transmitted.shape
-        assert np.abs(to_host_array(backscattered.array[0])).max() > 0
+        assert len(results) == 6
+        transmitted, reflected = results[2], results[5]
+        assert isinstance(reflected, abtem.Waves)
+        # the transmitted waves have an exit-plane axis, the reflected wave none
+        assert reflected.shape == transmitted.shape[1:]
+        assert np.abs(to_host_array(reflected.array)).max() > 0
         # float32 rounding only: on the GPU the annular sum differs by 1.7e-7
         # relative between the two routes; another detector or the backscattered
         # waves would differ by order 1.
-        for detector, measurement in zip(detectors, measurements):
+        for detector, measurement, waves in zip(
+            detectors(False) * 2, results, [transmitted] * 3 + [reflected] * 3
+        ):
             actual = to_host_array(measurement.array)
-            expected = to_host_array(detector.detect(transmitted).array)
+            expected = to_host_array(detector.detect(waves).array)
             atol = 1e-12
             if test_system["device"] != "cpu":
                 # The two routes Fourier transform the exit wave separately, and
@@ -554,21 +687,38 @@ def _multislice_arrays(
     potential, lazy, scan=None, backscattered=True, potential_chunk_size="auto"
 ):
     """The arrays of a full-expansion real-space multislice: the transmitted
-    waves, and with `backscattered` also the backscattered waves."""
-    algorithm = RealSpaceMultislice(expansion_scope="full")
+    waves, and with `backscattered` also the wave reflected at the entrance."""
+    detectors = [abtem.WavesDetector()]
+    if backscattered:
+        detectors.append(abtem.WavesDetector(reflected=True))
     kwargs = dict(
         lazy=lazy,
-        return_backscattered=backscattered,
+        detectors=detectors,
         potential_chunk_size=potential_chunk_size,
-        algorithm=algorithm,
+        algorithm=RealSpaceMultislice(expansion_scope="full"),
     )
+    return _computed(potential, kwargs, scan, backscattered, lazy)
+
+
+def _deprecated_backscattered_arrays(potential, lazy):
+    """The transmitted waves and the backscattered waves at every exit plane, of the
+    deprecated return_backscattered."""
+    kwargs = dict(
+        lazy=lazy,
+        return_backscattered=True,
+        algorithm=RealSpaceMultislice(expansion_scope="full"),
+    )
+    return _computed(potential, kwargs, None, True, lazy)
+
+
+def _computed(potential, kwargs, scan, several, lazy):
     if scan is None:
         result = abtem.PlaneWave(energy=100e3).multislice(potential, **kwargs)
     else:
         result = abtem.Probe(energy=100e3, semiangle_cutoff=20).multislice(
             potential, scan=scan, **kwargs
         )
-    result = result if backscattered else [result]
+    result = result if several else [result]
     if lazy:
         result = [
             r.compute(scheduler="synchronous", progress_bar=False) for r in result
@@ -722,9 +872,8 @@ class TestFullExpansionChunking:
 
         def arrays(chunk_size):
             with abtem.config.set({"device": device}):
-                # backscattering needs an exit plane after every slice
                 return _multislice_arrays(
-                    make(exit_planes=1 if backscattered else 2),
+                    make(exit_planes=2),
                     lazy,
                     backscattered=backscattered,
                     potential_chunk_size=chunk_size,
@@ -746,56 +895,29 @@ class TestFullExpansionChunking:
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("lazy", [False, True])
-    def test_backscattered_wave_crosses_vacuum_unchanged(self, lazy, device):
-        # Vacuum over a laterally uniform slab: the only source is the interface
-        # at plane 4 (after slice 3). A laterally uniform backward wave crosses
-        # vacuum unchanged, so it reaches every plane above the interface as the
-        # source itself; crossing a slab slice would rotate its phase.
-        array = np.zeros((7, 24, 20), dtype=np.float32)
-        array[4:] = 1.0
-        with abtem.config.set({"device": device}):
+    def test_vacuum_in_front_delays_the_reflection_by_its_round_trip(
+        self, lazy, device
+    ):
+        # A laterally uniform slab under 4 or under 1 slice of vacuum: the only source
+        # is its front face, and a laterally uniform backward wave crosses vacuum
+        # unchanged, so the two reflections differ by the round trip of the 3 Å
+        # between the faces, exp(2 i k 3 Å).
+        def reflected(vacuum_slices):
+            array = np.zeros((vacuum_slices + 3, 24, 20), dtype=np.float32)
+            array[vacuum_slices:] = 1.0
             potential = abtem.PotentialArray(
-                array, slice_thickness=1.0, extent=(6.0, 5.0), exit_planes=1
+                array, slice_thickness=1.0, extent=(6.0, 5.0)
             )
-            _, backscattered = _multislice_arrays(potential, lazy)
+            return _multislice_arrays(potential, lazy)[1]
 
-        source = backscattered[4]
-        assert np.abs(source).min() > 0
+        with abtem.config.set({"device": device}):
+            deep, shallow = reflected(4), reflected(1)
+
+        k = 2 * np.pi / abtem.core.energy.energy2wavelength(100e3)
+        assert np.abs(shallow).min() > 0
         np.testing.assert_allclose(
-            backscattered[:4],
-            np.broadcast_to(source, backscattered[:4].shape),
-            rtol=0,
-            atol=1e-5 * np.abs(source).max(),
+            deep, shallow * np.exp(2j * k * 3.0), rtol=0, atol=1e-4 * np.abs(deep).max()
         )
-        assert not np.any(backscattered[5:])
-
-    @pytest.mark.parametrize("device", ["cpu", gpu])
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_backscattered_wave_crosses_each_slab_slice_once(self, lazy, device):
-        # Slab over vacuum: the only source is the slab/vacuum interface at plane 3
-        # (after slice 2). A laterally uniform backward wave crossing a uniform
-        # slice of projected potential V (in V Å) turns its phase by sigma * V and
-        # keeps its modulus, so each plane above the interface differs from the one
-        # below by exactly sigma, whichever sign the backward step is given.
-        array = np.zeros((7, 24, 20), dtype=np.float32)
-        array[:3] = 1.0
-        with abtem.config.set({"device": device}):
-            potential = abtem.PotentialArray(
-                array, slice_thickness=1.0, extent=(6.0, 5.0), exit_planes=1
-            )
-            _, backscattered = _multislice_arrays(potential, lazy)
-
-        source = backscattered[3]
-        assert np.abs(source).min() > 0
-        for plane in range(3):
-            np.testing.assert_allclose(
-                np.abs(backscattered[plane]), np.abs(source), rtol=1e-4
-            )
-            step = np.angle(backscattered[plane] * np.conj(backscattered[plane + 1]))
-            np.testing.assert_allclose(
-                np.abs(step), abtem.core.energy.energy2sigma(100e3), rtol=1e-2
-            )
-        assert not np.any(backscattered[4:])
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("lazy", [False, True])
@@ -840,15 +962,14 @@ class TestFullExpansionChunking:
                     np.ones((len(profile), 8, 8), np.float32) * profile[:, None, None],
                     slice_thickness=dz,
                     sampling=0.5,
-                    exit_planes=1,
                 )
-                _, backscattered = abtem.PlaneWave(energy=energy).multislice(
+                wave = abtem.PlaneWave(energy=energy).multislice(
                     potential,
+                    detectors=abtem.WavesDetector(reflected=True),
                     algorithm=RealSpaceMultislice(order=order, expansion_scope="full"),
-                    return_backscattered=True,
                     lazy=False,
                 )
-            reflected.append(abs(to_host_array(backscattered[0].array).mean()) ** 2)
+            reflected.append(abs(to_host_array(wave.array).mean()) ** 2)
 
         np.testing.assert_allclose(
             reflected, expected, rtol=0.03, atol=0.01 * max(expected)
@@ -859,18 +980,27 @@ class TestFullExpansionChunking:
         atoms = ase.build.bulk("Si", cubic=True)
         slab = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
         slab.positions[:, 2] += 2.0
-        slab.cell[2, 2] = 3 * atoms.cell[2, 2]
-        with abtem.config.set({"device": device}):
+
+        def run(cells, backscattered=True):
+            # the same slices of the slab, with more or less vacuum behind it
+            behind = slab.copy()
+            behind.cell[2, 2] = cells * atoms.cell[2, 2]
             potential = abtem.Potential(
-                slab, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3, exit_planes=1
+                behind, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3
             )
-            transmitted, backscattered = _multislice_arrays(potential, False)
-            (alone,) = _multislice_arrays(potential, False, backscattered=False)
+            return _multislice_arrays(potential, False, backscattered=backscattered)
+
+        with abtem.config.set({"device": device}):
+            transmitted, reflected = run(3)
+            (alone,) = run(3, backscattered=False)
+            _, more_vacuum = run(4)
 
         np.testing.assert_array_equal(transmitted, alone)
-        per_plane = np.abs(backscattered).max(axis=(-2, -1))
+        assert np.abs(reflected).max() > 0
         # nothing comes back from the vacuum behind the slab
-        assert per_plane[:5].all() and not per_plane[5:].any()
+        np.testing.assert_allclose(
+            more_vacuum, reflected, rtol=0, atol=1e-5 * np.abs(reflected).max()
+        )
 
 
 class TestAlgorithmComparison:
