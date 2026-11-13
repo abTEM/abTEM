@@ -691,12 +691,27 @@ class TestEqualityDiscriminates:
         assert Holder([images, 0.1]) != Holder([images, 0.1 + 1e-12])
         assert Holder([images, np.arange(3)]) != Holder([images, np.arange(3)])
 
-    @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError, RuntimeError])
+    def test_a_runtime_error_from_a_held_object_escapes(self):
+        """Only the `RuntimeError` of an `ArrayObject` indexed by NumPy is caught;
+        any other, such as a device error, escapes `==`. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Inner(EqualityMixin):
+            def __eq__(self, other):
+                raise RuntimeError("device error")
+
+        class Holder(EqualityMixin):
+            def __init__(self):
+                self._inner = Inner()
+
+        with pytest.raises(RuntimeError, match="device error"):
+            Holder() == Holder()
+
+    @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
     def test_a_held_object_whose_own_comparison_raises_is_a_difference(self, error):
         """A held object's `__eq__` is compared inside the same `try` as every
-        other attribute, so a `KeyError`, `TypeError`, `ValueError` or
-        `RuntimeError` it raises is a difference, as it is for a list of arrays.
-        Device-independent."""
+        other attribute, so a `KeyError`, `TypeError` or `ValueError` it raises
+        is a difference, as it is for a list of arrays. Device-independent."""
         from abtem.core.utils import EqualityMixin
 
         class Inner(EqualityMixin):

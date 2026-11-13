@@ -123,6 +123,11 @@ def _is_same_dask_collection(a, b) -> bool:
     )
 
 
+class _TooManyIndicesError(RuntimeError):
+    """An `ArrayObject` indexed with more indices than it has axes, as NumPy does
+    when it converts a list of them; `safe_equality` catches only this one."""
+
+
 class LazyComparisonError(TypeError):
     """`==` met lazy (dask) content that only computing it could decide."""
 
@@ -196,13 +201,13 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
             # slice index). Lazy content below, in a held object, list or dict,
             # is deferred like a lazy attribute; any other error is a difference.
-            # A RuntimeError arises from an ndarray against a list of array
+            # `_TooManyIndicesError`: an ndarray against a list of array
             # objects, whose `ArrayObject.__getitem__` NumPy calls to convert it.
             equal = value == other
         except LazyComparisonError:
             undecided = undecided or key
             continue
-        except (KeyError, TypeError, ValueError, RuntimeError):
+        except (KeyError, TypeError, ValueError, _TooManyIndicesError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
@@ -228,9 +233,9 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             )
             try:
                 equal = np.all(compare(value, other)) and _shape(value) == _shape(other)
-            except (ValueError, TypeError, RuntimeError):
-                # NumPy cannot convert the values (RuntimeError: a list holding
-                # array objects, which it indexes); `==` above gave the verdict.
+            except (ValueError, TypeError, _TooManyIndicesError):
+                # NumPy cannot convert the values (`_TooManyIndicesError`: a list
+                # holding array objects, which it indexes); `==` gave the verdict.
                 pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
