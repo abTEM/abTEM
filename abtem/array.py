@@ -1383,6 +1383,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     ) -> Self:
         """Creates array object from a given array and metadata.
 
+        A class that cannot rebuild itself from the array, the axes metadata and
+        the metadata raises `NotImplementedError`; `from_zarr` then rebuilds it
+        from its stored constructor kwargs.
+
         Parameters
         ----------
         array : ndarray
@@ -3148,7 +3152,9 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        except Exception:
+        except NotImplementedError:
+            # The class rebuilds only from its constructor kwargs, which every
+            # canonical file since abTEM 1.0.10 stores.
             if kwargs is None:
                 raise
 
