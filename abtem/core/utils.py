@@ -124,8 +124,8 @@ def _is_same_dask_collection(a, b) -> bool:
 
 
 class _TooManyIndicesError(RuntimeError):
-    """An `ArrayObject` indexed with more indices than it has axes, as NumPy does
-    when it converts a list of them; `safe_equality` catches only this one."""
+    """More indices than the indexable axes of an `ArrayObject`, as NumPy gives
+    when it converts a list of them."""
 
 
 class LazyComparisonError(TypeError):
