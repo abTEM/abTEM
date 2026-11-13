@@ -17,7 +17,7 @@ import abtem
 import abtem.array
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
-from abtem.core.axes import OrdinalAxis
+from abtem.core.axes import EnergyAxis, OrdinalAxis
 from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.measurements import Images
 
@@ -922,3 +922,56 @@ def test_apply_func_calls_the_function_with_the_array_object(device, lazy):
     np.testing.assert_allclose(
         asnumpy(result.array), expected, rtol=1e-6, atol=1e-6 * expected.max()
     )
+
+
+def test_set_ensemble_axes_metadata_refuses_an_axis_that_does_not_fit():
+    """The axis is checked against the array: a mismatch raises and leaves the
+    old axis in place. The test sets metadata only, so it pins no device."""
+    old_axis = OrdinalAxis(label="a", values=(1, 2, 3))
+    images = Images(
+        np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=[old_axis]
+    )
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        images.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert images.ensemble_axes_metadata[0] == old_axis
+
+    new_axis = OrdinalAxis(label="b", values=(10, 20, 30))
+    assert images.set_ensemble_axes_metadata(new_axis, 0) is images
+    assert images.ensemble_axes_metadata[0] == new_axis
+
+
+def test_set_ensemble_axes_metadata_leaves_a_list_shared_with_another_object_alone():
+    """A refused axis is never written into the list the caller passed, and an
+    accepted one is installed in a list of the object's own, so another object
+    built from the same list keeps its axes. The test sets metadata only, so it
+    pins no device."""
+    axes = [OrdinalAxis(label="a", values=(1, 2, 3))]
+    first = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+    second = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"
+
+    first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20, 30)), 0)
+    assert first.ensemble_axes_metadata[0].label == "b"
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"
+
+
+def test_set_ensemble_axes_metadata_refuses_an_energy_axis_contradicting_the_energy():
+    """An `EnergyAxis` that does not hold the object's energy is refused, as the
+    constructor refuses it. The test sets metadata only, so it pins no device."""
+    old_axis = OrdinalAxis(label="a", values=(1, 2))
+    waves = abtem.Waves(
+        np.ones((2, 4, 4), np.complex64),
+        sampling=0.1,
+        energy=100e3,
+        ensemble_axes_metadata=[old_axis],
+    )
+
+    with pytest.raises(ValueError, match="contradicts"):
+        waves.set_ensemble_axes_metadata(EnergyAxis(values=(100e3, 200e3)), 0)
+    assert waves.ensemble_axes_metadata[0] == old_axis
