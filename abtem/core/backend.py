@@ -6,6 +6,7 @@ import ctypes
 import importlib.util
 import logging
 import os
+import re
 import sys
 import threading
 import warnings
@@ -127,6 +128,34 @@ def check_cupy_is_installed():
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
 
 
+# The oldest PyTorch whose Metal backend abTEM supports. Before it MPS has no
+# ``linalg.eigh``, and an FFT over an axis before the last four dimensions makes
+# MPSGraph abort the whole process (not a Python exception), so it is refused up
+# front. Keep in sync with the `mps` extra in pyproject.toml.
+_MIN_TORCH_VERSION_FOR_MPS = (2, 14)
+
+
+def _check_torch_version_for_mps(version: str) -> None:
+    """
+    Raise if a PyTorch version string is older than the Metal (MPS) floor.
+
+    An unparseable version string is let through: refusing a working torch over
+    an unfamiliar version scheme would be worse than the check it replaces.
+    """
+    match = re.match(r"(\d+)\.(\d+)", version)
+    if match is None:
+        return
+    if (int(match[1]), int(match[2])) < _MIN_TORCH_VERSION_FOR_MPS:
+        minimum = ".".join(str(n) for n in _MIN_TORCH_VERSION_FOR_MPS)
+        raise RuntimeError(
+            f"The Metal (MPS) backend requires PyTorch {minimum} or newer, but "
+            f"PyTorch {version} is installed. Before {minimum}, MPS has no "
+            "`linalg.eigh`, and an FFT over an axis before the last four aborts "
+            "the whole process. Upgrade PyTorch (`pip install -U torch`), or "
+            "change the device to 'cpu'."
+        )
+
+
 def check_mps_is_available():
     """
     Load the Metal (MPS) array namespace, raising if it is unusable.
@@ -177,6 +206,9 @@ def check_mps_is_available():
                 _torch.DEVICE = torch_device
 
                 _torch._check_available()
+
+                if torch_device == "mps":
+                    _check_torch_version_for_mps(_torch.torch.__version__)
 
                 # tp last: other threads test it without the lock, and must
                 # not see it before TorchNDArray is in place too.
