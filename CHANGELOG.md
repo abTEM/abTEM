@@ -760,7 +760,10 @@ Bugfixes:
   judged it by the generic rule and skipped any check the object's class adds (the slice index of
   `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
   `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
-  unequal the other, and is unequal both ways, as the two objects are on their own
+  unequal the other, and is unequal both ways, as the two objects are on their own. An error that the held
+  object's comparison raises (`TypeError`, `ValueError`, `KeyError`) escapes `==` and `!=` when the object is an
+  attribute itself; held in a list, tuple or dict it still makes the holder unequal, and a lazy comparison is
+  still deferred
 - `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
   in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
   `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
@@ -838,6 +841,43 @@ Bugfixes:
   `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
   NumPy, Metal and float64 CuPy are unchanged
   ([PR #680](https://github.com/abTEM/abTEM/pull/680))
+- Indexing an ensemble axis with a step, a negative start or stop, a reversed slice or an index array keeps the
+  coordinates of the selected members. The axis kept the unsliced offset and sampling, so `dp[::2, ::2]` of a
+  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size
+    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`) raises `IndexError`; index with the
+      explicit positions (`dp[np.arange(n)[::-1]]`) instead. A reversed slice of another linear axis, and an index
+      array on any linear axis, scan axes included, give a `NonLinearAxis` with the selected coordinates. A scan
+      axis indexed with an array is therefore no longer a scan axis: reductions over it return line profiles
+      instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D scan;
+      `integrated_center_of_mass` raises when one of the two scan axes was indexed with an array; and a reduction
+      of `dp[:, [1, 4]]` puts the indexed axis first
+- `set_ensemble_axes_metadata` raises when the new axis does not fit the array (a `RuntimeError` for an ordinal axis
+  of the wrong length) or contradicts its energy (a `ValueError`), and leaves the object's axes unchanged. It no
+  longer writes into an axes list the object shares with its caller or with other objects, so a list read from
+  `ensemble_axes_metadata` before the call keeps the old axes
+    - **Behaviour change:** the call returned without an error and without changing anything for an axis of the
+      wrong length, and installed a contradicting `EnergyAxis`
+- `from_zarr` builds an object from the axes and metadata the file stores, and falls back to the stored constructor
+  arguments only for the classes that cannot be built that way. A file whose axes do not fit its array raises
+  instead of loading with other axes, and an error inside `from_array_and_metadata` is no longer hidden. Files
+  written by abTEM 1.0.10 and 1.0.11 load to the same objects as before
+- `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
+  per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
+  limit; every other error, an insufficient driver included, raises on every call
+- A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
+  where it ran on the synchronous scheduler instead
+- The GPU chunk and batch size estimates raise a CUDA error from their memory probe, where they fell back to
+  `dask.chunk-size-gpu`. They still use that setting when CuPy is not installed or sees no device
+- `natural_neighbor_weights` falls back to nearest-parent weights only for degenerate (collinear or coincident)
+  parent beams; any other error from the triangulation is raised
+- `shrink_cell` works under `python -O`
+    - **Behaviour change:** an `Atoms` object without atoms raises, where it returned an empty `Atoms` with a zero
+      cell
+- The Miller-index labels of an indexed diffraction-pattern plot delegate only the methods of matplotlib's
+  `Annotation`: `hasattr`, `getattr` with a default and `copy.deepcopy` work on them, and any other name raises
+  `AttributeError`
+- The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
+  location), where it reported a convergence failure for any assertion
 
 Documentation:
 
