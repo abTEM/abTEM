@@ -4,11 +4,13 @@ import ase
 import ase.build
 import numpy as np
 import pytest
+from scipy.linalg import sqrtm
 from scipy.special import binom
 from utils import float64_devices, to_host_array
 
 import abtem
 from abtem.antialias import antialias_aperture
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.finite_difference import LaplaceOperator, _exact_root_step, multislice_step
 from abtem.multislice import LanczosMultislice, RealSpaceMultislice
@@ -254,6 +256,67 @@ def test_the_backscatter_of_a_uniform_step_is_the_series_of_the_wave_numbers(
 
     ratio = to_host_array(backscattered) / amplitude
     np.testing.assert_allclose(ratio, expected, rtol=1e-6, atol=0)
+
+
+@float64_devices
+@pytest.mark.parametrize("order", [4, 6])
+def test_the_backscatter_of_a_structured_wave_is_the_exact_operator_of_eq_7(
+    order, device
+):
+    # Oracle: B = (2 k_next)^-1 (k_next - k_current), with the wave-number operators
+    # k = K0 sqrt(1 + (laplacian / (4 pi K0) + sigma V) / (pi K0)) as dense matrices
+    # of the stencil of the step on a 12 x 12 grid, and their matrix square roots.
+    # 1 / k_next acts to the left of the difference, which differs from acting to
+    # its right for a structured wave and structured potentials. The first slice is
+    # so thin that the wave is the same after it. The comparison is at 30 keV, where
+    # the series of order 4 is converged to 2e-8 of the backscatter.
+    n, sampling, energy = 12, 0.2, 30e3
+    rng = np.random.default_rng(1)
+    q2 = np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None] ** 2
+
+    def structured_potential():  # smooth, 0 to 20 V
+        v = np.fft.ifft2(np.fft.fft2(rng.random((n, n))) * np.exp(-60 * q2)).real
+        return 20 * (v - v.min()) / np.ptp(v)
+
+    volts = [structured_potential(), structured_potential()]
+    thicknesses = [1e-9, 0.1]
+    slices = abtem.PotentialArray(
+        np.stack([v * t for v, t in zip(volts, thicknesses)]),
+        slice_thickness=thicknesses,
+        sampling=sampling,
+    )
+    waves = abtem.PlaneWave(energy=energy).match_grid(slices).build(lazy=False)
+    xp = get_array_module(waves.array)
+    wave = rng.random((n, n)) * np.exp(2j * np.pi * rng.random((n, n)))
+    waves._array = xp.asarray(wave.reshape(waves.array.shape))
+
+    stencil = LaplaceOperator(6).get_stencil(waves, device=waves.device)
+    basis = np.eye(n * n, dtype=complex).reshape(n * n, n, n)
+    laplacian = asnumpy(stencil(xp.asarray(basis))).reshape(n * n, n * n).T
+    k0, sigma = 1 / energy2wavelength(energy), energy2sigma(energy)
+
+    def wave_number(v):
+        a = laplacian / (4 * np.pi * k0) + np.diag(sigma * v.ravel())
+        return k0 * sqrtm(np.eye(n * n) + a / (np.pi * k0))
+
+    k_current, k_next = (wave_number(v) for v in volts)
+    mask = antialias_aperture(waves._valid_gpts, waves._valid_sampling, np)
+
+    def bandlimit(a):
+        return np.fft.ifft2(np.fft.fft2(a.reshape(n, n)) * mask).ravel()
+
+    expected = bandlimit(
+        np.linalg.solve(2 * k_next, (k_next - k_current) @ bandlimit(wave))
+    )
+
+    _, backscattered = _series_step(order)(waves, slices[0], slices[1])
+
+    np.testing.assert_allclose(
+        to_host_array(backscattered).ravel(),
+        expected,
+        rtol=0,
+        atol=1e-6 * np.abs(expected).max(),
+    )
 
 
 @float64_devices
