@@ -14,9 +14,14 @@ Changed behaviour:
   limits and offsets, apertures and the probe's `semiangle_cutoff`, `max_angle` of crops and patterns, slit
   coordinates) is the scattering angle `arcsin(wavelength * k)`, not `wavelength * k`. Every result that depends on
   such an angle changes slightly: by 0.01 % at 25 mrad, 0.7 % at 200 mrad and 19 % at 1000 mrad. A detector without an
-  outer limit counts the propagating beams only, and the axes of patterns are labelled `λk`. Set
-  `abtem.config.set({"angles": "paraxial"})` to reproduce the results of earlier versions
-  ([PR #675](https://github.com/abTEM/abTEM/pull/675))
+  outer limit counts the propagating beams only. Set `abtem.config.set({"angles": "paraxial"})` to reproduce the results
+  of earlier versions ([PR #675](https://github.com/abTEM/abTEM/pull/675))
+- **Diffraction patterns in angles are drawn on their scattering angles.** With the exact convention, `show()` of a
+  pattern in angular units (`units="mrad"`, and the detectors' own `show`) draws every pixel at its scattering angle
+  from the centre, in the direction of its `wavelength * k`, so that the distance from the centre is the angle and
+  rings of constant angle are circles; the axes read "scattering angle". The pixels, uniform in `wavelength * k`, are
+  stretched towards 90 degrees, where the plot ends; evanescent beams are not drawn. Patterns in `1/Å` are images of
+  their grid as before ([PR #676](https://github.com/abTEM/abTEM/pull/676))
 
 Features:
 

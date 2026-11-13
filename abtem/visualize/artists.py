@@ -17,7 +17,12 @@ from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from abtem.core import config
 from abtem.core.axes import LinearAxis
 from abtem.core.colors import hsluv_cmap
-from abtem.core.units import get_conversion_factor
+from abtem.core.units import (
+    _conversion_factors,
+    format_units,
+    get_conversion_factor,
+    units_type,
+)
 
 if TYPE_CHECKING:
     from matplotlib.text import Annotation
@@ -491,6 +496,86 @@ def get_extent(measurement, units=None):
     return (left, right, bottom, top)
 
 
+def angle_plane_mesh(
+    shape: tuple[int, int],
+    grid_left: tuple[float, float],
+    grid_sampling: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The corners [mrad] of the pixels of a pattern drawn so that the distance from
+    the origin is the scattering angle, with the exact angle convention (see
+    `to_angle_plane`), and which pixels are evanescent beams.
+
+    Parameters
+    ----------
+    shape : two int
+        The number of pixels along x and y.
+    grid_left : two float
+        The left (lower) edge of the first pixel along x and y [mrad on the grid].
+    grid_sampling : two float
+        The size of a pixel along x and y [mrad on the grid].
+
+    Returns
+    -------
+    x, y : np.ndarray
+        The corners of the pixels, shape ``(nx + 1, ny + 1)``.
+    evanescent : np.ndarray
+        Whether the centre of each pixel is beyond ``wavelength * k = 1``, shape
+        ``(nx, ny)``.
+    """
+    from abtem.core.energy import to_angle_plane
+
+    edges = [
+        left + sampling * np.arange(n + 1)
+        for left, sampling, n in zip(grid_left, grid_sampling, shape)
+    ]
+    gx, gy = np.meshgrid(*edges, indexing="ij")
+    centres = [(e[1:] + e[:-1]) / 2 for e in edges]
+    evanescent = np.hypot(centres[0][:, None], centres[1][None, :]) > 1e3
+    x, y = to_angle_plane(gx, gy, "exact")
+    return x, y, evanescent
+
+
+def _angle_plane_mesh_of(measurement, units, origin="lower"):
+    """The pixel corners [units] of `measurement` drawn on scattering angles (see
+    `angle_plane_mesh`), and its evanescent pixels, or None where it is drawn as an
+    image: with the paraxial convention, in units that are not angles, for axes in
+    real space, or for another origin than "lower"."""
+    from abtem.core.axes import ReciprocalSpaceAxis
+
+    energy = measurement.metadata.get("energy", None)
+    if origin != "lower" or not _draws_on_angle_plane(units, energy):
+        return None
+    axes = measurement.base_axes_metadata[:2]
+    if not all(isinstance(axis, ReciprocalSpaceAxis) for axis in axes):
+        return None
+
+    # the grid in mrad, which get_extent gives in `units`
+    to_mrad = 1.0 / _conversion_factors[units]
+    left, right, bottom, top = (e * to_mrad for e in get_extent(measurement, units))
+    shape = measurement.base_shape[:2]
+    sampling = ((right - left) / shape[0], (top - bottom) / shape[1])
+    x, y, evanescent = angle_plane_mesh(shape, (left, bottom), sampling)
+    return x / to_mrad, y / to_mrad, evanescent
+
+
+def _draws_on_angle_plane(units, energy) -> bool:
+    """Whether a plot in `units` is drawn on scattering angles: with the exact angle
+    convention, in angular units and with a known energy."""
+    from abtem.core.energy import angle_convention
+
+    return (
+        angle_convention() == "exact"
+        and units is not None
+        and units_type.get(units) == "angular"
+        and energy is not None
+    )
+
+
+def _angle_plane_labels(units):
+    units = format_units(units)
+    return f"scattering angle x [{units}]", f"scattering angle y [{units}]"
+
+
 class ImageArtist(Artist2D):
     num_cbars = 1
 
@@ -513,24 +598,40 @@ class ImageArtist(Artist2D):
         if measurement.is_complex:
             raise ValueError("Complex measurements are not supported.")
 
-        extent = get_extent(measurement, units=units)
-
         cmap = validate_cmap(cmap, measurement)
 
-        self._axes_image = ax.imshow(
-            measurement.array.T,
-            origin=origin,
-            cmap=cmap,
-            extent=extent,
-            interpolation=kwargs.pop("interpolation", "none"),
-            **kwargs,
-        )
+        # with the exact angle convention a pattern in angles is drawn so that the
+        # distance from the centre is the scattering angle, which is not a
+        # rectangular image of its uniform grid of wavelength * k
+        self._mesh = _angle_plane_mesh_of(measurement, units, origin)
+        if self._mesh is not None:
+            x, y, self._evanescent = self._mesh
+            kwargs.pop("interpolation", None)
+            # a mesh of a quadrilateral per pixel: a raster in vector output
+            kwargs.setdefault("rasterized", True)
+            self._axes_image = ax.pcolormesh(
+                x.T, y.T, self._masked(measurement.array), cmap=cmap, **kwargs
+            )
+            ax.set_aspect(plt.rcParams["image.aspect"])
+        else:
+            extent = get_extent(measurement, units=units)
+            self._axes_image = ax.imshow(
+                measurement.array.T,
+                origin=origin,
+                cmap=cmap,
+                extent=extent,
+                interpolation=kwargs.pop("interpolation", "none"),
+                **kwargs,
+            )
         norm = _get_norm(vmin, vmax, power, logscale)
         self._axes_image.set_norm(norm)
         self._cbar = None
 
-        xlabel = measurement.base_axes_metadata[0].format_label(units)
-        ylabel = measurement.base_axes_metadata[1].format_label(units)
+        if self._mesh is not None:
+            xlabel, ylabel = _angle_plane_labels(units)
+        else:
+            xlabel = measurement.base_axes_metadata[0].format_label(units)
+            ylabel = measurement.base_axes_metadata[1].format_label(units)
 
         self.set_xlabel(xlabel)
         self.set_ylabel(ylabel)
@@ -538,6 +639,13 @@ class ImageArtist(Artist2D):
         if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
+
+    def _masked(self, array):
+        # the (x, y) array as the (y, x) values of the mesh, without the evanescent
+        # beams, which have no scattering angle
+        array = np.asarray(array).T
+        mask = np.broadcast_to(self._evanescent.T, array.shape)
+        return np.ma.masked_array(array, mask=mask)
 
     @property
     def axes_image(self):
@@ -561,9 +669,13 @@ class ImageArtist(Artist2D):
         return [array.min(), array.max()]
 
     def get_xlim(self):
+        if self._mesh is not None:
+            return float(self._mesh[0].min()), float(self._mesh[0].max())
         return self.axes_image.get_extent()[:2]
 
     def get_ylim(self):
+        if self._mesh is not None:
+            return float(self._mesh[1].min()), float(self._mesh[1].max())
         return self.axes_image.get_extent()[2:]
 
     def set_cbars(self, caxes, **kwargs):
@@ -575,9 +687,16 @@ class ImageArtist(Artist2D):
         self.axes_image.set_cmap(cmap)
 
     def set_data(self, data):
-        self.axes_image.set_data(data.array.T)
+        if self._mesh is not None:
+            self.axes_image.set_array(self._masked(data.array))
+        else:
+            self.axes_image.set_data(data.array.T)
 
     def set_extent(self, extent):
+        if self._mesh is not None:
+            raise NotImplementedError(
+                "a pattern drawn on scattering angles has no rectangular extent"
+            )
         self.axes_image.set_extent(extent)
 
     def set_power(self, power: float = 1.0):
@@ -867,13 +986,15 @@ class ScatterArtist(Artist2D):
         self._unit_conversion = get_conversion_factor(
             units, old_units="1/Å", energy=energy
         )
+        self._units = units
+        self._on_angle_plane = _draws_on_angle_plane(units, energy)
 
         cmap = validate_cmap(cmap, measurement)
 
         self._circles = ScaledCircleCollection(
             array=measurement.array,
             cmap=cmap,
-            offsets=measurement.positions[:, :2] * self._unit_conversion,
+            offsets=self._offsets(measurement),
             transOffset=ax.transData,
             norm=norm,
             scale=scale,
@@ -887,11 +1008,15 @@ class ScatterArtist(Artist2D):
 
         units = "1/Å" if units is None else units
 
-        x_axis = LinearAxis(label="k_x", units=units, tex_label="$k_x$")
-        y_axis = LinearAxis(label="k_y", units=units, tex_label="$k_y$")
+        if self._on_angle_plane:
+            xlabel, ylabel = _angle_plane_labels(units)
+        else:
+            x_axis = LinearAxis(label="k_x", units=units, tex_label="$k_x$")
+            y_axis = LinearAxis(label="k_y", units=units, tex_label="$k_y$")
+            xlabel, ylabel = x_axis.format_label(units), y_axis.format_label(units)
 
-        self.set_xlabel(x_axis.format_label(units))
-        self.set_ylabel(y_axis.format_label(units))
+        self.set_xlabel(xlabel)
+        self.set_ylabel(ylabel)
 
         if annotations:
             annotations = []
@@ -961,10 +1086,20 @@ class ScatterArtist(Artist2D):
         else:
             return 1.0
 
+    def _offsets(self, measurement) -> np.ndarray:
+        offsets = measurement.positions[:, :2] * self._unit_conversion
+        if not self._on_angle_plane:
+            return offsets
+        # the spots at their scattering angles, where patterns in angles are drawn
+        from abtem.core.energy import to_angle_plane
+
+        to_mrad = 1.0 / _conversion_factors[self._units]
+        x, y = to_angle_plane(offsets[:, 0] * to_mrad, offsets[:, 1] * to_mrad, "exact")
+        return np.column_stack([x, y]) / to_mrad
+
     def set_data(self, measurement: np.ndarray):
-        positions = measurement.positions[:, :2] * self._unit_conversion
         intensities = measurement.array
-        self._circles.set_data(intensities, positions)
+        self._circles.set_data(intensities, self._offsets(measurement))
 
     def set_annotation_kwargs(self, **kwargs):
         if self._annotations is None:
@@ -1027,40 +1162,67 @@ class DomainColoringArtist(Artist2D):
         abs_array = np.abs(measurement.array)
         alpha = _domain_coloring_alpha(norm, abs_array)
 
-        extent = get_extent(measurement, units=units)
-
         cmap = validate_cmap(cmap, measurement)
 
-        self._phase_axes_image = ax.imshow(
-            np.angle(measurement.array).T,
-            origin="lower",
-            interpolation=kwargs.pop("interpolation", "none"),
-            alpha=alpha.T,
-            vmin=-np.pi,
-            vmax=np.pi,
-            cmap=cmap,
-            extent=extent,
-            **kwargs,
-        )
-        self._amplitude_axes_image = ax.imshow(
-            abs_array.T,
-            origin="lower",
-            interpolation=kwargs.pop("interpolation", "none"),
-            cmap="gray",
-            zorder=-1,
-            extent=extent,
-            **kwargs,
-        )
+        # drawn on scattering angles as in ImageArtist
+        self._mesh = _angle_plane_mesh_of(measurement, units)
+        if self._mesh is not None:
+            x, y, self._evanescent = self._mesh
+            kwargs.pop("interpolation", None)
+            kwargs.setdefault("rasterized", True)
+            self._phase_axes_image = ax.pcolormesh(
+                x.T,
+                y.T,
+                self._masked(np.angle(measurement.array)),
+                alpha=alpha.T,
+                vmin=-np.pi,
+                vmax=np.pi,
+                cmap=cmap,
+                **kwargs,
+            )
+            self._amplitude_axes_image = ax.pcolormesh(
+                x.T, y.T, self._masked(abs_array), cmap="gray", zorder=-1, **kwargs
+            )
+            ax.set_aspect(plt.rcParams["image.aspect"])
+        else:
+            extent = get_extent(measurement, units=units)
+            self._phase_axes_image = ax.imshow(
+                np.angle(measurement.array).T,
+                origin="lower",
+                interpolation=kwargs.pop("interpolation", "none"),
+                alpha=alpha.T,
+                vmin=-np.pi,
+                vmax=np.pi,
+                cmap=cmap,
+                extent=extent,
+                **kwargs,
+            )
+            self._amplitude_axes_image = ax.imshow(
+                abs_array.T,
+                origin="lower",
+                interpolation=kwargs.pop("interpolation", "none"),
+                cmap="gray",
+                zorder=-1,
+                extent=extent,
+                **kwargs,
+            )
 
         self._amplitude_axes_image.set_norm(norm)
         self._amplitude_cbar = None
 
-        self.set_xlabel(measurement.base_axes_metadata[0].format_label(units))
-        self.set_ylabel(measurement.base_axes_metadata[1].format_label(units))
+        if self._mesh is not None:
+            xlabel, ylabel = _angle_plane_labels(units)
+        else:
+            xlabel = measurement.base_axes_metadata[0].format_label(units)
+            ylabel = measurement.base_axes_metadata[1].format_label(units)
+        self.set_xlabel(xlabel)
+        self.set_ylabel(ylabel)
 
         if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes, label=cbar_label)
+
+    _masked = ImageArtist._masked
 
     def remove(self):
         self.amplitude_axes_image.remove()
@@ -1076,11 +1238,12 @@ class DomainColoringArtist(Artist2D):
         array = self.amplitude_axes_image.get_array()
         return [array.min(), array.max()]
 
-    def get_xlim(self):
-        return self.amplitude_axes_image.get_extent()[:2]
+    get_xlim = ImageArtist.get_xlim
+    get_ylim = ImageArtist.get_ylim
 
-    def get_ylim(self):
-        return self.amplitude_axes_image.get_extent()[2:]
+    @property
+    def axes_image(self):
+        return self.amplitude_axes_image
 
     @property
     def amplitude_norm(self):
@@ -1123,6 +1286,10 @@ class DomainColoringArtist(Artist2D):
         self._update_alpha()
 
     def set_extent(self, extent):
+        if self._mesh is not None:
+            raise NotImplementedError(
+                "a pattern drawn on scattering angles has no rectangular extent"
+            )
         self.phase_axes_image.set_extent(extent)
         self.amplitude_axes_image.set_extent(extent)
 
@@ -1130,6 +1297,11 @@ class DomainColoringArtist(Artist2D):
         abs_array = np.abs(data._array)
         alpha = _domain_coloring_alpha(self.amplitude_norm, abs_array)
 
+        if self._mesh is not None:
+            self.phase_axes_image.set_array(self._masked(np.angle(data._array)))
+            self.phase_axes_image.set_alpha(alpha.T)
+            self.amplitude_axes_image.set_array(self._masked(abs_array))
+            return
         self.phase_axes_image.set_alpha(alpha.T)
         self.phase_axes_image.set_data(np.angle(data._array).T)
         self.amplitude_axes_image.set_data(abs_array.T)
