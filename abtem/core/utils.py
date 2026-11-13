@@ -138,7 +138,10 @@ def _is_integral(value) -> bool:
         return True
     if isinstance(value, (tuple, list)):
         return all(_is_integral(item) for item in value)
-    return getattr(getattr(value, "dtype", None), "kind", None) in ("b", "i", "u")
+    # A NumPy dtype only: the `dtype` of a `dask.delayed` value is delayed too,
+    # and comparing it raises.
+    dtype = getattr(value, "dtype", None)
+    return isinstance(dtype, np.dtype) and dtype.kind in ("b", "i", "u")
 
 
 def _shape(value) -> tuple[int, ...]:
