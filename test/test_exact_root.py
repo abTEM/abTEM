@@ -163,7 +163,7 @@ def test_the_correction_is_subtracted_from_the_forward_wave_as_for_the_series():
 def test_the_exact_root_agrees_with_the_converged_series_at_high_energy():
     # Oracle: where 2 sigma V / k is far below 1 the Taylor series converges to the
     # root: at 100 keV the series of order 3 and the exact root give the same wave
-    # to 0.3 % (the series is truncated, and the stencil of the exact root is the same).
+    # to 0.3 % (the series is truncated and has the finite-difference Laplacian).
     potential = graphene_potential(0.1, vacuum=3.0)
     wave = {}
     for name, algorithm in (

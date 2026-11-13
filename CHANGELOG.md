@@ -12,7 +12,7 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 Features:
 
 - `RealSpaceMultislice(order="exact", expansion_scope="full")` evaluates the one-way root of the full operator without a
-  Taylor series, by a Lanczos iteration with the finite-difference Laplacian on the propagating band (new parameters
+  Taylor series, by a Lanczos iteration on the Fourier coefficients of the wave (an exact Laplacian) in the propagating band (new parameters
   `propagating_cutoff`, `lanczos_tolerance` and `max_iterations`). The series diverges where `2 sigma V / k` reaches 1, which
   is the case for the whole band at low energies and at the nuclei of heavy atoms at any energy: on graphene at 1 keV the
   exact root (with the backscatter correction, which `expansion_scope="full"` always applies) is within 1.4 % of an exact

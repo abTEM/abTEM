@@ -795,33 +795,22 @@ def _propagating_band(waves: Waves, propagating_cutoff: float, shift, xp):
     )
 
 
-def _gradient(laplace: LaplaceOperator, sampling, xp):
-    """The centred finite-difference gradient (d/dx, d/dy) of the accuracy of
-    ``laplace``, for arrays (..., nx, ny) with periodic boundaries."""
-    coefficients = _calculate_finite_difference_coefficient(1, laplace._accuracy)
-    half = len(coefficients) // 2
-
-    def derivative(array, axis, step):
-        return (
-            sum(
-                float(coefficients[k + half]) * xp.roll(array, -k, axis=axis)
-                for k in range(-half, half + 1)
-                if coefficients[k + half] != 0.0
-            )
-            / step
-        )
-
-    return (
-        lambda a: derivative(a, -2, sampling[0]),
-        lambda a: derivative(a, -1, sampling[1]),
-    )
+def _kinetic_symbol(waves: Waves, shift, k: float, xp) -> np.ndarray:
+    """The kinetic part of the operator on the Fourier coefficients of a wave stored
+    without the carrier of the in-plane wave vector ``shift`` = k_t [1/Å]: the
+    Laplacian of the plane wave q + k_t over 2 k, ``-4 pi^2 |q + k_t|^2 / (2 k)``."""
+    nx, ny = waves._valid_gpts
+    dx, dy = waves._valid_sampling
+    qx = np.fft.fftfreq(nx, dx)[:, None] + shift[0]
+    qy = np.fft.fftfreq(ny, dy)[None, :] + shift[1]
+    symbol = -4 * np.pi**2 * (qx**2 + qy**2) / (2 * k)
+    return xp.asarray(symbol.astype(get_dtype(complex=False)))
 
 
 def _exact_root_step(
     waves: Waves,
     potential_slice: PotentialArray,
     next_slice: PotentialArray | None,
-    laplace: LaplaceOperator,
     propagating_cutoff: float,
     tolerance: float,
     max_iterations: int,
@@ -829,10 +818,12 @@ def _exact_root_step(
     """A multislice step with the exact one-way root of the full operator, and the
     backscattered wave of the next slice, by Lanczos iterations (no Taylor series).
 
-    A tilted wave travels along (tan x, tan y, 1) and, as in multislice, is stored
-    without its carrier exp(2 pi i (k_t . r + k_zt z)): with K_t = 2 pi k_t the
-    operator acting on the stored wave is (laplacian + 2 i K_t . gradient - |K_t|^2) /
-    (2 k) + sigma V, on the band around -k_t, and the step removes the phase of k_zt."""
+    The iterations act on the Fourier coefficients of the waves, where the kinetic
+    part of the operator is exact, so an application of the operator costs one pair
+    of FFTs (for the potential, which acts in real space). A tilted wave travels along
+    (tan x, tan y, 1) and, as in multislice, is stored without its carrier
+    exp(2 pi i (k_t . r + k_zt z)): its coefficient q is the plane wave q + k_t, on
+    the band around -k_t, and the step removes the phase of k_zt."""
     xp = get_array_module(waves.array)
 
     if waves.device != potential_slice.device:
@@ -844,8 +835,6 @@ def _exact_root_step(
     sigma = energy2sigma(waves._valid_energy)
     wavelength = energy2wavelength(waves._valid_energy)
     k = 2 * np.pi / wavelength
-    laplace_stencil = laplace.get_stencil(waves, device=waves.device)
-    gradient_x, gradient_y = _gradient(laplace, waves._valid_sampling, xp)
     potentials = [potential_slice.array[0] * sigma / thickness]
     if next_slice is not None:
         potentials.append(next_slice.array[0] * sigma / thickness)
@@ -856,33 +845,22 @@ def _exact_root_step(
         norm = np.sqrt(1.0 + np.sum(tangent**2))
         shift = tangent / (wavelength * norm)  # k_t [1/Å]
         reference = k / norm  # k_zt
-        momentum = 2 * np.pi * shift  # K_t
-        tilted = bool(np.any(shift))
         band = _propagating_band(waves, propagating_cutoff, shift, xp)
-
-        def project(array):
-            return ifft2(fft2(array) * band)
+        kinetic = _kinetic_symbol(waves, shift, k, xp) * band
 
         def operator(potential, stacked=False):
             """The operator of a potential, or of a stack of two (2, 1, nx, ny), for a
-            batch made of two halves, one for each potential."""
+            batch made of two halves, one for each potential, on the band."""
 
-            def apply(a):
-                kinetic = laplace_stencil(a)
-                if tilted:
-                    kinetic = (
-                        kinetic
-                        + 2j
-                        * (momentum[0] * gradient_x(a) + momentum[1] * gradient_y(a))
-                        - float(np.sum(momentum**2)) * a
-                    )
+            def apply(spectrum):
+                a = ifft2(spectrum)
                 if stacked:
                     local = (a.reshape((2, -1) + a.shape[1:]) * potential).reshape(
                         a.shape
                     )
                 else:
                     local = potential * a
-                return project(kinetic / (2 * k) + local)
+                return kinetic * spectrum + band * fft2(local)
 
             return apply
 
@@ -892,7 +870,7 @@ def _exact_root_step(
         correction_tolerance = max(tolerance, 1e-5)
         current = operator(potentials[0])
         batch = lanczos_function(
-            project(batch),
+            fft2(batch) * band,
             current,
             exponential_of_root(k, thickness, reference),
             tolerance,
@@ -926,7 +904,7 @@ def _exact_root_step(
                 xp,
             )
             batch = batch - backscatter
-        return batch, backscatter
+        return ifft2(batch), ifft2(backscatter)
 
     shape = waves._array.shape
     members = waves._array.reshape((-1,) + shape[-2:])
@@ -995,7 +973,6 @@ def multislice_step(
             waves,
             potential_slice,
             next_slice,
-            laplace,
             propagating_cutoff,
             lanczos_tolerance,
             max_iterations,

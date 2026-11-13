@@ -1,8 +1,9 @@
 """Profile the parts of one Lanczos iteration of RealSpaceMultislice(order="exact").
 
 One slice of the exact root with the backscatter correction runs three Lanczos
-iterations of about ten steps each. A step applies the operator (stencil, FFT, band,
-inverse FFT), orthogonalises the result against the Krylov basis, normalises it and
+iterations of about ten steps each, on the Fourier coefficients of the waves. A step
+applies the operator (the kinetic symbol, and the potential between an inverse FFT and
+an FFT), orthogonalises the result against the Krylov basis, normalises it and
 moves two numbers to the host. This script times each part on a batch of waves of the
 shape of a benchmark (graphene, 64 x 112 points by default), and a whole run.
 
@@ -75,7 +76,7 @@ def main():
     from abtem.core.backend import asnumpy, cp, get_array_module
     from abtem.core.energy import energy2sigma, energy2wavelength
     from abtem.core.fft import fft2, ifft2
-    from abtem.finite_difference import LaplaceOperator, _propagating_band
+    from abtem.finite_difference import _kinetic_symbol, _propagating_band
 
     device = args.device
     sync = synchronizer(device)
@@ -95,21 +96,22 @@ def main():
     rng = np.random.default_rng(0)
     array = rng.normal(size=(batch, nx, ny)) + 1j * rng.normal(size=(batch, nx, ny))
     a = xp.asarray(array.astype(np.complex64))
-    # one wave defines the grid, the sampling and the energy of the stencil and the band
+    # one wave defines the grid, the sampling and the energy of the band; the
+    # iterations act on Fourier coefficients
     waves = abtem.Waves(a[0], extent=potential.extent, energy=args.energy)
     wavelength = energy2wavelength(args.energy)
     k = 2 * np.pi / wavelength
     sigma = energy2sigma(args.energy)
     thickness = potential.slice_thickness[0]
     local = potential.array[0] * sigma / thickness
-    stencil = LaplaceOperator(6).get_stencil(waves, device=device)
     band = _propagating_band(waves, 0.95, (0.0, 0.0), xp)
+    kinetic = _kinetic_symbol(waves, (0.0, 0.0), k, xp) * band
 
-    def project(x):
-        return ifft2(fft2(x) * band)
+    def potential_term(x):
+        return band * fft2(local * ifft2(x))
 
     def apply(x):
-        return project(stencil(x) / (2 * k) + local * x)
+        return kinetic * x + potential_term(x)
 
     # the Krylov basis and a residual of the shape of an iteration
     m = args.basis
@@ -165,13 +167,8 @@ def main():
 
     megabytes = lambda x: x.nbytes / 1e6  # noqa: E731
     parts = [
-        ("stencil", lambda: stencil(a), megabytes(a)),
-        ("FFT, band, inverse FFT", lambda: project(a), megabytes(a)),
-        (
-            "potential times the wave, add (2 kernels)",
-            lambda: local * a + a,
-            megabytes(a),
-        ),
+        ("kinetic symbol times the coefficients", lambda: kinetic * a, megabytes(a)),
+        ("inverse FFT, potential, FFT, band", lambda: potential_term(a), megabytes(a)),
         ("operator (the whole apply)", lambda: apply(a), megabytes(a)),
         (f"orthogonalise against {m} vectors", project_out, megabytes(basis)),
         ("norm and one transfer to the host", norm_and_transfer, megabytes(w)),

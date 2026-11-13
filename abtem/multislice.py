@@ -753,9 +753,9 @@ class RealSpaceMultislice:
         Propagator and/or transmission operator order (default 1). ``"exact"`` (only
         for ``expansion_scope="full"``) evaluates the one-way root of the full
         operator, ``sqrt(k^2 + laplacian + 2 k sigma V) - k``, without a Taylor series,
-        by a Lanczos iteration with the finite-difference Laplacian, on the
-        propagating band (``|k| < propagating_cutoff / wavelength``, within the
-        antialiasing aperture). The series diverges where ``2 sigma V / k`` reaches 1,
+        by a Lanczos iteration on the Fourier coefficients of the wave, where the
+        Laplacian is exact, on the propagating band (``|k| < propagating_cutoff /
+        wavelength``, within the antialiasing aperture). The series diverges where ``2 sigma V / k`` reaches 1,
         which is the case at the nuclei of heavy atoms at any energy that the grid
         resolves, and at low energies for the whole band, so that its result for
         higher orders is not that of the root. It costs about 5 to 10 applications of
@@ -763,8 +763,8 @@ class RealSpaceMultislice:
         backscatter correction of the full scope. The potential must have finite
         projection, as for the full scope.
         A tilted wave is propagated in the frame of its direction, as in
-        ``FourierMultislice`` (the operator has the first derivative of the tilt in
-        it), not with the paraxial translation of the series.
+        ``FourierMultislice`` (the Laplacian is that of the plane waves ``q + k_t``),
+        not with the paraxial translation of the series.
 
     expansion_scope: str
         If "propagator" (default) only the propagator operator is expanded to order
@@ -775,7 +775,8 @@ class RealSpaceMultislice:
         beams at large angles to within a few percent between 1 and 5 keV, where they
         are 30 to 40 % too weak without it.
     derivative_accuracy : int, optional
-        Finite-difference accuracy for Laplace operator (default 6)
+        Finite-difference accuracy for Laplace operator (default 6). Not used by
+        ``order="exact"``.
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
     propagating_cutoff : float, optional
