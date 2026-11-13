@@ -202,15 +202,24 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         try:
             # A held EqualityMixin is compared with its own __eq__, which applies
             # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
-            # slice index). Lazy content below, in a held object, list or dict,
-            # is deferred like a lazy attribute; any other error is a difference.
-            # `_TooManyIndicesError`: an ndarray against a list of array
-            # objects, whose `ArrayObject.__getitem__` NumPy calls to convert it.
+            # slice index), and decides every comparison it cannot make itself,
+            # so an error it raises is a defect and escapes when the object is
+            # an attribute itself; held in a list, tuple or dict, the value is
+            # the container and the error is a difference. Lazy content below,
+            # in a held object, list or dict, is deferred like a lazy attribute.
+            # Any other value raises `TypeError` or `ValueError` when `==`
+            # cannot reduce its comparison: a list or dict holding arrays,
+            # arrays on two devices, or an ndarray against a list of array
+            # objects (`_TooManyIndicesError`, from the `ArrayObject.__getitem__`
+            # NumPy calls to convert it). That is a difference. A `KeyError`
+            # escapes for any attribute.
             equal = value == other
         except LazyComparisonError:
             undecided = undecided or key
             continue
-        except (KeyError, TypeError, ValueError, _TooManyIndicesError):
+        except (TypeError, ValueError, _TooManyIndicesError):
+            if isinstance(value, EqualityMixin):
+                raise
             return False
 
         from abtem.core.ensemble import EmptyEnsemble

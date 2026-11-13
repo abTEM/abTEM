@@ -735,10 +735,12 @@ class TestEqualityDiscriminates:
             Holder() == Holder()
 
     @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
-    def test_a_held_object_whose_own_comparison_raises_is_a_difference(self, error):
-        """A held object's `__eq__` is compared inside the same `try` as every
-        other attribute, so a `KeyError`, `TypeError` or `ValueError` it raises
-        is a difference, as it is for a list of arrays. Device-independent."""
+    def test_an_error_from_a_held_objects_own_comparison_escapes(self, error):
+        """A held object's `__eq__` decides every comparison it cannot make
+        itself, so an error it raises is a defect and escapes `==`, as a
+        `RuntimeError` does, when the object is an attribute itself (held in a
+        list, tuple or dict, the error is still a difference). A lazy
+        comparison error stays deferred. Device-independent."""
         from abtem.core.utils import EqualityMixin
 
         class Inner(EqualityMixin):
@@ -749,7 +751,24 @@ class TestEqualityDiscriminates:
             def __init__(self):
                 self._inner = Inner()
 
-        assert Holder() != Holder()
+        with pytest.raises(error, match="not comparable"):
+            Holder() == Holder()
+
+    def test_a_key_error_from_a_held_value_escapes(self):
+        """No comparison `==` cannot make raises `KeyError`, so one raised by a
+        held value's `__eq__` escapes. Device-independent."""
+        from abtem.core.utils import EqualityMixin
+
+        class Inner:
+            def __eq__(self, other):
+                raise KeyError("not comparable")
+
+        class Holder(EqualityMixin):
+            def __init__(self):
+                self._inner = Inner()
+
+        with pytest.raises(KeyError, match="not comparable"):
+            Holder() == Holder()
 
     def test_lazy_content_in_a_held_object_is_deferred_behind_a_difference(self):
         """A held lazy object decides nothing, so a difference in an attribute
