@@ -431,6 +431,7 @@ def is_gpu_dask_client(client) -> bool:
     -------
     bool
         True if the client is running and all of its workers are single-threaded.
+        An error from the scheduler's reply is raised, not read as "no".
     """
     if client is None:
         return False
@@ -438,11 +439,7 @@ def is_gpu_dask_client(client) -> bool:
     if getattr(client, "status", None) != "running":
         return False
 
-    try:
-        nthreads = client.nthreads()
-    except Exception:
-        return False
-
+    nthreads = client.nthreads()
     return len(nthreads) > 0 and all(n == 1 for n in nthreads.values())
 
 

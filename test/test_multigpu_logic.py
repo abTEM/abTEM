@@ -51,6 +51,13 @@ def test_is_gpu_dask_client_rejects_multithreaded():
     assert is_gpu_dask_client(client) is False
 
 
+def test_is_gpu_dask_client_raises_what_the_scheduler_query_raises():
+    client = mock.Mock(status="running")
+    client.nthreads.side_effect = OSError("connection to the scheduler dropped")
+    with pytest.raises(OSError, match="dropped"):
+        is_gpu_dask_client(client)
+
+
 def test_is_gpu_dask_client_rejects_empty():
     client = mock.Mock(status="running")
     client.nthreads.return_value = {}
