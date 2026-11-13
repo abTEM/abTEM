@@ -12,7 +12,13 @@ from unittest import mock
 
 import pytest
 
-from utils import requires_gpu
+from utils import (
+    INSUFFICIENT_DRIVER_ERROR,
+    NO_DEVICE_ERROR,
+    CUDARuntimeErrorStandIn,
+    cupy_cuda_stand_in,
+    requires_gpu,
+)
 
 import abtem
 import abtem.array
@@ -150,6 +156,63 @@ def test_ensure_cuda_cluster_defaults_omit_optional_kwargs(monkeypatch):
     backend.ensure_cuda_cluster()
     assert "rmm_pool_size" not in captured
     assert "CUDA_VISIBLE_DEVICES" not in captured
+
+
+def _fake_cupy(get_device_count):
+    """A stand-in for ``backend.cp`` exposing the device probe of
+    ``ensure_cuda_cluster``."""
+    return types.SimpleNamespace(cuda=cupy_cuda_stand_in(get_device_count))
+
+
+def _start_cuda_cluster(monkeypatch, cupy_stand_in):
+    """Start the cluster against ``cupy_stand_in`` and return the keyword
+    arguments that reached ``LocalCUDACluster``."""
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+    monkeypatch.setattr(backend, "cp", cupy_stand_in)
+    captured = {}
+    monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_capturing(captured))
+    monkeypatch.setattr(
+        "distributed.Client", lambda cluster: mock.Mock(status="running")
+    )
+    backend.ensure_cuda_cluster()
+    return captured
+
+
+def test_ensure_cuda_cluster_raises_a_failing_device_count_every_time(monkeypatch):
+    """CuPy's ``is_available()`` would answer False from the second call on."""
+
+    def failing_count():
+        raise CUDARuntimeErrorStandIn(*INSUFFICIENT_DRIVER_ERROR)
+
+    cupy_stand_in = _fake_cupy(failing_count)
+    for _ in range(2):
+        with pytest.raises(CUDARuntimeErrorStandIn, match="InsufficientDriver"):
+            _start_cuda_cluster(monkeypatch, cupy_stand_in)
+
+
+@pytest.mark.parametrize("n_gpus", [2, 3])
+def test_ensure_cuda_cluster_gives_each_worker_a_share_of_the_memory(
+    monkeypatch, n_gpus
+):
+    from distributed.system import MEMORY_LIMIT
+
+    captured = _start_cuda_cluster(monkeypatch, _fake_cupy(lambda: n_gpus))
+    assert captured["memory_limit"] == int(0.85 * MEMORY_LIMIT / n_gpus)
+
+
+def _no_device_count():
+    raise CUDARuntimeErrorStandIn(*NO_DEVICE_ERROR)
+
+
+@pytest.mark.parametrize(
+    "cupy_stand_in",
+    [None, _fake_cupy(_no_device_count)],
+    ids=["no cupy", "no device"],
+)
+def test_ensure_cuda_cluster_without_a_device_leaves_worker_memory_to_dask_cuda(
+    monkeypatch, cupy_stand_in
+):
+    assert "memory_limit" not in _start_cuda_cluster(monkeypatch, cupy_stand_in)
 
 
 def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch):

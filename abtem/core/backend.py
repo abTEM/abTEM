@@ -196,6 +196,35 @@ def check_mps_is_available():
 
 _cuda_cluster_client = None
 
+# CUDARuntimeError.status of cudaErrorNoDevice (CUDA) and hipErrorNoDevice (HIP).
+_CUDA_ERROR_NO_DEVICE = 100
+
+
+def _visible_gpu_count(cupy_module) -> int:
+    """
+    Number of GPUs that CuPy sees, 0 when there is none.
+
+    Only the no-device error means 0; any other CUDA error is raised. This is not
+    ``cupy.cuda.is_available()``, which caches a failed query as False and so
+    reports every later call, after the first one raised, as "no device".
+
+    Parameters
+    ----------
+    cupy_module : module
+        The ``cupy`` module.
+
+    Returns
+    -------
+    int
+        The number of visible GPUs.
+    """
+    try:
+        return cupy_module.cuda.runtime.getDeviceCount()
+    except cupy_module.cuda.runtime.CUDARuntimeError as exc:
+        if exc.status != _CUDA_ERROR_NO_DEVICE:
+            raise
+        return 0
+
 
 def ensure_cuda_cluster():
     """
@@ -234,15 +263,12 @@ def ensure_cuda_cluster():
     # memory-constrained allocation (e.g. a Slurm cgroup) spills instead of being
     # OOM-killed. dask-cuda otherwise sizes workers from the node total, which
     # over-commits when the cgroup grants less than the node has.
-    cluster_kwargs: dict = {}
-    try:
-        from distributed.system import MEMORY_LIMIT
+    from distributed.system import MEMORY_LIMIT
 
-        n_gpus = cp.cuda.runtime.getDeviceCount() if cp is not None else 0
-        if n_gpus > 0:
-            cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
-    except Exception:  # noqa: BLE001 -- fall back to dask-cuda's default sizing
-        pass
+    cluster_kwargs: dict = {}
+    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
+    if n_gpus > 0:
+        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
 
     # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
     # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
