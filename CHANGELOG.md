@@ -270,6 +270,12 @@ Dependencies:
 
 Bugfixes:
 
+- The backscattered wave of `RealSpaceMultislice(expansion_scope="full")` (`return_backscattered=True`) is the
+  reflected wave. Its back-propagation conjugated the waves and left out the round-trip phase `exp(2ikz)` of a
+  reflection at depth `z`, so the reflections at different depths added with the wrong phases: the reflection of a
+  flat slab was 4e-11 at every thickness instead of the Airy reflection, up to 2.5e-5 for 10 V at 1 keV, and that of
+  graphene at 1 keV 4 times the exact two-way value. It now matches the Airy reflection to 1 %. The transmitted wave
+  is unchanged
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))

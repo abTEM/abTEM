@@ -817,8 +817,10 @@ def multislice_and_detect(
         Algorithm used for multislice operator (default is FourierMultislice()).
     return_backscattered : bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
-        backscattered components are also returned. Requires an exit plane after
-        every slice (potential exit_planes=1).
+        backscattered components are also returned: at each exit plane the wave
+        reflected by the slices below it, so that the first is the wave reflected at
+        the entrance. Requires an exit plane after every slice (potential
+        exit_planes=1).
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -1017,31 +1019,39 @@ def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
     forward_slices: list[BasePotential],
     multislice_step: Callable,
+    reference_wave_number: Optional[float | np.ndarray] = None,
 ) -> Waves:
     """
-    For each slice in the multislice step, a small part of the wave get backscattered.
-    This function runs the multislice in reverse for each backscattered wave summing
-    them for a final backscattered wave result.
+    Carry the waves backscattered at every plane back towards the entrance, so that
+    plane `i` holds the wave reflected by the slices below it.
 
     `backscattered_waves` are those of one configuration, with one exit plane after
     every slice and the entrance plane first, and `forward_slices` are the slices its
-    forward pass used. The wave at plane `i + 1`, after slice `i`, crosses slice `i`
-    to reach plane `i`.
+    forward pass used. The reflected wave has the carrier exp(-i K z), and its envelope
+    obeys the forward step, so it is stepped through slice `i` from plane `i + 1` to
+    plane `i`. A wave backscattered at depth z leaves the forward wave, of carrier
+    exp(i K z), with the round-trip phase exp(2 i K z). `K` [rad/Å] is the wave number
+    that the step takes out: 2 pi / wavelength, unless `reference_wave_number` gives
+    it, as a number or per member.
     """
-
     xp = get_array_module(backscattered_waves.device)
+    if reference_wave_number is None:
+        reference_wave_number = 2 * np.pi / backscattered_waves.wavelength
+    reference = np.asarray(reference_wave_number, dtype=float)[..., None, None]
+    depths = np.cumsum([0.0] + [float(s.thickness) for s in forward_slices])
 
-    # zero intensity in incoming wave
+    # nothing is reflected before the wave enters
     backscattered_waves[0]._array[:] = 0
+    for j in range(1, len(depths)):
+        plane = backscattered_waves[j]
+        phase = np.exp(2j * reference * depths[j]).astype(plane._array.dtype)
+        plane._array *= xp.asarray(phase)
 
-    # Go through potential in reverse
     for i in range(len(forward_slices) - 1, -1, -1):
-        contribution_at_slice = backscattered_waves[i + 1].copy()
-        contribution_at_slice.array = xp.conj(contribution_at_slice.array)
-        contribution_at_slice, _ = multislice_step(
-            contribution_at_slice, forward_slices[i], next_slice=None
+        contribution, _ = multislice_step(
+            backscattered_waves[i + 1].copy(), forward_slices[i], next_slice=None
         )
-        backscattered_waves[i].array += xp.conj(contribution_at_slice.array)
+        backscattered_waves[i].array += contribution.array
 
     return backscattered_waves
 
