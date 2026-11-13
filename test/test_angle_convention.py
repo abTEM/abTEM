@@ -140,10 +140,9 @@ def test_the_angles_of_an_ebsd_detector_grid_are_the_exact_angles():
     )
     polar = 1e3 * np.arccos(detector.directions[:, 2].reshape(31, 31))
 
-    # coordinates in the configured precision: to 1 µrad
-    x, y = patterns.scattering_angles()
-    np.testing.assert_allclose(np.abs(x), polar[:, 15], atol=1e-3)
-    np.testing.assert_allclose(np.abs(y), polar[15, :], atol=1e-3)
+    # the angle of every pixel from the reversed beam, in the configured precision:
+    # to 1 µrad
+    np.testing.assert_allclose(patterns.scattering_angles(), polar, atol=1e-3)
 
     grid_x, grid_y = patterns.angular_coordinates
     radius = np.hypot(grid_x[:, None], grid_y[None])
@@ -256,12 +255,84 @@ def test_diffraction_patterns_get_honest_axes_and_the_exact_angles():
         assert "λk" in waves.reciprocal_space_axes_metadata[0].label
 
     patterns = waves.diffraction_patterns(max_angle="full")
-    x, _ = patterns.scattering_angles()
-    grid_x, _ = patterns.angular_coordinates
-    inside = np.abs(grid_x) <= 1e3
-    # in either convention: arcsin of the axis, NaN beyond wavelength * k = 1
-    np.testing.assert_allclose(x[inside], 1e3 * np.arcsin(grid_x[inside] / 1e3))
-    assert np.all(np.isnan(x[~inside]))
+    angles = patterns.scattering_angles()
+    grid_x, grid_y = patterns.angular_coordinates
+    radius = np.hypot(grid_x[:, None], grid_y[None])
+    inside = radius <= 1e3
+    # in either convention: arcsin of the radius, NaN beyond wavelength * |k| = 1
+    assert angles.shape == patterns.base_shape
+    # the reference is in the configured precision: float32 to 1e-5 relative
+    np.testing.assert_allclose(
+        angles[inside], 1e3 * np.arcsin(radius[inside] / 1e3), rtol=1e-5
+    )
+    assert np.all(np.isnan(angles[~inside]))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("convention", ["paraxial", "exact"])
+def test_scattering_angles_are_the_angle_of_every_pixel(device, fftshift, convention):
+    # beams at (i, j) / EXTENT on a 192 x 192 grid at 200 eV: along x, along y, on
+    # the diagonal and an evanescent one. A beam off the axes is at
+    # arcsin(wavelength * |k|), not at the angle of either of its components.
+    x = np.arange(GPTS) * EXTENT / GPTS
+    beams = {(10, 0): 1.0, (0, 30): 2.0, (20, 20): 3.0, (-25, 15): 4.0, (50, 0): 5.0}
+    psi = sum(
+        a * np.exp(2j * np.pi * (i * x[:, None] + j * x[None, :]) / EXTENT)
+        for (i, j), a in beams.items()
+    )
+    waves = abtem.Waves(
+        psi.astype(get_dtype(complex=True)), extent=EXTENT, energy=ENERGY
+    ).copy_to_device(device)
+
+    with abtem.config.set({"angles": convention}):
+        patterns = waves.diffraction_patterns(max_angle="full", fftshift=fftshift)
+        angles = asnumpy(patterns.scattering_angles())
+    intensity = asnumpy(patterns.array)
+
+    assert angles.shape == intensity.shape == (GPTS, GPTS)
+    wavelength = energy2wavelength(ENERGY)
+    shift = GPTS // 2 if fftshift else 0
+    for (i, j), amplitude in beams.items():
+        pixel = ((i + shift) % GPTS, (j + shift) % GPTS)
+        # the intensity of an unnormalised transform: (GPTS * GPTS) ** 2 a unit beam
+        assert intensity[pixel] / GPTS**4 == pytest.approx(amplitude**2, rel=1e-4)
+        ratio = wavelength * np.hypot(i, j) / EXTENT
+        if ratio <= 1.0:
+            # to 1 µrad, in the configured precision
+            assert angles[pixel] == pytest.approx(1e3 * np.arcsin(ratio), abs=1e-3)
+        else:
+            assert np.isnan(angles[pixel])
+
+    # the diagonal beam is not at the angle of its x or y component
+    diagonal = angles[(20 + shift) % GPTS, (20 + shift) % GPTS]
+    along_x = 1e3 * np.arcsin(wavelength * 20 / EXTENT)
+    assert diagonal > 1.3 * along_x
+    assert angles[shift, shift] == 0.0
+    # the evanescent beams are the ones beyond wavelength * |k| = 1
+    k = np.fft.fftfreq(GPTS, EXTENT / GPTS)
+    radius = np.hypot(k[:, None], k[None]) * wavelength
+    if fftshift:
+        radius = np.fft.fftshift(radius)
+    np.testing.assert_array_equal(np.isnan(angles), radius > 1.0)
+
+
+def test_scattering_angles_follow_the_storage_order_and_the_precision():
+    waves = plane_waves()
+    shifted = waves.diffraction_patterns(max_angle="full", fftshift=True)
+    unshifted = waves.diffraction_patterns(max_angle="full", fftshift=False)
+    np.testing.assert_array_equal(
+        np.fft.fftshift(unshifted.scattering_angles()), shifted.scattering_angles()
+    )
+    assert shifted.scattering_angles().dtype == get_dtype()
+    # the same in both conventions: a scattering angle is never wavelength * k
+    with abtem.config.set({"angles": "paraxial"}):
+        paraxial = shifted.scattering_angles()
+    with abtem.config.set({"angles": "exact"}):
+        exact = shifted.scattering_angles()
+    np.testing.assert_array_equal(paraxial, exact)
+    with abtem.config.set({"precision": "float64"}):
+        assert shifted.scattering_angles().dtype == np.float64
 
 
 def test_a_large_paraxial_angle_warns_and_an_exact_one_does_not():
