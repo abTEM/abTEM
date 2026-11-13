@@ -24,8 +24,11 @@ from abtem.core.complex import abs2
 from abtem.core.energy import (
     angle_convention,
     energy2wavelength,
-    require_paraxial_angles,
+    offset_to_grid,
     to_grid_angle,
+    to_scattering_angle,
+    to_scattering_angle_limit,
+    to_signed_grid_angle,
     warn_if_paraxial_angle_is_large,
 )
 from abtem.core.ensemble import _wrap_with_array
@@ -882,10 +885,9 @@ class _AbstractRadialDetector(BaseDetector):
 
         if sampling is None:
             # the grid reaches 10 % beyond the outermost angle the region
-            # covers, about its (possibly offset) centre
-            reach = 1.1 * (
-                to_grid_angle(outer) + float(np.hypot(*to_grid_angle(np.array(offset))))
-            )
+            # covers, about its (possibly offset) centre: with the exact
+            # convention the farthest beam is at the sum of the two angles
+            reach = 1.1 * to_grid_angle(outer + float(np.hypot(*offset)))
             angular_sampling = (2 * reach / gpts[0], 2 * reach / gpts[1])
             reciprocal_space_sampling = (
                 angular_sampling[0] / wavelength,
@@ -997,7 +999,10 @@ class AnnularDetector(_AbstractRadialDetector):
         Outer integration limit [mrad]. If None, the antialias cutoff angle of the
         detected waves.
     offset: two float, optional
-        Center offset of the annular integration region [mrad].
+        Center offset of the annular integration region [mrad]. With the
+        ``"exact"`` angles configuration the centre is the direction at the angle
+        ``hypot(*offset)`` from the optical axis, in the azimuthal direction of
+        ``offset``, and the limits and bins are angles from it.
     sensitivity : RadialSensitivity, callable or tuple of array-like, optional
         A radially varying detector sensitivity. If given, the diffraction patterns are
         weighted by this factor as a function of the radial scattering angle [mrad]
@@ -1273,6 +1278,14 @@ class AnnularDetector(_AbstractRadialDetector):
         return diffraction_patterns
 
 
+def _label_reciprocal_axes(ax) -> None:
+    """Label the axes of a plot on the angular grid, as the axes of diffraction
+    patterns are: the scattering angle only with the paraxial convention."""
+    label = "k" if angle_convention() == "paraxial" else "λk "
+    ax.set_xlabel(f"{label}x [mrad]")
+    ax.set_ylabel(f"{label}y [mrad]")
+
+
 def _slit_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -1283,6 +1296,8 @@ def _slit_detector_mask(
     width: float,
     fftshift: bool = False,
     xp=np,
+    across_bounds: Optional[tuple[float, float]] = None,
+    propagating_only: bool = False,
 ) -> np.ndarray:
     """Boolean mask for a rectangular slit in reciprocal space.
 
@@ -1317,6 +1332,12 @@ def _slit_detector_mask(
     fftshift : bool
         If True, zero frequency is at the centre of the array.
     xp : array module
+    across_bounds : (float, float), optional
+        Bounds ``[lo, hi)`` of ``(k - origin) . n`` [mrad] in place of
+        ``[-width / 2, width / 2)``, for a slit that is not centred on the
+        origin across its long axis.
+    propagating_only : bool
+        If True, exclude evanescent beams, ``|k| > 1000`` mrad on the grid.
     """
     from abtem.core.grid import spatial_frequencies
 
@@ -1333,13 +1354,17 @@ def _slit_detector_mask(
     along = dx * cos_a + dy * sin_a
     across = -dx * sin_a + dy * cos_a
 
-    half_width = width / 2.0
+    if across_bounds is None:
+        half_width = width / 2.0
+        across_bounds = (-half_width, half_width)
     mask = (
         (along >= q_min)
         & (along < q_max)
-        & (across >= -half_width)
-        & (across < half_width)
+        & (across >= across_bounds[0])
+        & (across < across_bounds[1])
     )
+    if propagating_only:
+        mask &= kx[:, None] ** 2 + ky[None, :] ** 2 <= 1e6
 
     if fftshift:
         mask = xp.fft.fftshift(mask)
@@ -1410,7 +1435,11 @@ class SpectralSlitDetector(BaseDetector):
         Origin of the q-axis sweep ``(kx, ky)`` [mrad].  The q-axis starts
         here (at ``q_min``) and extends in the direction given by ``angle``.
         Default is ``(0, 0)``, i.e. the sweep starts from the diffraction
-        pattern centre.
+        pattern centre. With the ``"exact"`` angles configuration every
+        coordinate of the slit, along and across its long axis, is the angle
+        whose sine is the direction cosine of the beam along that axis, so the
+        slit stays a rectangle in the diffraction plane; with the origin on the
+        optical axis ``q`` is the scattering angle on the centre line of the slit.
     q_sampling : float, optional
         Desired q-axis bin size [mrad].  If None (default) the native
         pixel sampling of the diffraction pattern is used.  Setting a
@@ -1529,6 +1558,12 @@ class SpectralSlitDetector(BaseDetector):
             self._corners = _corners_from_slit_params(
                 slit_center, self._angle, self._extent, self._width
             )
+        if self._from_corners:
+            warn_if_paraxial_angle_is_large(corners)
+        else:
+            warn_if_paraxial_angle_is_large(
+                self._q_min, self._q_max, self._width / 2.0, self._offset
+            )
         super().__init__(to_cpu=to_cpu, url=url)
 
     @property
@@ -1590,6 +1625,9 @@ class SpectralSlitDetector(BaseDetector):
         checks. The slit has no rotationally-symmetric inner exclusion, so
         the inner bound is 0; the outer bound is the farthest distance from
         the origin reached by the bounding rectangle's corners."""
+        if angle_convention() == "exact":
+            reach = float(np.hypot(*self._grid_corners().T).max())
+            return 0.0, to_scattering_angle_limit(reach)
         kx_min, kx_max, ky_min, ky_max = self.corners
         outer = max(
             float(np.hypot(kx, ky))
@@ -1651,19 +1689,83 @@ class SpectralSlitDetector(BaseDetector):
     ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
         return (_scanned_measurement_type(waves),)
 
+    def _grid_frame(self) -> tuple[tuple[float, float], float, float, float, float]:
+        """The slit on the angular grid [mrad]: its origin, the bounds of the long
+        axis from the origin, ``q_min`` and ``q_max``, and the bounds across it,
+        ``across_min`` and ``across_max``.
+
+        With the exact convention a coordinate of the slit is the angle whose sine is
+        the direction cosine of the beam along the long axis or across it, so the slit
+        is a rectangle on the grid, as a slit in a diffraction plane is (the sine
+        condition). The origin gives the coordinates of its own along and across
+        the slit, the long axis covers ``origin + q_min`` to ``origin + q_max`` and the
+        width ``origin - width / 2`` to ``origin + width / 2``. With the origin on the
+        optical axis (the default) ``q`` is the scattering angle of the beams on the
+        centre line of the slit.
+        """
+        if angle_convention() == "paraxial":
+            # as given, like _copy_kwargs: q_min + extent can differ in the last bit
+            half_width = self._width / 2.0
+            return self._offset, self.q_min, self._q_max, -half_width, half_width
+
+        cos_a, sin_a = cos_sin_deg(self._angle)
+        o_along = self._offset[0] * cos_a + self._offset[1] * sin_a
+        o_across = -self._offset[0] * sin_a + self._offset[1] * cos_a
+        grid = partial(to_signed_grid_angle, convention="exact")
+        g_along, g_across = grid(o_along), grid(o_across)
+        origin = (
+            float(g_along * cos_a - g_across * sin_a),
+            float(g_along * sin_a + g_across * cos_a),
+        )
+        half_width = self._width / 2.0
+        return (
+            origin,
+            float(grid(o_along + self.q_min) - g_along),
+            float(grid(o_along + self._q_max) - g_along),
+            float(grid(o_across - half_width) - g_across),
+            float(grid(o_across + half_width) - g_across),
+        )
+
+    def _q_from_grid(self, along: np.ndarray) -> np.ndarray:
+        """The ``q`` [mrad] of positions ``along`` [mrad on the grid] the long axis
+        from the origin of `_grid_frame`."""
+        if angle_convention() == "paraxial":
+            return along
+        cos_a, sin_a = cos_sin_deg(self._angle)
+        o_along = self._offset[0] * cos_a + self._offset[1] * sin_a
+        g_along = to_signed_grid_angle(o_along, "exact")
+        return to_scattering_angle(g_along + np.asarray(along), "exact") - o_along
+
+    def _grid_corners(self) -> np.ndarray:
+        """The four corners of the slit on the angular grid [mrad], in order around
+        the rectangle."""
+        origin, q_min, q_max, across_min, across_max = self._grid_frame()
+        cos_a, sin_a = cos_sin_deg(self._angle)
+        local = np.array(
+            [
+                [q_min, across_min],
+                [q_max, across_min],
+                [q_max, across_max],
+                [q_min, across_max],
+            ]
+        )
+        R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        return local @ R.T + np.array(origin)
+
     def _mask(self, gpts, sampling, fftshift: bool = False, xp=np) -> np.ndarray:
-        require_paraxial_angles("SpectralSlitDetector")
+        origin, q_min, q_max, across_min, across_max = self._grid_frame()
         return _slit_detector_mask(
             gpts=gpts,
             sampling=sampling,
-            origin=self._offset,
+            origin=origin,
             angle=self._angle,
-            q_min=self.q_min,
-            # as given, like _copy_kwargs: q_min + extent can differ in the last bit
-            q_max=self._q_max,
+            q_min=q_min,
+            q_max=q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
+            across_bounds=(across_min, across_max),
+            propagating_only=angle_convention() == "exact",
         )
 
     def _get_detector_region_array(
@@ -1785,6 +1887,9 @@ class SpectralSlitDetector(BaseDetector):
             [-half_e, half_w],
         ])
         world = local @ R.T + center
+        if angle_convention() == "exact":
+            # the axes of the pattern are on the angular grid
+            world = self._grid_corners()
 
         patch = MplPolygon(
             world,
@@ -1797,14 +1902,17 @@ class SpectralSlitDetector(BaseDetector):
         ax.add_patch(patch)
 
         ax.set_aspect("equal")
-        ax.set_xlabel("kx [mrad]")
-        ax.set_ylabel("ky [mrad]")
+        _label_reciprocal_axes(ax)
         if not show_pattern:
             ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
             ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
         if mx is not None:
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
+        elif angle_convention() == "exact":
+            lim = float(np.abs(world).max()) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
         else:
             lim = (self.q_max + self._width) * 1.1
             ax.set_xlim(-lim, lim)
@@ -1815,7 +1923,6 @@ class SpectralSlitDetector(BaseDetector):
         return ax
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
-        require_paraxial_angles("SpectralSlitDetector")
         xp = get_array_module(waves.array)
 
         diffraction_patterns = waves.diffraction_patterns(
@@ -1853,6 +1960,50 @@ class SpectralSlitDetector(BaseDetector):
             measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
         )
         return measurements
+
+
+def _exact_cone_outline(
+    offset: tuple[float, float], radius: float, num: int = 361
+) -> np.ndarray:
+    """The outline on the angular grid [mrad] of the beams at the scattering angle
+    ``radius`` [mrad] from the direction of a detector centre offset by ``offset``
+    [mrad] (see `offset_to_grid`), for the exact convention.
+
+    The beams at a fixed angle from a direction are a small circle on the sphere of
+    directions, and the grid holds their components ``wavelength * k`` across the
+    optical axis, so the outline is that circle seen along the axis: a circle about
+    the axis, and an oval for a tilted centre. Where the circle runs past 90 degrees
+    from the axis, its beams travel backwards and are not on the grid; the
+    outline follows the edge of the propagating beams, ``|wavelength * k| = 1``,
+    there, which bounds the beams within ``radius`` of the centre.
+
+    Returns
+    -------
+    np.ndarray
+        The ``num`` points of the closed outline, shape ``(num, 2)``.
+    """
+    centre = offset_to_grid(offset, "exact") / 1e3
+    theta = float(np.arcsin(min(float(np.hypot(*centre)), 1.0)))
+    phi = float(np.arctan2(centre[1], centre[0]))
+    c = np.array(
+        [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+    )
+    # orthonormal to the centre: in its meridian plane, and along the azimuth
+    e1 = np.array(
+        [np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -np.sin(theta)]
+    )
+    e2 = np.array([-np.sin(phi), np.cos(phi), 0.0])
+    r = min(radius / 1e3, np.pi)
+    psi = np.linspace(0.0, 2 * np.pi, num)
+    n = np.cos(r) * c + np.sin(r) * (
+        np.cos(psi)[:, None] * e1 + np.sin(psi)[:, None] * e2
+    )
+    xy = n[:, :2]
+    behind = n[:, 2] < 0.0
+    # the edge of the propagating beams at the azimuth of a backward beam, which
+    # is within the angle (it is closer to the centre than the backward beam is)
+    xy[behind] /= np.hypot(*xy[behind].T)[:, None]
+    return 1e3 * xy
 
 
 class SpectralAnnularDetector(AnnularDetector):
@@ -1988,6 +2139,7 @@ class SpectralAnnularDetector(AnnularDetector):
         """
         import matplotlib.pyplot as plt
         from matplotlib.patches import Circle
+        from matplotlib.patches import Polygon as MplPolygon
 
         from abtem.measurements import DiffractionPatterns
 
@@ -2009,23 +2161,21 @@ class SpectralAnnularDetector(AnnularDetector):
         q_vals = np.linspace(self.q_min, q_max, n_steps)
 
         cos_a, sin_a = cos_sin_deg(self._sweep_angle)
+        exact = angle_convention() == "exact"
+        style = dict(fill=False, edgecolor="red", linewidth=0.8, alpha=0.6)
 
         for q in q_vals:
             cx, cy = q * cos_a, q * sin_a
-            ax.add_patch(
-                Circle(
-                    (cx, cy),
-                    self.outer,
-                    fill=False,
-                    edgecolor="red",
-                    linewidth=0.8,
-                    alpha=0.6,
-                )
-            )
+            if exact:
+                # the beams within the angle of a tilted centre are not a circle on
+                # the angular grid of the axes
+                outline = _exact_cone_outline((cx, cy), self.outer)
+                ax.add_patch(MplPolygon(outline, closed=True, **style))
+            else:
+                ax.add_patch(Circle((cx, cy), self.outer, **style))
 
         ax.set_aspect("equal")
-        ax.set_xlabel("kx [mrad]")
-        ax.set_ylabel("ky [mrad]")
+        _label_reciprocal_axes(ax)
         if not show_pattern:
             ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
             ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
@@ -2033,7 +2183,7 @@ class SpectralAnnularDetector(AnnularDetector):
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
         else:
-            lim = (q_max + self.outer) * 1.1
+            lim = to_grid_angle(q_max + self.outer) * 1.1
             ax.set_xlim(-lim, lim)
             ax.set_ylim(-lim, lim)
         ax.set_title(
@@ -2154,7 +2304,10 @@ class SegmentedDetector(_AbstractRadialDetector):
     rotation : float
         Rotation of the bins around the origin [rad].
     offset : two float
-        Offset of the bins from the origin in `x` and `y` [mrad].
+        Offset of the bins from the origin in `x` and `y` [mrad]. With the
+        ``"exact"`` angles configuration the centre is the direction at the angle
+        ``hypot(*offset)`` from the optical axis, in the azimuthal direction of
+        ``offset``, and the limits and bins are angles from it.
     sensitivity : RadialSensitivity, callable or tuple of array-like, optional
         A radially varying detector sensitivity. If given, the diffraction patterns are
         weighted by this factor as a function of the radial scattering angle [mrad]

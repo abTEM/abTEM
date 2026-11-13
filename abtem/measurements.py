@@ -57,6 +57,7 @@ from abtem.core.complex import abs2
 from abtem.core.energy import (
     angle_convention,
     energy2wavelength,
+    offset_to_grid,
     to_grid_angle,
     to_scattering_angle,
     to_scattering_angle_limit,
@@ -296,7 +297,9 @@ def _radial_weight_map(
     from the optical axis displaced by ``offset``. The offset is applied like the
     detector masks and bins apply it (whole pixels, without wrapping), so a weight
     always belongs to the same pixels as its detector region; pixels shifted in from
-    beyond the Nyquist frequency get a weight of 0.
+    beyond the Nyquist frequency get a weight of 0. With the exact convention the
+    angle is measured from the direction of the centre instead (see
+    `_exact_angles_about_centre`), and evanescent beams are evaluated at NaN.
 
     The map depends only on the grid/sensitivity, not on any diffraction pattern data,
     so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp,
@@ -350,11 +353,14 @@ def _radial_weight_map_cached(
     dtype,
     convention: str,
 ) -> np.ndarray:
-    kx, ky = spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
-    )
-
-    alpha = to_scattering_angle(xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2), convention)
+    if convention == "exact":
+        # the angle from the (tilted) centre direction, which is not a shift
+        alpha, _ = _exact_angles_about_centre(gpts, sampling, offset, xp)
+    else:
+        kx, ky = spatial_frequencies(
+            gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+        )
+        alpha = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
 
     weights = xp.asarray(sensitivity(alpha), dtype=dtype)
     if xp is np:
@@ -362,10 +368,8 @@ def _radial_weight_map_cached(
         # cached map is made read-only below.
         weights = np.array(weights, dtype=dtype)
 
-    if np.any(np.array(offset) != 0.0):
-        weights = _shift_bins_without_wrap(
-            weights, to_grid_angle(np.array(offset), convention), sampling, fill=0.0
-        )
+    if convention != "exact" and np.any(np.array(offset) != 0.0):
+        weights = _shift_bins_without_wrap(weights, offset, sampling, fill=0.0)
 
     if fftshift:
         weights = xp.fft.fftshift(weights)
@@ -387,14 +391,15 @@ def _annular_detector_mask(
     k2: Optional[np.ndarray] = None,
     sensitivity: Optional[Callable] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    if k2 is None:
-        k2 = _spatial_frequency_squared(gpts, sampling, xp)
-
-    if angle_convention() == "paraxial":
-        bins = (k2 >= inner**2) & (k2 < outer**2)
-    else:
-        alpha = to_scattering_angle(xp.sqrt(k2))
+    exact = angle_convention() == "exact"
+    if exact:
+        # the angle from the (tilted) centre direction, which is not a shift
+        alpha, _ = _exact_angles_about_centre(gpts, sampling, offset, xp)
         bins = (alpha >= inner) & (alpha < outer)
+    else:
+        if k2 is None:
+            k2 = _spatial_frequency_squared(gpts, sampling, xp)
+        bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if sensitivity is not None:
         # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
@@ -409,13 +414,12 @@ def _annular_detector_mask(
             sensitivity=sensitivity,
             fftshift=False,
             xp=xp,
+            offset=offset if exact else (0.0, 0.0),
         )
         bins = xp.where(bins, weights, 0.0)
 
-    if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(
-            bins, to_grid_angle(np.array(offset)), sampling, fill=False
-        )
+    if not exact and np.any(np.array(offset) != 0.0):
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
 
     if fftshift:
         bins = xp.fft.fftshift(bins)
@@ -445,6 +449,76 @@ def _shift_bins_without_wrap(bins, offset, sampling, fill):
             bins[tuple(index)] = fill
 
     return bins
+
+
+def _exact_angles_about_centre(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    offset: tuple[float, float],
+    xp: ModuleType = np,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    The scattering angle [mrad] of the beam of every pixel measured from the
+    direction of a detector centre, and its azimuth [rad] about that direction, in
+    unshifted FFT layout, for the exact convention.
+
+    The centre is the direction at the angle ``hypot(*offset)`` from the optical
+    axis (see `offset_to_grid`), rounded to the nearest pixel as the paraxial
+    convention shifts a detector by whole pixels, so the centre pixel is at exactly
+    0. The azimuth is measured in the frame that the rotation taking the optical axis
+    onto the centre, about the axis perpendicular to both, carries the pattern axes
+    to; without an offset it is the azimuth in the pattern. Evanescent beams have no
+    direction: their angle is NaN and their azimuth 0.
+
+    Parameters
+    ----------
+    gpts : two int
+        Number of grid points of the pattern.
+    sampling : two float
+        Angular sampling of the pattern [mrad].
+    offset : two float
+        Offset of the detector centre from the optical axis [mrad].
+    xp : module, optional
+        The array module of the returned arrays.
+    """
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
+    # direction cosines of the beams, n = (wavelength * k, cos(angle))
+    nx = kx[:, None] / 1e3
+    ny = ky[None, :] / 1e3
+    # propagating as in to_scattering_angle, |wavelength * k| <= 1, so that a beam
+    # at exactly 1 is not lost to rounding of 1 - nx**2 - ny**2
+    propagating = xp.sqrt(nx**2 + ny**2) <= 1.0
+    nz = xp.where(propagating, xp.sqrt(xp.maximum(1.0 - nx**2 - ny**2, 0.0)), xp.nan)
+
+    centre = offset_to_grid(offset, "exact")
+    centre = np.array([np.round(c / d) * d for c, d in zip(centre, sampling)]) / 1e3
+    sin_theta = min(float(np.hypot(*centre)), 1.0)
+    theta = float(np.arcsin(sin_theta))
+    phi = float(np.arctan2(centre[1], centre[0]))
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    cos_p, sin_p = np.cos(phi), np.sin(phi)
+
+    # rotate the beams by -theta about a = (-sin phi, cos phi, 0) (Rodrigues), which
+    # takes the centre onto the optical axis
+    a_dot_n = -sin_p * nx + cos_p * ny
+    rx = nx * cos_t - cos_p * nz * sin_t - sin_p * a_dot_n * (1 - cos_t)
+    ry = ny * cos_t - sin_p * nz * sin_t + cos_p * a_dot_n * (1 - cos_t)
+    rz = nz * cos_t + (cos_p * nx + sin_p * ny) * sin_t
+
+    alpha = 1e3 * xp.arctan2(xp.sqrt(rx**2 + ry**2), rz)
+    azimuth = xp.where(propagating, xp.arctan2(ry, rx), 0.0)
+
+    # the centre pixel is at exactly 0, with the azimuth 0 of the paraxial
+    # convention, rather than at the angle and azimuth of the rounding; a centre
+    # beyond the grid has no pixel (its index would wrap round to another one)
+    frequency = [int(np.round(c * 1e3 / d)) for c, d in zip(centre, sampling)]
+    if all(-(n // 2) <= f <= (n - 1) // 2 for f, n in zip(frequency, gpts)):
+        index = tuple(f % n for f, n in zip(frequency, gpts))
+        alpha[index] = 0.0
+        azimuth[index] = 0.0
+    return alpha, azimuth
 
 
 def _polar_bins_key(
@@ -649,10 +723,13 @@ def _polar_detector_bins_uncached(
     return_indices: bool = False,
     convention: str = "paraxial",
 ) -> np.ndarray | list[np.ndarray]:
-    alpha, phi = polar_spatial_frequencies(
-        gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
-    )
-    alpha = to_scattering_angle(alpha, convention)
+    if convention == "exact":
+        # angle and azimuth about the (tilted) centre direction, which is not a shift
+        alpha, phi = _exact_angles_about_centre(gpts, sampling, offset, np)
+    else:
+        alpha, phi = polar_spatial_frequencies(
+            gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
+        )
     phi = (phi - rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
@@ -666,10 +743,8 @@ def _polar_detector_bins_uncached(
     bins = -np.ones(gpts, dtype=int)
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
-    if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(
-            bins, to_grid_angle(np.array(offset), convention), sampling, fill=-1
-        )
+    if convention != "exact" and np.any(np.array(offset) != 0.0):
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=-1)
 
     if fftshift:
         bins = np.fft.fftshift(bins)
@@ -8688,16 +8763,37 @@ def momentum_resolved_spectrum(
         wavelength = energy2wavelength(energy)  # Å
         mrad_to_inv_ang = 1.0 / (wavelength * 1e3)
 
+        exact = angle_convention() == "exact"
+        if exact:
+            # the slit is a rectangle on the angular grid (see
+            # SpectralSlitDetector._grid_frame), not centred on the origin across
+            # its long axis when the origin is off the optical axis
+            origin, along_min, along_max, across_min, across_max = (
+                detector._grid_frame()
+            )
+            across_mid = (across_min + across_max) / 2.0
+            width_grid = across_max - across_min
+        else:
+            origin = detector.offset
+            along_min, along_max = detector.q_min, detector.q_max
+            across_mid, width_grid = 0.0, detector.width
+
         offset_inv = (
-            detector.offset[0] * mrad_to_inv_ang,
-            detector.offset[1] * mrad_to_inv_ang,
+            origin[0] * mrad_to_inv_ang,
+            origin[1] * mrad_to_inv_ang,
         )
-        q_min_inv = detector.q_min * mrad_to_inv_ang
-        q_max_inv = detector.q_max * mrad_to_inv_ang
-        width_inv = detector.width * mrad_to_inv_ang
+        q_min_inv = along_min * mrad_to_inv_ang
+        q_max_inv = along_max * mrad_to_inv_ang
+        width_inv = width_grid * mrad_to_inv_ang
         sampling_inv = min(dp.sampling)
 
         cos_a, sin_a = cos_sin_deg(detector.angle)
+        if exact:
+            mid_inv = across_mid * mrad_to_inv_ang
+            offset_inv = (
+                offset_inv[0] - mid_inv * sin_a,
+                offset_inv[1] + mid_inv * cos_a,
+            )
 
         # Sample directly from q_min to q_max along the slit direction.
         # For q_min=0 this naturally includes q=0 as the first point.
@@ -8712,6 +8808,13 @@ def momentum_resolved_spectrum(
         # interpolate_line + the q-binning reshape below to compute an
         # incorrect result size. Consolidate it into a single chunk first.
         dp_for_interp = dp.rechunk({energy_axis_idx: -1}) if dp.is_lazy else dp
+        if exact:
+            # evanescent beams have no scattering angle: the strip collects the
+            # propagating beams only, as the slit's mask does
+            alpha_x, alpha_y = dp.angular_coordinates
+            dp_for_interp = dp_for_interp * (
+                alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2 <= 1e6
+            )
 
         line_profiles = dp_for_interp.interpolate_line(
             start=start_inv,
@@ -8745,10 +8848,28 @@ def momentum_resolved_spectrum(
         spectrum_array = moveaxis(
             line_profiles.array * samples_to_sum, energy_axis_idx, -1
         )
-        q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
+        if exact:
+            # uniform on the grid, not in q
+            q_values_fine = detector._q_from_grid(np.linspace(along_min, along_max, N))
+        else:
+            q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 
         # Optionally bin along q to reduce the number of points
-        if detector.q_sampling is not None:
+        if detector.q_sampling is not None and exact:
+            # the samples are uniform on the grid, not in q: bin them by their q
+            q_sampling_mrad = detector.q_sampling
+            q_span = q_values_fine[-1] - q_values_fine[0]
+            # a last sample at q_max may round to just below a bin edge
+            n_q_binned = max(1, int(np.floor(q_span / q_sampling_mrad + 1e-6)))
+            index = (q_values_fine - q_values_fine[0]) // q_sampling_mrad
+            membership = index[None, :] == np.arange(n_q_binned)[:, None]
+            spectrum_array = (
+                xp.asarray(membership, dtype=spectrum_array.dtype) @ spectrum_array
+            )
+            q_values = (
+                q_values_fine[0] + (np.arange(n_q_binned) + 0.5) * q_sampling_mrad
+            )
+        elif detector.q_sampling is not None:
             q_sampling_mrad = detector.q_sampling
             native_step = (detector.q_max - detector.q_min) / max(N - 1, 1)
             bin_size = max(1, int(round(q_sampling_mrad / native_step)))
