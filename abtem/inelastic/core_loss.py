@@ -44,6 +44,9 @@ from abtem.core.energy import (
     energy2sigma,
     energy2wavelength,
     relativistic_mass_correction,
+    to_grid_angle,
+    to_scattering_angle_limit,
+    warn_if_paraxial_angle_is_large,
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
@@ -2729,18 +2732,20 @@ def _check_collection_angle(s_matrix, detectors, collection_angle):
 
     if collection_angle is None:
         return
+    warn_if_paraxial_angle_is_large(collection_angle)
     gpts = tuple(s_matrix.gpts)
     sampling = tuple(e / n for e, n in zip(s_matrix.extent, gpts))
     wavelength = energy2wavelength(s_matrix.energy)
-    # Scattering angles [mrad] of the grid beams, in the same units as the
-    # collection disk |k| <= collection_angle / 1e3 / wavelength of the driver.
+    # Grid angles 1e3 * wavelength * |k| [mrad] of the grid beams, in the same units
+    # as the collection disk |k| <= to_grid_angle(collection_angle) / 1e3 / wavelength
+    # of the driver.
     alpha_y, alpha_x = np.meshgrid(
         np.fft.fftfreq(gpts[0], d=sampling[0]) * wavelength * 1e3,
         np.fft.fftfreq(gpts[1], d=sampling[1]) * wavelength * 1e3,
         indexing="ij",
     )
     alpha = np.hypot(alpha_y, alpha_x)
-    outside = alpha > collection_angle
+    outside = alpha > to_grid_angle(collection_angle)
     if not outside.any():
         return
 
@@ -2794,7 +2799,7 @@ def _check_collection_angle(s_matrix, detectors, collection_angle):
             # on every Fourier beam.
             collected = np.ones_like(outside)
         if (outside & collected).any():
-            needed = float(alpha[collected].max())
+            needed = to_scattering_angle_limit(float(alpha[collected].max()))
             raise ValueError(
                 f"collection_angle={collection_angle} mrad is smaller than the "
                 f"angles {type(detector).__name__} collects (up to {needed:.4g} "
@@ -3113,7 +3118,7 @@ def prism_transition_potential_scan_beam_basis(
         # Max transverse carrier frequency of the re-tilted S1 columns = the
         # aperture-disk radius (a conservative upper bound on the discrete beam
         # frequencies), which sets the Fresnel lateral spread for the window margin.
-        fb_kmax = s_matrix.semiangle_cutoff / 1e3 / fb_wavelength
+        fb_kmax = to_grid_angle(s_matrix.semiangle_cutoff) / 1e3 / fb_wavelength
 
     # S2 output-beam set: the detector-collection disk (BiP-PRISM map regime) when
     # ``collection_angle`` is given, else the full native reciprocal grid (PR #289
@@ -3130,7 +3135,7 @@ def prism_transition_potential_scan_beam_basis(
         fx = np.fft.fftfreq(gpts[1], d=full_sampling[1])
         KY, KX = np.meshgrid(fy, fx, indexing="ij")
         if collection_angle is not None:
-            k_max = collection_angle / 1e3 / energy2wavelength(energy)
+            k_max = to_grid_angle(collection_angle) / 1e3 / energy2wavelength(energy)
             s2_mask = (KY**2 + KX**2) <= k_max**2
         else:
             s2_mask = np.ones(tuple(gpts), dtype=bool)
