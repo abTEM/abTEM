@@ -2227,11 +2227,18 @@ class EnergyEnsemble(EnsembleFromDistributions):
     """
 
     def __init__(self, energy=None):
-        if energy is not None:
-            self._energy = validate_distribution(energy)
-        else:
-            self._energy = None
+        self._energy = self._validate(energy)
         super().__init__(distributions=("energy",))
+
+    @staticmethod
+    def _validate(energy):
+        """A one-value distribution is stored as its float."""
+        if energy is None:
+            return None
+        energy = validate_distribution(energy)
+        if isinstance(energy, BaseDistribution) and len(energy) == 1:
+            return float(energy.values[0])
+        return energy
 
     @property
     def energy(self):
@@ -2246,15 +2253,11 @@ class EnergyEnsemble(EnsembleFromDistributions):
         None
             If no energy has been set.
         """
-        if self._energy is None:
-            return None
-        if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
-            return float(self._energy.values[0])
         return self._energy
 
     @energy.setter
     def energy(self, value):
-        self._energy = validate_distribution(value) if value is not None else None
+        self._energy = self._validate(value)
 
     @property
     def ensemble_axes_metadata(self) -> list:

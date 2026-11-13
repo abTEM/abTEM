@@ -381,9 +381,11 @@ class Artist2D(Artist):
         if vmax is None and array is not None:
             vmax = array.max()
 
+        # one change signal for both limits, also when only one of them changes
         with norm.callbacks.blocked():
             norm.vmin = vmin
-        norm.vmax = vmax
+            norm.vmax = vmax
+        norm._changed()
 
     @staticmethod
     def _update_norm(old_norm, power, artist, logscale=False):

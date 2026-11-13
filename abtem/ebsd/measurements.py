@@ -281,6 +281,11 @@ class SphericalPattern(CopyMixin, EqualityMixin):
             return computed, profilers
         return computed
 
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `_compute` stores the computed array through
+        here, as it does for an `ArrayObject`."""
+        self._array = array
+
     @property
     def directions(self) -> np.ndarray:
         """The sampled directions, of shape ``(N, 3)``."""

@@ -731,6 +731,69 @@ Bugfixes:
   per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
   along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
+- `Visualization.set_value_limits` with a new `vmin` and an unchanged `vmax` left the colorbar, and for
+  indexed diffraction patterns the spot radii, on the old limits
+- `==` and `!=` no longer guess that lazy objects are equal ([issue #413](https://github.com/abTEM/abTEM/issues/413)).
+  A dask array never counted as a difference, so lazy `ArrayObject`s compared equal to each other regardless of
+  their array content, lazy zeros equal to lazy ones
+    - **Behaviour change:** comparing objects whose content is lazy on either side raises
+      `abtem.core.utils.LazyComparisonError`, a `TypeError` subclass that asks for computed objects, so user
+      code that did `lazy_a == lazy_b` now raises. It is raised only when no attribute differs: objects that
+      differ in an eager attribute, or whose lazy arrays differ in shape, compare unequal whatever their order of
+      attributes. Eager objects compare as before, and objects that hold the very same dask array (the same
+      object, or an array with the same name, as in a `copy()`) still compare equal. A `GPAWPotential` holds a
+      `.gpw` path as a lazy read keyed by the resolved path, so two potentials read from the same file compare
+      equal without reading it, and two read from different files raise. A relative `.gpw` path is now resolved
+      when the potential is created, so a lazy read uses the working directory of that moment, not of the later
+      computation
+- `compute()` on a `TransitionPotentialArray` read from zarr or built lazily no longer leaves the local
+  potential that site filtering reads (`absolute_threshold`, `filter_sites`, and through them
+  `scatter(threshold=)`, `generate_scattered_waves` and multislice site filtering) lazy. The computed object kept
+  reading its source: `absolute_threshold` ran the graph again on every call, followed a store that was
+  overwritten, and returned `0.0` (site filtering off) once the store was deleted, and `to_cpu()` could return a
+  lazy object
+    - **Behaviour change:** after `tp.array = new`, `absolute_threshold` and the site filtering built on it use the
+      local potential of `new`, where they kept using that of the old array. `local_potential()` itself
+      recomputes from the array and is unchanged
+    - `IndexedDiffractionPatterns` no longer keeps a second reference to its array, which `compute()` left lazy
+- `==` and `!=` on an object that holds another abTEM object use that object's own comparison, where the holder
+  judged it by the generic rule and skipped any check the object's class adds (the slice index of
+  `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
+  `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
+  unequal the other, and is unequal both ways, as the two objects are on their own
+- `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
+  in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
+  `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
+    - **Behaviour change:** objects holding a host array and a Metal array of equal content compare equal in both orders. With the
+      host array on the left they compared unequal, because the Metal array layer had no `np.equal`, which it now
+      maps to `torch.eq`; with the Metal array on the left they compared equal
+- `==` and `!=` compare integers exactly, where `np.allclose`'s relative tolerance took seeds a few parts per
+  million apart as equal, so `FrozenPhonons`, `Potential`, `CrystalPotential` and noise transforms that draw
+  different random numbers, and the `SMatrix` or `MultisliceTransform` that holds them, no longer compare equal
+    - **Behaviour change:** integer attributes (seeds, but also counts, sizes and an `energy` given as an integer)
+      that differ by a small relative amount compare unequal. An integer against a float, and floats, keep the
+      tolerance, so `energy=100_000` still equals `energy=100e3`
+- `==` and `!=` compare the shapes of numbers, tuples, lists and arrays as well as their values, where broadcasting
+  made `(5,)` equal to `(5, 5)` and an empty sequence equal to anything, so a `FrozenPhonons` of one configuration
+  and one of two with the same seed, and `NoiseTransform`s with seeds `(5,)` and `(5, 5)`, no longer compare equal
+    - **Behaviour change:** a number and a one-element sequence of it compare unequal, so
+      `Probe(semiangle_cutoff=20) != Probe(semiangle_cutoff=[20])`, whose `[20]` adds a length-1 ensemble axis. It
+      was equal one way round. The energy of a `PlaneWave` or `Probe` is the exception: a one-value list is stored
+      as its value, so `energy=100e3` and `energy=[100e3]` compare equal both ways
+- `==` and `!=` on an object that holds a list or tuple of abTEM array objects (`Images`, `Waves`, ...) no longer
+  raise `RuntimeError: too many indices for array`: not for equal lists, lists of different lengths or shapes, nested
+  lists, or such a list against a NumPy array. `==` on the list decides, so a list does not equal a tuple of the
+  same objects and the numbers in it compare exactly. No abTEM class compares such a list with `==`; a subclass
+  that does can now be compared
+- A `StructureFactorArray` accepts its Miller indices and cell as any array-like, lists included, so one built from
+  lists or read from zarr works with `BlochWaves`, `g_vec` and `get_projected_potential`. The Miller indices are stored
+  as an integer array and the cell as a `Cell`, and a `StructureFactor` stores its Miller indices the same way
+- An `SMatrixArray` read from zarr keeps the dtype of the wave vectors it was written with and reduces to the same
+  waves as the S-matrix that was written, where they were read as float32. The dtype is stored in the
+  zarr attributes as `wave_vectors_dtype`; a file without it holds float64 values and reads as float64, unchanged
+    - **Behaviour change:** an `SMatrixArray` file written by this version cannot be read by an earlier version, which
+      raises `TypeError` for the unexpected `wave_vectors_dtype` argument. Files written by earlier versions read
+      with float64 wave vectors, the values they hold
 - `RealSpaceMultislice(order=n)` for `n` of 4 or more uses the binomial coefficients of the Taylor series of the
   forward wavenumber, $K(\sqrt{1 + 2C/K} - 1)$ with $K = 2\pi/\lambda$ and $C$ the slice operator, in both
   expansion scopes. The coefficients of the operator powers were geometric, $-1/(2K), 1/(2K^2), -1/(2K^3), \dots$,

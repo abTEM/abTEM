@@ -1019,17 +1019,26 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             metadata=metadata,
         )
 
-        self._local_potential = self.local_potential(space="real").sum(0)
-        self._local_potential_device_cache = None
+        self._derive_from_array()
         # Memo for _get_site_ceiling, keyed by (max_batch, waves.shape,
         # dtype, device) -- see that method.
         self._site_ceiling_cache: dict = {}
+        self._threshold = None
+
+    def _derive_from_array(self):
+        """Derive the state that depends on the array's content; `__init__` and
+        `_replace_array` call it."""
+        self._local_potential = self.local_potential(space="real").sum(0)
+        self._local_potential_device_cache = None
         # Memo for copy_to_device, keyed by target device -- see that method.
         # Set here, on the object every _task_local view is shallow-copied
         # from, so copy.copy's shared dict reference is what makes every
         # per-task view see what any sibling view already uploaded.
         self._device_array_cache: dict = {}
-        self._threshold = None
+
+    def _replace_array(self, array):
+        super()._replace_array(array)
+        self._derive_from_array()
 
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
@@ -1127,8 +1136,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         array = abs2(waves.array)
 
         # This runs once per scattering slice; reuse the local potential
-        # computed in __init__ and its cached device copy instead of
-        # re-deriving and re-uploading both on every call.
+        # derived from the array (_derive_from_array) and its cached device
+        # copy instead of re-deriving and re-uploading both on every call.
         local_potential = self._local_potential_on_device(array)
 
         complex_dtype = get_dtype(complex=True)
@@ -1247,7 +1256,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         resident array and the local potential derived from it are cached,
         and a fresh, independently-mutable wrapper is copied out each call.
 
-        The cache lives in ``_device_array_cache``, set in ``__init__`` on
+        The cache lives in ``_device_array_cache``, set by
+        ``_derive_from_array`` (``__init__`` and ``_replace_array``) on
         the object every ``_task_local`` view is shallow-copied from --
         ``copy.copy`` shares dict *references*, not contents, so every
         per-task view sees the same dict and therefore whatever a sibling

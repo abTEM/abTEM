@@ -60,6 +60,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    _TooManyIndicesError,
     get_dtype,
     interleave,
     itemset,
@@ -1126,7 +1127,7 @@ def _compute(
         arrays = dask.compute(arrays, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
-        wrapper._array = array
+        wrapper._replace_array(array)
 
     profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
@@ -1181,7 +1182,7 @@ def _validate_array_items(
         raise NotImplementedError
 
     if len(tuple(item for item in items if item is not None)) > len(shape):
-        raise RuntimeError("too many indices for array")
+        raise _TooManyIndicesError("too many indices for array")
 
     return items
 
@@ -1445,6 +1446,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy != isinstance(array, da.core.Array):
             raise ValueError("Type of array must match type of object.")
 
+        self._replace_array(array)
+
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `compute` and the `array` setter go through
+        here. A subclass that derives state from the array in `__init__` overrides
+        this to derive it again from the new array."""
         self._array = array
 
     @property
