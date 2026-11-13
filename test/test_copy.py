@@ -654,11 +654,49 @@ class TestEqualityDiscriminates:
         with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             hold(3) == hold(3, da.ones)
 
-    @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
+    def test_a_nested_container_of_array_objects_is_decided_by_its_elements(self):
+        """A list of lists of `ArrayObject`s is decided like a flat one: 3 and 3
+        rows are equal, 3 and 5 rows differ. Device-independent."""
+        Holder = self._list_holder()
+
+        def hold(rows):
+            return Holder([[self._images(np.zeros((rows, 4), dtype="float32"))]])
+
+        assert hold(3) == hold(3)
+        assert hold(3) != hold(5)
+        assert hold(5) != hold(3)
+
+    @pytest.mark.parametrize("array_first", [True, False])
+    def test_an_ndarray_differs_from_a_container_of_array_objects(self, array_first):
+        """A NumPy array and a list of `ArrayObject`s differ whichever side the
+        array is on. Device-independent."""
+        Holder = self._list_holder()
+        array = Holder(np.zeros(3))
+        container = Holder([self._images(np.zeros((3, 4), dtype="float32"))])
+
+        assert (array != container) if array_first else (container != array)
+
+    def test_a_container_of_array_objects_is_decided_by_eq_on_the_container(self):
+        """`==` on the container decides, so a list does not equal a tuple of the
+        same objects and the numbers in it compare exactly, while without an
+        `ArrayObject` both keep the NumPy comparison. A list that also holds a
+        3-element ndarray differs from a copy of itself: `list.__eq__` cannot
+        reduce the array's comparison. Device-independent."""
+        Holder = self._list_holder()
+        images = self._images(np.zeros((3, 4), dtype="float32"))
+
+        assert Holder([1.0]) == Holder((1.0,))
+        assert Holder([images]) != Holder((images,))
+        assert Holder([0.1]) == Holder([0.1 + 1e-12])
+        assert Holder([images, 0.1]) != Holder([images, 0.1 + 1e-12])
+        assert Holder([images, np.arange(3)]) != Holder([images, np.arange(3)])
+
+    @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError, RuntimeError])
     def test_a_held_object_whose_own_comparison_raises_is_a_difference(self, error):
         """A held object's `__eq__` is compared inside the same `try` as every
-        other attribute, so a `KeyError`, `TypeError` or `ValueError` it raises
-        is a difference, as it is for a list of arrays. Device-independent."""
+        other attribute, so a `KeyError`, `TypeError`, `ValueError` or
+        `RuntimeError` it raises is a difference, as it is for a list of arrays.
+        Device-independent."""
         from abtem.core.utils import EqualityMixin
 
         class Inner(EqualityMixin):

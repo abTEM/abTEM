@@ -142,24 +142,17 @@ def _shape(value) -> tuple[int, ...]:
     return np.shape(value) if shape is None else tuple(shape)
 
 
-def _is_decided_by_eq(value) -> bool:
-    """Whether `==` decides a value: an `EqualityMixin`, or a list or tuple
-    holding one. NumPy would index such a container's elements as arrays."""
-    return isinstance(value, EqualityMixin) or (
-        isinstance(value, (list, tuple))
-        and any(isinstance(v, EqualityMixin) for v in value)
-    )
-
-
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
 
     Numbers, and tuples, lists and arrays of numbers, are equal when their
     shapes and their values are: integers exactly, any other number to the
     default tolerance of `np.allclose`. A list equals a tuple of the same values.
-    A list or tuple holding abTEM objects (`EqualityMixin`) is decided by `==` on
-    the container instead: it does not equal a tuple of the same objects, and the
-    numbers in it compare exactly. Only its direct elements are checked.
+    A list or tuple holding abTEM objects (`EqualityMixin`), at any depth, is
+    decided by `==` on the container alone, since NumPy cannot convert it: it
+    does not equal a tuple of the same objects, the numbers in it compare
+    exactly, and one that also holds a copy of a NumPy array of more than one
+    element differs from its twin (`list.__eq__` cannot reduce that comparison).
 
     A lazy (dask) attribute decides nothing: comparing its values would run its
     graph, discard the result and let an error from inside the graph escape
@@ -205,11 +198,13 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
             # slice index). Lazy content below, in a held object, list or dict,
             # is deferred like a lazy attribute; any other error is a difference.
+            # RuntimeError: an ndarray against a list of array objects, whose
+            # `ArrayObject.__getitem__` NumPy calls to convert the list.
             equal = value == other
         except LazyComparisonError:
             undecided = undecided or key
             continue
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, RuntimeError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
@@ -226,7 +221,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if not (_is_decided_by_eq(value) or _is_decided_by_eq(other)):
+        if not isinstance(value, EqualityMixin):
             # A tolerance is for floating-point round-off; integers (seeds,
             # counts, indices) compare without one. Both comparisons broadcast,
             # so the shapes must match as well: (5,) is not (5, 5).
@@ -235,7 +230,9 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             )
             try:
                 equal = np.all(compare(value, other)) and _shape(value) == _shape(other)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RuntimeError):
+                # NumPy cannot convert the values (RuntimeError: a list holding
+                # array objects, which it indexes); `==` above gave the verdict.
                 pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
