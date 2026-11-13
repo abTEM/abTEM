@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.cell import Cell
 from ase.build import graphene
 from utils import float64_devices
 
@@ -388,3 +389,29 @@ def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
     one = slices(array, 9.0, 10)
     repeated = slices(np.tile(array, (1, 1, 3)), 27.0, 30)
     np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
+
+
+@pytest.mark.parametrize("g_max", [1.0, 2.5])
+def test_cosine_band_limit_keeps_the_passband(g_max):
+    # Content up to g_max is untouched and content beyond 3/2 g_max removed, with
+    # a monotonic roll-off between: g_max names the passband, not the zero.
+    from abtem.potentials.charge_density import (
+        _spatial_frequencies,
+        band_limit_fourier,
+    )
+
+    cell = Cell(np.diag([6.0, 7.0, 8.0]))
+    shape = (48, 56, 64)
+    array = np.random.default_rng(0).standard_normal(shape)
+
+    k = np.sqrt(sum(f**2 for f in _spatial_frequencies(shape, cell)))
+    gain = np.abs(np.fft.fftn(band_limit_fourier(array, cell, g_max))) / np.abs(
+        np.fft.fftn(array)
+    )
+
+    assert np.allclose(gain[k <= g_max], 1.0)
+    assert np.allclose(gain[k >= 1.5 * g_max], 0.0, atol=1e-12)
+    rolloff = (k > g_max) & (k < 1.5 * g_max)
+    order = np.argsort(k[rolloff])
+    assert np.all(np.diff(gain[rolloff][order]) <= 1e-12)
+    assert 0.0 < gain[rolloff].min() < gain[rolloff].max() < 1.0
