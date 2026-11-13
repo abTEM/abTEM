@@ -1,3 +1,4 @@
+import copy
 import functools
 import math
 import operator
@@ -3956,6 +3957,39 @@ def test_show_overlays_the_rows_of_an_ensemble_without_base_axes():
     assert [line.get_label() for line in lines] == ["channel = single", "channel = double"]
     for line, row in zip(lines, array):
         np.testing.assert_allclose(line.get_ydata(), row)
+
+
+def test_miller_index_labels_have_only_the_attributes_of_an_annotation():
+    """The labels pass `Annotation` methods on to each label and have no others.
+
+    Plotting runs on the CPU whatever the device of the measurement, so no device is
+    parametrised.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ase.build import bulk
+
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((48, 40)),
+        sampling=(0.2, 0.25),
+        metadata={"energy": 100e3},
+        fftshift=True,
+    )
+    indexed = patterns.index_diffraction_spots(cell=bulk("Si", cubic=True).cell)
+    try:
+        labels = indexed.show(annotations=True).artists[0, 0].annotations
+        assert not hasattr(labels, "no_such_attribute")
+        assert getattr(labels, "_no_such_attribute", None) is None
+        with pytest.raises(AttributeError):
+            labels.stale  # a non-callable attribute of Annotation is not delegated
+        assert len(copy.deepcopy(labels)._annotations) == len(labels._annotations)
+
+        labels.set_fontsize(12)
+        assert {label.get_fontsize() for label in labels._annotations} == {12.0}
+    finally:
+        plt.close("all")
 
 
 @pytest.mark.parametrize("cls", [DiffractionPatterns, Images])
