@@ -4,14 +4,20 @@ import ase
 import ase.build
 import numpy as np
 import pytest
-from utils import to_host_array
+from scipy.special import binom
+from utils import float64_devices, to_host_array
 
 import abtem
 from abtem.antialias import antialias_aperture
+from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.finite_difference import LaplaceOperator, _exact_root_step, multislice_step
 from abtem.multislice import LanczosMultislice, RealSpaceMultislice
 
-pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::UserWarning",
+    # the series it is compared with is deprecated
+    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
+)
 
 
 def _sto_potential(**kwargs):
@@ -163,3 +169,82 @@ def test_the_full_scope_warns_about_the_infinite_projection():
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         plane_wave.multislice(potential, algorithm=RealSpaceMultislice(), lazy=False)
+
+
+def _series_step(order):
+    def step(waves, potential_slice, next_slice):
+        return multislice_step(
+            waves,
+            potential_slice,
+            next_slice,
+            LaplaceOperator(6),
+            order=order,
+            fully_corrected=True,
+        )
+
+    return step
+
+
+def _reflected_and_transmitted(potential, algorithm, amplitude=1.0):
+    """The wave reflected at the entrance and the transmitted waves at every exit
+    plane, of a plane wave of the given amplitude at 1 keV."""
+    waves = abtem.PlaneWave(energy=1000.0).match_grid(potential).build(lazy=False)
+    waves._array = waves._array * amplitude
+    transmitted, reflected = waves.multislice(
+        potential,
+        algorithm=algorithm,
+        detectors=[abtem.WavesDetector(), abtem.WavesDetector(reflected=True)],
+    )
+    return to_host_array(reflected), to_host_array(transmitted)
+
+
+@float64_devices
+@pytest.mark.parametrize("order", [1, 2])
+def test_the_full_expansion_is_linear_in_the_incident_wave(order, device):
+    # Oracle: the Schrödinger equation is linear, so doubling the incident wave
+    # doubles the reflected wave and the transmitted waves at every exit plane. The
+    # potential is laterally structured, so the backscatter is not a constant.
+    array = np.random.default_rng(0).random((4, 16, 12)).astype(np.float32)
+    potential = abtem.PotentialArray(
+        array, slice_thickness=0.1, extent=(4.0, 3.0), exit_planes=1
+    )
+    algorithm = RealSpaceMultislice(order=order, expansion_scope="full")
+
+    once = _reflected_and_transmitted(potential, algorithm, 1.0)
+    twice = _reflected_and_transmitted(potential, algorithm, 2.0)
+
+    for name, single, double in zip(("reflected", "transmitted"), once, twice):
+        assert np.abs(single).max() > 1e-4, name
+        deviation = np.linalg.norm(double - 2 * single) / np.linalg.norm(2 * single)
+        assert deviation < 1e-12, name
+
+
+@float64_devices
+@pytest.mark.parametrize("order", [1, 2, 3])
+@pytest.mark.parametrize("thickness", [0.01, 0.05])
+@pytest.mark.parametrize("amplitude", [1.0, 1e-3])
+def test_the_backscatter_of_a_uniform_step_is_the_series_of_the_wave_numbers(
+    order, thickness, amplitude, device
+):
+    # Oracle: for a constant wave across a step from 0 to U, k_next - k_current acts
+    # as K0 sum_{i=1..order} binom(1/2, i) x^i, and 1 / k_next as the series
+    # sum_{i=0..order} binom(-1/2, i) x^i / K0 (Eq. 13 of the Micron paper), with
+    # x = sigma U / (pi K0): the backscatter over the wave is
+    # (k_next - k_current) / (2 k_next) of the same truncated series.
+    energy, volts = 1000.0, 10.0
+    k0, sigma = 1 / energy2wavelength(energy), energy2sigma(energy)
+    x = sigma * volts / (np.pi * k0)
+    difference = sum(binom(0.5, i) * x**i for i in range(1, order + 1))
+    inverse = sum(binom(-0.5, i) * x**i for i in range(order + 1))
+    expected = difference * inverse / 2
+
+    array = np.zeros((2, 8, 8), dtype=np.float32)
+    array[1] = volts * thickness
+    slices = abtem.PotentialArray(array, slice_thickness=thickness, extent=(4.0, 4.0))
+    waves = abtem.PlaneWave(energy=energy).match_grid(slices).build(lazy=False)
+    waves._array = waves._array * amplitude
+
+    _, backscattered = _series_step(order)(waves, slices[0], slices[1])
+
+    ratio = to_host_array(backscattered) / amplitude
+    np.testing.assert_allclose(ratio, expected, rtol=1e-6, atol=0)

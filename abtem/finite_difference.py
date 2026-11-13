@@ -743,23 +743,15 @@ def full_series(
     order: int,
     wavelength: float,
     thickness: float,
-    override_prefactor: list[float] = [],
 ):
     """
     Full Taylor series expansion of the MS Eq.(14) in Ultramicrscopy 134 (2013) 135-143.
-    override_prefactor used in backscatter call, Eq. (13) in Micron 190 (2025) 103778.
     """
     series = conventional_operator(waves, laplace, transmission_function, wavelength)
     temp = series.copy()
     for i in range(2, order + 1):
-        if override_prefactor:
-            prefactor = override_prefactor[
-                i - 1
-            ]  # Note that the first prefactor always gets skipped and is always 1
-        else:
-            prefactor = _series_prefactor(i, wavelength)
         temp = conventional_operator(temp, laplace, transmission_function, wavelength)
-        series += temp * prefactor
+        series += temp * _series_prefactor(i, wavelength)
     return series * 1.0j * thickness
 
 
@@ -1031,29 +1023,18 @@ def multislice_step(
             )
         )
 
-        # 1/k series with custom prefactors
-        prefactors = [1]
+        # 1 / (2 k_{j+1}) of Eq. 7: the operator series of Eq. 13 applied to the
+        # difference
+        term = backscatter
         for i in range(1, order + 1):
-            prefactors.append(prefactors[-1] * (1 - 2 * i) / (2 * i))
-        for i in range(len(prefactors)):
-            prefactors[i] = prefactors[i] / (1.0j * thickness) / (np.pi * K0) ** i
-
-        backscatter *= (
-            1
-            / (2 * K0)
-            * (
-                1
-                + full_series(
-                    waves._array,
-                    laplace_stencil,
-                    transmission_function_array_next_slice,
-                    order,
-                    wavelength,
-                    thickness,
-                    override_prefactor=prefactors,
-                )
-            )
-        )
+            term = conventional_operator(
+                term,
+                laplace_stencil,
+                transmission_function_array_next_slice,
+                wavelength,
+            ) * ((1 - 2 * i) / (2 * i) / (np.pi * K0))
+            backscatter = backscatter + term
+        backscatter = backscatter / (2 * K0)
 
         if not xp.all(xp.isfinite(backscatter)):
             raise DivergedError(
