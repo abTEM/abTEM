@@ -196,8 +196,8 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
             # slice index). Lazy content below, in a held object, list or dict,
             # is deferred like a lazy attribute; any other error is a difference.
-            # RuntimeError includes an ndarray against a list of array objects,
-            # whose `ArrayObject.__getitem__` NumPy calls to convert the list.
+            # A RuntimeError arises from an ndarray against a list of array
+            # objects, whose `ArrayObject.__getitem__` NumPy calls to convert it.
             equal = value == other
         except LazyComparisonError:
             undecided = undecided or key
