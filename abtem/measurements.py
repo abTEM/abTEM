@@ -4729,24 +4729,36 @@ class DiffractionPatterns(_BaseMeasurement2D):
         alpha_y = xp.asarray(k_y, dtype=get_dtype()) * (wavelength * 1e3)
         return alpha_x, alpha_y
 
-    def scattering_angles(self) -> tuple[np.ndarray, np.ndarray]:
+    def scattering_angles(self) -> np.ndarray:
         """
-        The scattering angles of the pixels on the `x` and `y` axes [mrad],
-        ``arcsin(wavelength * k)`` whatever the ``angles`` configuration is, and NaN
-        for evanescent beams. A pixel off the axes is at
-        ``arcsin(wavelength * |k|)``, not at either of these. For diffraction
-        patterns of several energies, those of the highest energy (see
-        `angular_sampling`).
+        The scattering angle of every pixel [mrad], the angle between the direction
+        of its beam and the optical axis: ``arcsin(wavelength * |k|)`` whatever the
+        ``angles`` configuration is, and NaN for evanescent beams
+        (``wavelength * |k| > 1``), which have no direction.
+
+        The array has the shape of the diffraction patterns, ``(nx, ny)``, in the
+        order they are stored in (see `fftshift`), so that it can be applied to them
+        directly, for example ``patterns.array * (patterns.scattering_angles() < 100)``.
+        It is evaluated from the coordinates in double precision and returned in the
+        configured precision. The coordinates of the pixels along `x` and `y` on the
+        angular grid, which the axes of the patterns are uniform in, are
+        `angular_coordinates`.
+
+        For diffraction patterns of several energies, those of the highest energy
+        (see `angular_sampling`).
 
         For a wave travelling against the beam, such as the backscattered wave of
         ``RealSpaceMultislice(expansion_scope="full")``, the angle is from the
         reversed beam direction.
         """
-        alpha_x, alpha_y = self.angular_coordinates
-        return (
-            to_scattering_angle(alpha_x, "exact"),
-            to_scattering_angle(alpha_y, "exact"),
-        )
+        xp = get_array_module(self.array)
+        wavelength = energy2wavelength(self._get_energy())
+        k_x, k_y = (np.asarray(k) for k in self.coordinates)
+        # on the host in double precision: arcsin amplifies the rounding of the
+        # radius next to wavelength * |k| = 1
+        radius = np.sqrt(k_x[:, None] ** 2 + k_y[None, :] ** 2) * (wavelength * 1e3)
+        angles = to_scattering_angle(radius, "exact")
+        return xp.asarray(angles, dtype=get_dtype())
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
