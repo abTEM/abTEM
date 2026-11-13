@@ -783,8 +783,9 @@ Bugfixes:
 - `==` and `!=` on an object that holds a list or tuple of abTEM array objects (`Images`, `Waves`, ...) no longer
   raise `RuntimeError: too many indices for array`: not for equal lists, lists of different lengths or shapes, nested
   lists, or such a list against a NumPy array. `==` on the list decides, so a list does not equal a tuple of the
-  same objects, numbers in it compare exactly, and a list that also holds a NumPy array of more than one element
-  differs from its copy. No abTEM class holds such a list; a subclass that does can now be compared
+  same objects and the numbers in it compare exactly. No abTEM class compares such a list with `==`; a subclass
+  that does can now be compared. A `RuntimeError` raised by a held object's own `__eq__` now makes `==` return
+  `False`, as a `KeyError`, `TypeError` or `ValueError` already did, instead of escaping it
 - A `StructureFactorArray` accepts its Miller indices and cell as any array-like, lists included, so one built from
   lists or read from zarr works with `BlochWaves`, `g_vec` and `get_projected_potential`. The Miller indices are stored
   as an integer array and the cell as a `Cell`, and a `StructureFactor` stores its Miller indices the same way
