@@ -18,6 +18,11 @@ Features:
   exact root (with the backscatter correction, which `expansion_scope="full"` always applies) is within 1.4 % of an exact
   two-way solution where the series of order 1 is 7 % and the split step 8 % off, and it works at the orders and grids
   where the series fails ([PR #629](https://github.com/abTEM/abTEM/pull/629))
+- Detectors take `reflected=True` to measure the wave reflected at the entrance of the specimen instead of the
+  transmitted one, e.g. `WavesDetector(reflected=True)` or `AnnularDetector(..., reflected=True)`, alongside the
+  detectors of the transmitted wave. Angles are measured from -z. A reflected detector has no exit-plane axis and
+  needs no `exit_planes=1`; it needs a multislice algorithm that reflects, and is refused elsewhere (PRISM, the
+  core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
@@ -275,8 +280,21 @@ Dependencies:
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
 
+Deprecated (removed in 1.2):
+
+- `return_backscattered=True`: use a detector with `reflected=True`. `RealSpaceMultislice(expansion_scope="full")`,
+  the series of the full operator, which diverges below about 5 keV: use `LanczosMultislice`. The `expansion_scope`
+  argument of `RealSpaceMultislice` and `FourierMultislice`. Each warns with a `FutureWarning`
+  ([PR #686](https://github.com/abTEM/abTEM/pull/686))
+
 Bugfixes:
 
+- The backscattered wave of `RealSpaceMultislice(expansion_scope="full")` (`return_backscattered=True`) is the
+  reflected wave. Its back-propagation conjugated the waves and left out the round-trip phase `exp(2ikz)` of a
+  reflection at depth `z`, so the reflections at different depths added with the wrong phases: the reflection of a
+  flat slab was 4e-11 at every thickness instead of the Airy reflection, up to 2.5e-5 for 10 V at 1 keV, and that of
+  graphene at 1 keV 4 times the exact two-way value. It now matches the Airy reflection to 1 %. The transmitted wave
+  is unchanged
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))

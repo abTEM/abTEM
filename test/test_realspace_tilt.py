@@ -70,7 +70,10 @@ def test_translate_untilted_waves_is_the_identity():
     )
 
 
-@pytest.mark.parametrize("scope", ["propagator", "full"])
+@pytest.mark.filterwarnings(
+    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning"
+)
+@pytest.mark.parametrize("scope", [None, "full"])
 @pytest.mark.parametrize("tilt", [(5.0, 0.0), (20.0, 10.0)])
 def test_the_tilt_changes_the_exit_wave_as_it_does_for_the_fourier_propagator(
     scope, tilt
