@@ -4,6 +4,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,6 +130,47 @@ def test_collecting_the_tests_does_not_import_torch(request):
     which took ~15 s: it covers the tests this run collected -- all of them
     in a full run."""
     assert not request.config._abtem_torch_imported_by_collection
+
+
+@pytest.mark.parametrize("version", ["2.4.0", "2.10.0", "2.13.1", "1.13.1+cpu"])
+def test_torch_older_than_the_mps_floor_is_refused(version):
+    with pytest.raises(RuntimeError, match=r"requires PyTorch 2\.14 or newer"):
+        backend._check_torch_version_for_mps(version)
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["2.14.0", "2.14.1", "2.15.0.dev20261101", "2.14.0+cpu", "3.0.0", "weird"],
+)
+def test_torch_at_or_above_the_mps_floor_is_accepted(version):
+    backend._check_torch_version_for_mps(version)
+
+
+def test_an_old_torch_is_refused_on_the_mps_device_only(monkeypatch):
+    class FakeTorchBackend:
+        DEVICE = "mps"
+        TorchNDArray = object
+        torch_numpy = object()
+        torch = SimpleNamespace(__version__="2.13.0")
+
+        @classmethod
+        def _check_available(cls):
+            pass
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(backend, "tp", None)
+    monkeypatch.setattr(backend, "TorchNDArray", None)
+    monkeypatch.setattr(abtem.core, "_torch", FakeTorchBackend, raising=False)
+    monkeypatch.setitem(sys.modules, "abtem.core._torch", FakeTorchBackend)
+
+    with abtem.config.set({"torch.device": "mps"}):
+        with pytest.raises(RuntimeError, match=r"requires PyTorch 2\.14 or newer"):
+            backend.check_mps_is_available()
+        assert backend.tp is None
+
+    # The 'cpu' torch device does not use MPSGraph, so an old torch is fine there.
+    with abtem.config.set({"torch.device": "cpu", "precision": "float32"}):
+        assert backend.check_mps_is_available() is FakeTorchBackend.torch_numpy
 
 
 @pytest.mark.parametrize("machine", ["arm64", "x86_64"])
