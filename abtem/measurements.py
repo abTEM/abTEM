@@ -6891,8 +6891,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         state.pop("_intensities", None)
         self.__dict__.update(state)
 
+    @classmethod
     def from_array_and_metadata(
-        self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
     ) -> BaseMeasurements:
         raise NotImplementedError
 
