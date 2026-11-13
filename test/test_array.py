@@ -17,7 +17,14 @@ import abtem
 import abtem.array
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
-from abtem.core.axes import OrdinalAxis
+from abtem.core.axes import (
+    LinearAxis,
+    NonLinearAxis,
+    OrdinalAxis,
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+    ScanAxis,
+)
 from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.measurements import Images
 
@@ -922,3 +929,161 @@ def test_apply_func_calls_the_function_with_the_array_object(device, lazy):
     np.testing.assert_allclose(
         asnumpy(result.array), expected, rtol=1e-6, atol=1e-6 * expected.max()
     )
+
+
+def _linear_axes():
+    return [
+        LinearAxis(label="z", sampling=0.7, offset=-1.3),
+        RealSpaceAxis(label="z", sampling=0.7, offset=-1.3),
+        ScanAxis(label="z", sampling=0.7, offset=-1.3),
+        ReciprocalSpaceAxis(label="z", sampling=0.7, offset=-(9 // 2) * 0.7),
+    ]
+
+
+# (item, step of the slice or None for an index array), over 9 members
+_LINEAR_AXIS_ITEMS = [
+    (slice(1, 8, 2), 2),
+    (slice(None, None, 3), 3),
+    (slice(-4, None), 1),
+    (slice(1, -2), 1),
+    (slice(-7, -1, 2), 2),
+    (slice(None, None, -1), -1),
+    (slice(7, 1, -2), -2),
+    ([0, 3, 4, 8], None),
+    (np.array([True, False, False, True, True, False, False, False, True]), None),
+]
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("axis", _linear_axes(), ids=lambda axis: type(axis).__name__)
+@pytest.mark.parametrize("item, step", _LINEAR_AXIS_ITEMS)
+def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
+    axis, item, step, lazy, device
+):
+    host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+
+    # a scan axis increases, so a reversed slice is refused; an index array is not
+    if isinstance(axis, ScanAxis) and step is not None and step < 0:
+        with pytest.raises(IndexError) as error:
+            images[item]
+        assert "ScanAxis 'z'" in str(error.value)
+        hint = {-1: "np.arange(9)[::-1]", -2: "np.arange(9)[7:1:-2]"}[step]
+        assert f"the explicit positions {hint} instead" in str(error.value)
+        return
+
+    indexed = images[item]
+    new_axis = indexed.ensemble_axes_metadata[0]
+    expected = np.asarray(axis.coordinates(9))[item]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12 * 9 * 0.7
+    )
+    np.testing.assert_array_equal(asnumpy(indexed.compute().array), host[item])
+
+    # a positive step keeps the class, except that a ReciprocalSpaceAxis rounds
+    # its offset to a whole multiple of its sampling, which a step breaks
+    keeps_class = step is not None and step > 0
+    if isinstance(axis, ReciprocalSpaceAxis):
+        keeps_class = step == 1
+    if keeps_class:
+        assert type(new_axis) is type(axis)
+        assert new_axis.sampling == pytest.approx(0.7 * step)
+    else:
+        assert type(new_axis) is NonLinearAxis
+        assert (new_axis.label, new_axis.units) == (axis.label, axis.units)
+
+
+@devices
+def test_a_decreasing_index_array_on_a_scan_axis_gives_a_non_linear_axis(device):
+    """A reversed slice of a scan axis is refused, but the same members listed
+    by an index array keep their order on an axis with explicit coordinates."""
+    axis = ScanAxis(label="x", sampling=0.5, offset=0.25)
+    images = Images(
+        copy_to_device(np.zeros((6, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    new_axis = images[np.arange(6)[::-1]].ensemble_axes_metadata[0]
+
+    assert type(new_axis) is NonLinearAxis
+    assert new_axis.values == pytest.approx((2.75, 2.25, 1.75, 1.25, 0.75, 0.25))
+
+
+def test_the_hint_of_a_refused_empty_reversed_slice_names_the_slice():
+    """An empty reversed slice is refused like any other, and the hint gives the
+    slice as written. The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((8, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(label="x")],
+    )
+
+    with pytest.raises(IndexError, match=r"np\.arange\(8\)\[2:5:-1\] instead"):
+        images[2:5:-1]
+
+
+@devices
+def test_a_new_axis_before_a_stepped_linear_ensemble_axis(device):
+    axis = LinearAxis(label="z", sampling=0.7, offset=-1.3)
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    new_axis = images[None, 1::2].ensemble_axes_metadata[1]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(4), np.asarray(axis.coordinates(9))[1::2], atol=1e-12
+    )
+
+
+def test_a_type_error_inside_an_axis_getitem_propagates(monkeypatch):
+    """A `TypeError` raised by an axis's own `__getitem__` is a bug in the axis,
+    not a request for a plain copy of it. The test indexes metadata only, so it
+    pins no device."""
+
+    def broken(self, item):
+        raise TypeError("a bug inside __getitem__")
+
+    monkeypatch.setattr(OrdinalAxis, "__getitem__", broken)
+    images = Images(
+        np.zeros((3, 4, 4)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(1, 2, 3))],
+    )
+
+    with pytest.raises(TypeError, match="a bug inside __getitem__"):
+        images[1:]
+
+
+@lazy_params
+@devices
+def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinates(
+    lazy, device
+):
+    """The partition path indexes the already indexed axis with contiguous
+    forward slices; each block's coordinates are those of its members."""
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.5, offset=1.0)],
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+    indexed = images[1::2]
+    expected = indexed.ensemble_axes_metadata[0].coordinates(4)
+
+    blocks = indexed._partition_ensemble_axes_metadata(chunks=((2, 2),), lazy=False)
+
+    for block, start in zip(blocks, (0, 2)):
+        np.testing.assert_allclose(
+            block[0].coordinates(2), expected[start : start + 2], atol=1e-12
+        )

@@ -40,6 +40,7 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _index_ensemble_axis,
     _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
@@ -1961,14 +1962,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         expanded_axes_metadatas = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
         ]
+        expanded_shape = list(self.ensemble_shape)
         for i, item in enumerate(items):
             if item is None:
                 expanded_axes_metadatas.insert(i, UnknownAxis())
+                expanded_shape.insert(i, 1)
 
         metadata = {}
         axes_metadata = []
         last_indexed = 0
-        for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
+        for item, expanded_axes_metadata, n in zip(
+            items, expanded_axes_metadatas, expanded_shape
+        ):
             last_indexed += 1
             if isinstance(item, Number):
                 metadata = {
@@ -1976,10 +1981,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     **expanded_axes_metadata.item_metadata(item, self.metadata),
                 }
             else:
-                try:
-                    axes_metadata += [expanded_axes_metadata[item].copy()]
-                except TypeError:
-                    axes_metadata += [expanded_axes_metadata.copy()]
+                axes_metadata += [_index_ensemble_axis(expanded_axes_metadata, item, n)]
 
         axes_metadata += expanded_axes_metadatas[last_indexed:]
         return axes_metadata, metadata

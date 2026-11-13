@@ -60,12 +60,9 @@ def test_linear_axis_getitem_with_length_one_tuple():
 )
 def test_linear_axis_getitem_rejects_unsupported_slices(bad_item):
     """Strided, negative, or empty slices cannot be represented by shifting
-    `offset` alone. This must raise TypeError specifically (not e.g.
-    NotImplementedError): `ArrayObject._get_ensemble_axes_metadata_items`
-    catches TypeError to fall back to a plain copy for whatever an axis
-    can't represent exactly -- the same fallback this axis relied on before
-    it had a `__getitem__` at all. Any other exception type would break
-    general indexing instead of falling back gracefully."""
+    `offset` alone, and `__getitem__` raises TypeError for them: it is the
+    contract of the chunk partitioning, which never constructs such a slice.
+    Indexing an array object goes through `_index_ensemble_axis` instead."""
     axis = RealSpaceAxis(offset=10.0, sampling=0.5)
 
     with pytest.raises(TypeError):
