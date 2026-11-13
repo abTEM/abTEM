@@ -17,11 +17,12 @@ method the table lists
   by kz / k (the flux, which the solver conserves) instead,
 * the sum of |psi_g|^2 and the flux of the exit wave.
 
-``RealSpaceMultislice(expansion_scope="full")`` always applies the backscatter
-correction. The solver and ``order="exact"`` (abTEM#629) are left out of the methods of
-a checkout that does not have them (see ``--list``); without the solver there is no
-reference, and the table has only the times and the memory. The same holds if
-``--methods`` leaves ``twoway`` out.
+``RealSpaceMultislice(expansion_scope="full")`` (deprecated with abTEM#686) and
+``LanczosMultislice`` always apply the backscatter correction. The solver and
+``LanczosMultislice`` (abTEM#629; ``rs-full-exact`` is accepted as its old name) are
+left out of the methods of a checkout that does not have them (see ``--list``);
+without the solver there is no reference, and the table has only the times and the
+memory. The same holds if ``--methods`` leaves ``twoway`` out.
 
 Examples
 --------
@@ -52,7 +53,7 @@ the way a scan does, and reports the time per probe (without the solver, which t
 plane waves)::
 
     python benchmarks/benchmark_twoway_vs_multislice.py --device gpu --batch 256 \\
-        --energy 1000 --methods fourier rs-full-exact
+        --energy 1000 --methods fourier lanczos
 
 Memory is reported in MB (10^6 bytes), times in s, lengths in Å as everywhere in abTEM.
 Set ``--threads`` (or the thread environment variables) when comparing runs: a BLAS
@@ -60,7 +61,6 @@ that starts one thread per core on the small blocks of the solver is much slower
 """
 
 import argparse
-import dataclasses
 import json
 import os
 import resource
@@ -144,7 +144,7 @@ def make_potential(atoms, gpts, thickness, device):
 
 def available_methods():
     """name -> description of the methods this checkout has."""
-    from abtem.multislice import RealSpaceMultislice
+    import abtem.multislice
 
     names = {}
     try:
@@ -156,9 +156,8 @@ def available_methods():
     names["fourier"] = "FourierMultislice"
     for order in (1, 2, 3):
         names[f"rs-full-o{order}"] = f"RealSpaceMultislice full, order {order}"
-    fields = {f.name for f in dataclasses.fields(RealSpaceMultislice)}
-    if "lanczos_tolerance" in fields:  # order="exact", abTEM#629
-        names["rs-full-exact"] = "RealSpaceMultislice full, order 'exact'"
+    if hasattr(abtem.multislice, "LanczosMultislice"):  # abTEM#629
+        names["lanczos"] = "LanczosMultislice (exact root)"
     return names
 
 
@@ -167,10 +166,12 @@ def make_algorithm(name):
 
     if name == "fourier":
         return FourierMultislice()
-    order = name.removeprefix("rs-full-")
-    return RealSpaceMultislice(
-        expansion_scope="full", order="exact" if order == "exact" else int(order[1:])
-    )
+    if name == "lanczos":
+        from abtem.multislice import LanczosMultislice
+
+        return LanczosMultislice()
+    order = int(name.removeprefix("rs-full-o"))
+    return RealSpaceMultislice(expansion_scope="full", order=order)
 
 
 def band_edges(cutoff):
@@ -472,7 +473,9 @@ def main():
         for name, description in methods.items():
             print(f"{name:<20s} {description}")
         return
-    selected = args.methods or list(methods)
+    # the exact root was RealSpaceMultislice(order="exact") before LanczosMultislice
+    selected = ["lanczos" if m == "rs-full-exact" else m for m in args.methods or []]
+    selected = selected or list(methods)
     unknown = [m for m in selected if m not in methods]
     if unknown:
         raise SystemExit(f"unavailable methods {unknown}; available: {list(methods)}")
