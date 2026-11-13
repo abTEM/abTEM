@@ -552,6 +552,33 @@ class TestEqualityDiscriminates:
         with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
             a == b
 
+    @pytest.mark.parametrize("container", [list, tuple])
+    def test_the_same_delayed_values_in_a_container_compare_equal(self, container):
+        """A list or tuple holding the same `dask.delayed` values on both sides
+        is equal, as one delayed value held directly is, and differs from a
+        number in both orders. Choosing how to compare the values must not ask
+        a delayed value for its `dtype`, which is delayed too, and `==` runs no
+        graph. Device-independent."""
+        import dask
+
+        reads = []
+
+        def read(n):
+            reads.append(n)
+            return np.arange(n)
+
+        Holder = self._list_holder()
+        values = container([dask.delayed(read)(3), dask.delayed(read)(4)])
+        a = Holder(values)
+
+        assert a == a
+        assert a == Holder(values)
+        assert not a != a
+        assert Holder(a) == Holder(a)
+        assert a != Holder(5)
+        assert Holder(5) != a
+        assert reads == []
+
     @staticmethod
     def _list_holder():
         from abtem.core.utils import EqualityMixin
