@@ -829,7 +829,7 @@ def _exact_root_step(
     k = 2 * np.pi / wavelength
     potentials = [potential_slice.array[0] * sigma / thickness]
     if next_slice is not None:
-        potentials.append(next_slice.array[0] * sigma / thickness)
+        potentials.append(next_slice.array[0] * sigma / next_slice.thickness)
 
     def advance(batch, tilt):
         """The forward and the backscattered wave of a batch of one tilt."""
@@ -966,7 +966,9 @@ def multislice_step(
     )
     if fully_corrected and next_slice is not None:
         transmission_function_array_next_slice = (
-            next_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
+            next_slice.array[0]
+            * energy2sigma(waves._valid_energy)
+            / next_slice.thickness
         )
 
     laplace_stencil = laplace.get_stencil(waves, device=waves.device)

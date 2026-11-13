@@ -185,6 +185,12 @@ def _series_step(order):
     return step
 
 
+def _algorithm(name):
+    if name == "lanczos":
+        return LanczosMultislice()
+    return RealSpaceMultislice(order=1, expansion_scope="full")
+
+
 def _reflected_and_transmitted(potential, algorithm, amplitude=1.0):
     """The wave reflected at the entrance and the transmitted waves at every exit
     plane, of a plane wave of the given amplitude at 1 keV."""
@@ -248,3 +254,60 @@ def test_the_backscatter_of_a_uniform_step_is_the_series_of_the_wave_numbers(
 
     ratio = to_host_array(backscattered) / amplitude
     np.testing.assert_allclose(ratio, expected, rtol=1e-6, atol=0)
+
+
+@float64_devices
+@pytest.mark.parametrize("algorithm", ["series", "lanczos"])
+def test_a_uniform_medium_sliced_unevenly_reflects_nothing(algorithm, device):
+    # Oracle: a laterally uniform medium of 10 V with no vacuum has no interface,
+    # however it is sliced, so it reflects nothing (|r|^2 < 1e-20).
+    thicknesses = np.array([0.01, 0.02, 0.03, 0.01, 0.02] * 6)
+    potential = abtem.PotentialArray(
+        np.ones((len(thicknesses), 8, 8)) * (10.0 * thicknesses)[:, None, None],
+        slice_thickness=list(thicknesses),
+        sampling=0.5,
+    )
+    waves = abtem.PlaneWave(energy=1000.0).match_grid(potential).build(lazy=False)
+    reflected = waves.multislice(
+        potential,
+        algorithm=_algorithm(algorithm),
+        detectors=abtem.WavesDetector(reflected=True),
+    )
+
+    assert np.abs(to_host_array(reflected.array)).max() ** 2 < 1e-20
+
+
+@float64_devices
+@pytest.mark.parametrize("algorithm", ["series", "lanczos"])
+def test_the_reflection_of_a_slab_does_not_depend_on_how_unevenly_it_is_sliced(
+    algorithm, device
+):
+    # Oracle: the reflection of a slab of potential V0 and thickness d, in vacuum, is
+    # r12 (1 - exp(2 i k2 d)) / (1 - r12^2 exp(2 i k2 d)), with k2 the wave number in
+    # the slab (Airy), whatever the slicing. The slab is sliced in 0.01-0.03 Å.
+    energy, v0 = 1000.0, 10.0
+    thickness = np.array([0.01, 0.02, 0.03, 0.01, 0.02] * 6)
+    k1 = 2 * np.pi / energy2wavelength(energy)
+    k2 = np.sqrt(k1**2 + 2 * k1 * energy2sigma(energy) * v0)
+    r12 = (k1 - k2) / (k1 + k2)
+    phase = np.exp(2j * k2 * thickness.sum())
+    expected = abs(r12 * (1 - phase) / (1 - r12**2 * phase)) ** 2
+
+    thicknesses = np.r_[np.full(5, 0.02), thickness, np.full(5, 0.02)]
+    volts = np.r_[np.zeros(5), np.full(len(thickness), v0), np.zeros(5)]
+    potential = abtem.PotentialArray(
+        np.ones((len(volts), 8, 8), np.float32)
+        * (volts * thicknesses).astype(np.float32)[:, None, None],
+        slice_thickness=list(thicknesses),
+        sampling=0.5,
+    )
+    waves = abtem.PlaneWave(energy=energy).match_grid(potential).build(lazy=False)
+    reflected = waves.multislice(
+        potential,
+        algorithm=_algorithm(algorithm),
+        detectors=abtem.WavesDetector(reflected=True),
+    )
+
+    assert abs(to_host_array(reflected.array).mean()) ** 2 == pytest.approx(
+        expected, rel=0.01
+    )
