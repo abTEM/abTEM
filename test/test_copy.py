@@ -680,8 +680,8 @@ class TestEqualityDiscriminates:
         """`==` on the container decides, so a list does not equal a tuple of the
         same objects and the numbers in it compare exactly, while without an
         `ArrayObject` both keep the NumPy comparison. A list that also holds a
-        3-element ndarray differs from a copy of itself: `list.__eq__` cannot
-        reduce the array's comparison. Device-independent."""
+        3-element ndarray differs from a copy of itself, as any list holding one
+        does: `list.__eq__` cannot reduce the array's comparison. Device-independent."""
         Holder = self._list_holder()
         images = self._images(np.zeros((3, 4), dtype="float32"))
 
