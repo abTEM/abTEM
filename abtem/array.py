@@ -60,6 +60,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    _TooManyIndicesError,
     get_dtype,
     interleave,
     itemset,
@@ -322,6 +323,11 @@ def multi_output_blockwise(
     assert all(
         base_axis.numblocks[0] == len(c) for base_axis, c in zip(array_axes, old_chunks)
     )
+
+    # Pin the positional layout the task function has to reproduce: one axis
+    # arg per array dimension, then one arg per new_axes entry.
+    kwargs.setdefault("num_array_axes", base_ndim)
+    kwargs.setdefault("num_transform_args", len(new_axes))
 
     out_symbols = tuple(range(out_ndim))
     array_symbols = tuple(range(new_ndim, out_ndim))
@@ -812,20 +818,64 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
-def _is_gpu_array_object(obj) -> bool:
-    """Return True if obj's computation involves GPU (CuPy) arrays.
+def _mark_device_work(array, device: str):
+    """Record on the layer that produced a dask array that its tasks run their
+    computation on ``device``.
 
-    Detects GPU even when the output array has numpy meta, e.g. when a detector
-    with to_cpu=True produces CPU-resident results from GPU wave computations.
-    ArrayObject.device checks _device first (set in apply_transform when the source
-    was GPU), so this correctly handles the to_cpu=True case.
+    A task that returns host objects (the measurements of a whole S-matrix
+    ensemble member) has a NumPy ``chunk_type`` although it does the work on the
+    device. The mark is in the layer's ``collection_annotations``, so the graph
+    of every array derived from this one keeps it. The S-matrix scans mark their
+    assembled arrays once, in ``_finalize_lazy_measurements``. Any other producer
+    of device-held lazy results whose graph carries no typed layer (object or
+    host-NumPy meta) must call this on each such array. A device of ``None`` (the
+    producer follows the global configuration) marks nothing that a computation
+    reads: the scheduler choice then comes from ``config["device"]``.
     """
-    return hasattr(obj, "device") and obj.device == "gpu"
+    array.dask.layers[array.name].collection_annotations["device"] = device
+
+
+def _graph_holds_work_on(obj, device: str, array_type) -> bool:
+    """Whether the graph of a lazy array object has a layer of ``array_type``
+    chunks or a layer marked as running on ``device``.
+
+    dask records the chunk type of every array layer it creates in the layer's
+    ``collection_annotations``, and the graph of an array derived from another
+    keeps the other's layers. Device work upstream therefore stays visible in a
+    result held on the CPU (a detector's ``to_cpu=True``), whichever method
+    rebuilt that result.
+    """
+    if not getattr(obj, "is_lazy", False):
+        return False
+    chunk_type = None if array_type is None else dask.utils.typename(array_type)
+    layers = getattr(obj.array.__dask_graph__(), "layers", {})
+    annotations = (
+        getattr(layer, "collection_annotations", None) or {}
+        for layer in layers.values()
+    )
+    return any(
+        annotation.get("device") == device
+        or (chunk_type is not None and annotation.get("chunk_type") == chunk_type)
+        for annotation in annotations
+    )
+
+
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays: obj is
+    labelled or stored on the GPU, or its graph has CuPy chunks or tasks marked
+    as running on the GPU."""
+    return (hasattr(obj, "device") and obj.device == "gpu") or _graph_holds_work_on(
+        obj, "gpu", None if cp is None else cp.ndarray
+    )
 
 
 def _is_mps_array_object(obj) -> bool:
-    """Return True if obj's computation involves Metal (MPS) arrays."""
-    return hasattr(obj, "device") and obj.device == "mps"
+    """Return True if obj's computation involves Metal (MPS) arrays: obj is
+    labelled or stored on Metal, or its graph has Metal chunks or tasks marked as
+    running on Metal."""
+    return (hasattr(obj, "device") and obj.device == "mps") or _graph_holds_work_on(
+        obj, "mps", backend.TorchNDArray
+    )
 
 
 def _resolve_mps_scheduler(kwargs: dict) -> dict:
@@ -1077,7 +1127,7 @@ def _compute(
         arrays = dask.compute(arrays, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
-        wrapper._array = array
+        wrapper._replace_array(array)
 
     profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
@@ -1132,7 +1182,7 @@ def _validate_array_items(
         raise NotImplementedError
 
     if len(tuple(item for item in items if item is not None)) > len(shape):
-        raise RuntimeError("too many indices for array")
+        raise _TooManyIndicesError("too many indices for array")
 
     return items
 
@@ -1269,21 +1319,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return len(set(axis).intersection(base_axes)) > 0
 
     def apply_func(self, func: Callable, **kwargs) -> Self:
-        """Apply a function to the array object. The function must take an array as its
-        first argument, only the array is modified, the metadata is not changed. The
-        function is applied lazily if the array object is lazy.
+        """Apply a function to the array of the array object; the metadata is not
+        changed.
+
+        The function is called with the array object as its first argument and returns
+        the new array, of the same shape and dtype. For a lazy array object it is
+        applied lazily, block by block: each call then receives an eager array object
+        that holds one block, with the ensemble axes metadata of that block.
 
         Parameters
         ----------
         func : callable
-            Function to apply to the array object.
+            Function taking the array object as its first argument and returning the
+            new array.
         kwargs :
             Additional keyword arguments passed to the function.
 
         Returns
         -------
         array_object : ArrayObject or subclass of ArrayObject
-            The array object with the function applied.
+            The array object with the new array.
         """
         transform = TransformFromFunc(func, func_kwargs=kwargs)
         return transform.apply(self)
@@ -1391,6 +1446,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy != isinstance(array, da.core.Array):
             raise ValueError("Type of array must match type of object.")
 
+        self._replace_array(array)
+
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `compute` and the `array` setter go through
+        here. A subclass that derives state from the array in `__init__` overrides
+        this to derive it again from the new array."""
         self._array = array
 
     @property
@@ -2315,15 +2376,45 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array_object_partial: Callable,
         base_ndims: int,
         out_ndim: int,
+        num_array_axes: Optional[int] = None,
+        num_transform_args: Optional[int] = None,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
-        array_axes = axes[: len(array.shape)]
+        # How many of the positional args are the ARRAY's axes is decided when
+        # the graph is built -- it is the dask array's ndim, and
+        # multi_output_blockwise passes exactly that many axis args ahead of
+        # the transform's own partitioned args. Recovering it here from
+        # len(array.shape), a property of whichever chunk actually turned up,
+        # silently mis-splits `axes` the moment the two disagree: the tail of
+        # the array's own axes is then fed to the transform's reconstruction
+        # chain, which unwraps one level per stage and eventually tries to
+        # build an object out of an AxisMetadata, raising an error that points
+        # nowhere near here. Split on the graph-time counts instead, and if a
+        # chunk contradicts them, say which side broke.
+        if num_array_axes is None:
+            num_array_axes = len(array.shape)
+        elif num_array_axes != len(array.shape) or (
+            num_transform_args is not None
+            and len(axes) != num_array_axes + num_transform_args
+        ):
+            raise RuntimeError(
+                "blockwise argument layout does not match the graph: it was "
+                f"built for an array of ndim {num_array_axes} followed by "
+                f"{num_transform_args} transform arg(s), but this task got a "
+                f"chunk of shape {getattr(array, 'shape', None)} "
+                f"(ndim {len(array.shape)}, type {type(array).__name__}) and "
+                f"{len(axes)} axis arg(s) of types "
+                f"{tuple(type(a).__name__ for a in axes)} "
+                f"(base_ndims={base_ndims})."
+            )
+
+        array_axes = axes[:num_array_axes]
         # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
         # comment in ArrayObject.squeeze for a base-less array_object.
         n_ensemble_axes = len(array_axes) - base_ndims
         ensemble_axes = array_axes[:n_ensemble_axes]
-        transform_axes = axes[len(array.shape) :]
+        transform_axes = axes[num_array_axes:]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
@@ -2333,6 +2424,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
+        # one dimension per blockwise axis, from the graph (a transform
+        # argument can span several, e.g. configurations x exit planes)
         packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing

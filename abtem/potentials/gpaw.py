@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from numbers import Number
+from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import dask
@@ -145,7 +147,9 @@ class _DummyGPAW:
     @classmethod
     def from_file(cls, path: str, lazy: bool = True):
         if lazy:
-            return dask.delayed(_read_gpw)(path)
+            # pure, on the resolved path: the key follows the file, so reads of
+            # one file compare equal however its path is spelled.
+            return dask.delayed(_read_gpw, pure=True)(os.fspath(Path(path).resolve()))
 
         return _read_gpw(path)
 
@@ -645,8 +649,7 @@ class GPAWPotential(_PotentialBuilder):
         slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         calculator = (
             self.calculators[0]

@@ -703,23 +703,24 @@ def _sum_runs(array, separators):
 AZIMUTHAL_STEP_SINGLE_PASS = True
 
 
-def _cupy_safe_coordinates(array, coordinates):
-    """Cast map_coordinates coordinates to the precision CuPy computes in.
+def _cupy_double_precision(array):
+    """Return a CuPy map_coordinates input in double precision.
 
-    For a float32 (or complex64) input, cupyx's spline kernel takes the
-    starting index from floor((float)c) but the weights from floor(c) on the
-    coordinate's own dtype. A float64 coordinate just below an integer,
-    k - 1e-12, then rounds to k for the index but not for the weights, and
-    the result is the value at node k + 1. Giving the coordinates the
-    kernel's precision keeps both floors consistent. SciPy computes in
-    float64 throughout and is left alone -- on the CPU, and on Metal, whose
+    cupyx's map_coordinates computes in the precision of its input. For a
+    single-precision input, CuPy 14.1 and later take the starting index from
+    floor((float)c) but the weights from floor(c) on the coordinate's own
+    dtype, so a float64 coordinate just below an integer, k - 1e-12, gives the
+    value at node k + 1, while float32 coordinates are consistent but rounded
+    by up to half a float32 spacing: 1.2e-4 pixels 2048 pixels into an axis. A
+    double-precision input makes the prefilter, the index and the weights
+    float64; the output keeps the caller's dtype. SciPy computes in float64
+    throughout and is left alone -- on the CPU, and on Metal, whose
     map_coordinates is SciPy's run on the host.
     """
     xp = get_array_module(array)
     if cp is None or xp is not cp:
-        return coordinates
-    float_dtype = xp.promote_types(array.real.dtype, xp.float32)
-    return coordinates.astype(float_dtype, copy=False)
+        return array
+    return array.astype(xp.promote_types(array.dtype, xp.float64), copy=False)
 
 
 def _interpolate_stack(
@@ -749,11 +750,12 @@ def _interpolate_stack(
         padding = 2 * order
         array = xp.pad(array, ((0, 0), (padding,) * 2, (padding,) * 2), mode=mode)
 
-    positions = _cupy_safe_coordinates(array, positions + padding)
+    positions = positions + padding
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        member = _cupy_double_precision(array[i])
+        map_coordinates(member, positions.T, output=output[i], order=order, **kwargs)
 
     output = output.reshape(old_shape[:-2] + positions_shape[:-1])
     return output
@@ -1536,7 +1538,10 @@ class _BaseMeasurement2D(BaseMeasurements):
             scan.add_margin(margin)
 
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self._first_pixel_coordinates)
+            (
+                scan.get_positions(lazy=False, dtype=np.float64)
+                - self._first_pixel_coordinates
+            )
             / self.sampling
         )
 
@@ -2821,7 +2826,6 @@ class _BaseMeasurement1D(BaseMeasurements):
         new_points = xp.linspace(3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint)[
             None
         ]
-        new_points = _cupy_safe_coordinates(array, new_points)
 
         # Follow the input dtype: hardcoding float32 downgrades a float64
         # profile and makes map_coordinates reject a complex one outright
@@ -2831,7 +2835,8 @@ class _BaseMeasurement1D(BaseMeasurements):
             # By keyword: Metal's map_coordinates is SciPy's run on the host, and
             # takes `output` only as a keyword. Passed positionally it is copied
             # to the host like any other argument, written there and discarded.
-            map_coordinates(array[i], new_points, output=new_array[i], order=order)
+            member = _cupy_double_precision(array[i])
+            map_coordinates(member, new_points, output=new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 
@@ -3162,15 +3167,16 @@ def _fourier_space_bilinear_nodes_and_weight(
         1 / new_angular_sampling[1] / new_shape[1],
     )
 
+    # In float64 on the host whatever `dtype`: a frequency n / 2 steps from zero
+    # rounded to float32 is off by about eps * n / 2 steps, and so is its weight.
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(dtype))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(dtype))
-        distances = k_new[None] - k[:, None]
-        distances[distances < 0.0] = np.inf
-        w = distances.min(0) / (k[1] - k[0])
-        w[w == np.inf] = 0.0
-        nodes.append(distances.argmin(0))
-        weights.append(w)
+        k = np.fft.fftshift(np.fft.fftfreq(n, r))
+        k_new = np.fft.fftshift(np.fft.fftfreq(m, d))
+        # the node at or below each new frequency; node 0, weight 0 below the first
+        node = np.maximum(np.searchsorted(k, k_new, side="right") - 1, 0)
+        w = np.maximum(k_new - k[node], 0.0) / (k[1] - k[0])
+        nodes.append(xp.asarray(node))
+        weights.append(xp.asarray(w, dtype=dtype))
 
     v, u = nodes
     vw, uw = weights
@@ -3915,6 +3921,8 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
+        elif isinstance(sampling, (tuple, list)) and len(sampling) == 2:
+            validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")
 
@@ -3931,7 +3939,7 @@ def _diffraction_pattern_resampling_gpts(
             gpts = (gpts,) * 2
 
         validated_sampling = tuple(
-            d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
+            d * old_n / new_n for d, old_n, new_n in zip(old_sampling, old_gpts, gpts)
         )
 
     return gpts, validated_sampling
@@ -4243,45 +4251,49 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         from abtem.bloch.indexing import estimate_necessary_excitation_error
 
+        # bloch.indexing.index_diffraction_spots takes one orientation and one
+        # energy. The orientation matrices, and the energies of an energy
+        # ensemble, have the block's ensemble shape (or length 1 on an axis)
+        # followed by two axes. Split along the first ensemble axis on which
+        # either varies and index each member with its own matrix and energy,
+        # so its spots are filtered and assigned exactly as for that member
+        # indexed on its own.
         energy = np.asarray(energy)
-        if energy.ndim > 0:
-            # Per-member energies of an energy ensemble, shaped like the
-            # orientation matrices: this block's ensemble shape (1 on every
-            # axis but the energy axis) followed by two length-1 axes. Each
-            # member's spots are filtered and assigned with its own excitation
-            # errors -- exactly as for a single-energy measurement of that
-            # member -- rather than with one energy for the whole ensemble.
-            energy = energy[..., 0, 0]
-            kwargs = dict(
-                hkl=hkl, mask_all=mask_all, sampling=sampling, cell=cell,
-                sg_max=sg_max, g_max=g_max, centering=centering, radius=radius,
+        per_member = (orientation_matrices, energy)
+        varying = [
+            i
+            for i, n in enumerate(
+                np.broadcast_shapes(*(x.shape[:-2] for x in per_member if x.ndim))
             )
-            varying = [i for i, n in enumerate(energy.shape) if n > 1]
-            if not varying:
-                return DiffractionPatterns._index_diffraction_spots(
-                    array=array,
-                    orientation_matrices=orientation_matrices,
-                    energy=float(energy.ravel()[0]),
-                    **kwargs,
-                )
-            (axis,) = varying
+            if n > 1
+        ]
+        if varying:
+            axis = varying[0]
+            take = (slice(None),) * axis
             members = []
-            for j in range(energy.shape[axis]):
-                take = (slice(None),) * axis + (slice(j, j + 1),)
-                om = orientation_matrices
-                if om.shape[axis] > 1:
-                    om = om[take]
+            for j in range(array.shape[axis]):
+                om, e = (
+                    x[take + (slice(j, j + 1),)] if x.ndim and x.shape[axis] > 1 else x
+                    for x in per_member
+                )
                 members.append(
                     DiffractionPatterns._index_diffraction_spots(
-                        array=array[take],
+                        array=array[take + (slice(j, j + 1),)],
                         orientation_matrices=om,
-                        energy=float(energy[take].ravel()[0]),
-                        **kwargs,
+                        hkl=hkl,
+                        mask_all=mask_all,
+                        sampling=sampling,
+                        cell=cell,
+                        sg_max=sg_max,
+                        g_max=g_max,
+                        centering=centering,
+                        energy=e,
+                        radius=radius,
                     )
                 )
             return get_array_module(members[0]).concatenate(members, axis=axis)
 
-        energy = float(energy)
+        energy = energy.item()
         if sg_max is None:
             sg_max = estimate_necessary_excitation_error(energy, g_max)
 
@@ -4332,8 +4344,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             three floats (for orthorhombic unit cells).
         orientation_matrices : numpy.ndarray, optional
             Orientation matrices used for indexing the diffraction spots. The shape of
-            the orientation matrices must be broadcastable with the ensemble shape of
-            the diffraction patterns.
+            the orientation matrices, without the last two axes, must broadcast to the
+            ensemble shape of the diffraction patterns: each axis has length 1 or the
+            length of that ensemble axis. Each pattern is indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -4362,12 +4375,17 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        if orientation_matrices is not None and not is_broadcastable(
-            self.ensemble_shape, orientation_matrices.shape[:-2]
+        # each pattern is indexed with one matrix: an axis of the matrices is
+        # either 1 or as long as the matching ensemble axis
+        if orientation_matrices is not None and any(
+            m not in (1, n)
+            for n, m in zip(
+                self.ensemble_shape[::-1], orientation_matrices.shape[:-2][::-1]
+            )
         ):
             raise ValueError(
-                "The ensemble shape and the shape of the orientation matrices must be"
-                " broadcastable."
+                "Every axis of the orientation matrices' ensemble shape must have"
+                " length 1 or the length of the matching ensemble axis."
             )
 
         ensemble_ndim = len(self.array.shape[:-2])
@@ -4643,11 +4661,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def interpolate(
         self,
         sampling: Optional[str | float | tuple[float, float]] = None,
-        gpts: Optional[tuple[int, int]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
-        different sampling.
+        different sampling. A sampling finer than that of the diffraction patterns, or
+        more `gpts`, is accepted: the interpolation is bilinear and adds no angular
+        resolution, and the new frequencies outside the range of the patterns'
+        frequencies (a pixel or two at the ends of each axis) take the value of the
+        nearest edge pixel, up to the renormalisation that keeps the sums.
 
         Parameters
         ----------
@@ -4656,7 +4678,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             If a single value, the same sampling is used for both axes. If 'uniform',
             the diffraction patterns are down-sampled along the axis with the smallest
             pixel size such that the sampling is uniform.
-        gpts : tuple of int
+        gpts : int or tuple of int
             Number of grid points of the diffraction patterns after interpolation in
             `x` and `y`.
             Do not use if 'sampling' is used.
@@ -6862,8 +6884,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
         self._miller_indices = miller_indices
-        self._intensities = array
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
+
+    def __setstate__(self, state):
+        # abTEM 1.0.11 and earlier kept `_intensities`, an alias of the array.
+        state.pop("_intensities", None)
+        self.__dict__.update(state)
 
     def from_array_and_metadata(
         self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict

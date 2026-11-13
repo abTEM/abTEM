@@ -1349,7 +1349,9 @@ def transition_potential_multislice_and_detect(
                 # runs O(n_unique) times instead of O(n_outer), and the
                 # transmission cache footprint drops by repetitions[2].
                 # For SrTiO3 reps=(4,4,25): 50 transmissions -> 2 unique
-                # (-24 MB cache, -48 bandlimit FFTs per configuration).
+                # (-24 MB cache, -48 bandlimit FFTs per configuration); a unit
+                # with a finite projection also has the slices of its surfaces
+                # (see CrystalPotential, correct_surfaces), which are unique.
                 # The EELS driver reads exit_planes off ``potential`` globally,
                 # never off the slice (compare standard_multislice_and_detect
                 # at multislice.py:672), so sharing TransmissionFunction

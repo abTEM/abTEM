@@ -11,10 +11,11 @@ pattern.
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import assert_array_objects_equal, devices
+from utils import assert_array_objects_equal, devices, to_host_array
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.distributions import uniform
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 from abtem.potentials.iam import PotentialArray
@@ -124,6 +125,36 @@ def test_prism_keeps_waves_of_every_frozen_phonon_configuration(path, device):
 
     assert measured[0].shape == (2, 3, 5, 64, 64)
     assert measured[1].shape == (3, 5)
+    _assert_matches(list(measured), list(expected))
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("frozen_phonons", [None, False])
+@devices
+def test_prism_scan_with_a_slit_detector_matches_multislice(
+    path, frozen_phonons, device
+):
+    # The slit moves the scan axes into its base shape, as the annular
+    # detector does. It sits between detectors with other output shapes, and the
+    # scan (3 x 5), the configurations (2) and the patterns differ in size.
+    potential = _potential(frozen_phonons, device=device)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        return [
+            abtem.AnnularDetector(30, 90),
+            abtem.SpectralSlitDetector(q_max=40.0, width=10.0, angle=30.0),
+            abtem.PixelatedDetector(max_angle=60),
+        ]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=scan, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), **_PATHS[path])
+    measured = measured.compute()
+
+    assert measured[1].shape == ((3, 5) if frozen_phonons is None else (2, 3, 5))
     _assert_matches(list(measured), list(expected))
 
 
@@ -326,6 +357,30 @@ def test_upsampled_core_loss_frozen_phonons_match_each_configuration(
     )
 
 
+def test_lazy_core_loss_prism_scan_with_a_slit_detector_matches_the_eager_scan():
+    # CPU only: the synthetic transition potential is a host array
+    potential = _potential()
+    s_matrix = _s_matrix(potential)
+
+    def scan(lazy):
+        return s_matrix.transition_potential_scan(
+            _transition_potential(potential),
+            scan=_grid_scan(potential),
+            detectors=[
+                abtem.AnnularDetector(0, 40),
+                abtem.SpectralSlitDetector(q_max=40.0, width=10.0, angle=30.0),
+            ],
+            sites=ATOMS[:2],
+            lazy=lazy,
+        )
+
+    measured = scan(lazy=True).compute()
+    expected = scan(lazy=False)
+
+    assert measured[1].shape == expected[1].shape == (3, 5)
+    _assert_matches(list(measured), list(expected))
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("frozen_phonons", [None, False, True])
 @pytest.mark.parametrize("detector", ["pixelated", "flexible"])
@@ -379,6 +434,97 @@ def test_upsampled_prism_sizes_detectors_on_a_non_square_grid(
     np.testing.assert_allclose(
         measured.array, expected, rtol=TOLERANCE, atol=TOLERANCE * expected.max()
     )
+
+
+# a square cell sampled differently along x and y, and a rectangular cell
+_CUTOFF_CELLS = {
+    "square-cell": (ATOMS, (56, 64)),
+    "rectangular-cell": (bulk("Si", cubic=True) * (1, 2, 1), (48, 100)),
+}
+
+
+def _assert_values_match(measured, expected):
+    # PRISM results carry the band limit of the built S-matrix in their metadata,
+    # which multislice results have no reason to; the rest must agree
+    scale = _max_abs(expected)
+    for measured_i, expected_i in zip(measured, expected):
+        assert measured_i.shape == expected_i.shape
+        assert measured_i.axes_metadata == expected_i.axes_metadata
+        np.testing.assert_allclose(
+            measured_i.to_cpu().array,
+            expected_i.to_cpu().array,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * scale,
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("cell", list(_CUTOFF_CELLS))
+@devices
+def test_downsampled_prism_detects_to_the_antialias_cutoff_of_multislice(
+    cell, lazy, device
+):
+    # downsample="cutoff" keeps everything the full grid's antialias aperture
+    # passes, so at interpolation 1 the patterns, the radial bins and the
+    # automatic outer angle are those of multislice on the full grid
+    atoms, gpts = _CUTOFF_CELLS[cell]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    scan = _grid_scan(potential)
+    s_matrix = _s_matrix(potential, downsample="cutoff", device=device)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+
+    def detectors():
+        return [
+            abtem.PixelatedDetector(max_angle="cutoff"),
+            abtem.FlexibleAnnularDetector(),
+            abtem.AnnularDetector(50),
+        ]
+
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), lazy=lazy).compute()
+    expected = probe.scan(potential, scan=scan, detectors=detectors(), lazy=False)
+
+    probe.grid.match(potential)
+    assert measured[0].max_angles == pytest.approx(probe.cutoff_angles)
+    _assert_values_match(list(measured), list(expected))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"upsample": True}, {"upsample": True, "window_gpts": (24, 32)}],
+    ids=["prism", "upsample", "upsample-window"],
+)
+@devices
+def test_downsampled_prism_keeps_the_cutoff_at_interpolation_two(kwargs, device):
+    # at interpolation 2 the patterns lie on the grid the reduction detects on
+    # (the window, or with upsample the downsampled grid), whose angular sampling
+    # is coarser than that of the full grid; their outermost angle is the full
+    # grid's cutoff, rounded to that sampling
+    atoms, gpts = _CUTOFF_CELLS["square-cell"]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    # whole pixels of the (40, 40) downsampled grid, which the compressed
+    # reduction requires for its fast path
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    s_matrix = _s_matrix(
+        potential, interpolation=2, downsample="cutoff", device=device, **kwargs
+    )
+
+    measured = s_matrix.scan(
+        scan=scan, detectors=abtem.PixelatedDetector(max_angle="cutoff"), lazy=False
+    )
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    for angle, cutoff, sampling in zip(
+        measured.max_angles, probe.cutoff_angles, measured.angular_sampling
+    ):
+        assert abs(angle - cutoff) <= sampling
 
 
 # automatic batches are sized by the chunk size; with a 64 x 64 grid, 37 beams and
@@ -509,6 +655,52 @@ def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device)
     expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
 
     assert measured.shape == expected.shape == ()
+
+
+def _averaged_defocus_ctf():
+    # 6 defoci: differs from the 2 configurations, the 4 exit planes and the
+    # 3 x 5 scan, so an axis landing on another raises or is caught by value
+    return abtem.CTF(
+        semiangle_cutoff=20, defocus=uniform(-20, 20, 6, ensemble_mean=True)
+    )
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("frozen_phonons", [None, False, True])
+@pytest.mark.parametrize("exit_planes", [None, 2])
+@devices
+def test_prism_averages_a_ctf_ensemble_as_multislice_of_each_member(
+    path, frozen_phonons, exit_planes, device
+):
+    # the intensity of a CTF ensemble is the mean of the intensities of its
+    # members, each a multislice run of the dummy probes with one defocus
+    potential = _potential(frozen_phonons, device=device, exit_planes=exit_planes)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+    ctf = _averaged_defocus_ctf()
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 90), abtem.PixelatedDetector(max_angle=60)]
+
+    members = [
+        s_matrix.dummy_probes(ctf=abtem.CTF(semiangle_cutoff=20, defocus=defocus)).scan(
+            potential=potential, scan=scan, detectors=detectors(), lazy=False
+        )
+        for defocus in ctf.defocus.values
+    ]
+    measured = s_matrix.reduce(
+        scan=scan, detectors=detectors(), ctf=ctf, **_PATHS[path]
+    ).compute()
+
+    for i, measured_i in enumerate(measured):
+        expected = np.mean([to_host_array(member[i]) for member in members], axis=0)
+        assert measured_i.shape == expected.shape
+        np.testing.assert_allclose(
+            to_host_array(measured_i),
+            expected,
+            rtol=TOLERANCE,
+            atol=TOLERANCE * np.abs(expected).max(),
+        )
 
 
 def test_auto_reduction_batch_follows_the_chunk_size_of_the_device(monkeypatch):

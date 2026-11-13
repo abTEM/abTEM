@@ -381,9 +381,11 @@ class Artist2D(Artist):
         if vmax is None and array is not None:
             vmax = array.max()
 
+        # one change signal for both limits, also when only one of them changes
         with norm.callbacks.blocked():
             norm.vmin = vmin
-        norm.vmax = vmax
+            norm.vmax = vmax
+        norm._changed()
 
     @staticmethod
     def _update_norm(old_norm, power, artist, logscale=False):
@@ -995,6 +997,13 @@ class ScatterArtist(Artist2D):
         self._update_norm(self.norm, power, self._circles, logscale=logscale)
 
 
+def _domain_coloring_alpha(norm, abs_array):
+    # Pixels the norm masks are transparent: NaN and inf, which do not enter the
+    # autoscaled limits, and zero amplitude on a log scale.
+    alpha = np.clip(norm(np.ma.masked_invalid(abs_array)), a_min=0.0, a_max=1.0)
+    return np.ma.filled(alpha, 0.0)
+
+
 class DomainColoringArtist(Artist2D):
     num_cbars = 2
 
@@ -1016,7 +1025,7 @@ class DomainColoringArtist(Artist2D):
         norm = _get_norm(vmin, vmax, power, logscale)
 
         abs_array = np.abs(measurement.array)
-        alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
+        alpha = _domain_coloring_alpha(norm, abs_array)
 
         extent = get_extent(measurement, units=units)
 
@@ -1087,8 +1096,7 @@ class DomainColoringArtist(Artist2D):
 
     def _update_alpha(self):
         data = self.amplitude_axes_image.get_array().data
-        alpha = self.amplitude_axes_image.norm(np.abs(data))
-        alpha = np.clip(alpha, a_min=0, a_max=1)
+        alpha = _domain_coloring_alpha(self.amplitude_axes_image.norm, np.abs(data))
         self.phase_axes_image.set_alpha(alpha)
 
     def set_value_limits(self, value_limits: tuple[float, float] = (None, None)):
@@ -1120,8 +1128,7 @@ class DomainColoringArtist(Artist2D):
 
     def set_data(self, data):
         abs_array = np.abs(data._array)
-        alpha = self.amplitude_norm(abs_array)
-        alpha = np.clip(alpha, a_min=0, a_max=1)
+        alpha = _domain_coloring_alpha(self.amplitude_norm, abs_array)
 
         self.phase_axes_image.set_alpha(alpha.T)
         self.phase_axes_image.set_data(np.angle(data._array).T)

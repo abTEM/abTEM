@@ -119,12 +119,26 @@ def _ensure_parity_of_gpts(
 
 
 def _antialias_cutoff_gpts(
-    gpts: tuple[int, int], sampling: tuple[float, float]
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    extent: Optional[tuple[float, float]] = None,
 ) -> tuple[int, int]:
+    """The number of points within the antialias cutoff of a grid of the given
+    ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
+    grid of ``gpts`` points at ``sampling``).
+
+    The count takes the parity of the number of points of the grid at ``sampling``
+    that spans ``extent`` when that number is an integer, as it is for downsampled or
+    tiled waves, and the parity of ``gpts`` otherwise."""
     kcut = 2.0 / 3.0 / max(sampling)
-    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    if extent is None:
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+    ratio = extent[0] / sampling[0], extent[1] / sampling[1]
+    parity_gpts = tuple(
+        round(r) if abs(r - round(r)) < 1e-6 else n for r, n in zip(ratio, gpts)
+    )
+    return _ensure_parity_of_gpts(new_gpts, parity_gpts, parity="same")
 
 
 def _max_batch_with_exit_planes(
@@ -282,18 +296,49 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         ]
 
     @property
+    def _antialias_sampling(self) -> tuple[float, float]:
+        """The sampling of the grid whose antialias aperture band-limits the waves:
+        their own, or that of the grid they were resampled from."""
+        return self.metadata.get("antialias_sampling", self._valid_sampling)
+
+    @property
+    def _coarsest_sampling(self) -> tuple[float, float]:
+        """The sampling of the coarsest grid the waves were resampled onto, at which
+        their content ends: their own, if they were not resampled."""
+        return self.metadata.get("coarsest_sampling", self._valid_sampling)
+
+    def _resampling_metadata(self, gpts: tuple[int, int]) -> dict:
+        """The metadata of these waves resampled to ``gpts`` points over their
+        extent that keeps the band limit of the content."""
+        sampling = (self._valid_extent[0] / gpts[0], self._valid_extent[1] / gpts[1])
+        return {
+            "antialias_sampling": self._antialias_sampling,
+            "coarsest_sampling": tuple(
+                max(coarsest, new)
+                for coarsest, new in zip(self._coarsest_sampling, sampling)
+            ),
+        }
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            n = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
+            # waves stored with the pixel count itself
+            cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
+        else:
+            cutoff_gpts = _antialias_cutoff_gpts(
+                self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
-            m = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][1], self._valid_gpts[1]
-            )
-            return n, m
-        return _antialias_cutoff_gpts(self._valid_gpts, self._valid_sampling)
+        # the content ends at the edge of the coarsest grid it was resampled onto
+        content_gpts = [
+            round(length / sampling)
+            for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
+        ]
+        return (
+            min(cutoff_gpts[0], content_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1], self._valid_gpts[1]),
+        )
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
@@ -558,6 +603,46 @@ class _WavesNormalization(WavesToWavesTransform):
             raise ValueError()
 
         return array
+
+
+# The tapers of `Waves.window`, which a thickness series applies at every exit plane.
+# Two at most: a taper of an 8000 x 8000 grid is 256 MB at single precision.
+_window_tapers = None
+
+
+def _window_taper(window, shape, array):
+    """The separable window taper of the grid `shape`, as an array of the type, device
+    and precision of `array`; kept for the next call of the same window, grid, device
+    and precision."""
+    from scipy.signal import windows as scipy_windows
+
+    xp = get_array_module(array)
+    dtype = array.real.dtype
+
+    def build():
+        window_x = scipy_windows.get_window(window, shape[0])
+        window_y = scipy_windows.get_window(window, shape[1])
+        return xp.asarray(window_x[:, None] * window_y[None, :], dtype=dtype)
+
+    try:
+        hash(window)
+    except TypeError:  # nothing to key it by
+        return build()
+
+    if isinstance(array, da.Array):  # no device to key a lazy array by
+        return build()
+
+    from abtem.integrals import _DeviceArrayCache, _device_cache_key
+
+    global _window_tapers
+    if _window_tapers is None:
+        _window_tapers = _DeviceArrayCache(maxsize=2)
+
+    key = (window, tuple(shape), np.dtype(dtype).str, _device_cache_key(array, array))
+    taper = _window_tapers.get(key)
+    if taper is None:
+        taper = _window_tapers.put(key, build())
+    return taper
 
 
 class Waves(BaseWaves, ArrayObject):
@@ -956,6 +1041,131 @@ class Waves(BaseWaves, ArrayObject):
             kwargs["array"] /= int(np.prod(repetitions))
 
         return self.__class__(**kwargs)
+
+    def crop(
+        self,
+        extent: tuple[float, float],
+        offset: tuple[float, float] = (0.0, 0.0),
+        centered: bool = False,
+    ) -> Waves:
+        """Crop the wave functions to a smaller extent in real space.
+
+        Parameters
+        ----------
+        extent : tuple of float
+            Extent of the rectangular cropping region in `x` and `y` [Å].
+        offset : tuple of float, optional
+            Lower corner of the cropping region in `x` and `y` [Å] (default is
+            (0, 0)). Ignored if `centered` is True.
+        centered : bool, optional
+            If True, the cropping region is centered on the wave functions instead
+            of using `offset` (default is False).
+
+        Returns
+        -------
+        cropped_waves : Waves
+            The cropped wave functions.
+        """
+        if self.reciprocal_space:
+            raise NotImplementedError("crop can only be applied in real space")
+
+        if centered and offset != (0.0, 0.0):
+            raise ValueError("offset is not used when centered is True")
+        elif centered:
+            offset = (
+                self.extent[0] / 2 - extent[0] / 2,
+                self.extent[1] / 2 - extent[1] / 2,
+            )
+
+        if extent[0] > self.extent[0] or extent[1] > self.extent[1]:
+            raise ValueError("extent must not be larger than the current extent")
+
+        offset_gpts = (
+            int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * offset[1] / self.extent[1])),
+        )
+        new_shape = (
+            int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * extent[1] / self.extent[1])),
+        )
+
+        if min(new_shape) < 1:
+            raise ValueError(
+                f"extent {tuple(extent)} Å is smaller than one grid point of the waves"
+            )
+        if min(offset_gpts) < 0 or any(
+            o + n > b for o, n, b in zip(offset_gpts, new_shape, self.base_shape)
+        ):
+            raise ValueError(
+                f"the cropping region (offset {tuple(offset)} Å, extent "
+                f"{tuple(extent)} Å) is not within the waves"
+            )
+
+        array = self.array[
+            ...,
+            offset_gpts[0] : offset_gpts[0] + new_shape[0],
+            offset_gpts[1] : offset_gpts[1] + new_shape[1],
+        ]
+
+        kwargs = self._copy_kwargs(exclude=("array", "extent"))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
+
+    def window(
+        self,
+        window: str | tuple = "hann",
+        margin: float | tuple[float, float] = 0.0,
+    ) -> Waves:
+        """Apply a separable real-space window function to the wave functions,
+        optionally after first cropping a margin from each side.
+
+        Windowing tapers the wave functions to (near-)zero at the edges before a
+        Fourier transform, suppressing the truncation-rod streaks a hard-edged,
+        finite (non-periodic) structure would otherwise produce in its diffraction
+        pattern. See :func:`scipy.signal.windows.get_window` for the available
+        window functions.
+
+        Parameters
+        ----------
+        window : str or tuple, optional
+            The window function to apply, as accepted by
+            :func:`scipy.signal.windows.get_window` (default is `'hann'`). Use
+            `None` to disable windowing (only the `margin` crop is applied, if
+            given).
+        margin : float or tuple of float, optional
+            Margin cropped from each side in `x` and `y` [Å] before windowing
+            (default is 0.0, i.e. no cropping). A single float applies the same
+            margin to both axes.
+
+        Returns
+        -------
+        windowed_waves : Waves
+            The windowed (and optionally cropped) wave functions.
+        """
+        if isinstance(margin, (int, float)):
+            margin = (float(margin), float(margin))
+
+        waves = self
+        if margin[0] != 0.0 or margin[1] != 0.0:
+            waves = waves.crop(
+                extent=(
+                    waves.extent[0] - 2 * margin[0],
+                    waves.extent[1] - 2 * margin[1],
+                ),
+                centered=True,
+            )
+
+        if window is None:
+            return waves
+
+        if waves.reciprocal_space:
+            raise NotImplementedError("window can only be applied in real space")
+
+        taper = _window_taper(window, waves.base_shape, waves.array)
+
+        kwargs = waves._copy_kwargs(exclude=("array",))
+        kwargs["array"] = waves.array * taper
+        return waves.__class__(**kwargs)
 
     def ensure_reciprocal_space(self, overwrite_x: bool = False) -> Waves:
         """Transform to reciprocal space if the wave functions are represented in real
@@ -1477,9 +1687,7 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            waves.antialias_cutoff_gpts
-        )
+        kwargs["metadata"].update(waves._resampling_metadata(gpts))
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()
@@ -2019,11 +2227,18 @@ class EnergyEnsemble(EnsembleFromDistributions):
     """
 
     def __init__(self, energy=None):
-        if energy is not None:
-            self._energy = validate_distribution(energy)
-        else:
-            self._energy = None
+        self._energy = self._validate(energy)
         super().__init__(distributions=("energy",))
+
+    @staticmethod
+    def _validate(energy):
+        """A one-value distribution is stored as its float."""
+        if energy is None:
+            return None
+        energy = validate_distribution(energy)
+        if isinstance(energy, BaseDistribution) and len(energy) == 1:
+            return float(energy.values[0])
+        return energy
 
     @property
     def energy(self):
@@ -2038,15 +2253,11 @@ class EnergyEnsemble(EnsembleFromDistributions):
         None
             If no energy has been set.
         """
-        if self._energy is None:
-            return None
-        if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
-            return float(self._energy.values[0])
         return self._energy
 
     @energy.setter
     def energy(self, value):
-        self._energy = validate_distribution(value) if value is not None else None
+        self._energy = self._validate(value)
 
     @property
     def ensemble_axes_metadata(self) -> list:
