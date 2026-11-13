@@ -68,6 +68,36 @@ def test_natural_neighbor_weights_partition_of_unity():
     assert (w >= 0).all()
 
 
+def test_collinear_parents_give_nearest_parent_weights():
+    """Collinear parents have no triangulation; every query takes its nearest parent.
+
+    The weights are computed with NumPy on the host, so no device is pinned.
+    """
+    from abtem.prism._bipartite import _linear_barycentric_weights
+
+    parents = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+    queries = np.array([[0.1, 0.0], [1.9, 2.2], [0.9, 1.2]])
+    indices, values = _linear_barycentric_weights(parents, queries)
+    np.testing.assert_array_equal(indices[:, 0], [0, 2, 1])
+    np.testing.assert_array_equal(values, [[1.0, 0.0, 0.0]] * 3)
+
+
+def test_an_error_other_than_qhull_propagates_from_the_triangulation(monkeypatch):
+    """Only a degenerate triangulation falls back to nearest-parent weights.
+
+    The weights are computed with NumPy on the host, so no device is pinned.
+    """
+    import abtem.prism._bipartite as bipartite
+
+    def failing_delaunay(points):
+        raise MemoryError("not degenerate geometry")
+
+    monkeypatch.setattr(bipartite, "Delaunay", failing_delaunay)
+    parents = np.random.default_rng(0).uniform(0, 1, (12, 2))
+    with pytest.raises(MemoryError, match="not degenerate"):
+        bipartite._linear_barycentric_weights(parents, np.array([[0.5, 0.5]]))
+
+
 # windowed reconstruction
 
 
