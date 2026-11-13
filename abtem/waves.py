@@ -66,7 +66,7 @@ from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
     _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
-    _is_full_expansion_scope,
+    _reflects,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
@@ -230,7 +230,7 @@ def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
     if multislice_func_kwargs.get("detectors_elastic"):
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
-    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+    if _reflects(multislice_func_kwargs.get("algorithm")):
         raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 

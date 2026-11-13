@@ -932,11 +932,8 @@ def multislice_step(
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
-    order: int | str = 1,
+    order: int = 1,
     fully_corrected: bool = False,
-    propagating_cutoff: float = 0.95,
-    lanczos_tolerance: float = 1e-8,
-    max_iterations: int = 60,
 ) -> Waves | Sequence[Waves]:
     """
     Performs a single multislice step.
@@ -960,24 +957,8 @@ def multislice_step(
     fully_corrected: bool
         If True, transmission and propagator operators are expanded to specified order.
         If next_slice is not None, the backscattered wave component is also computed.
-    propagating_cutoff, lanczos_tolerance, max_iterations
-        For ``order="exact"``, which evaluates the root of the full operator by a
-        Lanczos iteration instead of a series (it requires ``fully_corrected``): the
-        propagating band, the convergence of the iteration and its maximum length.
 
     """
-    if order == "exact":
-        if not fully_corrected:
-            raise ValueError('order="exact" requires the full expansion scope')
-        return _exact_root_step(
-            waves,
-            potential_slice,
-            next_slice,
-            propagating_cutoff,
-            lanczos_tolerance,
-            max_iterations,
-        )
-
     xp = get_array_module(waves.array)
     if max_terms < 1:
         raise ValueError()

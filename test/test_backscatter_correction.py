@@ -8,8 +8,8 @@ from utils import to_host_array
 
 import abtem
 from abtem.antialias import antialias_aperture
-from abtem.finite_difference import LaplaceOperator, multislice_step
-from abtem.multislice import RealSpaceMultislice
+from abtem.finite_difference import LaplaceOperator, _exact_root_step, multislice_step
+from abtem.multislice import LanczosMultislice, RealSpaceMultislice
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
@@ -64,14 +64,17 @@ def test_requesting_the_backscattered_wave_leaves_the_forward_wave_unchanged():
     # Oracle: the correction is always applied, so the forward wave is the same
     # whether or not the backscattered wave is returned too.
     potential = _sto_potential(exit_planes=1)
-    algorithm = RealSpaceMultislice(order=3, expansion_scope="full")
+    algorithm = LanczosMultislice()
     forward_only = abtem.PlaneWave(energy=30e3).multislice(
         potential, algorithm=algorithm, lazy=False
     )
-    transmitted, backscattered = abtem.PlaneWave(energy=30e3).multislice(
-        potential, algorithm=algorithm, return_backscattered=True, lazy=False
+    transmitted, reflected = abtem.PlaneWave(energy=30e3).multislice(
+        potential,
+        algorithm=algorithm,
+        detectors=[abtem.WavesDetector(), abtem.WavesDetector(reflected=True)],
+        lazy=False,
     )
-    assert np.abs(to_host_array(backscattered)[0]).max() > 0
+    assert np.abs(to_host_array(reflected)).max() > 0
     np.testing.assert_array_equal(
         to_host_array(transmitted), to_host_array(forward_only)
     )
@@ -117,20 +120,13 @@ def test_the_correction_brings_the_wide_angle_beams_to_the_exact_solution():
     corrected = to_host_array(
         wave.multislice(
             potential,
-            algorithm=RealSpaceMultislice(order="exact", expansion_scope="full"),
+            algorithm=LanczosMultislice(),
             lazy=False,
         )
     )
     plain = wave.match_grid(potential).build(lazy=False)
     for index in range(len(potential)):
-        plain = multislice_step(
-            plain,
-            potential[index],
-            None,
-            LaplaceOperator(6),
-            order="exact",
-            fully_corrected=True,
-        )[0]
+        plain = _exact_root_step(plain, potential[index], None, 0.95, 1e-8, 60)[0]
     plain = to_host_array(plain)
 
     error = {
@@ -161,7 +157,7 @@ def test_the_full_scope_warns_about_the_infinite_projection():
     with pytest.warns(UserWarning, match="projection='finite'"):
         plane_wave.multislice(
             potential,
-            algorithm=RealSpaceMultislice(expansion_scope="full"),
+            algorithm=LanczosMultislice(),
             lazy=False,
         )
     with warnings.catch_warnings():

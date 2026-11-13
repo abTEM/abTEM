@@ -1,5 +1,5 @@
-"""RealSpaceMultislice(order="exact"): the one-way root of the full operator by a
-Lanczos iteration, instead of a Taylor series."""
+"""LanczosMultislice: the one-way root of the full operator by a Lanczos iteration,
+instead of a Taylor series."""
 
 import ase
 import ase.build
@@ -9,10 +9,14 @@ from utils import devices, to_host_array
 
 import abtem
 from abtem.core.energy import energy2sigma, energy2wavelength
-from abtem.finite_difference import LaplaceOperator, multislice_step
-from abtem.multislice import RealSpaceMultislice
+from abtem.finite_difference import _exact_root_step
+from abtem.multislice import LanczosMultislice, RealSpaceMultislice
 
-pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::UserWarning",
+    # the series it is compared with is deprecated
+    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
+)
 
 # Strong beams of a graphene monolayer, as the flux that the exact two-way solution
 # (Numerov, 0.01 Å steps, propagating beams only) puts in the three families of the
@@ -53,7 +57,20 @@ def family_intensities(array):
 
 
 def exact_algorithm(**kwargs):
-    return RealSpaceMultislice(order="exact", expansion_scope="full", **kwargs)
+    return LanczosMultislice(**kwargs)
+
+
+def exact_step(waves, potential_slice, next_slice):
+    """One step of the exact root, with the defaults of LanczosMultislice."""
+    algorithm = LanczosMultislice()
+    return _exact_root_step(
+        waves,
+        potential_slice,
+        next_slice,
+        algorithm.propagating_cutoff,
+        algorithm.tolerance,
+        algorithm.max_iterations,
+    )
 
 
 def plain_exit_wave(potential, energy, tilt=(0.0, 0.0)):
@@ -64,14 +81,7 @@ def plain_exit_wave(potential, energy, tilt=(0.0, 0.0)):
         abtem.PlaneWave(energy=energy, tilt=tilt).match_grid(slices).build(lazy=False)
     )
     for index in range(len(slices)):
-        waves = multislice_step(
-            waves,
-            slices[index],
-            None,
-            LaplaceOperator(6),
-            order="exact",
-            fully_corrected=True,
-        )[0]
+        waves = exact_step(waves, slices[index], None)[0]
     return to_host_array(waves)
 
 
@@ -109,14 +119,7 @@ def test_the_backscattered_wave_of_flat_slices_is_the_difference_of_wave_numbers
     slices = abtem.PotentialArray(array, slice_thickness=thickness, extent=(8.0, 8.0))
     waves = abtem.PlaneWave(energy=energy).match_grid(slices).build(lazy=False)
 
-    forward, backscattered = multislice_step(
-        waves.copy(),
-        slices[0],
-        slices[1],
-        LaplaceOperator(6),
-        order="exact",
-        fully_corrected=True,
-    )
+    forward, backscattered = exact_step(waves.copy(), slices[0], slices[1])
 
     def wave_number(u):
         return k0 * np.sqrt(1 + sigma * u / (np.pi * k0))
@@ -144,14 +147,7 @@ def test_the_correction_is_subtracted_from_the_forward_wave_as_for_the_series():
     def step(next_slice):
         return tuple(
             to_host_array(w)
-            for w in multislice_step(
-                waves.copy(),
-                slices[first],
-                next_slice,
-                LaplaceOperator(6),
-                order="exact",
-                fully_corrected=True,
-            )
+            for w in exact_step(waves.copy(), slices[first], next_slice)
         )
 
     plain = step(None)[0]
@@ -181,17 +177,15 @@ def test_the_exact_root_agrees_with_the_converged_series_at_high_energy():
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"order": "exact"},  # the propagator scope
-        {"order": 0},
-        {"order": "second", "expansion_scope": "full"},
-        {"order": "exact", "expansion_scope": "full", "propagating_cutoff": 1.0},
-        {"order": "exact", "expansion_scope": "full", "lanczos_tolerance": 0.0},
-        {"order": "exact", "expansion_scope": "full", "max_iterations": 1},
+        {"propagating_cutoff": 1.0},
+        {"propagating_cutoff": 0.0},
+        {"tolerance": 0.0},
+        {"max_iterations": 1},
     ],
 )
 def test_parameters_are_validated(kwargs):
     with pytest.raises(ValueError):
-        RealSpaceMultislice(**kwargs)
+        LanczosMultislice(**kwargs)
 
 
 # The strong beams of a graphene monolayer for a wave tilted by (80, 30) mrad, at 1 keV:
@@ -262,3 +256,42 @@ def test_an_ensemble_of_tilts_is_the_tilts_one_by_one_for_the_exact_root():
             potential, algorithm=exact_algorithm(), lazy=False
         )
         np.testing.assert_allclose(ensemble[i], to_host_array(single), atol=2e-5)
+
+
+def test_the_reflection_of_a_tilted_flat_slab_is_the_airy_reflection():
+    # Oracle: the reflection of a medium of wave number k2 = sqrt(k^2 + 2 k sigma V0)
+    # for a wave along (tan x, tan y, 1): the faces reflect with the longitudinal wave
+    # numbers k_z = k / N in vacuum and sqrt(k2^2 - |K_t|^2) in the slab. The round
+    # trip of the back-propagation is k_z of each member of the ensemble of tilts.
+    energy, v0, dz = 1000.0, 10.0, 0.01
+    k = 2 * np.pi / energy2wavelength(energy)
+    k2 = np.sqrt(k**2 + 2 * k * energy2sigma(energy) * v0)
+    tilts_x = [0.0, 80.0, 150.0]
+
+    def airy(tilt, d):
+        tangent = np.tan(np.array(tilt) / 1e3)
+        transverse = k**2 * np.sum(tangent**2) / (1 + np.sum(tangent**2))
+        k1z, k2z = np.sqrt(k**2 - transverse), np.sqrt(k2**2 - transverse)
+        r12 = (k1z - k2z) / (k1z + k2z)
+        phase = np.exp(2j * k2z * d)
+        return abs(r12 * (1 - phase) / (1 - r12**2 * phase)) ** 2
+
+    for n in (6, 10, 18):
+        profile = np.r_[np.zeros(20), np.full(n, v0 * dz), np.zeros(20)]
+        potential = abtem.PotentialArray(
+            np.ones((len(profile), 8, 8), np.float32) * profile[:, None, None],
+            slice_thickness=dz,
+            sampling=0.5,
+        )
+        reflected = abtem.PlaneWave(energy=energy, tilt=(tilts_x, 30.0)).multislice(
+            potential,
+            algorithm=LanczosMultislice(),
+            detectors=abtem.WavesDetector(reflected=True),
+            lazy=False,
+        )
+        array = to_host_array(reflected)
+        assert array.shape == (len(tilts_x), 8, 8)
+        expected = [airy((tx, 30.0), n * dz) for tx in tilts_x]
+        np.testing.assert_allclose(
+            np.abs(array.mean(axis=(-2, -1))) ** 2, expected, rtol=0.01
+        )

@@ -1,4 +1,4 @@
-"""Profile the parts of one Lanczos iteration of RealSpaceMultislice(order="exact").
+"""Profile the parts of one Lanczos iteration of LanczosMultislice.
 
 One slice of the exact root with the backscatter correction runs three Lanczos
 iterations of about ten steps each, on the Fourier coefficients of the waves. A step
