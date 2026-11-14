@@ -295,24 +295,27 @@ Bugfixes:
   flat slab was 4e-11 at every thickness instead of the Airy reflection, up to 2.5e-5 for 10 V at 1 keV, and that of
   graphene at 1 keV 4 times the exact two-way value. It now matches the Airy reflection to 1 %. The transmitted wave
   is unchanged
-- The inverse wave number `1/(2k)` of the backscatter source of `RealSpaceMultislice(expansion_scope="full")` and
-  `LanczosMultislice` (Eqs. 7 to 10 of Micron 190 (2025) 103778) is the series of Eq. 13 applied as an operator to the
-  difference of the wave numbers. The series step multiplied the difference element-wise by `1 + (the series applied
-  to the wave)`, so the backscatter and, through Eq. 10, the transmitted wave did not scale with the incident wave. For
-  a constant wave of amplitude 1 at a step from 0 to 10 V at 1 keV with slices of 0.01 Å, the factor was
-  `1.0 + 0.0008i` at order 1 and `0.9996 + 0.0008i` at order 2, instead of 0.99500 and 0.99503
+- The inverse wave number `1/(2k)` of the backscatter source of `RealSpaceMultislice(expansion_scope="full")` (Eq. 7
+  of Micron 190 (2025) 103778) is the series of Eq. 13 applied as an operator to the difference of the wave numbers.
+  The step multiplied the difference element-wise by `1 + (the series applied to the wave)`, so the backscatter and,
+  through Eq. 10, the transmitted wave did not scale with the incident wave. For a constant wave of amplitude 1 at a
+  step from 0 to 10 V at 1 keV with slices of 0.01 Å, the factor was `1.0 + 0.0008i` at order 1 and
+  `0.9996 + 0.0008i` at order 2, instead of 0.99500 and 0.99503
+  ([PR #690](https://github.com/abTEM/abTEM/pull/690))
 - The potential per length of the next slice in the backscatter source is its projected potential over its own
   thickness, in both algorithms, not over the thickness of the current slice. With unequal slice thicknesses a uniform
   medium backscattered at every change of thickness: a 10 V slab sliced in 0.01-0.03 Å reflected 1.4 times the Airy
-  reflection, and now 1.00
+  reflection, and now 1.00 ([PR #690](https://github.com/abTEM/abTEM/pull/690))
 - **Behaviour change:** the series of Eq. 13 converges only for in-plane frequencies below 1/wavelength, and the series
   step applies it without a cut, so where the antialiasing aperture passes higher frequencies (sampling below about
   wavelength / 3) the reflected wave of the series step is larger than it was. For graphene at 1 keV, sampled at 0.05 Å
   in slices of 0.02 Å with 3 Å of vacuum on each side, the total reflected intensity of a plane wave at order 1 goes
   from 1.09e-3 to 3.78e-3, against 1.72e-4 for `LanczosMultislice`, which keeps only the frequencies below
   0.95/wavelength and is unchanged. The `RealSpaceMultislice` docstring states the limit
+  ([PR #690](https://github.com/abTEM/abTEM/pull/690))
 - A face of the specimen reflects only if the potential has a vacuum slice on that side, so the reflected wave needs at
   least one vacuum slice before and one after the specimen (the `reflected` parameter of the detectors)
+  ([PR #690](https://github.com/abTEM/abTEM/pull/690))
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
