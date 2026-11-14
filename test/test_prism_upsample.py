@@ -2241,28 +2241,32 @@ def test_cropped_window_batch_size_counts_the_grid_the_detector_reads(
 
 
 @devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("detector, grid", _DETECTED_GRIDS)
 def test_cropped_window_lattice_batches_count_the_grid_the_detector_reads(
-    detector, grid, device, monkeypatch
+    detector, grid, precision, device, monkeypatch
 ):
     # a budget of 50000 bytes holds 2 rows of the 4 scan columns on the window
     # (4 * 24 * 32 * 8 = 24576 bytes per row) but only 1 on the full grid
-    # (4 * 40 * 40 * 8 = 51200 bytes per row)
-    potential = _window_potential(_WINDOW_ATOMS, device)
-    built = _window_s_matrix(potential, device).build(lazy=False)
-    monkeypatch.setattr(CompressedSMatrixArray, "_REDUCE_BATCH_BYTES", 50000)
-    rows = []
-    share = Waves._share_diffraction_pattern_fft
+    # (4 * 40 * 40 * 8 = 51200 bytes per row); at double precision an element is 16
+    # bytes, not 8, and the rows are half as many
+    itemsize = {"float32": 8, "float64": 16}[precision]
+    with abtem.config.set({"precision": precision}):
+        potential = _window_potential(_WINDOW_ATOMS, device)
+        built = _window_s_matrix(potential, device).build(lazy=False)
+        monkeypatch.setattr(CompressedSMatrixArray, "_REDUCE_BATCH_BYTES", 50000)
+        rows = []
+        share = Waves._share_diffraction_pattern_fft
 
-    def record(self, *args, **kwargs):
-        rows.append(self.array.shape[-4])
-        return share(self, *args, **kwargs)
+        def record(self, *args, **kwargs):
+            rows.append(self.array.shape[-4])
+            return share(self, *args, **kwargs)
 
-    monkeypatch.setattr(Waves, "_share_diffraction_pattern_fft", record)
+        monkeypatch.setattr(Waves, "_share_diffraction_pattern_fft", record)
 
-    built.reduce(scan=_window_scan(potential), detectors=detector, blend_angle=0)
+        built.reduce(scan=_window_scan(potential), detectors=detector, blend_angle=0)
 
-    assert max(rows) == max(1, 50000 // (4 * int(np.prod(grid)) * 8))
+    assert max(rows) == max(1, 50000 // (4 * int(np.prod(grid)) * itemsize))
 
 
 @devices
@@ -2309,3 +2313,16 @@ def test_compressed_auto_reduction_batch_follows_the_chunk_size_of_the_device(
             s_matrix_array.reduce(scan=scan)
 
     assert batches == [7]
+
+
+@devices
+def test_a_window_view_keeps_the_expansion_batch(device):
+    # the view was built without max_batch_expansion, so it fell back to 'auto'
+    potential = _window_potential(_WINDOW_ATOMS, device)
+    built = _window_s_matrix(potential, device).build(lazy=False)
+    built._max_batch_expansion = 7
+
+    view = built._with_window(tuple(built.gpts))
+
+    assert view.max_batch_expansion == 7
+

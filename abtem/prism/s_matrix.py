@@ -130,11 +130,11 @@ def _averaged_axes(measurement, num_axes):
     )
 
 
-def _stack_energies(results, energies, axis: int = 0):
+def _stack_energies(results, energy_axis, axis: int = 0):
     """Stack the results of reducing each energy of a multi-energy ensemble
-    separately along an EnergyAxis. Each result is a measurement, or a list of
+    separately along its `energy_axis`, which carries the weights and the ensemble
+    mean of a distribution of energies. Each result is a measurement, or a list of
     measurements with one per detector."""
-    energy_axis = EnergyAxis(values=tuple(float(e) for e in energies))
     if isinstance(results[0], (list, ComputableList)):
         return _wrap_measurements(
             [
@@ -1136,7 +1136,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             )
             for i, energy in enumerate(energies)
         ]
-        return _stack_energies(results, energies, axis=axis)
+        return _stack_energies(
+            results, self.ensemble_axes_metadata[axis].copy(), axis=axis
+        )
 
     def reduce(
         self,
@@ -1966,8 +1968,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         waves = xp.zeros((num_positions, num_pixels), dtype=dtype)
 
         mode_chunk = min(num_modes, self._REDUCE_MODE_CHUNK)
-        max_batch = max(
-            1, int(self._REDUCE_BATCH_BYTES // max(num_pixels * mode_chunk * 8, 1))
+        max_batch = self._row_batch_size(
+            num_pixels * mode_chunk, dtype, self._REDUCE_BATCH_BYTES
         )
 
         for k_start in range(0, num_modes, mode_chunk):
@@ -2157,10 +2159,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # large (the sub-step groups hold window / step offsets each),
                 # so the rows are processed in chunks within the batch budget
                 # rather than materialized whole
-                row_bytes = (
-                    len(index_y) * len(select_x) * len(select_y) * 8
+                capacity = self._row_batch_size(
+                    len(index_y) * len(select_x) * len(select_y),
+                    self._complex_dtype,
+                    self._REDUCE_BATCH_BYTES,
                 )
-                capacity = max(1, int(self._REDUCE_BATCH_BYTES // row_bytes))
 
                 if capacity >= len(index_x):
                     product = (
@@ -2247,12 +2250,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             self._REDUCE_GPU_ROW_BLOCK_FACTOR if self._device == "gpu" else 2
         )
         budget = min(budget, self._reduce_memory_budget())
-        row_bytes = scan_shape[1] * int(np.prod(window)) * 8
-        num_rows = max(1, int(budget // max(row_bytes, 1)))
+        num_rows = self._row_batch_size(
+            scan_shape[1] * int(np.prod(window)), self._complex_dtype, budget
+        )
         num_rows = min(num_rows, scan_shape[0])
         detect_gpts = self._detection_gpts(detectors)
-        detect_row_bytes = scan_shape[1] * int(np.prod(detect_gpts)) * 8
-        detect_rows = max(1, int(self._REDUCE_BATCH_BYTES // max(detect_row_bytes, 1)))
+        detect_rows = self._row_batch_size(
+            scan_shape[1] * int(np.prod(detect_gpts)),
+            self._complex_dtype,
+            self._REDUCE_BATCH_BYTES,
+        )
         detect_rows = min(detect_rows, num_rows)
 
         keep_interpolated, keep_plane_wave = self._blend_branches(
@@ -3474,6 +3481,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             interpolation=self._interpolation,
             window_gpts=window_gpts,
             position_quantization=self._position_quantization,
+            max_batch_expansion=self._max_batch_expansion,
             blend_angle=self._blend_angle,
             device=self._device,
             metadata=self._metadata,
@@ -3961,6 +3969,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def _set_energies(self, energy):
         # several energies are carried by the EnergyAxis alone and leave the
         # accelerator without an energy, as for PlaneWave and Probe
+        # the distribution is kept for the weights and the ensemble mean of the axis
+        self._energy_distribution = (
+            energy if isinstance(energy, BaseDistribution) else None
+        )
         if isinstance(energy, BaseDistribution):
             energy = energy.values
         energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
@@ -3977,8 +3989,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def energy(self) -> float | BaseDistribution:
         """Electron energy [eV], or the distribution of several energies."""
         if len(self._energies) > 1:
+            if self._energy_distribution is not None:
+                return self._energy_distribution
             return validate_distribution(self._energies)
         return self.accelerator.energy
+
+    def _energy_axis(self) -> EnergyAxis:
+        """The ensemble axis of several energies, with the weights and the ensemble
+        mean of the distribution they were given as."""
+        if self._energy_distribution is not None:
+            return EnergyAxis.from_distribution(self._energy_distribution)
+        return EnergyAxis(values=tuple(float(e) for e in self._energies))
 
     @energy.setter
     def energy(self, energy: float | list | np.ndarray | BaseDistribution):
@@ -4005,11 +4026,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     @property
     def ensemble_axes_metadata(self):
         """Axis metadata for each ensemble axis."""
-        energy_meta = (
-            [EnergyAxis(values=tuple(float(e) for e in self._energies))]
-            if len(self._energies) > 1
-            else []
-        )
+        energy_meta = [self._energy_axis()] if len(self._energies) > 1 else []
         potential_meta = (
             self.potential.ensemble_axes_metadata if self.potential is not None else []
         )
@@ -4025,6 +4042,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """
         clone = self.copy()
         clone._energies = np.array([float(e)])
+        clone._energy_distribution = None
         clone._accelerator = Accelerator(energy=float(e))
         return clone
 
@@ -4969,7 +4987,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             else:
                 xp = get_array_module(embedded_arrays[0])
                 stacked_array = xp.stack(embedded_arrays, axis=0)
-            energy_ax = EnergyAxis(values=tuple(float(e) for e in self._energies))
+            energy_ax = self._energy_axis()
             return SMatrixArray(
                 array=stacked_array,
                 wave_vectors=union_wave_vectors,
@@ -5662,7 +5680,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 )
                 for e in self._energies
             ]
-            return _stack_energies(results, self._energies)
+            return _stack_energies(results, self._energy_axis())
 
         detectors = validate_detectors(detectors)
         scan = validate_scan(scan, self)
@@ -5914,7 +5932,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 )
                 for e in self._energies
             ]
-            return _stack_energies(results, self._energies)
+            return _stack_energies(results, self._energy_axis())
 
         if self._upsample_enabled:
             # the compressed scattering matrix spans the full downsampled grid
