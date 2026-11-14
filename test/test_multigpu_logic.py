@@ -6,6 +6,7 @@ save path -- via mocks / a threaded CPU cluster -- so the behaviour is
 exercised on ordinary (single-GPU or CPU) CI.
 """
 
+import asyncio
 import sys
 import types
 from unittest import mock
@@ -40,28 +41,48 @@ def test_is_gpu_dask_client_closed():
 
 
 def test_is_gpu_dask_client_single_threaded_running():
-    client = mock.Mock(status="running")
+    client = mock.Mock(status="running", asynchronous=False)
     client.nthreads.return_value = {"w1": 1, "w2": 1}
     assert is_gpu_dask_client(client) is True
 
 
 def test_is_gpu_dask_client_rejects_multithreaded():
-    client = mock.Mock(status="running")
+    client = mock.Mock(status="running", asynchronous=False)
     client.nthreads.return_value = {"w1": 2}
     assert is_gpu_dask_client(client) is False
 
 
 def test_is_gpu_dask_client_raises_what_the_scheduler_query_raises():
-    client = mock.Mock(status="running")
+    client = mock.Mock(status="running", asynchronous=False)
     client.nthreads.side_effect = OSError("connection to the scheduler dropped")
     with pytest.raises(OSError, match="dropped"):
         is_gpu_dask_client(client)
 
 
 def test_is_gpu_dask_client_rejects_empty():
-    client = mock.Mock(status="running")
+    client = mock.Mock(status="running", asynchronous=False)
     client.nthreads.return_value = {}
     assert is_gpu_dask_client(client) is False
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_is_gpu_dask_client_rejects_an_asynchronous_client_in_its_event_loop():
+    """Inside its event loop an asynchronous client answers with coroutines, so a
+    single-threaded one is still not used for a synchronous compute."""
+    from distributed import Client, LocalCluster
+
+    async def check():
+        async with LocalCluster(
+            asynchronous=True,
+            processes=False,
+            n_workers=1,
+            threads_per_worker=1,
+            dashboard_address=":0",
+        ) as cluster:
+            async with Client(cluster, asynchronous=True) as client:
+                return is_gpu_dask_client(client)
+
+    assert asyncio.run(check()) is False
 
 
 @pytest.mark.filterwarnings("ignore")
