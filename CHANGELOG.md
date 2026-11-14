@@ -23,6 +23,9 @@ Features:
   slab, many right-hand sides on one factorisation, an in-plane offset instead of a tilt, and the interior wave on every
   slice; `beam_flux` and `BeamSolution.reflected_flux` give the flux per beam, `|amplitude|^2 kz / k`, which the solver conserves.
   The members of an ensemble of tilts and energies are solved in parallel on the CPU (`workers`)
+  The beam cutoff follows the energy by default, twice 1 / wavelength and at least 4.5 1/Å, which converges the propagating beams to
+  about a percent of their intensity (the outermost couple to the evanescent beams beyond them); that is expensive and needs a
+  potential sampled at wavelength / 8, and `cutoff` takes a smaller value for a cheaper solution
   ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634), [PR #636](https://github.com/abTEM/abTEM/pull/636), [PR #637](https://github.com/abTEM/abTEM/pull/637), [PR #638](https://github.com/abTEM/abTEM/pull/638), [PR #641](https://github.com/abTEM/abTEM/pull/641))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
