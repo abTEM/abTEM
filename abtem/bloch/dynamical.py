@@ -649,6 +649,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             parametrization=self._parametrization,
             g_max=self.g_max,
             thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
 
