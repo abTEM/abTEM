@@ -452,7 +452,7 @@ def test_upsample_detectors(device):
     assert pixelated.shape == pixelated_ref.shape
     assert _relative_error(pixelated, pixelated_ref) < 0.05
 
-    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:], normalization="amplitude")
+    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:])
     intensity = np.abs(to_host_array(waves)) ** 2
     intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
     assert _relative_error(intensity, intensity_ref) < 0.05

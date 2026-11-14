@@ -2323,7 +2323,7 @@ class BlochWaves:
         thicknesses: float | Iterable[float],
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
     ) -> Waves:
@@ -2337,8 +2337,11 @@ class BlochWaves:
             The grid points of the exit waves.
         extent : tuple of floats
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves. If 'values', the exit waves are
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
@@ -2357,7 +2360,7 @@ class BlochWaves:
                     thicknesses,
                     gpts=gpts,
                     extent=extent,
-                    normalization=normalization,
+                    normalize=normalize,
                     g_max=g_max,
                     lazy=lazy,
                 )
@@ -2444,6 +2447,11 @@ class BlochWaves:
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
 
+        if normalize:
+            # the incident wave is one in every pixel; normalized, its raw Fourier
+            # transform has a unit intensity
+            array = array / float(np.prod(gpts))
+
         ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
@@ -2456,7 +2464,9 @@ class BlochWaves:
             extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata={"normalization": normalization},
+            metadata={
+                "normalization": "reciprocal_space" if normalize else "values"
+            },
         )
 
         return waves
@@ -3176,7 +3186,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3216,7 +3226,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 lazy=False,
             )
@@ -3233,7 +3243,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3242,7 +3252,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
         )
@@ -3252,7 +3262,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> da.core.Array:
@@ -3276,7 +3286,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
             concatenate=True,
@@ -3289,7 +3299,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: float | Sequence[float] | np.ndarray,
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
         pbar: Optional[bool] = None,
@@ -3305,8 +3315,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             The grid points of the exit waves.
         extent : tuple of floats, optional
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves.
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         g_max : float, optional
             Maximum scattering vector length for the plane wave
             expansion [1/Å].
@@ -3368,7 +3381,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3377,7 +3390,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3395,7 +3408,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
-            metadata={"normalization": normalization},
+            metadata={
+                "normalization": "reciprocal_space" if normalize else "values"
+            },
         )
 
         return waves

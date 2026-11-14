@@ -4950,10 +4950,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves = waves.downsample(
-                gpts=s_matrix.downsampled_gpts,
-                normalization="intensity",
-            )
+            waves = waves.downsample(gpts=s_matrix.downsampled_gpts)
 
         if s_matrix.store_on_host and s_matrix.device == "gpu":
             waves = waves.to_cpu()

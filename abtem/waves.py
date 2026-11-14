@@ -578,6 +578,14 @@ class _WavesNormalization(WavesToWavesTransform):
     def in_place(self) -> bool:
         return self._in_place
 
+    @property
+    def metadata(self) -> dict:
+        # the wave functions are now normalized as those of a builder with
+        # `normalize=True` are, which `diffraction_patterns` must not divide again
+        if self._space == "reciprocal":
+            return {"normalization": "reciprocal_space"}
+        return {}
+
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
 
@@ -1621,9 +1629,13 @@ class Waves(BaseWaves, ArrayObject):
         self,
         max_angle: str | float = "cutoff",
         gpts: Optional[tuple[int, int]] = None,
-        normalization: str = "values",
     ) -> Waves:
         """Downsample the wave functions to a lower maximum scattering angle.
+
+        The normalization of the wave functions is kept: with the normalization of
+        ``PlaneWave()``, where the wave function takes a value of one everywhere, the
+        pixel values are preserved; with that of ``PlaneWave(normalize=True)``, which
+        ``Probe`` waves have, the reciprocal space intensity keeps its sum.
 
         Parameters
         ----------
@@ -1645,16 +1657,6 @@ class Waves(BaseWaves, ArrayObject):
             Number of grid points of the wave functions after downsampling.
             If given, `max_angle` is not used.
 
-        normalization : {'values', 'amplitude'}
-            The normalization parameter determines the preserved quantity after
-            normalization.
-
-                ``values`` :
-                    The pixel-wise values of the wave function are preserved (default).
-
-                ``amplitude`` :
-                    The total amplitude of the wave function is preserved.
-
         Returns
         -------
         downsampled_waves : Waves
@@ -1667,6 +1669,7 @@ class Waves(BaseWaves, ArrayObject):
         if gpts is None:
             gpts = waves._gpts_within_angle(max_angle)
 
+        normalization = Waves._fft_resampling_normalization(waves.metadata)
         if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
@@ -1741,6 +1744,15 @@ class Waves(BaseWaves, ArrayObject):
         return Waves._diffraction_pattern_from_fft(
             fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
         )
+
+    @staticmethod
+    def _fft_resampling_normalization(metadata) -> str:
+        """What `fft_interpolate` preserves when resampling waves with this metadata:
+        the pixel values of waves with the normalization of ``PlaneWave()``, otherwise
+        the reciprocal space intensity, as `diffraction_patterns` takes the waves."""
+        if Waves._diffraction_pattern_should_normalize(metadata):
+            return "values"
+        return "amplitude"
 
     @staticmethod
     def _diffraction_pattern_should_normalize(metadata, renormalize=True):

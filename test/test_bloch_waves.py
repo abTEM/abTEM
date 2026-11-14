@@ -2557,3 +2557,57 @@ def test_orientation_matrix_must_be_three_by_three():
             sg_max=0.1,
             orientation_matrix=np.eye(2),
         )
+
+
+def _exit_wave_calculators():
+    bloch_waves = _silicon_bloch_waves("cpu")
+    ensemble = bloch_waves.rotate(
+        "x", abtem.distributions.from_values(np.array([0.0, 0.2])), degrees=True
+    )
+    return {"BlochWaves": bloch_waves, "BlochwaveEnsemble": ensemble}
+
+
+@pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy):
+    # the argument only wrote a label to the metadata, and the exit waves did not
+    # change: normalize=False is the incident wave of PlaneWave() (one in every pixel),
+    # normalize=True that of PlaneWave(normalize=True)
+    source = _exit_wave_calculators()[calculator]
+    gpts = (16, 20)
+
+    def exit_waves(normalize, thickness=(50.0, 200.0)):
+        waves = source.calculate_exit_waves(
+            thickness, gpts=gpts, extent=(5.43, 5.43), normalize=normalize, lazy=lazy
+        )
+        return waves.compute() if lazy else waves
+
+    plain, normalized = exit_waves(False), exit_waves(True)
+
+    assert plain.metadata["normalization"] == "values"
+    assert normalized.metadata["normalization"] == "reciprocal_space"
+    np.testing.assert_allclose(
+        np.asarray(normalized.array), np.asarray(plain.array) / np.prod(gpts)
+    )
+    # a thin crystal leaves the incident wave: one in every pixel, or one over N
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(False, thickness=0.001).array)), 1.0, atol=1e-3
+    )
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(True, thickness=0.001).array)),
+        1.0 / np.prod(gpts),
+        atol=1e-3 / np.prod(gpts),
+    )
+    # either way the diffraction patterns are those of the same wave
+    np.testing.assert_allclose(
+        plain.diffraction_patterns(max_angle=None).array,
+        normalized.diffraction_patterns(max_angle=None).array,
+        atol=1e-6,
+    )
+
+
+def test_exit_waves_no_longer_take_a_normalization_label():
+    with pytest.raises(TypeError, match="normalization"):
+        _silicon_bloch_waves("cpu").calculate_exit_waves(
+            [50.0], gpts=(16, 16), normalization="values"
+        )
