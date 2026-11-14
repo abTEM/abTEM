@@ -29,7 +29,7 @@ import numpy as np
 _torch_import_error: ImportError | None = None
 try:
     import torch
-except ModuleNotFoundError as error:
+except ImportError as error:
     torch = None  # type: ignore[assignment]
     _torch_import_error = error
 

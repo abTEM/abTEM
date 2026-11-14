@@ -94,6 +94,7 @@ _USE = {
     "get_array_module('mps')",
 }
 
+# Every backend is used in turn; each prints the error raised and its cause.
 _PROBE = """
 import warnings
 warnings.simplefilter("always")
@@ -101,43 +102,44 @@ with warnings.catch_warnings(record=True) as caught:
     import numpy as np
     import abtem
 print("WARNED", any("could not be imported" in str(w.message) for w in caught))
-try:
-    {use}
-except RuntimeError as error:
-    cause = error.__cause__
-    print("RAISED", type(error).__name__)
-    print("CAUSE", type(cause).__name__, getattr(cause, "name", None))
+for package, use in {use!r}.items():
+    try:
+        exec(use)
+    except RuntimeError as error:
+        cause = error.__cause__
+        print(package, type(error).__name__, type(cause).__name__,
+              getattr(cause, "name", None))
 """
 
-# Makes `package` not installed: a finder ahead of the others that answers "No
+# Makes the packages not installed: a finder ahead of the others that answers "No
 # module named ...". (sys.modules[package] = None would do, but scipy then finds
 # None where it looks for torch.)
 _HIDE = """
 import sys
 class _NotInstalled:
     def find_spec(self, name, path=None, target=None):
-        if name == {package!r}:
+        if name in {packages!r}:
             raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
 sys.meta_path.insert(0, _NotInstalled())
 """
 
 
-def _run_with_broken(package, tmp_path, broken, extra_env=None, init=None):
-    """Run _PROBE in a fresh process where `package` either is not installed
-    (broken=False) or is installed but its import fails with `init` (by default
-    the import of a module that is missing)."""
-    code = _PROBE.format(use=_USE[package])
-    if broken:
-        (tmp_path / package).mkdir()
-        (tmp_path / package / "__init__.py").write_text(init or f"import {_MISSING}\n")
+def _run_with_every_backend(tmp_path, init=None):
+    """Run _PROBE in a fresh process where every backend package either is not
+    installed (`init` is None) or is installed but its import runs `init`."""
+    code = _PROBE.format(use=_USE)
+    if init is None:
+        code = _HIDE.format(packages=tuple(_USE)) + code
     else:
-        code = _HIDE.format(package=package) + code
+        for package in _USE:
+            (tmp_path / package).mkdir()
+            (tmp_path / package / "__init__.py").write_text(init)
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
         [str(tmp_path)] + [p for p in [env.get("PYTHONPATH")] if p]
     )
+    env["ABTEM_DEVICE"] = "gpu"
     env["ABTEM_TORCH__DEVICE"] = "cpu"
-    env.update(extra_env or {})
     result = subprocess.run(
         [sys.executable, "-c", code], env=env, capture_output=True, timeout=120
     )
@@ -145,37 +147,28 @@ def _run_with_broken(package, tmp_path, broken, extra_env=None, init=None):
     return result.stdout.decode().split("\n")
 
 
-@pytest.mark.parametrize("package", ["cupy", "pyfftw", "mkl_fft", "torch"])
-def test_a_broken_optional_backend_reports_its_import_error(package, tmp_path):
-    lines = _run_with_broken(package, tmp_path, broken=True)
-    assert f"CAUSE ModuleNotFoundError {_MISSING}" in lines
-
-
-@pytest.mark.parametrize("package", ["cupy", "pyfftw", "mkl_fft", "torch"])
-def test_a_missing_optional_backend_raises_a_runtime_error_when_used(package, tmp_path):
-    lines = _run_with_broken(package, tmp_path, broken=False)
-    assert "RAISED RuntimeError" in lines
-
-
-def test_a_plain_import_error_from_mkl_fft_does_not_break_import_abtem(tmp_path):
-    lines = _run_with_broken(
-        "mkl_fft",
-        tmp_path,
-        broken=True,
-        init='raise ImportError("libmkl_rt.so.2: cannot open shared object file")\n',
-    )
-    assert "CAUSE ImportError None" in lines
-
-
-def test_a_broken_cupy_warns_at_import_when_cupy_is_the_configured_device(tmp_path):
-    lines = _run_with_broken(
-        "cupy", tmp_path, broken=True, extra_env={"ABTEM_DEVICE": "gpu"}
-    )
+def test_a_broken_optional_backend_reports_its_import_error(tmp_path):
+    lines = _run_with_every_backend(tmp_path, init=f"import {_MISSING}\n")
+    for package in _USE:
+        assert f"{package} RuntimeError ModuleNotFoundError {_MISSING}" in lines
+    # CuPy is the configured device
     assert "WARNED True" in lines
 
 
-def test_a_missing_cupy_does_not_warn_at_import(tmp_path):
-    lines = _run_with_broken(
-        "cupy", tmp_path, broken=False, extra_env={"ABTEM_DEVICE": "gpu"}
+def test_a_plain_import_error_of_an_optional_backend_is_reported(tmp_path):
+    # as raised by a missing shared library; a broken mkl_fft must not stop
+    # `import abtem` either
+    lines = _run_with_every_backend(
+        tmp_path, init='raise ImportError("libx.so: cannot open shared object file")\n'
     )
+    for package in _USE:
+        assert f"{package} RuntimeError ImportError None" in lines
+    assert "WARNED True" in lines
+
+
+def test_a_missing_optional_backend_raises_a_runtime_error_when_used(tmp_path):
+    lines = _run_with_every_backend(tmp_path)
+    for package in _USE:
+        assert f"{package} RuntimeError ModuleNotFoundError {package}" in lines
+    # a package that is not installed is not a warning at import
     assert "WARNED False" in lines
