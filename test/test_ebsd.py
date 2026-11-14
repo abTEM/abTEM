@@ -518,7 +518,7 @@ class TestOrientations:
                 monkeypatch.setattr(
                     spglib.error, "OLD_ERROR_HANDLING", old_error_handling
                 )
-                with pytest.raises(ValueError, match="could not determine"):
+                with pytest.raises(_SymmetryNotFoundError, match="could not determine"):
                     is_centrosymmetric(overlapping)
                 with pytest.raises(ValueError, match="could not standardize"):
                     _conventional_cell(overlapping, None)
@@ -2053,9 +2053,12 @@ class TestHemispheres:
 
     def test_without_spglib_the_symmetry_is_unknown(self, monkeypatch):
         # without spglib, or when it cannot find the symmetry, the pattern is
-        # still built, and records the symmetry as unknown
+        # still built, and records the symmetry as unknown; an spglib that cannot
+        # be imported is reported with the cause
+        broken = ImportError("finding the inversion centre requires spglib")
+        broken.__cause__ = ModuleNotFoundError("No module named 'spglib'")
         for error, match in (
-            (ImportError("no spglib"), "spglib is not installed"),
+            (broken, r"spglib could not be imported \(No module named 'spglib'\)"),
             (_SymmetryNotFoundError("no symmetry"), "spglib could not determine"),
         ):
 
@@ -2069,8 +2072,8 @@ class TestHemispheres:
 
     def test_an_unrelated_error_of_the_symmetry_search_is_raised(self, monkeypatch):
         # only spglib's failure to find the symmetry leaves it unknown; any other
-        # error (here numpy's, as from the scaled positions of a singular cell)
-        # stops the build rather than reading as that failure
+        # error (here a stand-in) stops the build rather than reading as that
+        # failure
         def search(atoms):
             raise np.linalg.LinAlgError("stand-in for an unrelated error")
 
