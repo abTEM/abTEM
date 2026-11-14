@@ -501,6 +501,38 @@ def test_a_built_potential_gives_the_same_waves_as_the_potential():
         np.testing.assert_allclose(a.array, b.array, atol=1e-4)
 
 
+def test_the_default_cutoff_follows_the_energy():
+    # Oracle: the converged cutoff is twice 1 / wavelength, not below 4.5 1/Å (the beams
+    # of low energies are evanescent far beyond 1 / wavelength); a given cutoff stays.
+    solver = TwoWaySolver()
+    assert solver._cutoff_for(100.0) == 4.5
+    assert solver._cutoff_for(1000.0) == pytest.approx(2 / energy2wavelength(1000.0))
+    assert solver._cutoff_for(30e3) == pytest.approx(2 / energy2wavelength(30e3))
+    assert TwoWaySolver(cutoff=3.0)._cutoff_for(30e3) == 3.0
+
+
+def test_the_default_cutoff_gives_the_solution_of_that_cutoff():
+    # Oracle: at 100 eV the default is the floor of 4.5 1/Å, so the solution equals the
+    # one with that cutoff given.
+    potential = abtem.Potential(
+        graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
+    )
+    wave = abtem.PlaneWave(energy=100.0)
+    default = TwoWaySolver().scatter(wave, potential)
+    given = TwoWaySolver(cutoff=4.5).scatter(wave, potential)
+    for a, b in zip(default, given):
+        np.testing.assert_array_equal(a.array, b.array)
+
+
+def test_a_potential_too_coarse_for_the_default_cutoff_says_so():
+    # At 1 keV the default cutoff is 5.15 1/Å, which needs a sampling of 0.0485 Å.
+    coarse = abtem.Potential(
+        graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
+    )
+    with pytest.raises(ValueError, match="the default for this energy"):
+        TwoWaySolver().scatter(abtem.PlaneWave(energy=1000.0), coarse)
+
+
 def test_the_solver_refuses_unsupported_input():
     potential = abtem.Potential(
         graphene_atoms(), gpts=(48, 84), slice_thickness=0.01, projection="finite"
