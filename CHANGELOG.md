@@ -270,6 +270,60 @@ Dependencies:
 
 Bugfixes:
 
+- A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
+  compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
+  declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
+  configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
+  configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
+  are now in the configured precision, and floating point counts keep their dtype
+- `ChargeDensityPotential` built in chunks of several configurations (`chunks` greater than 1) gives each chunk the
+  charge densities of its own configurations. It paired density *k* with chunk *k* and dropped the rest, so
+  per-configuration charge densities were wrong unless every chunk held one configuration, the default
+- Plots: the log scale can be switched on and off for line profiles and complex (domain-coloured) images, which
+  raised a `TypeError` because their `set_logscale` took no argument; the extent of an image converts its y axis with
+  the units of the y axis, not the x axis; `PlasmonScatteringEvents.show_cumulative_scattering_events` plots the
+  requested integer `num_excitations` instead of the first and no longer prints the axes
+- Measurements: `poisson_noise()` with neither `dose_per_area` nor `total_dose` raises the intended
+  `RuntimeError` instead of failing inside NumPy with a NaN dose; `IndexedDiffractionPatterns.normalize_to_spot` keeps
+  the reciprocal lattice vectors (it replaced them by the spot positions) and `poisson_noise(dose_per_area=...)` on it
+  raises a `RuntimeError` (a missing `@property` made it a `TypeError`); `ScanNoiseTransform` keeps the units and label of
+  the images, which it relabelled as counts
+- Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
+  selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
+  ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error
+- PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis and
+  on the measurements it reduces, as `Probe` and `PlaneWave` do; the batches of the lattice and streamed reductions
+  count the real size of an element, so at double precision they hold half the rows instead of exceeding their memory
+  budget; the window view of a compressed S-matrix keeps `max_batch_expansion`
+- Potentials and fields: `ChargeDensityPotential` with `repetitions` displaces the repeated atoms of each frozen-phonon
+  configuration (every configuration was the undisplaced repeated cell); `depth_profile` works for magnetic fields and
+  vector potentials, keeping the components as an ensemble axis (it raised a `RuntimeError`); `GPAWMagneticField` and
+  `GPAWVectorPotential` have the labelled component axis of their base classes (it was `None`); the documented default
+  `slice_thickness` of `ChargeDensityPotential` and `GPAWPotential` is the 1.0 Å of the code, not 0.5 Å
+- `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`
+  is `bloch_waves.rotate(a, b)`: the rotations are about fixed axes, in the order given, whether they come in one call
+  or several, for angles and for distributions of angles. **Behaviour change:** rotating an already rotated object used
+  to discard its rotation and keep only the last. `BlochWaves.orientation_matrix` returns the (3, 3) orientation, and an
+  `orientation_matrix` that is not (3, 3) raises a `ValueError` naming its shape
+- Wave function normalization is spelled as for the builders of `Waves` everywhere: `BlochWaves.calculate_exit_waves`
+  and `BlochwaveEnsemble.calculate_exit_waves` take the bool `normalize` (default false), as `PlaneWave` does: false
+  gives an incident wave of one in every pixel, true normalizes the reciprocal-space intensity of the incident wave to one.
+  The `normalization` argument they had, `'values'` or `'amplitude'`, only wrote a label to the metadata (and
+  `'amplitude'` made `diffraction_patterns()` raise); it is removed. `Waves.downsample` and `WavesDetector(gpts)` keep
+  the normalization of the waves, and `Waves.downsample` has no `normalization` argument any more. **Behaviour change:**
+  they preserved the pixel values of every wave, so the diffraction patterns of a downsampled `Probe` or normalized plane
+  wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
+  (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
+  `Waves.normalize()` labels its result `'reciprocal_space'`, so that `diffraction_patterns()` of a normalized wave sums to
+  one (it divided by the number of pixels once more, to 1 / N²)
+- The default scan sampling is the probe's Nyquist sampling, as documented, and is the same for multislice and PRISM.
+  `GridScan()` with no `sampling` (and so `Probe.scan`, `SMatrixArray.scan` and `SMatrix.build().scan` without a scan) used
+  0.99 of it, a factor from before the number of scan points was counted within rounding of a whole number, while
+  `SMatrix.scan` and `SMatrix.transition_potential_scan` used the Nyquist sampling itself: for an extent of a whole number
+  of Nyquist pitches the same S-matrix gave 12 × 12 points through one and 13 × 13 through the other. **Behaviour change:**
+  the default scan of `Probe.scan` and the other routes has about 1% fewer points per axis (one fewer when the extent
+  is within 1% below a whole number of Nyquist pitches); the pitch is still never coarser than Nyquist, as the number of
+  points is rounded up
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
