@@ -843,14 +843,17 @@ Bugfixes:
   ([PR #680](https://github.com/abTEM/abTEM/pull/680))
 - Indexing an ensemble axis with a step, a negative start or stop, a reversed slice or an index array keeps the
   coordinates of the selected members. The axis kept the unsliced offset and sampling, so `dp[::2, ::2]` of a
-  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size
+  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size. A
+  partial slice of a `ReciprocalSpaceAxis` with `fftshift=False` kept the class, whose coordinates for the
+  shorter length are not those of the selected members of an axis stored in `ifftshift` order
     - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`) raises `IndexError`; index with the
       explicit positions (`dp[np.arange(n)[::-1]]`) instead. A reversed slice of another linear axis, and an index
-      array on any linear axis, scan axes included, give a `NonLinearAxis` with the selected coordinates. A scan
-      axis indexed with an array is therefore no longer a scan axis: reductions over it return line profiles
-      instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D scan;
-      `integrated_center_of_mass` raises when one of the two scan axes was indexed with an array; and a reduction
-      of `dp[:, [1, 4]]` puts the indexed axis first
+      array on any linear axis, scan axes included, give a `NonLinearAxis` with the selected coordinates, and so
+      do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with `fftshift=False`
+      that does not select every member. A scan axis indexed with an array is therefore no longer a scan axis:
+      reductions over it return line profiles instead of `Images` for a 2D scan, and a `MeasurementsEnsemble`
+      instead of line profiles for a 1D scan; `integrated_center_of_mass` raises when one of the two scan axes was
+      indexed with an array; and a reduction of `dp[:, [1, 4]]` puts the indexed axis first
 - `set_ensemble_axes_metadata` raises when the new axis does not fit the array (a `RuntimeError` for an ordinal axis
   of the wrong length) or contradicts its energy (a `ValueError`), and leaves the object's axes unchanged. It no
   longer writes into an axes list the object shares with its caller or with other objects, so a list read from
@@ -865,14 +868,16 @@ Bugfixes:
   per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
   limit; every other error, an insufficient driver included, raises on every call
 - A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
-  where it ran on the synchronous scheduler instead
+  where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
+  returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
+  `TypeError`
 - The GPU chunk and batch size estimates raise a CUDA error from their memory probe, where they fell back to
   `dask.chunk-size-gpu`. They still use that setting when CuPy is not installed or sees no device
 - `natural_neighbor_weights` falls back to nearest-parent weights only for degenerate (collinear or coincident)
   parent beams; any other error from the triangulation is raised
 - `shrink_cell` works under `python -O`
-    - **Behaviour change:** an `Atoms` object without atoms raises, where it returned an empty `Atoms` with a zero
-      cell
+    - **Behaviour change:** an `Atoms` object without atoms raises `ValueError`, where it returned an empty
+      `Atoms` with a zero cell (and did not return under `python -O`)
 - The Miller-index labels of an indexed diffraction-pattern plot delegate only the methods of matplotlib's
   `Annotation`: `hasattr`, `getattr` with a default and `copy.deepcopy` work on them, and any other name raises
   `AttributeError`
