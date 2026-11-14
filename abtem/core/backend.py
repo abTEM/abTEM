@@ -431,12 +431,14 @@ def is_gpu_dask_client(client) -> bool:
     -------
     bool
         True if the client is running and all of its workers are single-threaded.
-        An error from the scheduler's reply is raised, not read as "no".
+        An asynchronous client inside its event loop gives False: it answers with
+        coroutines, which abTEM's synchronous compute does not await. An error from
+        the scheduler's reply is raised, not read as "no".
     """
     if client is None:
         return False
 
-    if getattr(client, "status", None) != "running":
+    if getattr(client, "status", None) != "running" or client.asynchronous:
         return False
 
     nthreads = client.nthreads()
