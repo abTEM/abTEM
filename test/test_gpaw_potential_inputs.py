@@ -167,6 +167,25 @@ def test_a_single_path_builds_eagerly(fake_gpaw):
     )
 
 
+def test_an_attribute_error_from_reading_a_single_path_is_raised(
+    fake_gpaw, monkeypatch
+):
+    """``generate_slices`` reads a path without an ensemble axis; an
+    ``AttributeError`` from that read reaches the caller unchanged."""
+    fake = gpaw_module.GPAW
+
+    def without_charge_coefficients(*args, **kwargs):
+        calculator = fake(*args, **kwargs)
+        del calculator.density.Q_aL
+        return calculator
+
+    monkeypatch.setattr(gpaw_module, "GPAW", without_charge_coefficients)
+    potential = GPAWPotential("a.gpw", gpts=GPTS)
+
+    with pytest.raises(AttributeError, match="compensation charge coefficients"):
+        potential.build(lazy=False)
+
+
 def test_lazy_reads_compare_by_path_without_reading(fake_gpaw, monkeypatch):
     """A path is held as a delayed read keyed by the resolved path, so `==`
     decides without reading the file: equal for the same file however it is

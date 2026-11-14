@@ -660,10 +660,8 @@ class GPAWPotential(_PotentialBuilder):
             else self.calculators
         )
 
-        try:
+        if isinstance(calculator, Delayed):
             calculator = calculator.compute()
-        except AttributeError:
-            pass
 
         # assert len(self.calculators) == 1
 
