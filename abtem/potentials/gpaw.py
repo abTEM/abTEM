@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import dask
-import dask.array as da
 import numpy as np
 from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
@@ -33,9 +32,8 @@ from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,
 )
-from abtem.core.ensemble import _wrap_with_array
+from abtem.core.ensemble import _wrap_with_array, partition_entries
 from abtem.core.fft import fft_crop
-from abtem.core.utils import itemset
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     BaseFrozenPhonons,
@@ -773,20 +771,22 @@ class GPAWPotential(_PotentialBuilder):
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
-        def frozen_phonons(calculators, frozen_phonons):
-            arr = np.zeros((1,), dtype=object)
-            itemset(
-                arr, 0, {"calculators": calculators, "frozen_phonons": frozen_phonons}
-            )
-            return arr
-
         calculators = self.calculators
 
         if not lazy:
             calculators = _defer_placeholders(calculators, _LastRead())
 
+        # A lazy calculator is its own graph node, shared by the tasks of every
+        # chunk. Passed as a literal argument instead, the calculator (with its
+        # density and potential grids) would be pickled into each task sent to
+        # a worker.
+        def node(x):
+            return dask.delayed(x) if lazy else x
+
+        def entry(calculators, frozen_phonons=None):
+            return {"calculators": calculators, "frozen_phonons": frozen_phonons}
+
         if isinstance(self.frozen_phonons, FrozenPhonons):
-            array = np.zeros(len(self.frozen_phonons), dtype=object)
             partitioned = self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
 
             # Iterating a dask array yields per-element dask array slices;
@@ -796,50 +796,17 @@ class GPAWPotential(_PotentialBuilder):
             # Delayed objects from to_delayed() compose correctly instead.
             fp_chunks = partitioned.to_delayed().ravel() if lazy else partitioned
 
-            # One graph node shared by every chunk's task. Passed as a literal
-            # argument instead, the calculator (with its density and potential
-            # grids) would be pickled into each task sent to a worker.
-            shared_calculators = dask.delayed(calculators) if lazy else calculators
+            shared_calculators = node(calculators)
+            entries = [entry(shared_calculators, fp) for fp in fp_chunks]
 
-            for i, fp in enumerate(fp_chunks):
-                if lazy:
-                    block = dask.delayed(frozen_phonons)(shared_calculators, fp)
-
-                    itemset(array, i, da.from_delayed(block, shape=(1,), dtype=object))
-                else:
-                    itemset(array, i, frozen_phonons(calculators, fp))
-
-            if lazy:
-                array = da.concatenate(list(array))
+        elif len(self.ensemble_shape) == 0:
+            entries = np.empty((), dtype=object)
+            entries[()] = entry(node(calculators))
 
         else:
-            if len(self.ensemble_shape) == 0 and lazy:
-                block = dask.delayed(frozen_phonons)(calculators, None)
-                array = da.from_delayed(block, shape=(), dtype=object)
-            elif len(self.ensemble_shape) == 0 and not lazy:
-                array = frozen_phonons(calculators, None)
-                array = _wrap_with_array(array, ndims=0)
-            else:
-                array = np.zeros(self.ensemble_shape[0], dtype=object)
-                for i, calculator in enumerate(calculators):
-                    calculator = [calculator]
+            entries = [entry(node([calculator])) for calculator in calculators]
 
-                    if lazy:
-                        calculator = dask.delayed(calculator)
-                        block = da.from_delayed(
-                            dask.delayed(frozen_phonons)(calculator, None),
-                            shape=(1,),
-                            dtype=object,
-                        )
-                    else:
-                        block = frozen_phonons(calculator, None)
-
-                    itemset(array, i, block)
-
-                if lazy:
-                    array = da.concatenate(list(array))
-
-        return (array,)
+        return (partition_entries(entries, lazy),)
 
 
 class GPAWParametrization:

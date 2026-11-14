@@ -830,8 +830,7 @@ def multislice_step(
         waves._array = waves._array - backscatter
 
     if fully_corrected:
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        backscatter_waves = waves.__class__(backscatter, **kwargs)
+        backscatter_waves = waves._with_array(backscatter)
         return waves, aperture.bandlimit(backscatter_waves)
 
     return waves

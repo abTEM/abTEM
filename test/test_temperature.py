@@ -156,8 +156,9 @@ def test_gpaw_lazy_partition_args_ship_the_calculator_once():
         eager_args = eager_args.item()
         assert lazy_args["calculators"] is calculator
         assert eager_args["calculators"] is calculator
-        # the lazy chunk arrives wrapped in a one-element object array
+        # lazy and eager blocks alike arrive wrapped in a one-element object
+        # array (see abtem.core.ensemble.partition_entries)
         lazy_atoms, lazy_seeds = np.asarray(lazy_args["frozen_phonons"]).item()
-        eager_atoms, eager_seeds = eager_args["frozen_phonons"]
+        eager_atoms, eager_seeds = eager_args["frozen_phonons"].item()
         assert lazy_atoms == eager_atoms
         assert tuple(lazy_seeds) == tuple(eager_seeds)

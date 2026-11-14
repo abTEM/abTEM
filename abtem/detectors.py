@@ -2668,9 +2668,7 @@ class PixelatedDetector(BaseDetector):
         if self.reduction_dtype is not None:
             dtype = np.result_type(self.reduction_dtype, np.complex64)
             if waves.dtype != dtype:
-                kwargs = waves._copy_kwargs(exclude=("array",))
-                kwargs["array"] = waves.array.astype(dtype)
-                waves = waves.__class__(**kwargs)
+                waves = waves._with_array(waves.array.astype(dtype))
 
         # After the cast, so a wider reduction_dtype windows in that precision.
         waves = waves.window(window=self.window_func, margin=self.margin)

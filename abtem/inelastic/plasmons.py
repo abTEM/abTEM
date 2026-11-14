@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, List, Tuple, Union
 
-import dask
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,8 +16,9 @@ from abtem.core.axes import (
     _iterate_axes_type,
 )
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import chunk_ranges, validate_chunks
-from abtem.core.utils import itemset
+from abtem.core.blockwise import array_namespace
+from abtem.core.chunks import validate_chunks
+from abtem.core.ensemble import partition_blocks
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
@@ -404,59 +404,18 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         )
         return partial(self._from_partitioned_args_func, **kwargs)
 
-    @staticmethod
-    def _plasmon_scattering_events(depths, radial_angles, azimuthal_angles, weights):
-        arr = np.zeros((1,), dtype=object)
-        itemset(
-            arr,
-            0,
-            {
-                "depths": depths,
-                "radial_angles": radial_angles,
-                "azimuthal_angles": azimuthal_angles,
-                "weights": weights,
-            },
-        )
-        return arr
-
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        array = np.zeros((len(chunks[0]),), dtype=object)
-        for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-            depths = self.depths[start:stop]
-            radial_angles = self.radial_angles[start:stop]
-            azimuthal_angles = self.azimuthal_angles[start:stop]
-            weights = self.weights[start:stop]
+        def events(slices):
+            return {
+                "depths": self.depths[slices[0]],
+                "radial_angles": self.radial_angles[slices[0]],
+                "azimuthal_angles": self.azimuthal_angles[slices[0]],
+                "weights": self.weights[slices[0]],
+            }
 
-            if lazy:
-                lazy_frozen_phonon = dask.delayed(self._plasmon_scattering_events)(
-                    depths=depths,
-                    radial_angles=radial_angles,
-                    azimuthal_angles=azimuthal_angles,
-                    weights=weights,
-                )
-                itemset(
-                    array,
-                    i,
-                    da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object),
-                )
-            else:
-                itemset(
-                    array,
-                    i,
-                    self._plasmon_scattering_events(
-                        depths=depths,
-                        radial_angles=radial_angles,
-                        azimuthal_angles=azimuthal_angles,
-                        weights=weights,
-                    ),
-                )
-
-        if lazy:
-            array = da.concatenate(list(array))
-
-        return (array,)
+        return (partition_blocks(chunks, events, lazy),)
 
     def _calculate_new_array(self, waves: "Waves") -> np.ndarray:
         xp = get_array_module(waves.device)
@@ -464,11 +423,10 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         return xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
 
     def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
-        if waves.is_lazy:
-            array = waves.array[(None,) * len(self.ensemble_shape)]
-            array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-        else:
-            array = self._calculate_new_array(waves)
+        array = waves.array[(None,) * len(self.ensemble_shape)]
+        array = array_namespace(array).tile(
+            array, self.ensemble_shape + (1,) * len(waves.shape)
+        )
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array

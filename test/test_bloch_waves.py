@@ -462,6 +462,40 @@ def test_energy_ensemble_blocks_keep_every_energy():
     assert patterns.metadata["energy"] == 200e3
 
 
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_structure_factor_build_passes_its_device_to_the_kernel(monkeypatch, lazy):
+    # Regression: map_kernel consumed `device=` itself, so the kernel always ran with
+    # its default device="cpu" and GPU Bloch-wave calculations silently used NumPy.
+    from abtem.bloch import dynamical
+
+    received = []
+    kernel = dynamical.calculate_structure_factors
+
+    def spy(*args, **kwargs):
+        received.append(kwargs.get("device", "not passed"))
+        return kernel(*args, **kwargs)
+
+    monkeypatch.setattr(dynamical, "calculate_structure_factors", spy)
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    structure_factor.build(lazy=lazy).compute()
+
+    assert received == [structure_factor._device]
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_structure_factor_build_runs_on_the_requested_device(device, lazy):
+    xp = get_array_module(device)
+    built = StructureFactor(bulk("Si", cubic=True), g_max=2.0, device=device).build(
+        lazy=lazy
+    )
+
+    assert get_array_module(built.array.compute() if lazy else built.array) is xp
+    if lazy:
+        assert get_array_module(built.array._meta) is xp
+
+
 @pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
 def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     # Regression: StructureFactorArray.get_projected_potential ignored its lazy

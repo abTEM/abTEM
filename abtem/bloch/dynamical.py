@@ -57,6 +57,7 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
+from abtem.core.blockwise import array_namespace, map_kernel
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -666,31 +667,22 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             The structure factors.
         """
         hkl = self.hkl
-        if lazy:
-            xp = get_array_module(self._device)
-            array = da.from_array(hkl, chunks=-1).map_blocks(
-                calculate_structure_factors,
-                atoms=self.atoms,
-                parametrization=self.parametrization,
-                thermal_sigma=self._thermal_sigma,
-                occupancy=self._occupancy,
-                g_max=self.g_max,
-                cutoff=self._cutoff,
-                device=self._device,
-                drop_axis=1,
-                meta=xp.array((), dtype=get_dtype(complex=True)),
-            )
-        else:
-            array = calculate_structure_factors(
-                hkl,
-                self.atoms,
-                parametrization=self._parametrization,
-                thermal_sigma=self._thermal_sigma,
-                occupancy=self.occupancy,
-                g_max=self.g_max,
-                cutoff=self._cutoff,
-                device=self._device,
-            )
+        # one structure factor per reflection, on the device of the calculation
+        array = map_kernel(
+            da.from_array(hkl, chunks=-1) if lazy else hkl,
+            calculate_structure_factors,
+            base_ndim=2,
+            base_shape_out=(len(hkl),),
+            dtype=get_dtype(complex=True),
+            out_device=self._device,
+            device=self._device,
+            atoms=self.atoms,
+            parametrization=self._parametrization,
+            thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
+            g_max=self.g_max,
+            cutoff=self._cutoff,
+        )
 
         return StructureFactorArray(
             array,
@@ -839,19 +831,14 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         numpy.ndarray
             The 3D structure factors.
         """
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = da.map_blocks(
-                structure_factor_1d_to_3d,
-                self._lazy_array,
-                da.from_array(self.hkl, chunks=-1),
-                gpts=self.gpts,
-                chunks=self.gpts,
-                meta=xp.array((), dtype=self.array.dtype),
-            )
-        else:
-            array = structure_factor_1d_to_3d(self._eager_array, self.hkl, self.gpts)
-        return array
+        return map_kernel(
+            self.array,
+            structure_factor_1d_to_3d,
+            base_ndim=1,
+            base_shape_out=self.gpts,
+            hkl=self.hkl,
+            gpts=self.gpts,
+        )
 
     def get_potential_3d(self) -> np.ndarray:
         """Calculate the 3D potential from the structure factors.
@@ -861,20 +848,15 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         numpy.ndarray
             The 3D potential.
         """
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            array = da.map_blocks(
-                structure_factor_to_potential,
-                self._lazy_array,
-                da.from_array(self.hkl, chunks=-1),
-                gpts=self.gpts,
-                chunks=self.gpts,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
-            )
-        else:
-            array = structure_factor_to_potential(
-                self._eager_array, self.hkl, self.gpts
-            )
+        array = map_kernel(
+            self.array,
+            structure_factor_to_potential,
+            base_ndim=1,
+            base_shape_out=self.gpts,
+            dtype=get_dtype(complex=False),
+            hkl=self.hkl,
+            gpts=self.gpts,
+        )
         return array
 
     def get_projected_potential(
@@ -957,24 +939,15 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 "increase `g_max` or the slice thickness",
             )
 
-        if self.is_lazy:
-            xp = get_array_module(potential_3d)
-            potential_sliced = da.map_blocks(
-                slice_potential,
-                potential_3d,
-                slice_chunks=slice_chunks,
-                slice_thicknesses=validated_slice_thickness,
-                gpts=validated_gpts,
-                chunks=(len(slice_chunks),) + validated_gpts,
-                meta=xp.array((), dtype=potential_3d.dtype),
-            )
-        else:
-            potential_sliced = slice_potential(
-                potential_3d,
-                slice_chunks=slice_chunks,
-                slice_thicknesses=validated_slice_thickness,
-                gpts=validated_gpts,
-            )
+        potential_sliced = map_kernel(
+            potential_3d,
+            slice_potential,
+            base_ndim=3,
+            base_shape_out=(len(slice_chunks),) + validated_gpts,
+            slice_chunks=slice_chunks,
+            slice_thicknesses=validated_slice_thickness,
+            gpts=validated_gpts,
+        )
 
         sampling = (
             extent[0] / potential_sliced.shape[-2],
@@ -2041,32 +2014,20 @@ class BlochWaves:
 
         structure_factor = self._get_structure_factor_array(lazy=lazy)
 
-        if lazy:
-            xp = get_array_module(self._device)
-            A = da.map_blocks(
-                calculate_structure_matrix,
-                structure_factor._lazy_array,
-                hkl=structure_factor.hkl,
-                hkl_selected=hkl,
-                cell=self.cell,
-                energy=self.energy,
-                use_wave_eq=self.use_wave_eq,
-                gpts=structure_factor.gpts,
-                new_axis=1,
-                chunks=(len(hkl), len(hkl)),
-                meta=xp.array((), dtype=get_dtype(complex=True)),
-            )
-        else:
-            A = calculate_structure_matrix(
-                structure_factor=structure_factor._eager_array,
-                hkl=structure_factor.hkl,
-                hkl_selected=hkl,
-                cell=self.cell,
-                energy=self.energy,
-                use_wave_eq=self.use_wave_eq,
-                gpts=structure_factor.gpts,
-            )
-        return A
+        return map_kernel(
+            structure_factor.array,
+            calculate_structure_matrix,
+            base_ndim=1,
+            base_shape_out=(len(hkl), len(hkl)),
+            dtype=get_dtype(complex=True),
+            out_device=self._device,
+            hkl=structure_factor.hkl,
+            hkl_selected=hkl,
+            cell=self.cell,
+            energy=self.energy,
+            use_wave_eq=self.use_wave_eq,
+            gpts=structure_factor.gpts,
+        )
 
     def calculate_scattering_matrix(
         self, z: float, lazy: bool = False
@@ -2099,18 +2060,18 @@ class BlochWaves:
             use_wave_eq=self.use_wave_eq,
         )
 
-        xp = get_array_module(self._device)
-        if lazy:
-            # the structure matrix is a single (n, n) block; expm maps it to
-            # one block of the same shape, on the structure matrix's device
-            return da.map_blocks(
-                calculate_scattering_matrix,
-                A,
-                **kwargs,
-                meta=xp.array((), dtype=get_dtype(complex=True)),
-            )
+        if not lazy:
+            A = get_array_module(self._device).asarray(A)
 
-        return calculate_scattering_matrix(A=xp.asarray(A), **kwargs)
+        # expm maps the (n, n) structure matrix to a matrix of the same shape
+        return map_kernel(
+            A,
+            calculate_scattering_matrix,
+            base_ndim=2,
+            dtype=get_dtype(complex=True),
+            out_device=self._device,
+            **kwargs,
+        )
 
     def _calculate_array(
         self, thicknesses: np.ndarray, lazy: bool = True
@@ -2132,30 +2093,16 @@ class BlochWaves:
             inversion_center=structure_factor.inversion_center,
         )
 
-        if lazy:
-            xp = get_array_module(self._device)
-
-            new_axis: tuple[int, ...]
-            chunks: tuple[int, ...]
-            if not thicknesses.shape:
-                new_axis, chunks = (), (len(hkl),)
-            else:
-                new_axis, chunks = (0,), (len(thicknesses), len(hkl))
-
-            array = da.map_blocks(
-                _structure_factor_dynamical_scattering,
-                structure_factor._lazy_array,
-                **kwargs,
-                new_axis=new_axis,
-                chunks=chunks,
-                meta=xp.array((), dtype=get_dtype(complex=True)),
-            )
-        else:
-            array = _structure_factor_dynamical_scattering(
-                structure_factor._eager_array, **kwargs
-            )
-
-        return array
+        # the amplitudes of the beams, per thickness if more than one is given
+        return map_kernel(
+            structure_factor.array,
+            _structure_factor_dynamical_scattering,
+            base_ndim=1,
+            base_shape_out=thicknesses.shape + (len(hkl),),
+            dtype=get_dtype(complex=True),
+            out_device=self._device,
+            **kwargs,
+        )
 
     def calculate_diffraction_patterns(
         self,
@@ -2211,34 +2158,21 @@ class BlochWaves:
                 )
                 if first_result is None:
                     first_result = res
-                active = self._energy_hkl_masks[i]
-                if lazy:
-                    new_chunks = res.array.chunks[:-1] + ((n_union,),)
-                    padded = res.array.map_blocks(
+                padded_arrays.append(
+                    map_kernel(
+                        res.array,
                         _embed_beams,
-                        active_mask=active,
+                        base_ndim=1,
+                        base_shape_out=(n_union,),
+                        active_mask=self._energy_hkl_masks[i],
                         n_total=n_union,
-                        dtype=res.array.dtype,
-                        chunks=new_chunks,
                     )
-                else:
-                    # lazy=False -- res.array is a plain numpy/cupy array with
-                    # no .chunks to preserve, so pad it directly instead of
-                    # going through the dask-only map_blocks path above.
-                    padded = _embed_beams(res.array, active, n_union)
-                padded_arrays.append(padded)
+                )
 
-            if lazy:
-                stacked = da.stack(padded_arrays, axis=0)
-            else:
-                # Same device concern as _embed_beams above: np.stack on a
-                # list of cupy arrays happens to work today via cupy's
-                # __array_function__ dispatch, but that's an implementation
-                # detail of cupy's NEP-18 support, not something this file
-                # should depend on implicitly elsewhere. Stack on whichever
-                # device the padded arrays are actually on.
-                xp = get_array_module(padded_arrays[0])
-                stacked = xp.stack(padded_arrays, axis=0)
+            # Same device concern as _embed_beams above: np.stack on a list of
+            # cupy arrays only works through cupy's __array_function__
+            # dispatch. Stack with the module of the padded arrays.
+            stacked = array_namespace(padded_arrays[0]).stack(padded_arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             rlv = first_result.reciprocal_lattice_vectors
             if rlv.ndim == 3:
@@ -2348,11 +2282,7 @@ class BlochWaves:
                 for i, e in enumerate(energies)
             ]
             arrays = [r.array for r in results]
-            if lazy:
-                stacked = da.stack(arrays, axis=0)
-            else:
-                # da.stack would wrap the eager per-energy arrays in dask
-                stacked = get_array_module(arrays[0]).stack(arrays, axis=0)
+            stacked = array_namespace(arrays[0]).stack(arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             return Waves(
                 array=stacked,
