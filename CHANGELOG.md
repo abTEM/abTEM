@@ -914,6 +914,23 @@ Bugfixes:
   `AttributeError`
 - The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
   location), where it reported a convergence failure for any assertion
+- Indexing an ensemble axis with a step, a negative start or stop, a reversed slice or an index array keeps the
+  coordinates of the selected members. The axis kept the unsliced offset and sampling, so `dp[::2, ::2]` of a
+  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size. A
+  partial slice of a `ReciprocalSpaceAxis` with `fftshift=False` kept the class, whose coordinates for the
+  shorter length are not those of the selected members of an axis stored in `ifftshift` order
+  ([PR #696](https://github.com/abTEM/abTEM/pull/696))
+    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`) raises `IndexError`; index with the
+      explicit positions (`dp[np.arange(n)[::-1]]`) instead. A reversed slice of another linear axis, and an index
+      array on one, give a `NonLinearAxis` with the selected coordinates, and so do a slice with a step other than
+      one of a `ReciprocalSpaceAxis` and any slice of one with `fftshift=False` that does not select every member.
+      On a scan axis, an index array whose members increase evenly is the equivalent slice (`dp[[0, 2, 4]]` is
+      `dp[0:5:2]`) and keeps the scan axis. Any other index array gives a `NonLinearAxis` there too, so the axis is
+      no longer a scan axis: reductions over it return line profiles instead of `Images` for a 2D scan, and a
+      `MeasurementsEnsemble` instead of line profiles for a 1D scan; `integrated_center_of_mass`,
+      `gaussian_source_size` (of diffraction patterns and of polar measurements) and `poisson_noise` with
+      `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of `dp[:, [1, 2, 4]]`
+      puts the indexed axis first. Outer indexing of both scan axes with `np.ix_` raises `TypeError`
 
 Documentation:
 
