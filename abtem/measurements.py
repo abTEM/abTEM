@@ -1088,20 +1088,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             "Provide one of 'dose_per_area' or 'total_dose'."
         )
 
-        if (dose_per_area is not None) and (total_dose is not None):
+        # exactly one of the two: with neither, the dose would be NaN
+        if (dose_per_area is None) == (total_dose is None):
             raise wrong_dose_error
 
-        if dose_per_area is not None and total_dose is None:
+        if dose_per_area is not None:
             total_dose = self._area_per_pixel * dose_per_area
-        elif total_dose is None:
-            pass
-
-        elif total_dose is not None:
-            if dose_per_area is not None:
-                raise wrong_dose_error
-
-        else:
-            raise wrong_dose_error
 
         total_dose = np.array(total_dose, dtype=dtype)
 
@@ -6896,8 +6888,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     ) -> BaseMeasurements:
         raise NotImplementedError
 
+    @property
     def _area_per_pixel(self):
-        raise NotImplementedError
+        raise RuntimeError("Cannot infer pixel area for indexed diffraction patterns.")
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
@@ -7181,14 +7174,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         else:
             c = intensities_dict[spot]
 
-        intensities = self.intensities / c
-        return self.__class__(
-            intensities,
-            self.miller_indices.copy(),
-            self.positions.copy(),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self._metadata,
-        )
+        kwargs = self._copy_kwargs(exclude=("array",))
+        return self.__class__(array=self.intensities / c, **kwargs)
 
     def to_data_array(self):
         """
