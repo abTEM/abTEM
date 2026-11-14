@@ -779,7 +779,8 @@ class RealSpaceMultislice:
         truncated series grows with the order. The antialiasing aperture passes such
         frequencies when the sampling is below about wavelength / 3.
         ``LanczosMultislice`` evaluates that operator exactly and keeps only the
-        frequencies below 0.95/wavelength.
+        frequencies below 0.95/wavelength. The reflected wave needs vacuum slices
+        around the specimen, see :class:`.BaseDetector`.
     """
 
     order: int = 1
@@ -825,7 +826,8 @@ class LanczosMultislice:
     keV, where the split step is 30 to 40 % off below 5 keV and the Taylor series of
     the operator diverges. Detectors with ``reflected=True`` measure the reflected
     wave. A tilted wave is propagated in the frame of its direction, as in
-    ``FourierMultislice``. The potential must have finite projection.
+    ``FourierMultislice``. The potential must have finite projection. The reflected
+    wave needs vacuum slices around the specimen, see :class:`.BaseDetector`.
 
     Parameters
     ----------
