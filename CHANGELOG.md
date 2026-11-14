@@ -270,6 +270,22 @@ Dependencies:
 
 Bugfixes:
 
+- When an installed CuPy, pyFFTW, mkl_fft or PyTorch fails to import, the error raised on using it says that the
+  package "could not be imported" and carries the original import error, where it said the package was not
+  installed. A CuPy that fails to import warns at `import abtem` when the device is `"gpu"` (once, not twice), a
+  plain `ImportError` from mkl_fft no longer makes `import abtem` fail whichever FFT library is configured, and the
+  message of a missing FFT library now has the space it lacked. The same holds for GPAW (`GPAWPotential`, and
+  `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`) and ipywidgets (the interactive `show`, which
+  failed with an `AttributeError`)
+- `slider_from_axes_metadata` starts a slider at the coordinate nearest a `default_value` given as a plain Python
+  number (it started at the first item), and builds range sliders over axes whose coordinates are Python floats (it
+  raised `TypeError`)
+- An eager build of a `GPAWPotential` from a `.gpw` path raises the error of reading the file instead of
+  `TypeError: Delayed objects are immutable`
+- Errors raised while registering the configuration plugin on dask workers, or inside the scatter-add of an
+  infinite projection, reach the caller unchanged instead of being replaced by an unrelated error. The fallbacks
+  for `distributed` without `Client.register_plugin` and CuPy without `ufunc.at`, which the dependencies exclude,
+  are removed
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
