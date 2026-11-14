@@ -938,11 +938,21 @@ def _linear_axes():
         RealSpaceAxis(label="z", sampling=0.7, offset=-1.3),
         ScanAxis(label="z", sampling=0.7, offset=-1.3),
         ReciprocalSpaceAxis(label="z", sampling=0.7, offset=-(9 // 2) * 0.7),
+        ReciprocalSpaceAxis(
+            label="z", sampling=0.7, offset=-(9 // 2) * 0.7, fftshift=False
+        ),
     ]
+
+
+def _linear_axis_id(axis):
+    if isinstance(axis, ReciprocalSpaceAxis) and not axis.fftshift:
+        return "ReciprocalSpaceAxis-unshifted"
+    return type(axis).__name__
 
 
 # (item, step of the slice or None for an index array), over 9 members
 _LINEAR_AXIS_ITEMS = [
+    (slice(None), 1),
     (slice(1, 8, 2), 2),
     (slice(None, None, 3), 3),
     (slice(-4, None), 1),
@@ -957,7 +967,7 @@ _LINEAR_AXIS_ITEMS = [
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("axis", _linear_axes(), ids=lambda axis: type(axis).__name__)
+@pytest.mark.parametrize("axis", _linear_axes(), ids=_linear_axis_id)
 @pytest.mark.parametrize("item, step", _LINEAR_AXIS_ITEMS)
 def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
     axis, item, step, lazy, device
@@ -990,10 +1000,11 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
     np.testing.assert_array_equal(asnumpy(indexed.compute().array), host[item])
 
     # a positive step keeps the class, except that a ReciprocalSpaceAxis rounds
-    # its offset to a whole multiple of its sampling, which a step breaks
+    # its offset to a whole multiple of its sampling, which a step breaks, and an
+    # unshifted one is not linear in storage order; selecting every member keeps it
     keeps_class = step is not None and step > 0
     if isinstance(axis, ReciprocalSpaceAxis):
-        keeps_class = step == 1
+        keeps_class = step == 1 and (axis.fftshift or item == slice(None))
     if keeps_class:
         assert type(new_axis) is type(axis)
         assert new_axis.sampling == pytest.approx(0.7 * step)
