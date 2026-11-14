@@ -276,6 +276,27 @@ Bugfixes:
   configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
   configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
   are now in the configured precision, and floating point counts keep their dtype
+- Plots: the log scale can be switched on and off for line profiles and complex (domain-coloured) images, which
+  raised a `TypeError` because their `set_logscale` took no argument; the extent of an image converts its y axis with
+  the units of the y axis, not the x axis; `PlasmonScatteringEvents.show_cumulative_scattering_events` plots the
+  requested integer `num_excitations` instead of the first and no longer prints the axes
+- Measurements: `poisson_noise()` with neither `dose_per_area` nor `total_dose` raises the intended
+  `RuntimeError` instead of failing inside NumPy with a NaN dose; `IndexedDiffractionPatterns.normalize_to_spot` keeps
+  the reciprocal lattice vectors (it replaced them by the spot positions) and `poisson_noise(dose_per_area=...)` on it
+  raises a `RuntimeError` (a missing `@property` made it a `TypeError`); `ScanNoiseTransform` keeps the units and label of
+  the images, which it relabelled as counts
+- Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
+  selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
+  ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error
+- PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis and
+  on the measurements it reduces, as `Probe` and `PlaneWave` do; the batches of the lattice and streamed reductions
+  count the real size of an element, so at double precision they hold half the rows instead of exceeding their memory
+  budget; the window view of a compressed S-matrix keeps `max_batch_expansion`
+- Potentials and fields: `ChargeDensityPotential` with `repetitions` displaces the repeated atoms of each frozen-phonon
+  configuration (every configuration was the undisplaced repeated cell); `depth_profile` works for magnetic fields and
+  vector potentials, keeping the components as an ensemble axis (it raised a `RuntimeError`); `GPAWMagneticField` and
+  `GPAWVectorPotential` have the labelled component axis of their base classes (it was `None`); the documented default
+  `slice_thickness` of `ChargeDensityPotential` and `GPAWPotential` is the 1.0 Å of the code, not 0.5 Å
 - `AtomsEnsemble` with a multi-dimensional trajectory partitions along every axis, so each block holds its own part
   of the trajectory. Its blocks were built along the first axis only: `generate_blocks` raised an `AssertionError`
   before the partition helpers of [PR #679](https://github.com/abTEM/abTEM/pull/679), and gave every block of a row the
