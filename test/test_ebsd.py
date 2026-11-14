@@ -38,6 +38,7 @@ from abtem.ebsd.emsoft import _conventional_cell
 from abtem.ebsd.orientations import (
     _crystal_and_displacements,
     _displaced,
+    _SymmetryNotFoundError,
     is_centrosymmetric,
 )
 from abtem.ebsd.reciprocity import (
@@ -2055,7 +2056,7 @@ class TestHemispheres:
         # still built, and records the symmetry as unknown
         for error, match in (
             (ImportError("no spglib"), "spglib is not installed"),
-            (ValueError("no symmetry"), "spglib could not determine"),
+            (_SymmetryNotFoundError("no symmetry"), "spglib could not determine"),
         ):
 
             def search(atoms, error=error):
@@ -2065,6 +2066,17 @@ class TestHemispheres:
             with pytest.warns(UserWarning, match=match):
                 pattern = self.reference(SILICON, "north").build(pbar=False, lazy=False)
             assert pattern.metadata["centrosymmetric"] is None
+
+    def test_an_unrelated_error_of_the_symmetry_search_is_raised(self, monkeypatch):
+        # only spglib's failure to find the symmetry leaves it unknown; any other
+        # error (here numpy's, as from the scaled positions of a singular cell)
+        # stops the build rather than reading as that failure
+        def search(atoms):
+            raise np.linalg.LinAlgError("stand-in for an unrelated error")
+
+        monkeypatch.setattr(reference_module, "is_centrosymmetric", search)
+        with pytest.raises(np.linalg.LinAlgError, match="stand-in"):
+            self.reference(SILICON, "north").build(pbar=False, lazy=False)
 
 
 # --------------------------------------------------------------------------
