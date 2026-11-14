@@ -8,7 +8,8 @@ from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
-from abtem.core.backend import cp, get_array_module
+from abtem.atoms import AtomProperties, validate_per_atom_property, validate_sigmas
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 
 
@@ -346,6 +347,17 @@ def ravel_hkl(hkl: np.ndarray, gpts: tuple[int, int, int]) -> np.ndarray:
     return np.ravel_multi_index(multi_index, gpts)
 
 
+def _dense_structure_factor(
+    array: np.ndarray, hkl_source: np.ndarray, gpts: tuple[int, int, int]
+) -> np.ndarray:
+    """The structure factors on the raveled `gpts` grid, zero away from `hkl_source`,
+    on the device of `array`."""
+    xp = get_array_module(array)
+    dense = xp.zeros(int(np.prod(gpts)), dtype=array.dtype)
+    dense[xp.asarray(ravel_hkl(hkl_source, gpts))] = array
+    return dense
+
+
 def retrieve_structure_factor_values(
     array: np.ndarray,
     hkl_source: np.ndarray,
@@ -353,47 +365,106 @@ def retrieve_structure_factor_values(
     gpts: tuple[int, int, int],
 ) -> np.ndarray:
     """
-    Convert a raveled array to a 3D array with the shape of the structure factor.
+    Look up the structure factors at a set of reciprocal space vectors.
 
     Parameters
     ----------
     array : numpy.ndarray
-        The raveled array.
+        The structure factors as a 1D array.
     hkl_source : numpy.ndarray
         The reciprocal space vectors as Miller indices for the source array.
     hkl_destination : numpy.ndarray
-        The reciprocal space vectors as Miller indices for the destination array.
+        The reciprocal space vectors as Miller indices to look up. Those on the grid
+        but not in `hkl_source` (beyond its g_max) give zero.
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
 
     Returns
     -------
     numpy.ndarray
-        The 3D array.
+        The structure factors at `hkl_destination`, on the device of `array`.
     """
+    xp = get_array_module(array)
+    dense = _dense_structure_factor(array, hkl_source, gpts)
+    return dense[xp.asarray(ravel_hkl(hkl_destination, gpts))]
 
-    hkl_source = ravel_hkl(hkl_source, gpts)
-    hkl_destination = ravel_hkl(hkl_destination, gpts)
 
-    if cp is not None and isinstance(array, cp.ndarray):
-        convert_to_numpy = True
-    else:
-        convert_to_numpy = False
+def structure_factor_coupling_matrix(
+    array: np.ndarray,
+    hkl_source: np.ndarray,
+    hkl: np.ndarray,
+    gpts: tuple[int, int, int],
+    inversion_center: Optional[np.ndarray] = None,
+    max_block_size: int = 2**26,
+) -> np.ndarray:
+    """The matrix of structure factors coupling a set of beams, A[i, j] = U(g_j - g_i).
 
-    if convert_to_numpy:
-        array = cp.asnumpy(array)
+    The matrix is gathered on the device of `array` from the structure factors on a
+    dense grid, with the raveled index of g_j - g_i computed from those of g_i and
+    g_j: no array of the beams x beams Miller index differences is made. The grid is
+    enlarged as needed to hold every difference; differences beyond the g_max of
+    `hkl_source` couple through zero.
 
-    import pandas as pd  # type: ignore  # here: it adds ~0.3 s to `import abtem`
+    Parameters
+    ----------
+    array : numpy.ndarray
+        The structure factors as a 1D array.
+    hkl_source : numpy.ndarray
+        The reciprocal space vectors of `array` as Miller indices, (M, 3).
+    hkl : numpy.ndarray
+        The Miller indices of the beams, (N, 3).
+    gpts : tuple of ints
+        The number of grid points in the 3D structure factor.
+    inversion_center : numpy.ndarray, optional
+        A center of inversion symmetry t of the crystal in scaled coordinates (see
+        `find_inversion_center`). If given, the matrix is that of the crystal moved
+        by -t: real, U(g) exp(-2 pi i g.t), and of the real dtype. It is D A D^H with
+        D = diag(exp(2 pi i g_i.t)).
+    max_block_size : int
+        The largest number of matrix elements gathered at once, bounding the memory
+        of the temporary index array.
 
-    df = pd.Series(array, index=hkl_source)
-    # copy=True: under pandas copy-on-write to_numpy() may return a read-only
-    # view, which torch.from_numpy (the Metal backend) will not wrap silently.
-    array = df.loc[hkl_destination].to_numpy(copy=True)
+    Returns
+    -------
+    numpy.ndarray
+        The (N, N) matrix, Fortran-ordered (the layout LAPACK and cuSOLVER use).
+    """
+    xp = get_array_module(array)
+    hkl = np.asarray(hkl)
+    hkl_source = np.asarray(hkl_source)
 
-    if convert_to_numpy:
-        array = cp.asarray(array)
+    if inversion_center is not None:
+        phase = np.exp(-2j * np.pi * (hkl_source @ np.asarray(inversion_center)))
+        array = (array * xp.asarray(phase, dtype=array.dtype)).real
 
-    return array
+    n = len(hkl)
+    if n == 0:
+        return xp.zeros((0, 0), dtype=array.dtype)
+
+    # A grid holding both the structure factors and every difference g_j - g_i,
+    # whose components span [-span, span]: the `gpts` grid can be too small when
+    # the beams' g_max exceeds half the structure factor's.
+    span = hkl.max(axis=0) - hkl.min(axis=0)
+    nx, ny, nz = (max(int(m), 2 * int(s) + 1) for m, s in zip(gpts, span))
+    shape = (nx, ny, nz)
+    dense = _dense_structure_factor(array, hkl_source, shape)
+
+    # The raveled index is linear in the Miller indices, so the index of g_i - g_j
+    # is that of g_i less that of g_j (as the components are on the grid).
+    strides = np.array((shape[1] * shape[2], shape[2], 1))
+    offset = int(ravel_hkl(np.zeros(3, dtype=int), shape))
+    index_dtype = np.int32 if dense.size < 2**31 else np.int64
+    rows = xp.asarray(hkl @ strides + offset, dtype=index_dtype)
+    columns = xp.asarray(hkl @ strides, dtype=index_dtype)
+
+    # transposed[i, j] = U(g_i - g_j) = A[j, i]: gathering the transpose in C order
+    # gives A in Fortran order
+    transposed = xp.empty((n, n), dtype=array.dtype)
+    block = max(1, max_block_size // n)
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        transposed[start:stop] = dense[rows[start:stop, None] - columns[None, :]]
+    return transposed.T
 
 
 def relative_positions_for_centering() -> dict[str, np.ndarray]:
@@ -571,3 +642,87 @@ def auto_detect_centering(
         detected = [centering for centering in detected if centering not in "ABC"]
 
     return "".join(detected) or "P"
+
+
+def _wrap_scaled(positions: np.ndarray) -> np.ndarray:
+    """Scaled positions in [0, 1), as a periodic cKDTree requires (the remainder of a
+    small negative number rounds to 1.0)."""
+    positions = positions % 1.0
+    positions[positions >= 1.0] = 0.0
+    return positions
+
+
+def find_inversion_center(
+    atoms: Atoms,
+    thermal_sigma: AtomProperties = 0.0,
+    occupancy: AtomProperties = 1.0,
+    tol: float = 1e-6,
+) -> Optional[np.ndarray]:
+    """
+    Find a center of inversion symmetry of a crystal.
+
+    The crystal is centrosymmetric about t when inverting it through t, r -> 2t - r,
+    maps every atom onto a periodic image of an atom of the same species, thermal
+    displacement and occupancy, with coincident atoms counted. Its structure factors
+    are then U(g) = exp(2 pi i g.t) times a real number, which makes the Bloch-wave
+    eigenproblem real symmetric up to a diagonal phase. If t is a center, so is
+    t + n / 2 for any lattice vector n; one of them is returned.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The crystal structure.
+    thermal_sigma : float, dict or sequence
+        The thermal displacements of the atoms, as for the structure factors.
+    occupancy : float, dict or sequence
+        The occupancies of the atoms, as for the structure factors.
+    tol : float
+        The largest distance in scaled coordinates at which an inverted atom matches
+        an atom. Small enough that the asymmetry it could hide is below the rounding
+        of single precision.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        The center in scaled coordinates, or None if the crystal has none.
+    """
+    from scipy.spatial import cKDTree  # type: ignore
+
+    if len(atoms) == 0:
+        return None
+
+    sigmas = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+    occupancies = validate_per_atom_property(atoms, occupancy, return_array=True)
+    assert isinstance(sigmas, np.ndarray)  # Type narrowing for mypy
+    assert isinstance(occupancies, np.ndarray)  # Type narrowing for mypy
+
+    # atoms that may map onto each other: same species, displacement and occupancy
+    properties = np.column_stack(
+        [atoms.numbers, np.reshape(sigmas, (len(atoms), -1)), occupancies]
+    )
+    kinds = np.unique(properties, axis=0, return_inverse=True)[1].ravel()
+
+    positions = _wrap_scaled(atoms.get_scaled_positions(wrap=False))
+    groups = [positions[kinds == kind] for kind in range(kinds.max() + 1)]
+    trees = [cKDTree(group, boxsize=1.0) for group in groups]
+    # the number of atoms on each site, which the inversion must preserve
+    multiplicities = [
+        tree.query_ball_point(group, tol, return_length=True)
+        for tree, group in zip(trees, groups)
+    ]
+
+    # a center lies halfway between an atom of the rarest kind and its inverse
+    rarest = groups[np.argmin([len(group) for group in groups])]
+    for partner in rarest:
+        center = (rarest[0] + partner) / 2
+        if all(
+            np.array_equal(
+                tree.query_ball_point(
+                    _wrap_scaled(2 * center - group), tol, return_length=True
+                ),
+                multiplicity,
+            )
+            for tree, group, multiplicity in zip(trees, groups, multiplicities)
+        ):
+            return center
+    return None

@@ -14,7 +14,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.array import validate_lazy
+from abtem.array import _mark_device_work, validate_lazy
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.ebsd.detectors import BackscatterDetector
@@ -535,6 +535,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                         shape=ensemble_shape + (len(local),),
                         dtype=get_dtype(complex=False),
                     )
+                    _mark_device_work(array, self._device)
                 else:
                     array = _patch_intensities(self, blocks[south], **arguments)
 

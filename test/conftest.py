@@ -1,6 +1,5 @@
 import os
 import sys
-import zlib
 
 # A non-interactive backend, before anything imports matplotlib (abtem does): on
 # macOS the default (TkAgg) runs figure cleanup off the main thread under
@@ -12,6 +11,7 @@ import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
+from gpu_groups import assign_gpu_groups
 from utils import _ACCELERATOR
 from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
@@ -45,15 +45,6 @@ _SERIALIZE_GPU_TESTS = _ACCELERATOR == "gpu" or (
 # of the GPU tests one after another.
 _GPU_WORKERS = max(int(os.environ.get("ABTEM_TEST_GPU_WORKERS", "1")), 1)
 
-
-def _gpu_group(item) -> str:
-    """The xdist group of a GPU test: one of _GPU_WORKERS, chosen by its test
-    function, so the cases of one function (and their fixtures) stay on one
-    worker. Multi-GPU tests share a group of their own."""
-    if _GPU_WORKERS == 1 or "multigpu" in item.keywords:
-        return "gpu"
-    function = item.nodeid.split("[")[0]
-    return f"gpu{zlib.crc32(function.encode()) % _GPU_WORKERS}"
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
 # alongside their skipif (see their definitions in test/utils.py) -- that
@@ -230,7 +221,7 @@ def pytest_collection_modifyitems(config, items):
     Routing every such test into one ``xdist_group`` makes xdist schedule
     them onto the same worker, so at most one runs at a time regardless of
     ``-n`` -- while CPU-only tests still fan out across every worker
-    (ABTEM_TEST_GPU_WORKERS spreads them over more groups, see _gpu_group). This
+    (ABTEM_TEST_GPU_WORKERS spreads them over more groups, see gpu_groups.py). This
     only takes effect together with ``--dist=loadgroup`` (see pyproject.toml);
     without it, xdist's default scheduler ignores ``xdist_group`` entirely.
     A test is "GPU-touching" if any of its parametrized values -- direct or
@@ -243,6 +234,7 @@ def pytest_collection_modifyitems(config, items):
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
     skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
+    gpu_items = []
 
     for item in items:
         if not runslow and "slow" in item.keywords:
@@ -266,4 +258,9 @@ def pytest_collection_modifyitems(config, items):
         if _SERIALIZE_GPU_TESTS and (
             is_gpu_param or is_gpu_marked or "multigpu" in item.keywords
         ):
-            item.add_marker(pytest.mark.xdist_group(_gpu_group(item)))
+            gpu_items.append(item)
+
+    # after the loop: the placement of one function depends on all the others
+    groups = assign_gpu_groups(gpu_items, _GPU_WORKERS)
+    for item in gpu_items:
+        item.add_marker(pytest.mark.xdist_group(groups[item.nodeid]))
