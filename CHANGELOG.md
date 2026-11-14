@@ -270,6 +270,13 @@ Dependencies:
 
 Bugfixes:
 
+- On the Metal (MPS) device, comparing a device array with a NumPy array (`device_array == host_array`) no longer
+  raises "Expected all tensors to be on the same device". Torch turned the NumPy operand into a CPU tensor itself, so
+  `==` failed, and `!=`, `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` failed the same way or with a `TypeError`. A
+  host operand is now moved onto the device first, as the arithmetic operators already did, and with the host array on
+  the left the comparison, `%` and bitwise operators work too (NumPy's `not_equal`, `less`, `less_equal`, `greater`,
+  `greater_equal`, `remainder`, `bitwise_and`, `bitwise_or` and `bitwise_xor` are now implemented for device arrays).
+  This surfaced as `Images == Images` between a host and a device object failing in one operand order
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
