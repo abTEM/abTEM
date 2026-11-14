@@ -18,6 +18,8 @@ where GPAW is not installed (CI). The last test needs GPAW.
 
 import gc
 import os
+import subprocess
+import sys
 import weakref
 from types import SimpleNamespace
 
@@ -607,3 +609,35 @@ def test_a_crystal_of_a_frozen_phonon_gpaw_unit_simulates_as_it_builds(
     result = result.compute(scheduler="synchronous") if lazy else result
 
     _assert_equal(result, expected)
+
+
+def test_a_broken_gpaw_install_is_reported_with_its_import_error(tmp_path):
+    # the import guard runs once per process: a stand-in `gpaw` that fails to
+    # import a missing module, in a fresh one
+    (tmp_path / "gpaw").mkdir()
+    (tmp_path / "gpaw" / "__init__.py").write_text("import _missing_dependency\n")
+    code = (
+        "from abtem.potentials.gpaw import GPAWPotential\n"
+        "try:\n"
+        "    GPAWPotential('a.gpw')\n"
+        "except RuntimeError as error:\n"
+        "    print(type(error.__cause__).__name__, error.__cause__.name)\n"
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(tmp_path)] + [p for p in [os.environ.get("PYTHONPATH")] if p]
+        ),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.decode().strip() == "ModuleNotFoundError _missing_dependency"
+
+
+def test_a_missing_gpaw_is_reported_when_paths_are_read_as_atoms(monkeypatch):
+    monkeypatch.setitem(sys.modules, "gpaw", None)
+    monkeypatch.setitem(sys.modules, "gpaw.io", None)
+    with pytest.raises(ImportError, match="gpaw"):
+        AtomsEnsemble(["a.gpw", "b.gpw"])

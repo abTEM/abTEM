@@ -469,11 +469,11 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     """
     try:
         import spglib  # type: ignore[import-untyped]
-    except ImportError:
+    except ImportError as error:
         raise ImportError(
             "finding the inversion centre requires spglib; install it with "
             "'pip install spglib', or install abtem[ebsd]"
-        ) from None
+        ) from error
 
     cell = (atoms.cell.array, atoms.get_scaled_positions(), atoms.numbers)
     with warnings.catch_warnings():

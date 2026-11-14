@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
+import ipywidgets as widgets
 import numpy as np
 from traitlets.traitlets import link
 
@@ -14,17 +15,6 @@ from abtem.visualize.visualizations import default_ensemble_index  # noqa: F401
 
 if TYPE_CHECKING:
     pass
-
-
-try:
-    import ipywidgets as widgets
-except ImportError:
-    widgets = None
-
-ipywidgets_not_installed = RuntimeError(
-    "This functionality of abTEM requires ipywidgets, see "
-    "https://ipywidgets.readthedocs.io/en/stable/user_install.html."
-)
 
 
 def _format_options(options):

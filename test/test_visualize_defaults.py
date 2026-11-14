@@ -1,5 +1,8 @@
 """Which ensemble item ``show()`` displays when it is not told (issue #515)."""
 
+import importlib
+import sys
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -66,3 +69,10 @@ def test_thickness_slider_starts_at_the_exit_surface():
 
     assert thickness.index == 2
     assert parameter.index == 0
+
+
+def test_a_missing_ipywidgets_is_reported_by_the_import_of_the_widgets(monkeypatch):
+    monkeypatch.delitem(sys.modules, "abtem.visualize.widgets")
+    monkeypatch.setitem(sys.modules, "ipywidgets", None)
+    with pytest.raises(ImportError, match="ipywidgets"):
+        importlib.import_module("abtem.visualize.widgets")

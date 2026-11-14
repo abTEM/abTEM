@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 import ase
@@ -520,6 +521,15 @@ class TestOrientations:
                     is_centrosymmetric(overlapping)
                 with pytest.raises(ValueError, match="could not standardize"):
                     _conventional_cell(overlapping, None)
+
+    def test_a_missing_spglib_is_reported_with_its_import_error(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "spglib", None)
+        with pytest.raises(ImportError, match="requires spglib") as info:
+            is_centrosymmetric(SILICON)
+        assert isinstance(info.value.__cause__, ImportError)
+        with pytest.raises(ValueError, match="spglib is not installed") as info:
+            _conventional_cell(SILICON, None)
+        assert isinstance(info.value.__cause__, ImportError)
 
 
 # --------------------------------------------------------------------------
@@ -2274,6 +2284,14 @@ class TestEMsoftWriter:
         path = str(tmp_path / "master.h5")
         pattern.to_emsoft(path, atoms, **kwargs)
         return h5py.File(path)
+
+    def test_a_missing_h5py_is_reported_with_its_import_error(
+        self, tmp_path, pattern, monkeypatch
+    ):
+        monkeypatch.setitem(sys.modules, "h5py", None)
+        with pytest.raises(ImportError, match="requires h5py") as info:
+            pattern.to_emsoft(str(tmp_path / "master.h5"), SILICON)
+        assert isinstance(info.value.__cause__, ImportError)
 
     def test_follows_the_format(self, tmp_path, pattern):
         with self.write(tmp_path, pattern, npx=20) as f:
