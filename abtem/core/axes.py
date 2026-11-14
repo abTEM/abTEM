@@ -829,23 +829,29 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     """The metadata of an ensemble axis of length `n` indexed by `item`, a slice or
     an integer or boolean index array.
 
-    A slice with a positive step is represented exactly by an axis of the same
-    class (not for a `ReciprocalSpaceAxis` with ``fftshift=False``, which is not
-    linear in storage order), except that a `ReciprocalSpaceAxis` keeps its class
-    only for a step of one. Every other slice and an index array give a
-    `NonLinearAxis` with the selected coordinates, except that a reversed slice of
-    a `ScanAxis` raises, since a scan axis increases.
+    A slice selecting every member gives a copy of the axis. Any other slice with a
+    positive step is represented exactly by an axis of the same class, except that
+    a `ReciprocalSpaceAxis` keeps its class only for a step of one and only with
+    ``fftshift=True`` (with ``fftshift=False`` its coordinates are not linear in
+    storage order). Every other slice and an index array give a `NonLinearAxis`
+    with the selected coordinates, except that a reversed slice of a `ScanAxis`
+    raises, since a scan axis increases.
     """
     if not isinstance(axis, LinearAxis):
         return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
 
     if isinstance(item, slice):
         indices = range(n)[item]
+        if indices == range(n):
+            return axis.copy()
+
         # a ReciprocalSpaceAxis rounds its offset to a whole multiple of its sampling,
         # which a slice with a step does not keep
-        if indices.step == 1 or (
-            indices.step > 1 and not isinstance(axis, ReciprocalSpaceAxis)
-        ):
+        if isinstance(axis, ReciprocalSpaceAxis):
+            exact = indices.step == 1 and axis.fftshift
+        else:
+            exact = indices.step > 0
+        if exact:
             new_axis = axis[indices.start :]
             new_axis.sampling = axis.sampling * indices.step
             return new_axis
