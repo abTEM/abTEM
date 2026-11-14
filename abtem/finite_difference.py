@@ -13,6 +13,7 @@ from abtem._lanczos import (
     exponential_of_root,
     inverse_wave_number,
     lanczos_function,
+    step_and_current_wave_number,
 )
 from abtem.antialias import AntialiasAperture
 from abtem.core import config
@@ -848,64 +849,65 @@ def _exact_root_step(
         band = _propagating_band(waves, propagating_cutoff, shift, xp)
         kinetic = _kinetic_symbol(waves, shift, k, xp) * band
 
-        def operator(potential, stacked=False):
-            """The operator of a potential, or of a stack of two (2, 1, nx, ny), for a
-            batch made of two halves, one for each potential, on the band."""
+        def operator(potential):
+            """The operator of a potential on the band, on the Fourier coefficients."""
 
             def apply(spectrum):
-                a = ifft2(spectrum)
-                if stacked:
-                    local = (a.reshape((2, -1) + a.shape[1:]) * potential).reshape(
-                        a.shape
-                    )
-                else:
-                    local = potential * a
-                return kinetic * spectrum + band * fft2(local)
+                return kinetic * spectrum + band * fft2(potential * ifft2(spectrum))
 
             return apply
 
-        # the backscattered component is a correction of a few percent: its functions
-        # are converged to at most 1e-5, which changes the intensity of a beam by
-        # less than 1e-4 of itself and saves about 40 % of the iterations
-        correction_tolerance = max(tolerance, 1e-5)
         current = operator(potentials[0])
-        batch = lanczos_function(
-            fft2(batch) * band,
+        spectrum = fft2(batch) * band
+        if next_slice is None:
+            batch = lanczos_function(
+                spectrum,
+                current,
+                exponential_of_root(k, thickness, reference),
+                tolerance,
+                max_iterations,
+                xp,
+            )
+            return ifft2(batch), ifft2(xp.zeros_like(batch))
+
+        # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
+        # (2025) 103778 with the operators of both slices. The wave number of the
+        # current slice acts on the stepped wave, a function of the same operator of
+        # the wave that is stepped: (excess * step)(O_current) on the wave before the
+        # step, from the Krylov space of the step itself, at no application of the
+        # operator more, and from one evaluation of the functions. The wave numbers are
+        # less k, which drops out of the difference but would leave it k times the
+        # rounding of the precision. The backscattered
+        # component is a correction of a few percent: its functions are converged to at
+        # most 1e-5, which changes the intensity of a beam by less than 1e-4 of itself
+        # and saves about 40 % of the iterations.
+        correction_tolerance = max(tolerance, 1e-5)
+        batch, current_wave_number = lanczos_function(
+            spectrum,
             current,
-            exponential_of_root(k, thickness, reference),
-            tolerance,
+            step_and_current_wave_number(k, thickness, reference),
+            [tolerance, correction_tolerance],
             max_iterations,
             xp,
         )
-
-        backscatter = xp.zeros_like(batch)
-        if next_slice is not None:
-            following = operator(potentials[1])
-            # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
-            # (2025) 103778 with the operators of both slices
-            # (the two wave numbers act on the same wave: one batch of two halves, one
-            # iteration, instead of two, which is what a GPU, not the arithmetic, pays;
-            # both less k, which drops out of the difference but would leave it
-            # k times the rounding of the precision)
-            members = batch.shape[0]
-            both = lanczos_function(
-                xp.concatenate([batch, batch]),
-                operator(xp.stack([potentials[1], potentials[0]])[:, None], True),
-                excess_wave_number(k),
-                correction_tolerance,
-                max_iterations,
-                xp,
-            )
-            difference = both[:members] - both[members:]
-            backscatter = 0.5 * lanczos_function(
-                difference,
-                following,
-                inverse_wave_number(k),
-                correction_tolerance,
-                max_iterations,
-                xp,
-            )
-            batch = batch - backscatter
+        following = operator(potentials[1])
+        next_wave_number = lanczos_function(
+            batch,
+            following,
+            excess_wave_number(k),
+            correction_tolerance,
+            max_iterations,
+            xp,
+        )
+        backscatter = 0.5 * lanczos_function(
+            next_wave_number - current_wave_number,
+            following,
+            inverse_wave_number(k),
+            correction_tolerance,
+            max_iterations,
+            xp,
+        )
+        batch = batch - backscatter
         return ifft2(batch), ifft2(backscatter)
 
     shape = waves._array.shape
