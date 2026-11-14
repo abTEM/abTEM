@@ -1157,12 +1157,12 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
 
     If `default` is true, `box` is the one abTEM chose because none was given: the
     warning says so, names the ways to avoid the strain, and a box that holds no
-    whole repetition is not an error here but silent: the potential reports it when
-    it places the atoms, if it does.
+    whole repetition, or a singular cell, is not an error here but silent: the
+    potential reports it when it places the atoms, if it does.
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except _NoWholeRepetitionError:
+    except (_NoWholeRepetitionError, np.linalg.LinAlgError):
         if default:
             return
         raise
