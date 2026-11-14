@@ -5222,6 +5222,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             :class:`WavesDetector` is given.
         """
 
+        # warned here, not in `reduce`, so that the warning points at the caller
+        _warn_reduction_scheme_deprecated("reduction_scheme", reduction_scheme)
+
         if scan is None:
             scan = GridScan(
                 start=(0, 0),
@@ -5237,7 +5240,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             max_batch_reduction=max_batch_reduction,
             max_batch_multislice=max_batch_multislice,
             ctf=ctf,
-            reduction_scheme=reduction_scheme,
             disable_s_matrix_chunks=disable_s_matrix_chunks,
             lazy=lazy,
         )

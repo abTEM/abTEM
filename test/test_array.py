@@ -922,3 +922,70 @@ def test_apply_func_calls_the_function_with_the_array_object(device, lazy):
     np.testing.assert_allclose(
         asnumpy(result.array), expected, rtol=1e-6, atol=1e-6 * expected.max()
     )
+
+
+def _images_with_metadata():
+    from abtem.core.axes import UnknownAxis
+    from abtem.measurements import Images
+
+    return Images(
+        np.arange(24, dtype=np.float32).reshape(2, 3, 4),
+        sampling=0.1,
+        ensemble_axes_metadata=[UnknownAxis(label="members")],
+        metadata={"label": "original", "nested": [1, 2]},
+    )
+
+
+def test_with_array_replaces_the_array_and_deep_copies_the_rest():
+    source = _images_with_metadata()
+    new_array = source.array * 3
+
+    result = source._with_array(new_array)
+
+    assert type(result) is type(source)
+    assert result.array is new_array
+    assert result.sampling == source.sampling
+    assert result.metadata == source.metadata
+    # nothing is shared with the source, so editing one cannot change the other
+    assert result.metadata is not source.metadata
+    assert result.metadata["nested"] is not source.metadata["nested"]
+    assert result.ensemble_axes_metadata is not source.ensemble_axes_metadata
+    assert result.ensemble_axes_metadata[0] is not source.ensemble_axes_metadata[0]
+    assert result.ensemble_axes_metadata == source.ensemble_axes_metadata
+    result.metadata["nested"].append(3)
+    assert source.metadata["nested"] == [1, 2]
+
+
+def test_with_array_changes_override_the_copy_and_are_passed_as_given():
+    source = _images_with_metadata()
+    axes = [source.ensemble_axes_metadata[0].copy()]
+
+    result = source._with_array(
+        source.array, sampling=(0.3, 0.4), ensemble_axes_metadata=axes
+    )
+
+    assert result.sampling == (0.3, 0.4)
+    assert source.sampling == (0.1, 0.1)
+    # a replacement is not copied: it is the caller's to copy if it needs to
+    assert result.ensemble_axes_metadata is axes
+
+
+def test_with_array_update_metadata_merges_into_a_copy():
+    source = _images_with_metadata()
+
+    result = source._with_array(
+        source.array, update_metadata={"label": "new", "extra": 1}
+    )
+
+    assert result.metadata == {"label": "new", "nested": [1, 2], "extra": 1}
+    assert source.metadata == {"label": "original", "nested": [1, 2]}
+
+
+def test_with_array_update_metadata_merges_into_replaced_metadata():
+    source = _images_with_metadata()
+
+    result = source._with_array(
+        source.array, metadata={"label": "replaced"}, update_metadata={"extra": 2}
+    )
+
+    assert result.metadata == {"label": "replaced", "extra": 2}

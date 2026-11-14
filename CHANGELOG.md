@@ -758,10 +758,11 @@ Bugfixes:
 Deprecations:
 
 - The `reduction_scheme` argument of `SMatrix.scan`, `SMatrix.reduce` and `SMatrixArray.reduce`, and the
-  `rechunk` argument of `SMatrixArray.scan`, are deprecated and give a `FutureWarning`. They had no effect:
-  a lazy S-matrix has always been reduced without rechunking, whatever the scheme. The one exception was
-  `reduction_scheme="no-chunks"` with an interpolation of 1, which raised `NotImplementedError` and now
-  reduces like any other ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+  `rechunk` argument of `SMatrixArray.scan`, are deprecated and give a `FutureWarning` whenever they are passed,
+  including with the former default `"auto"`. They had no effect: a lazy S-matrix has always been reduced
+  without rechunking, whatever the scheme. The one exception was `reduction_scheme="no-chunks"` with an
+  interpolation of 1 (lazy or eager), which raised `NotImplementedError` and now reduces like any other
+  ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 
 Internal:
 
@@ -780,8 +781,10 @@ Internal:
   dask collections (such as a node shared by every block). The scans, frozen phonons, atoms ensembles,
   plasmon scattering events, distributions, and the GPAW and charge-density potentials use them instead
   of building the object arrays, `from_delayed` blocks and concatenations themselves; `block_rebuilder`
-  rebuilds the scans and frozen phonons from their blocks. Results are unchanged
-  ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+  rebuilds the scans and frozen phonons from their blocks. Results are unchanged, but the blocks of an eager
+  partition now arrive wrapped in a one-element object array, as the lazy ones do, so the elements returned by
+  `DistributionFromValues.divide(..., lazy=False)` are one-element object arrays holding the sub-distributions
+  rather than the distributions themselves ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 - `ArrayObject._with_array(array, **changes)` makes a copy that holds a new array, replacing the
   copy-the-keyword-arguments-and-rebuild sequence at about 35 places
   ([PR #679](https://github.com/abTEM/abTEM/pull/679))

@@ -3,6 +3,7 @@ result, whatever the chunking of the ensemble and base axes."""
 
 import functools
 
+import dask
 import dask.array as da
 import numpy as np
 import pytest
@@ -10,7 +11,12 @@ from scipy.ndimage import gaussian_filter
 from utils import gpu
 
 from abtem.core.backend import get_array_module
-from abtem.core.blockwise import map_kernel, map_overlapping_kernel, merge_base_chunks
+from abtem.core.blockwise import (
+    array_namespace,
+    map_kernel,
+    map_overlapping_kernel,
+    merge_base_chunks,
+)
 
 CHUNKINGS = [
     (3, 4, 16, 12),  # one chunk
@@ -193,3 +199,148 @@ def test_map_kernel_out_device_sets_the_meta_not_the_kernel_keywords(array, devi
 
     assert get_array_module(result._meta) is xp
     assert get_array_module(result.compute()) is xp
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_array_namespace(device, lazy):
+    xp = get_array_module(device)
+    array = xp.zeros((2, 3))
+    if lazy:
+        array = da.from_array(array, chunks=(1, 3))
+
+    namespace = array_namespace(array)
+
+    assert namespace is (da if lazy else xp)
+    # a function of the namespace must accept the array it was chosen for
+    tiled = namespace.tile(array, (2, 1))
+    assert tiled.shape == (4, 3)
+    assert isinstance(tiled, da.Array) == lazy
+    assert get_array_module(tiled.compute() if lazy else tiled) is xp
+
+
+@pytest.mark.parametrize("base_ndim", [0, 1, 4])
+def test_map_kernel_base_ndim_extremes(array, base_ndim):
+    # no base axes: the kernel is applied element-wise; all base axes: no ensemble
+    chunks = (1, 2, 8, 6)
+    eager = map_kernel(array, _scale, base_ndim=base_ndim, factor=2.0)
+    lazy = map_kernel(
+        da.from_array(array, chunks=chunks), _scale, base_ndim=base_ndim, factor=2.0
+    )
+    _assert_lazy_matches_eager(eager, lazy)
+
+
+def test_map_kernel_with_an_empty_ensemble(array):
+    empty = array[:0]
+    lazy = map_kernel(
+        da.from_array(empty, chunks=(1, 2, 8, 6)),
+        _total,
+        base_ndim=2,
+        base_shape_out=(),
+    )
+    assert lazy.compute().shape == (0, 4)
+
+
+@pytest.mark.parametrize(
+    "name", ["axis", "keepdims", "name", "token", "vectorize", "concatenate"]
+)
+def test_map_kernel_rejects_keywords_that_dask_takes(array, name):
+    # Dask consumes these for a lazy array only (or silently drops them), so a kernel
+    # keyword of that name would give different lazy and eager results.
+    with pytest.raises(ValueError, match="reserved"):
+        map_kernel(array, _total, base_ndim=2, base_shape_out=(), **{name: 1})
+    with pytest.raises(ValueError, match="reserved"):
+        map_kernel(
+            da.from_array(array, chunks=(1, 2, 8, 6)),
+            _total,
+            base_ndim=2,
+            base_shape_out=(),
+            **{name: 1},
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "member, message",
+    [
+        (np.ones(4), "leading axes"),  # fewer axes than the ensemble axes
+        (np.ones((3, 5, 3, 3)), "leading axes"),  # wrong length on an ensemble axis
+        ([1.0, 2.0, 3.0], "NumPy or CuPy array"),
+        (da.ones((3, 4, 3, 3)), "NumPy or CuPy array"),
+    ],
+    ids=["too few axes", "wrong length", "list", "dask array"],
+)
+def test_map_kernel_validates_member_args(array, lazy, member, message):
+    source = da.from_array(array, chunks=(1, 2, 8, 6)) if lazy else array
+    with pytest.raises((ValueError, TypeError), match=message):
+        map_kernel(
+            source,
+            lambda a, m: a,
+            member,
+            base_ndim=2,
+        )
+
+
+def test_merge_base_chunks_keeps_unknown_ensemble_chunks(array):
+    lazy = da.from_array(array, chunks=(1, 2, 8, 6))
+    lazy = lazy[lazy[:, 0, 0, 0] > -1]
+    assert np.isnan(lazy.chunks[0]).all()
+
+    merged = merge_base_chunks(lazy, base_ndim=2)
+
+    assert merged.chunks[2:] == ((16,), (12,))
+    assert np.isnan(merged.chunks[0]).all()  # kept, not re-chosen
+    np.testing.assert_array_equal(merged.compute(), array)
+
+
+def test_merge_base_chunks_respects_the_dask_chunk_size(array):
+    # a block holds the whole base array of as many members as fit array.chunk-size,
+    # so splitting the base axes can never produce an unbounded chunk
+    big = da.zeros((64, 64, 128, 128), chunks=(1, 1, 64, 64), dtype=np.float32)
+
+    with dask.config.set({"array.chunk-size": "16MiB"}):
+        merged = merge_base_chunks(big, base_ndim=2)
+
+    assert merged.chunks[2:] == ((128,), (128,))
+    block_bytes = np.prod(merged.chunksize) * merged.dtype.itemsize
+    assert block_bytes <= 16 * 2**20
+
+
+@pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
+def test_map_overlapping_kernel_complex(array, boundary):
+    # the declared meta must keep the imaginary part
+    values = (array + 1j * array[::-1]).astype(np.complex64)
+    kernel = functools.partial(
+        gaussian_filter,
+        sigma=(0, 0, 1.5, 1.5),
+        mode="wrap" if boundary == "periodic" else boundary,
+    )
+    eager = map_overlapping_kernel(values, kernel, {}, boundary=boundary)
+    lazy = map_overlapping_kernel(
+        da.from_array(values, chunks=(1, 2, 8, 6)),
+        kernel,
+        depth={2: 6, 3: 6},
+        boundary=boundary,
+        dtype=np.complex64,
+    )
+
+    assert np.iscomplexobj(lazy.compute())
+    _assert_lazy_matches_eager(eager, lazy)
+
+
+@pytest.mark.parametrize(
+    "depth", [8, 12, 40], ids=["over a chunk", "over an axis", "far over"]
+)
+def test_map_overlapping_kernel_depth_larger_than_the_chunks(array, depth):
+    # The filter radius is 8 pixels. Dask merges chunks that are smaller than the
+    # overlap; an overlap larger than the axis is clipped to it. Either way the
+    # kernel's own edge handling stays exact.
+    kernel = functools.partial(gaussian_filter, sigma=(0, 0, 2.0, 2.0), mode="wrap")
+    eager = kernel(array)
+    lazy = map_overlapping_kernel(
+        da.from_array(array, chunks=(1, 2, 4, 3)),
+        kernel,
+        depth={2: depth, 3: depth},
+        boundary="periodic",
+    )
+    _assert_lazy_matches_eager(eager, lazy)
