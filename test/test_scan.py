@@ -11,7 +11,7 @@ from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials.iam import Potential
 from abtem.scan import CustomScan, GridScan, LineScan
-from abtem.waves import Probe
+from abtem.waves import PlaneWave, Probe
 
 
 def _probe():
@@ -341,3 +341,42 @@ def test_a_zero_length_line_scan_of_gpts_can_have_a_margin(endpoint):
     positions = scan.get_positions()
     assert positions.shape == (scan.gpts, 2)
     np.testing.assert_allclose(positions[0], (0.0, 1.0))
+
+
+class _WeightedScan(CustomScan):
+    """A scan that weights its positions; ``weights`` is what ``_get_weights``
+    returns, or an exception it raises."""
+
+    def __init__(self, positions, weights):
+        super().__init__(positions)
+        self._weights = weights
+
+    def _get_weights(self):
+        if isinstance(self._weights, Exception):
+            raise self._weights
+        return self._weights
+
+
+def _plane_waves():
+    return PlaneWave(energy=100e3, gpts=(16, 12), extent=(4, 3)).build()
+
+
+def test_the_weights_of_a_scan_scale_its_kernel():
+    """CPU only: the override returns NumPy weights."""
+    positions = np.array([[1.0, 1.0], [2.0, 1.5], [0.5, 2.0]])
+    weights = np.array([0.5, 2.0, 1.0])
+    waves = _plane_waves()
+
+    kernel = _WeightedScan(positions, weights)._evaluate_kernel(waves)
+
+    expected = CustomScan(positions)._evaluate_kernel(waves) * weights[:, None, None]
+    np.testing.assert_allclose(kernel, expected, rtol=0, atol=1e-6)
+
+
+def test_an_error_raised_by_the_weights_of_a_scan_reaches_the_caller():
+    """CPU only: the error is raised before any array is made on a device."""
+    error = NotImplementedError("weights are not implemented for this backend")
+    scan = _WeightedScan(np.array([[1.0, 1.0], [2.0, 1.5]]), error)
+
+    with pytest.raises(NotImplementedError, match="not implemented for this backend"):
+        scan._evaluate_kernel(_plane_waves())
