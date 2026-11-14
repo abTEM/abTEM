@@ -299,6 +299,14 @@ Bugfixes:
   (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
   `Waves.normalize()` labels its result `'reciprocal_space'`, so that `diffraction_patterns()` of a normalized wave sums to
   one (it divided by the number of pixels once more, to 1 / N²)
+- The default scan sampling is the probe's Nyquist sampling, as documented, and is the same for multislice and PRISM.
+  `GridScan()` with no `sampling` (and so `Probe.scan`, `SMatrixArray.scan` and `SMatrix.build().scan` without a scan) used
+  0.99 of it, a factor from before the number of scan points was counted within rounding of a whole number, while
+  `SMatrix.scan` and `SMatrix.transition_potential_scan` used the Nyquist sampling itself: for an extent of a whole number
+  of Nyquist pitches the same S-matrix gave 12 × 12 points through one and 13 × 13 through the other. **Behaviour change:**
+  the default scan of `Probe.scan` and the other routes has about 1% fewer points per axis (one fewer when the extent
+  is within 1% below a whole number of Nyquist pitches); the pitch is still never coarser than Nyquist, as the number of
+  points is rounded up
 - `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`
   is `bloch_waves.rotate(a, b)`: the rotations are about fixed axes, in the order given, whether they come in one call
   or several, for angles and for distributions of angles. **Behaviour change:** rotating an already rotated object used
