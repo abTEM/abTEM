@@ -288,6 +288,17 @@ Bugfixes:
 - Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
   selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
   ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error
+- Wave function normalization is spelled as for the builders of `Waves` everywhere: `BlochWaves.calculate_exit_waves`
+  and `BlochwaveEnsemble.calculate_exit_waves` take the bool `normalize` (default false), as `PlaneWave` does: false
+  gives an incident wave of one in every pixel, true normalizes the reciprocal-space intensity of the incident wave to one.
+  The `normalization` argument they had, `'values'` or `'amplitude'`, only wrote a label to the metadata (and
+  `'amplitude'` made `diffraction_patterns()` raise); it is removed. `Waves.downsample` and `WavesDetector(gpts)` keep
+  the normalization of the waves, and `Waves.downsample` has no `normalization` argument any more. **Behaviour change:**
+  they preserved the pixel values of every wave, so the diffraction patterns of a downsampled `Probe` or normalized plane
+  wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
+  (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
+  `Waves.normalize()` labels its result `'reciprocal_space'`, so that `diffraction_patterns()` of a normalized wave sums to
+  one (it divided by the number of pixels once more, to 1 / N²)
 - `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`
   is `bloch_waves.rotate(a, b)`: the rotations are about fixed axes, in the order given, whether they come in one call
   or several, for angles and for distributions of angles. **Behaviour change:** rotating an already rotated object used
