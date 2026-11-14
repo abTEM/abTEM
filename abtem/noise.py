@@ -560,10 +560,6 @@ class ScanNoiseTransform(EnsembleTransform):
 
         return ensemble_axes_metadata
 
-    @property
-    def metadata(self) -> dict:
-        return {"units": "electrons", "label": "Counts"}
-
     def _tile_ensemble(self, array: np.ndarray) -> np.ndarray:
         # the sample axis, then the rms-power axis in front of it
         xp = get_array_module(array)
