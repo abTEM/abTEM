@@ -262,6 +262,11 @@ def _resolve_reversed_slices(tensor, key):
     return tensor, tuple(resolved)
 
 
+def _to_device_operand(x):
+    """Move a host NumPy array onto the device; pass anything else through."""
+    return asarray(x) if isinstance(x, np.ndarray) else x
+
+
 def _forward(name: str):
     """Build a method that applies the tensor's ``name`` and rewraps the result."""
 
@@ -274,8 +279,15 @@ def _forward(name: str):
             # single-chunk array keeps the result lazy and on the device.
             return getattr(da.from_array(self, chunks=-1), name)(*args, **kwargs)
 
-        args = tuple(_unwrap(arg) for arg in args)
-        kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
+        # A host array is moved onto the device first, as the NumPy ufuncs below
+        # do, so the device side wins. Torch would otherwise turn it into a CPU
+        # tensor itself: most operators then decline it (NotImplemented, and
+        # NumPy's reflected ufunc does the move), but `==` does not and fails
+        # with a device mismatch.
+        args = tuple(_unwrap(_to_device_operand(arg)) for arg in args)
+        kwargs = {
+            key: _unwrap(_to_device_operand(value)) for key, value in kwargs.items()
+        }
         return _wrap(getattr(self._tensor, name)(*args, **kwargs))
 
     method.__name__ = name

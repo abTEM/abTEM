@@ -21,6 +21,7 @@ Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
 """
 
+import operator
 import subprocess
 import sys
 import textwrap
@@ -399,6 +400,39 @@ def test_minimum_and_maximum_take_a_scalar():
         asnumpy(xp.minimum(on_device + 1, 8)), np.minimum(indices + 1, 8)
     )
     assert np.array_equal(asnumpy(xp.maximum(2, on_device)), np.maximum(2, indices))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        operator.add,
+        operator.sub,
+        operator.mul,
+        operator.mod,
+        operator.eq,
+        operator.ne,
+        operator.lt,
+        operator.le,
+        operator.gt,
+        operator.ge,
+        operator.and_,
+        operator.or_,
+        operator.xor,
+    ],
+    ids=lambda op: op.__name__,
+)
+def test_a_device_array_operator_takes_a_host_array(op):
+    # `device == host` once failed with a device mismatch: torch turns a NumPy
+    # operand into a CPU tensor itself, and only `==` did not decline it, so the
+    # device side has to move the host operand first.
+    xp = get_array_module("mps")
+    host = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    other = np.array([[1, 5, 3], [2, 5, 7]], dtype=np.int32)
+
+    result = op(xp.asarray(host), other)
+
+    assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(result), op(host, other))
 
 
 def test_dask_constant_boundary_overlap_stays_on_device():
