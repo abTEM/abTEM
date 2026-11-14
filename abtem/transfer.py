@@ -520,7 +520,7 @@ def hard_aperture(
     alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution
 ) -> np.ndarray:
     """
-    Calculates an array with a disk of ones and a soft edge.
+    Calculates an array with a disk of ones and a hard edge.
 
     Parameters
     ----------
@@ -536,7 +536,16 @@ def hard_aperture(
     hard_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
-    return xp.array(alpha <= semiangle_cutoff).astype(get_dtype(complex=False))
+
+    semiangle_cutoff_array = xp.asarray(semiangle_cutoff)
+
+    semiangle_cutoff_array, alpha = expand_dims_to_broadcast(
+        semiangle_cutoff_array, xp.asarray(alpha)
+    )
+
+    return xp.asarray(alpha <= semiangle_cutoff_array).astype(
+        get_dtype(complex=False)
+    )
 
 
 class Aperture(BaseAperture):
@@ -1552,8 +1561,11 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     Parameters
     ----------
     angular_spread: float or 1D array or BaseDistribution
-        The standard deviation of the angular deviations due to source size [mrad].
-        Alternatively, a distribution of standard deviations may be provided.
+        The 1/e width of the angular spread distribution due to source size [mrad].
+        Note: this uses the 1/e width convention (as in Kirkland), not the standard
+        deviation; to convert, use angular_spread = sqrt(2)*sigma, where sigma is the
+        per-axis standard deviation of the beam tilts. Alternatively, a distribution
+        of 1/e widths may be provided.
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
@@ -1614,8 +1626,8 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the angular deviations due to source size
-        [mrad]."""
+        """The 1/e width of the angular spread distribution due to source size
+        [mrad], not the standard deviation: angular_spread = sqrt(2)*sigma."""
         return self._angular_spread
 
     @angular_spread.setter
@@ -1926,8 +1938,10 @@ class CTF(_HasAberrations, BaseAperture):
         convention (as in Kirkland), not the standard deviation; to convert, use
         focal_spread = sqrt(2)*sigma.
     angular_spread: float, optional
-        The standard deviation of the angular deviations due to source size [Å]
-        (default is 0).
+        The 1/e width of the angular spread distribution due to source size [mrad]
+        (default is 0). Note: this uses the 1/e width convention (as in Kirkland),
+        not the standard deviation; to convert, use angular_spread = sqrt(2)*sigma,
+        where sigma is the per-axis standard deviation of the beam tilts.
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
@@ -2102,8 +2116,8 @@ class CTF(_HasAberrations, BaseAperture):
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the angular deviations due to source size
-        [mrad]."""
+        """The 1/e width of the angular spread distribution due to source size
+        [mrad], not the standard deviation: angular_spread = sqrt(2)*sigma."""
         return self._angular_spread
 
     @angular_spread.setter
