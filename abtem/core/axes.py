@@ -261,18 +261,16 @@ class LinearAxis(AxisMetadata):
         change here -- the number of points continues to come from the
         array's own shape wherever this axis is used.
 
-        Only simple, positive-step, non-empty slices/indices -- which is all
-        `iterate_chunk_ranges` chunk partitioning ever produces -- are
-        represented exactly; anything else raises TypeError rather than
-        silently returning an axis with the wrong offset. TypeError
-        specifically: `ArrayObject._get_ensemble_axes_metadata_items`
-        (general user-facing indexing, e.g. `waves[::-1]`) already wraps
-        `axis[item]` in `try/except TypeError` and falls back to a plain
-        copy for whatever an axis can't represent exactly -- the same
-        fallback this axis relied on before it had a `__getitem__` at all.
-        Chunk partitioning is unaffected either way, since it never
-        constructs a slice this doesn't support.
+        Only a non-negative integer or a non-empty slice with a step of one and a
+        non-negative start -- which is all `iterate_chunk_ranges` chunk
+        partitioning ever produces -- is represented. Any other slice, and any
+        index that is neither an integer nor a slice, raises TypeError rather than
+        silently returning an axis with the wrong offset.
+        Indexing an array object goes through `_index_ensemble_axis`, which
+        knows the length of the axis and so also handles strides, negative
+        bounds, reversed slices and index arrays.
         """
+
         kwargs = dataclasses.asdict(self)
 
         # `iterate_chunk_ranges` always yields a tuple of slices, one per
@@ -825,6 +823,55 @@ def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]
     if not _has_unequal_weights(weights):
         return None
     return tuple(float(weight) for weight in weights)
+
+
+def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
+    """The metadata of an ensemble axis of length `n` indexed by `item`, a slice or
+    an integer or boolean index array.
+
+    A slice selecting every member gives a copy of the axis. Any other slice with a
+    positive step is represented exactly by an axis of the same class, except that
+    a `ReciprocalSpaceAxis` keeps its class only for a step of one and only with
+    ``fftshift=True`` (with ``fftshift=False`` its coordinates are not linear in
+    storage order). Every other slice and an index array give a `NonLinearAxis`
+    with the selected coordinates, except that a reversed slice of a `ScanAxis`
+    raises, since a scan axis increases.
+    """
+    if not isinstance(axis, LinearAxis):
+        return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
+
+    if isinstance(item, slice):
+        indices = range(n)[item]
+        if indices == range(n):
+            return axis.copy()
+
+        # a ReciprocalSpaceAxis rounds its offset to a whole multiple of its sampling,
+        # which a slice with a step does not keep
+        if isinstance(axis, ReciprocalSpaceAxis):
+            exact = indices.step == 1 and axis.fftshift
+        else:
+            exact = indices.step > 0
+        if exact:
+            new_axis = axis[indices.start :]
+            new_axis.sampling = axis.sampling * indices.step
+            return new_axis
+
+        if indices.step < 0 and isinstance(axis, ScanAxis):
+            bounds = ":".join(
+                "" if v is None else str(v) for v in (item.start, item.stop, item.step)
+            )
+            raise IndexError(
+                f"{type(axis).__name__} '{axis.label}' cannot be indexed with a "
+                f"negative step: a scan axis increases. Index with the explicit "
+                f"positions np.arange({n})[{bounds}] instead."
+            )
+
+    kwargs = {
+        field.name: getattr(axis, field.name)
+        for field in dataclasses.fields(AxisMetadata)
+    }
+    values = tuple(float(value) for value in np.asarray(axis.coordinates(n))[item])
+    return NonLinearAxis(values=values, **kwargs)
 
 
 def axis_to_dict(axis: AxisMetadata):
