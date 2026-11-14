@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import scipy.linalg as sla
@@ -44,6 +44,8 @@ _COMPLEX = np.complex128
 
 _MAX_CENTRE_CANDIDATES = 24  # atoms of the smallest class tried for rotation centres
 _CHECKPOINT_BYTES = 4e9  # store every elimination block below this size
+_MINIMUM_CUTOFF = 4.5  # the default cutoff [1/Å] is at least this ...
+_CUTOFF_WAVENUMBERS = 2.0  # ... and this many times 1 / wavelength
 _COUPLING_CACHE_BYTES = 2e9  # precompute every slice's coupling matrix below this size
 
 
@@ -381,7 +383,8 @@ class TwoWaySolver:
     The potential must be given on slices of equal thickness and consist of finite
     projections, the slices thin enough to resolve the cores (about 0.01 to 0.02 Å;
     check by halving) and sampled finely enough for the cutoff: 1 / (2 sampling) at
-    least 2 cutoff. The slab must start and end in vacuum. The phases of the beams carry
+    least 2 cutoff (a sampling of at most wavelength / 8 for the default cutoff). The
+    slab must start and end in vacuum. The phases of the beams carry
     the dispersion error of the Numerov step inside the material (the part in vacuum is
     corrected), which falls with the fourth power of the step; intensities converge
     faster.
@@ -389,9 +392,17 @@ class TwoWaySolver:
     Parameters
     ----------
     cutoff : float, optional
-        Beams with in-plane frequency below this value [1/Å] are included (default 4.5).
-        Beams above 1 / wavelength are evanescent. Pass ``0.95 / wavelength`` for the
-        propagating beams only.
+        Beams with in-plane frequency below this value [1/Å] are included. Beams above
+        1 / wavelength are evanescent. By default the cutoff follows the energy,
+        ``max(4.5, 2 / wavelength)``: the propagating beams then converge to about a
+        percent of their intensity, because the outermost ones couple to the evanescent
+        beams beyond them (graphene at 1 keV, beams up to 0.93 / wavelength: 2.6 %
+        from a cutoff of 1.74 / wavelength, 7.6 % from 1.4 / wavelength and 16 % from
+        0.95 / wavelength, against a cutoff of 2.1 / wavelength). That is exact but
+        expensive: the number of beams grows with the square of the cutoff and the cost
+        with its sixth power, and the potential must be sampled at ``wavelength / 8``.
+        Pass a smaller value for a cheaper, less converged solution, for example
+        ``0.95 / wavelength`` for the propagating beams only.
     symmetry : bool, optional
         Reduce the basis by the translation and point symmetry of the structure, found
         from the atoms of the potential (default True). The results agree with the full
@@ -403,13 +414,19 @@ class TwoWaySolver:
         1e-4).
     """
 
-    cutoff: float = 4.5
+    cutoff: Optional[float] = None
     symmetry: bool = True
     symmetry_tolerance: float = 1e-4
 
     def __post_init__(self):
-        if self.cutoff <= 0.0:
+        if self.cutoff is not None and self.cutoff <= 0.0:
             raise ValueError("cutoff must be positive")
+
+    def _cutoff_for(self, energy: float) -> float:
+        """The cutoff [1/Å] at an energy [eV]: the given one, or the converged one."""
+        if self.cutoff is not None:
+            return self.cutoff
+        return max(_MINIMUM_CUTOFF, _CUTOFF_WAVENUMBERS / energy2wavelength(energy))
 
     def scatter(
         self, plane_wave: PlaneWave, potential: BasePotential
@@ -447,6 +464,7 @@ class TwoWaySolver:
 
         energy = waves._valid_energy
         wavelength = energy2wavelength(energy)
+        cutoff = self._cutoff_for(energy)
         built = (
             potential
             if isinstance(potential, PotentialArray)
@@ -459,11 +477,12 @@ class TwoWaySolver:
         projected = np.asarray(asnumpy(built.array), dtype=np.float64)
         nz, nx, ny = projected.shape
         sampling = tuple(waves._valid_sampling)
-        if 1 / (2 * max(sampling)) < 2 * self.cutoff:
+        if 1 / (2 * max(sampling)) < 2 * cutoff:
+            default = "" if self.cutoff else " (the default for this energy)"
             raise ValueError(
-                f"The potential is sampled too coarsely for cutoff={self.cutoff}: use "
-                f"a sampling of at most {1 / (4 * self.cutoff):.4f} Å or a lower "
-                "cutoff."
+                f"The potential is sampled too coarsely for cutoff={cutoff:.2f}"
+                f"{default}: use a sampling of at most {1 / (4 * cutoff):.4f} Å or a "
+                "lower cutoff."
             )
 
         origin, operations, translations = (0.0, 0.0), [("rot0", np.eye(2))], []
@@ -479,10 +498,8 @@ class TwoWaySolver:
 
         wave_number = 2 * np.pi / wavelength
         sigma = energy2sigma(energy)
-        _check_step(h, wave_number, self.cutoff)
-        basis = _BeamBasis(
-            (nx, ny), sampling, self.cutoff, origin, operations, translations
-        )
+        _check_step(h, wave_number, cutoff)
+        basis = _BeamBasis((nx, ny), sampling, cutoff, origin, operations, translations)
 
         # the potential's Fourier coefficients, with the origin moved onto the symmetry
         # axis
