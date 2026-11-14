@@ -386,10 +386,7 @@ def push_config_to_workers(client):
     if token == _pushed_config_token:
         return
     plugin = _make_config_plugin(snapshot)
-    try:
-        client.register_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
-    except AttributeError:  # distributed without Client.register_plugin
-        client.register_worker_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
+    client.register_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
     _pushed_config_token = token
 
 
