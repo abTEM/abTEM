@@ -674,6 +674,31 @@ def _sum_run_length_encoded(array, result, separators):
             result[i, x] = total
 
 
+def _is_inexact(dtype) -> bool:
+    return np.issubdtype(dtype, np.inexact)
+
+
+def _integrated_dtype(dtype, weighted: bool) -> np.dtype:
+    """The dtype of a radial integral of an array of `dtype`.
+
+    Floating point and complex counts keep their dtype. Integer counts sum exactly
+    to a 64-bit integer, as NumPy and CuPy sum them, unless a per-pixel sensitivity
+    weights them, which gives the configured precision.
+    """
+    dtype = np.dtype(dtype)
+    if _is_inexact(dtype):
+        return dtype
+    return get_dtype(complex=False) if weighted else np.dtype(np.int64)
+
+
+def _averaged_dtype(dtype) -> np.dtype:
+    """The dtype of an average of an array of `dtype`: its own if floating point or
+    complex, otherwise the configured precision (averaging integer counts must not
+    truncate them, nor ignore the configured precision)."""
+    dtype = np.dtype(dtype)
+    return dtype if _is_inexact(dtype) else get_dtype(complex=False)
+
+
 def _sum_runs(array, separators):
     """Sum the runs of `array` (n_batch, n_selected) between `separators` into a
     zeroed (n_batch, n_runs) array, with the kernel of the array's backend: the
@@ -5177,7 +5202,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _integrate_fourier_space(
-        array, sampling, inner, outer, fftshift, offset, sensitivity=None
+        array, sampling, inner, outer, fftshift, offset, sensitivity=None, result_dtype=None
     ):
         xp = get_array_module(array)
 
@@ -5192,7 +5217,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             sensitivity=sensitivity,
         )
 
-        return xp.sum(array * bins, axis=(-2, -1))
+        integrated = xp.sum(array * bins, axis=(-2, -1))
+        if result_dtype is None:
+            return integrated
+        return integrated.astype(result_dtype, copy=False)
 
     @_per_energy
     def integrate_radial(
@@ -5252,6 +5280,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self._check_integration_limits(inner, outer)
 
         xp = get_array_module(self.array)
+        result_dtype = _integrated_dtype(
+            self.array.dtype, weighted=sensitivity is not None
+        )
 
         if self.is_lazy:
             integrated_intensity = self.array.map_blocks(
@@ -5262,8 +5293,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 sensitivity=sensitivity,
+                result_dtype=result_dtype,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=self.array.dtype),
+                meta=xp.array((), dtype=result_dtype),
             )
         else:
             integrated_intensity = self._integrate_fourier_space(
@@ -5274,6 +5306,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 sensitivity=sensitivity,
+                result_dtype=result_dtype,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
@@ -5653,8 +5686,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
         step_runs: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+        result_dtype: Optional[np.dtype] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
+
+        The averages have the dtype `result_dtype`, by default that of `array`.
 
         `step_runs` (`_azimuthal_step_runs`) average the step bins in one pass;
         `step_bounds` are the first and last bin of every pixel, for averaging
@@ -5663,6 +5699,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         are cast to, for the Gaussian weighting.
         """
         xp = get_array_module(array)
+        result_dtype = np.dtype(array.dtype if result_dtype is None else result_dtype)
 
         if step_runs is not None:
             # One gather of the binned pixels and one summing pass, instead of a
@@ -5674,7 +5711,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             sums = _sum_runs(flat[:, pixels], separators)
             # an empty bin averages to 0, as bin by bin
             values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
-            return values.reshape(array.shape[:-2] + centers.shape)
+            values = values.reshape(array.shape[:-2] + centers.shape)
+            return values.astype(result_dtype, copy=False)
 
         if weighting_function == "step":
             # On the device of the array, unless a node shared by the blocks was
@@ -5685,11 +5723,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
             r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
-        # Follow the input dtype: the default float64 both ignores the
-        # configured precision and silently drops the imaginary part when
-        # the summed values are assigned back in. On the device of the array:
-        # a host array cannot take the device sums assigned into it.
-        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
+        # The result dtype, not the default float64, which ignores the configured
+        # precision and silently drops the imaginary part when the summed values
+        # are assigned back in; and not an integer dtype, which would truncate the
+        # averages. On the device of the array: a host array cannot take the device
+        # sums assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=result_dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)
@@ -5811,6 +5850,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
+        result_dtype = _averaged_dtype(self.array.dtype)
+
         if self.is_lazy:
             base_axes = tuple(
                 range(
@@ -5823,11 +5864,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                result_dtype=result_dtype,
                 **kwargs,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (len(centers),),
-                meta=xp.array((), dtype=self.array.dtype),
+                meta=xp.array((), dtype=result_dtype),
             )
         else:
             array = self._azimuthal_average(
@@ -5835,6 +5877,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                result_dtype=result_dtype,
                 **kwargs,
             )
 
