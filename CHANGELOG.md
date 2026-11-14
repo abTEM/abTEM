@@ -18,8 +18,15 @@ Features:
   A plane wave of any direction, and ensembles of tilts and energies, in single or double precision (the `precision` of the
   configuration), on the CPU and on CUDA devices, with or without absorption (`absorption`, the imaginary part as a fraction of
   the potential, `absorptive_potential`, and `MeanFreePathAbsorber`, an absorbing layer of a given inelastic mean free
-  path, `V_i = 1 / (2 sigma lambda)`, that follows the energy of each member of an ensemble)
-  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634), [PR #636](https://github.com/abTEM/abTEM/pull/636), [PR #637](https://github.com/abTEM/abTEM/pull/637), [PR #638](https://github.com/abTEM/abTEM/pull/638))
+  path, `V_i = 1 / (2 sigma lambda)`, that follows the energy of each member of an ensemble).
+  `TwoWaySolver.solve` is the lower-level entry point: any incident beams (evanescent ones included) and sources inside the
+  slab, many right-hand sides on one factorisation, an in-plane offset instead of a tilt, and the interior wave on every
+  slice; `beam_flux` and `BeamSolution.reflected_flux` give the flux per beam, `|amplitude|^2 kz / k`, which the solver conserves.
+  The members of an ensemble of tilts and energies are solved in parallel on the CPU (`workers`)
+  The beam cutoff follows the energy by default, twice 1 / wavelength and at least 4.5 1/Å, which converges the propagating beams to
+  about a percent of their intensity (the outermost couple to the evanescent beams beyond them); that is expensive and needs a
+  potential sampled at wavelength / 8, and `cutoff` takes a smaller value for a cheaper solution
+  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634), [PR #636](https://github.com/abTEM/abTEM/pull/636), [PR #637](https://github.com/abTEM/abTEM/pull/637), [PR #638](https://github.com/abTEM/abTEM/pull/638), [PR #641](https://github.com/abTEM/abTEM/pull/641))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
