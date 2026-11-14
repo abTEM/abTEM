@@ -12,9 +12,12 @@ method the table lists
 * the peak resident memory of the process above that of the imported packages
   (and, on a GPU, the memory taken by the CuPy pool),
 * the error [%] of the intensity |psi_g|^2 summed in three bands of the scattering
-  angle against the two-way solution, ``low`` (0 to 1/3 of the cutoff), ``mid`` and
-  ``high`` (up to 0.98 of the cutoff); ``--weighting flux`` weights the beams of both
-  by kz / k (the flux, which the solver conserves) instead,
+  angle against the two-way solution, ``low`` (0 to 1/3 of the top of the bands),
+  ``mid`` and ``high``; the bands end at 0.98 of the propagating limit 0.95 / wavelength
+  of the multislice methods, or at 1 / 1.9 of the cutoff of the solver if that is lower
+  (its beams near the cutoff lack the coupling to the beams beyond it);
+  ``--weighting flux`` weights the beams of both by kz / k (the flux, which the solver
+  conserves) instead,
 * the sum of |psi_g|^2 and the flux of the exit wave.
 
 ``RealSpaceMultislice(expansion_scope="full")`` (deprecated with abTEM#686) and
@@ -85,7 +88,8 @@ def _peak_rss_mb():
 
 def make_atoms(system, cells, lateral, rattle, seed):
     """The slab and the grid of its potential, per lateral repeat the grid that
-    keeps the sampling below 0.046 Å (cutoff 5.4 Å^-1) and divides the lattice."""
+    keeps the sampling below 0.046 Å and divides the lattice (``refine_gpts`` refines
+    it for the cutoff of the solver)."""
     import ase
     import ase.build
 
@@ -174,8 +178,31 @@ def make_algorithm(name):
     return RealSpaceMultislice(expansion_scope="full", order=order)
 
 
-def band_edges(cutoff):
-    return [0.0, cutoff / 3, 2 * cutoff / 3, 0.98 * cutoff]
+def band_edges(top):
+    return [0.0, top / 3, 2 * top / 3, top]
+
+
+GPTS_SCALES = (1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
+
+
+def refine_gpts(atoms, gpts, cutoff, scale):
+    """The grid, refined by ``scale`` (by default the smallest of ``GPTS_SCALES`` whose
+    sampling the solver accepts for ``cutoff``: 1 / (2 sampling) >= 2 cutoff)."""
+    lengths = (atoms.cell[0, 0], atoms.cell[1, 1])
+
+    def refined(factor):
+        return tuple(int(round(g * factor)) for g in gpts)
+
+    if scale is not None:
+        return refined(scale)
+    for factor in GPTS_SCALES:
+        new = refined(factor)
+        if max(length / n for length, n in zip(lengths, new)) <= 1 / (4 * cutoff):
+            return new
+    raise SystemExit(
+        f"no grid up to {GPTS_SCALES[-1]}x the default is fine enough for the solver's "
+        f"cutoff of {cutoff:.1f} 1/Å: pass a smaller --cutoff"
+    )
 
 
 def band_sums(array, extent, energy, edges):
@@ -221,10 +248,17 @@ def worker(args):
     abtem.config.set({"precision": args.precision})
     device = args.device
     wavelength = energy2wavelength(args.energy)
-    cutoff = args.cutoff or min(5.4, 0.95 / wavelength)
+    from abtem.twoway import TwoWaySolver
+
     atoms, gpts = make_atoms(
         args.system, args.cells[0], args.lateral[0], args.rattle, args.seed
     )
+    # the solver's own default is its converged cutoff (twice 1 / wavelength): the
+    # solution that the multislice methods approximate, with the beams beyond their
+    # propagating limit that they leave out
+    cutoff = args.cutoff or TwoWaySolver()._cutoff_for(args.energy)
+    gpts = refine_gpts(atoms, gpts, cutoff, args.gpts_scale)
+    band_top = min(0.98 * 0.95 / wavelength, cutoff / 1.9)
     wave = abtem.PlaneWave(energy=args.energy, device=device)
     scan = None
     if args.batch > 1:
@@ -280,7 +314,7 @@ def worker(args):
     if args.batch > 1:  # the first probe stands for the batch
         array = array.reshape((-1,) + array.shape[-2:])[0]
     bands, total, flux_bands, flux = band_sums(
-        array, potential.extent, args.energy, band_edges(cutoff)
+        array, potential.extent, args.energy, band_edges(band_top)
     )
     out = {
         "method": args.worker,
@@ -338,6 +372,8 @@ def run_worker(method, args, cells, lateral):
     ]
     if args.cutoff:
         command += ["--cutoff", str(args.cutoff)]
+    if args.gpts_scale:
+        command += ["--gpts-scale", str(args.gpts_scale)]
     if args.no_symmetry:
         command.append("--no-symmetry")
     env = dict(os.environ)
@@ -391,7 +427,16 @@ def main():
         "--cutoff",
         type=float,
         default=None,
-        help="beam cutoff of the solver [1/Å] (default min(5.4, 0.95/wavelength))",
+        help="beam cutoff of the solver [1/Å] (default: that of the solver, twice "
+        "1/wavelength and at least 4.5, which needs a potential sampled at "
+        "wavelength/8; the grid is refined to it, and a smaller value is cheaper)",
+    )
+    parser.add_argument(
+        "--gpts-scale",
+        type=float,
+        default=None,
+        help="refine the grid of the potential by this factor (default: the smallest "
+        "that the solver's cutoff needs)",
     )
     parser.add_argument(
         "--cells", type=int, nargs="+", default=[1], help="unit cells along z (srtio3)"
