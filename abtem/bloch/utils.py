@@ -272,7 +272,7 @@ def fast_filter_excitation_errors(
 
         sg = -g[:, 0] * R[2, 0] - g[:, 1] * R[2, 1] - g[:, 2] * R[2, 2] - b
 
-        mask += np.abs(sg) < sg_max
+        mask += np.abs(sg) <= sg_max
 
 
 def filter_reciprocal_space_vectors(

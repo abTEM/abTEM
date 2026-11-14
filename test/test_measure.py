@@ -38,6 +38,7 @@ from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    IndexedDiffractionPatterns,
     MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
@@ -4051,3 +4052,114 @@ def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
     ]
     np.testing.assert_allclose(lines[0].get_ydata(), array[0].real)
     np.testing.assert_allclose(lines[3].get_ydata(), array[1].imag)
+
+
+def test_poisson_noise_needs_exactly_one_dose():
+    # with neither, the dose was NaN and NumPy failed with "lam value too large"
+    images = Images(np.ones((4, 4)), sampling=0.1)
+
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise()
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise(dose_per_area=1.0, total_dose=1.0)
+
+    assert images.poisson_noise(total_dose=1e3, seed=0).shape == images.shape
+
+
+def _indexed_patterns():
+    return IndexedDiffractionPatterns(
+        np.array([1.0, 2.0, 4.0]),
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]]),
+        np.eye(3) * 0.2,
+    )
+
+
+@pytest.mark.parametrize(
+    "spot, expected", [(None, [0.25, 0.5, 1.0]), ((1, 0, 0), [0.5, 1, 2])]
+)
+def test_indexed_patterns_normalize_to_a_spot_and_keep_their_lattice(spot, expected):
+    # the reciprocal lattice vectors were replaced by the spot positions
+    patterns = _indexed_patterns()
+
+    normalized = patterns.normalize_to_spot(spot)
+
+    np.testing.assert_allclose(normalized.array, expected)
+    np.testing.assert_array_equal(normalized.miller_indices, patterns.miller_indices)
+    np.testing.assert_array_equal(
+        normalized.reciprocal_lattice_vectors, patterns.reciprocal_lattice_vectors
+    )
+    np.testing.assert_allclose(normalized.positions, patterns.positions)
+
+
+def test_indexed_patterns_cannot_infer_a_pixel_area():
+    # a missing @property made this a TypeError (method * float)
+    with pytest.raises(RuntimeError, match="Cannot infer pixel area"):
+        _indexed_patterns().poisson_noise(dose_per_area=1.0)
+
+
+_COUNT_DTYPES = [np.int32, np.uint16, np.float32, np.float64]
+
+
+def _count_patterns(dtype, lazy):
+    counts = (np.random.default_rng(3).random((3, 4, 16, 16)) * 200).astype(dtype)
+    return DiffractionPatterns(
+        da.from_array(counts, chunks=(2, 2, 16, 16)) if lazy else counts,
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.2, _main=True)] * 2,
+        metadata={"energy": 100e3},
+    )
+
+
+_RADIAL_OPERATIONS = {
+    "integrate_radial": lambda m: m.integrate_radial(0, 10),
+    "integrate_radial_weighted": lambda m: m.integrate_radial(
+        0, 10, sensitivity=lambda r: 1.0 + 0.0 * r
+    ),
+    "azimuthal_average": lambda m: m.azimuthal_average(),
+    "azimuthal_average_gaussian": lambda m: m.azimuthal_average(
+        weighting_function="gaussian"
+    ),
+}
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("dtype", _COUNT_DTYPES)
+@pytest.mark.parametrize("operation", _RADIAL_OPERATIONS)
+def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
+    operation, dtype, precision
+):
+    """Integer counts used to be declared as their own dtype by a lazy
+    `integrate_radial` (it computes int64) and `azimuthal_average` (float64, whatever
+    the precision, and truncated to integers by the Gaussian weighting)."""
+    with abtem.config.set({"precision": precision}):
+        run = _RADIAL_OPERATIONS[operation]
+        eager = run(_count_patterns(dtype, lazy=False))
+        lazy = run(_count_patterns(dtype, lazy=True))
+        computed = lazy.compute().array
+
+    assert lazy.array.dtype == computed.dtype == eager.array.dtype
+    if not np.issubdtype(dtype, np.inexact):
+        if "weighted" in operation or "average" in operation:
+            assert computed.dtype == np.dtype(precision)
+        else:
+            assert computed.dtype == np.int64  # integer counts sum exactly
+    else:
+        assert computed.dtype == np.dtype(dtype)  # floating point counts keep theirs
+    np.testing.assert_allclose(computed, eager.array, rtol=1e-5)
+
+
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function):
+    counts = _count_patterns(np.int32, lazy=False)
+    exact = DiffractionPatterns(
+        counts.array.astype(np.float64),
+        sampling=counts.sampling,
+        ensemble_axes_metadata=counts.ensemble_axes_metadata,
+        metadata=counts.metadata,
+    )
+
+    averaged = counts.azimuthal_average(weighting_function=weighting_function).array
+    expected = exact.azimuthal_average(weighting_function=weighting_function).array
+
+    assert not np.array_equal(averaged, np.round(averaged))  # fractional averages
+    np.testing.assert_allclose(averaged, expected, rtol=1e-5)

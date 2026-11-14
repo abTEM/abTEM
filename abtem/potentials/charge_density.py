@@ -19,7 +19,7 @@ from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
-from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
+from abtem.inelastic.phonons import SOURCE_INDEX, AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
@@ -339,7 +339,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         Sampling of the potential in `x` and `y` [1 / Å] calculated by specifying either
         `sampling` or `gpts`.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices [Å] (default is 0.5 Å). If given as a float,
+        Thickness of the potential slices [Å] (default is 1.0 Å). If given as a float,
         the number of slices are calculated by dividing the slice thickness into the
         `z`-height of the cell. The slice thickness may be given as a sequence of values
         for each slice, in which case an error will be thrown if the sum of slice
@@ -524,16 +524,8 @@ class ChargeDensityPotential(_PotentialBuilder):
                     charge_densities = da.from_array(
                         charge_densities, chunks=(1, -1, -1, -1)
                     )
-                if charge_densities.shape[0] == 1 and n_ensemble > 1:
-                    charge_densities = da.tile(
-                        charge_densities, (n_ensemble,) + (1,) * 3
-                    )
-                charge_densities = charge_densities.to_delayed().ravel()
             elif hasattr(charge_densities, "compute"):
                 raise RuntimeError
-            elif charge_densities.shape[0] == 1 and n_ensemble > 1:
-                # One charge density shared by every configuration.
-                charge_densities = [charge_densities[0]] * n_ensemble
 
             frozen_phonon_blocks = (
                 self._get_ewald_potential()
@@ -545,11 +537,22 @@ class ChargeDensityPotential(_PotentialBuilder):
                 # delayed blocks of to_delayed() compose correctly.
                 frozen_phonon_blocks = frozen_phonon_blocks.to_delayed().ravel()
 
+            # A chunk of configurations holds the charge densities of those
+            # configurations (the block then pairs them again one by one when it is
+            # built), or the one density that all of them share.
+            per_configuration = charge_densities.shape[0] > 1
+            bounds = np.concatenate([[0], np.cumsum(chunks[0])])
             array = np.zeros((len(chunks[0]),), dtype=object)
-            for i, (cd, fp) in enumerate(
-                zip(charge_densities, frozen_phonon_blocks)
+            for i, (fp, start, stop) in enumerate(
+                zip(frozen_phonon_blocks, bounds, bounds[1:])
             ):
+                if per_configuration:
+                    cd = charge_densities[start:stop]
+                else:
+                    cd = charge_densities[:1]
                 if lazy:
+                    # one dask chunk, so that the block is a single graph node
+                    cd = cd.rechunk(-1).to_delayed().item()
                     block = dask.delayed(wrap_args)(cd, fp)
                     itemset(
                         array, i, da.from_delayed(block, shape=(1,), dtype=object)
@@ -644,7 +647,13 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
-            atoms = self.frozen_phonons.atoms * self.repetitions
+            atoms = self.frozen_phonons.atoms.copy()
+            # per-atom displacement standard deviations follow their atoms into the
+            # repeated cell
+            atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
+            atoms = atoms * self.repetitions
+            # displaced here, as the potential made below holds these atoms alone
+            atoms = self.frozen_phonons._randomize_transformed(atoms)
             ewald_parametrization = EwaldParametrization(width=3)
             ewald_potential = Potential(
                 atoms=atoms,
