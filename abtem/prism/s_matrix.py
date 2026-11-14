@@ -5726,11 +5726,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """
 
         if scan is None:
-            scan = GridScan(
-                start=(0, 0),
-                end=self.extent,
-                sampling=self.dummy_probes().aperture.nyquist_sampling,
-            )
+            # the whole extent at the probe's Nyquist sampling, as for any scan
+            scan = GridScan()
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
@@ -6118,11 +6115,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         if scan is None:
-            scan = GridScan(
-                start=(0, 0),
-                end=self.extent,
-                sampling=self.dummy_probes().aperture.nyquist_sampling,
-            )
+            # the whole extent at the probe's Nyquist sampling, as for any scan
+            scan = GridScan()
 
         # The documented default, as in :meth:`scan`. Left to validate_detectors,
         # None became a WavesDetector, so a scan with no detectors gave the
