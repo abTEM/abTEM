@@ -304,6 +304,7 @@ def validate_radial_sensitivity(
 def validate_detectors(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     waves: Optional[BaseWaves] = None,
+    allow_reflected: bool = False,
 ) -> list[BaseDetector]:
     """
     Validate that a variable is a list of detectors.
@@ -314,6 +315,9 @@ def validate_detectors(
         The detectors to validate.
     waves : Waves, optional
         The waves to match the detectors to.
+    allow_reflected : bool, optional
+        Accept detectors of the reflected wave, which only multislice produces
+        (default False).
 
     Returns
     -------
@@ -339,6 +343,12 @@ def validate_detectors(
     ):
         raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
+    if not allow_reflected and any(getattr(d, "reflected", False) for d in detectors):
+        raise ValueError(
+            "a detector with reflected=True measures the wave reflected by a "
+            "multislice algorithm that reflects, and cannot be used here"
+        )
+
     if waves is not None:
         detectors = [
             detector._matched(waves) if hasattr(detector, "_matched") else detector
@@ -362,13 +372,29 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    reflected : bool, optional
+       If True, the detector measures the wave reflected at the entrance of the
+       specimen instead of the transmitted one, with angles measured from -z and x, y
+       in the specimen's frame. It has no exit-plane axis. Only for a multislice
+       algorithm that reflects (default False); applied to waves directly with
+       `detect`, it measures those waves. The multislice keeps the wave backscattered
+       at every slice until the end of the pass, so a block of waves takes the memory
+       of one wave per slice more, and the automatic batch is smaller.
     """
 
     _splits_energy_ensembles = True
 
-    def __init__(self, to_cpu: bool = True, url: Optional[str] = None):
+    def __init__(
+        self, to_cpu: bool = True, url: Optional[str] = None, reflected: bool = False
+    ):
         self._to_cpu = to_cpu
         self._url = url
+        self._reflected = bool(reflected)
+
+    @property
+    def reflected(self) -> bool:
+        """The detector measures the reflected wave."""
+        return self._reflected
 
     @property
     def url(self) -> Optional[str]:
@@ -460,6 +486,7 @@ class _AbstractRadialDetector(BaseDetector):
         sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         if inner < 0.0:
             raise ValueError(f"'inner' must be non-negative, got {inner}")
@@ -484,7 +511,7 @@ class _AbstractRadialDetector(BaseDetector):
         if self._sensitivity is not None and outer is not None:
             self._sensitivity._check_range(inner, outer)
 
-        super().__init__(to_cpu=to_cpu, url=url)
+        super().__init__(to_cpu=to_cpu, url=url, reflected=reflected)
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
@@ -1002,6 +1029,9 @@ class AnnularDetector(_AbstractRadialDetector):
         location, typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     """
 
     def __init__(
@@ -1012,6 +1042,7 @@ class AnnularDetector(_AbstractRadialDetector):
         sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         self._inner = inner
         self._outer = outer
@@ -1025,6 +1056,7 @@ class AnnularDetector(_AbstractRadialDetector):
             sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
+            reflected=reflected,
         )
 
     @property
@@ -1422,6 +1454,9 @@ class SpectralSlitDetector(BaseDetector):
         Copy result to CPU after detection.  Default is True.
     url : str, optional
         Save path for the measurement.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
 
     Notes
     -----
@@ -1462,6 +1497,7 @@ class SpectralSlitDetector(BaseDetector):
         q_sampling: Optional[float] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         self._q_sampling = float(q_sampling) if q_sampling is not None else None
         if corners is not None:
@@ -1517,7 +1553,7 @@ class SpectralSlitDetector(BaseDetector):
             self._corners = _corners_from_slit_params(
                 slit_center, self._angle, self._extent, self._width
             )
-        super().__init__(to_cpu=to_cpu, url=url)
+        super().__init__(to_cpu=to_cpu, url=url, reflected=reflected)
 
     @property
     def offset(self) -> tuple[float, float]:
@@ -1874,6 +1910,9 @@ class SpectralAnnularDetector(AnnularDetector):
         produces fewer q-points and a faster spectrum.
     to_cpu : bool, optional
     url : str, optional
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
 
     Notes
     -----
@@ -1901,13 +1940,19 @@ class SpectralAnnularDetector(AnnularDetector):
         q_sampling: Optional[float] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         self._q_min = float(q_min)
         self._q_max = q_max
         self._sweep_angle = float(angle)
         self._q_sampling = float(q_sampling) if q_sampling is not None else None
         super().__init__(
-            inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
+            inner=0.0,
+            outer=outer,
+            offset=(0.0, 0.0),
+            to_cpu=to_cpu,
+            url=url,
+            reflected=reflected,
         )
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
@@ -2061,6 +2106,9 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         location, typically a path to a local file. A URL can also include a
         protocol specifier like s3:// for remote data. If not set (default)
         the data stays in memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     """
 
     def __init__(
@@ -2071,6 +2119,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         self._step_size = step_size
         super().__init__(
@@ -2081,6 +2130,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
             sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
+            reflected=reflected,
         )
 
     def _nbins_within(self, outer: float) -> int:
@@ -2154,6 +2204,9 @@ class SegmentedDetector(_AbstractRadialDetector):
         location,typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     """
 
     def __init__(
@@ -2167,6 +2220,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        reflected: bool = False,
     ):
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
@@ -2178,6 +2232,7 @@ class SegmentedDetector(_AbstractRadialDetector):
             sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
+            reflected=reflected,
         )
 
     @property
@@ -2308,6 +2363,9 @@ class PixelatedDetector(BaseDetector):
         location, typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     components : {'all', 'total', 'elastic', 'diffuse'} or sequence of str, optional
         Detect the elastic, diffuse and total intensity of a frozen-phonon ensemble
         instead of the intensity of each configuration, as
@@ -2382,6 +2440,7 @@ class PixelatedDetector(BaseDetector):
         margin: float | tuple[float, float] = 0.0,
         window_func: Optional[str | tuple] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
+        reflected: bool = False,
     ):
         if isinstance(max_angle, numbers.Real) and max_angle <= 0:
             raise ValueError(
@@ -2424,7 +2483,7 @@ class PixelatedDetector(BaseDetector):
         # _match_ensemble and kept through the constructor so that lazy blocks
         # rebuild it.
         self._ensemble_gpts = _ensemble_gpts
-        super().__init__(to_cpu=to_cpu, url=url)
+        super().__init__(to_cpu=to_cpu, url=url, reflected=reflected)
 
     def _match_ensemble(self, waves: WavesType) -> PixelatedDetector:
         """Fix the crop size of a multi-energy ensemble.
@@ -2797,6 +2856,9 @@ class WavesDetector(BaseDetector):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     average_frozen_phonons : bool, optional
        If True, return the configuration-averaged wave function <ψ> of a
        frozen-phonon ensemble, the coherent (elastic) wave, instead of the wave
@@ -2841,6 +2903,7 @@ class WavesDetector(BaseDetector):
         reduction_dtype: Optional[str | np.dtype] = None,
         margin: float | tuple[float, float] = 0.0,
         window_func: Optional[str | tuple] = None,
+        reflected: bool = False,
     ):
         if not isinstance(average_frozen_phonons, (bool, np.bool_)):
             raise TypeError(
@@ -2855,7 +2918,7 @@ class WavesDetector(BaseDetector):
         self._reduction_dtype = reduction_dtype
         self._margin = margin
         self._window_func = window_func
-        super().__init__(to_cpu=to_cpu, url=url)
+        super().__init__(to_cpu=to_cpu, url=url, reflected=reflected)
 
     @property
     def average_frozen_phonons(self) -> bool:

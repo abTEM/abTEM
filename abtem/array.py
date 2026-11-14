@@ -368,13 +368,15 @@ def multi_output_blockwise(
         # function -- see apply_transform), matching `chunks`, `drop_axis`
         # and out_array's own axes, none of which are ever reordered by
         # da.blockwise above.
+        # pair the kept axes with new_shape: a dropped axis need not be the last
         drop_chunks = []
-        for j, (item, ns) in enumerate(zip(chunks, new_shape)):
-            if j not in drop_axis:
-                if sum(item) != ns:
-                    assert len(item) == 1
-                    item = (ns,)
-                drop_chunks.append(item)
+        kept = [j for j in range(len(chunks)) if j not in drop_axis]
+        for j, ns in zip(kept, new_shape):
+            item = chunks[j]
+            if sum(item) != ns:
+                assert len(item) == 1
+                item = (ns,)
+            drop_chunks.append(item)
         drop_chunks = tuple(drop_chunks)
 
         with (
@@ -2513,8 +2515,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # over dropped axes (AnnularDetector drops the wave-function axes).
             out_ndim = len(self.shape) + sum(len(axis.shape) for axis in new_axes)
 
+            # an output may also drop some of the transform's own ensemble axes
+            # (a detector of the reflected wave has no exit-plane axis)
+            ensemble_drops = transform._out_dropped_ensemble_axes(self)
             num_dropped_axes = tuple(
-                len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
+                len(shape) - len(out_shape) - len(dropped)
+                for out_shape, dropped in zip(
+                    transform._out_shape(self), ensemble_drops
+                )
             )
 
             # drop_axes = tuple(
@@ -2524,13 +2532,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             n = len(transform.ensemble_shape)
             drop_axes = tuple(
-                tuple(
+                tuple(dropped)
+                + tuple(
                     range(
                         self.ensemble_dims + n,
                         self.ensemble_dims + num_dropped_axis + n,
                     )
                 )
-                for num_dropped_axis in num_dropped_axes
+                for dropped, num_dropped_axis in zip(ensemble_drops, num_dropped_axes)
             )
 
             out_metas = transform._out_meta(self)

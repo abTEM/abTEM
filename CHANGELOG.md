@@ -11,6 +11,13 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- Detectors take `reflected=True` to measure the wave reflected at the entrance of the specimen instead of the
+  transmitted one, e.g. `WavesDetector(reflected=True)` or `AnnularDetector(..., reflected=True)`, alongside the
+  detectors of the transmitted wave. It is the reflected wave with its sign, `-B psi` of the method (the deprecated
+  `return_backscattered` gives `B psi`), and angles are measured from -z. A reflected detector has no exit-plane axis
+  and needs no `exit_planes=1`, but a block of waves keeps the wave backscattered at every slice, which the automatic
+  batch size counts. It needs a multislice algorithm that reflects (`LanczosMultislice`, with #629), and is refused
+  elsewhere (PRISM, the core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
@@ -267,6 +274,15 @@ Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
+
+Deprecated (removed in 1.2):
+
+- `return_backscattered=True`: use a detector with `reflected=True`. `RealSpaceMultislice(expansion_scope="full")`,
+  the series of the full operator, which diverges below about 5 keV: use `LanczosMultislice`. The `expansion_scope`
+  argument of `RealSpaceMultislice` and `FourierMultislice`. Each warns with a `FutureWarning`; an algorithm still
+  equals one given `expansion_scope="propagator"`. An unknown `expansion_scope` now raises, and so does
+  `FourierMultislice(expansion_scope="full")`, which failed when the multislice ran
+  ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 
 Bugfixes:
 
