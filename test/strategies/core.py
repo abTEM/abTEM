@@ -103,7 +103,10 @@ def scan_axis_metadata(draw):
 
 @st.composite
 def ordinal_axis_metadata(draw, n):
-    values = draw(st.lists(st.integers(), min_size=n, max_size=n))
+    # Within int32, so that differences of the values fit in int64, as HyperSpy
+    # computes them when it checks the order of an axis.
+    integers = st.integers(min_value=-(2**31), max_value=2**31 - 1)
+    values = draw(st.lists(integers, min_size=n, max_size=n))
     return OrdinalAxis(values=values)
 
 

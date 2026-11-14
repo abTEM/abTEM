@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import bulk
+from dask import is_dask_collection
 from test_imports import NEEDS_CUPY
 from utils import assert_array_objects_equal
 
@@ -183,6 +184,169 @@ def test_array_object_round_trip(name, tmp_path):
     url = str(tmp_path / "array_object.zarr")
     array_object.to_zarr(url)
     assert_array_objects_equal(abtem.from_zarr(url), array_object)
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_compute_leaves_no_lazy_attribute(name, tmp_path):
+    """compute() turns every array the object holds eager, not only its main one,
+    so the computed object compares equal to the eagerly built one.
+
+    CPU only: which attributes compute() replaces is bookkeeping shared by every
+    device.
+    """
+    array_object = CASES[name]()
+    url = str(tmp_path / "array_object.zarr")
+    array_object.to_zarr(url)
+
+    for computed in (
+        array_object.ensure_lazy().compute(),
+        abtem.from_zarr(url).compute(),
+    ):
+        lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
+        assert not computed.is_lazy
+        assert lazy == []
+        assert computed == array_object
+        assert_array_objects_equal(computed, array_object)
+
+
+def test_indexed_diffraction_patterns_unpickled_from_an_older_version_compare_equal():
+    """abTEM 1.0.11 and earlier pickled `_intensities`, an alias of the array, with
+    the object; one restored from such a pickle compares equal both ways.
+
+    CPU only: unpickling is bookkeeping shared by every device.
+    """
+    import pickle
+
+    old = CASES["IndexedDiffractionPatterns"]()
+    old.__dict__["_intensities"] = old.array
+    restored = pickle.loads(pickle.dumps(old))
+    new = CASES["IndexedDiffractionPatterns"]()
+
+    assert "_intensities" not in vars(restored)
+    assert restored == new
+    assert new == restored
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_zarr_round_trip_keeps_array_valued_attributes(name, tmp_path):
+    """Every array-valued attribute (Miller indices, cell, wave vectors, ...) reads
+    back from zarr with its type, dtype, shape and values; the zarr attributes hold
+    it as nested JSON lists, which `==` (np.allclose) cannot tell from the array.
+
+    CPU only: zarr is written and read on the host.
+    """
+    array_object = CASES[name]()
+    url = str(tmp_path / "array_object.zarr")
+    array_object.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    for key, value in vars(array_object).items():
+        if key == "_array" or not hasattr(value, "dtype") or np.ndim(value) == 0:
+            continue
+        other = vars(read)[key]
+        assert type(other) is type(value), (key, type(other), type(value))
+        assert other.dtype == value.dtype, (key, other.dtype, value.dtype)
+        np.testing.assert_array_equal(np.asarray(other), np.asarray(value), err_msg=key)
+
+
+def test_structure_factor_read_from_zarr_gives_the_same_bloch_wave_patterns(tmp_path):
+    """The Miller indices and the cell of a structure factor read from zarr are
+    arrays, so `BlochWaves` accepts it. `lazy=False`: a lazy `BlochWaves` does not
+    take an eager structure factor.
+
+    CPU only: zarr is written and read on the host.
+    """
+    structure_factor = CASES["StructureFactorArray"]()
+    url = str(tmp_path / "structure_factor.zarr")
+    structure_factor.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    def patterns(structure_factor):
+        bloch_waves = abtem.BlochWaves(structure_factor, energy=ENERGY, sg_max=0.05)
+        return bloch_waves.calculate_diffraction_patterns(10.0, lazy=False)
+
+    assert_array_objects_equal(patterns(read), patterns(structure_factor))
+
+
+def test_s_matrix_read_from_zarr_reduces_to_the_same_waves(tmp_path):
+    """The wave vectors of an S-matrix read from zarr keep the float64 they were
+    written in, so reducing it gives the waves of the S-matrix that was written.
+    The 5 x 4 scan differs in size from the 9 plane waves and from each grid axis.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = CASES["SMatrixArray"]()
+    url = str(tmp_path / "s_matrix.zarr")
+    s_matrix.to_zarr(url)
+    read = abtem.from_zarr(url).compute()
+
+    scan = abtem.GridScan((0.0, 0.0), (4.0, 3.0), gpts=(5, 4))
+    assert_array_objects_equal(
+        read.reduce(scan=scan).compute(), s_matrix.reduce(scan=scan).compute()
+    )
+
+
+def _s_matrix_with_wave_vectors_of(dtype):
+    s_matrix = CASES["SMatrixArray"]()
+    kwargs = s_matrix._copy_kwargs(exclude=("array",))
+    kwargs["wave_vectors"] = s_matrix.wave_vectors.astype(dtype)
+    return abtem.SMatrixArray(s_matrix.array, **kwargs)
+
+
+def _write_s_matrix(s_matrix, url, layout, without_wave_vectors_dtype):
+    """Write `s_matrix` in the canonical layout (`to_zarr`) or the legacy one
+    (`kwargs0`/`type0` attributes), optionally as a file that has no
+    `wave_vectors_dtype` key, as written by an earlier version."""
+    import zarr
+
+    if layout == "canonical":
+        s_matrix.to_zarr(url)
+        if without_wave_vectors_dtype:
+            root = zarr.open(url, mode="r+")
+            metadata = root.attrs["metadata0"]
+            metadata["kwargs"].pop("wave_vectors_dtype", None)
+            root.attrs["metadata0"] = metadata
+        return
+
+    root = zarr.open(url, mode="w")
+    root.create_array(name="array0", data=s_matrix.array, chunks=s_matrix.shape)
+    kwargs = s_matrix._pack_kwargs(s_matrix._copy_kwargs(exclude=("array",)))
+    if without_wave_vectors_dtype:
+        kwargs.pop("wave_vectors_dtype", None)
+    root.attrs["kwargs0"] = kwargs
+    root.attrs["type0"] = "SMatrixArray"
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_s_matrix_wave_vectors_keep_the_dtype_they_were_written_in(dtype, tmp_path):
+    """The dtype of the wave vectors is stored next to them, so a float32
+    S-matrix reads back as float32, not as the float64 of the JSON numbers.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = _s_matrix_with_wave_vectors_of(dtype)
+    url = str(tmp_path / "s_matrix.zarr")
+    _write_s_matrix(s_matrix, url, "canonical", without_wave_vectors_dtype=False)
+    read = abtem.from_zarr(url).compute()
+
+    assert read.wave_vectors.dtype == dtype
+    np.testing.assert_array_equal(read.wave_vectors, s_matrix.wave_vectors)
+
+
+@pytest.mark.parametrize("layout", ["canonical", "legacy"])
+def test_s_matrix_file_without_a_wave_vector_dtype_reads_float64(layout, tmp_path):
+    """A file with no `wave_vectors_dtype` holds float64 values, which read
+    back unchanged.
+
+    CPU only: zarr is written and read on the host.
+    """
+    s_matrix = _s_matrix_with_wave_vectors_of(np.float64)
+    url = str(tmp_path / "s_matrix.zarr")
+    _write_s_matrix(s_matrix, url, layout, without_wave_vectors_dtype=True)
+    read = abtem.from_zarr(url).compute()
+
+    assert read.wave_vectors.dtype == np.float64
+    np.testing.assert_array_equal(read.wave_vectors, s_matrix.wave_vectors)
 
 
 @pytest.mark.parametrize("lazy", [False, True])
