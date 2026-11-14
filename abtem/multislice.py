@@ -734,7 +734,7 @@ class FourierMultislice:
         If True, reverse the order of propagation and transmission (default is False)
     expansion_scope : str, optional
         Deprecated, and without effect: the Fourier multislice always takes the split
-        step.
+        step (``"propagator"``, the only value it takes).
     """
 
     order: Literal[1, 2, "exact"] = "exact"
@@ -743,6 +743,11 @@ class FourierMultislice:
     transpose: bool = False
 
     def __post_init__(self):
+        if self.expansion_scope not in (None, "propagator"):
+            raise ValueError(
+                "FourierMultislice takes the split step only: expansion_scope must be "
+                f"'propagator', got {self.expansion_scope!r}"
+            )
         if self.expansion_scope is not None:
             warnings.warn(
                 "FourierMultislice(expansion_scope=...) is deprecated, has no effect "
@@ -750,6 +755,8 @@ class FourierMultislice:
                 FutureWarning,
                 stacklevel=3,
             )
+        # equal to an instance given "propagator", as before the deprecation
+        object.__setattr__(self, "expansion_scope", "propagator")
 
 
 @dataclass(frozen=True)
@@ -802,6 +809,8 @@ class RealSpaceMultislice:
                 "so leave it out."
             )
         else:
+            # equal to an instance given "propagator", as before the deprecation
+            object.__setattr__(self, "expansion_scope", "propagator")
             return
         warnings.warn(message, FutureWarning, stacklevel=3)
 
@@ -881,7 +890,7 @@ def multislice_and_detect(
     waves = waves.copy()
 
     if return_backscattered:
-        if algorithm.expansion_scope != "full":
+        if not _is_full_expansion_scope(algorithm):
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
@@ -1676,6 +1685,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         potential: BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         multislice_func: Optional[Callable] = None,
+        *,
+        _warn_deprecated: bool = True,
         **multislice_func_kwargs,
     ):
         if multislice_func is None:
@@ -1697,17 +1708,19 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             if not _reflects(multislice_func_kwargs.get("algorithm")):
                 raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
 
+        # the per-task rebuild of a lazy run does not warn again
         if multislice_func_kwargs.get("return_backscattered", False):
             from abtem.atoms import _stacklevel_outside_package
 
-            warnings.warn(
-                "return_backscattered is deprecated and will be removed in abTEM 1.2: "
-                "add a detector with reflected=True, e.g. WavesDetector(reflected="
-                "True), which gives the wave reflected at the entrance without "
-                "exit_planes=1.",
-                FutureWarning,
-                stacklevel=_stacklevel_outside_package(),
-            )
+            if _warn_deprecated:
+                warnings.warn(
+                    "return_backscattered is deprecated and will be removed in abTEM "
+                    "1.2: add a detector with reflected=True, e.g. WavesDetector("
+                    "reflected=True), which gives the wave reflected at the entrance "
+                    "without exit_planes=1.",
+                    FutureWarning,
+                    stacklevel=_stacklevel_outside_package(),
+                )
             detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
@@ -1962,7 +1975,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         potential = potential_partial(*args)
         potential = potential.item()
-        transform = MultisliceTransform(potential, **kwargs)
+        transform = MultisliceTransform(potential, _warn_deprecated=False, **kwargs)
 
         ndims = len(transform.ensemble_shape)
         wrapped_transform = _wrap_with_array(transform, ndims)

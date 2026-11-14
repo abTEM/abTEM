@@ -1,3 +1,5 @@
+import os
+
 import ase
 import ase.build
 import numpy as np
@@ -534,6 +536,97 @@ def _random_slices(exit_planes):
         array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
     )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_the_deprecated_output_of_two_configurations_and_detectors(self, lazy):
+        # guards the deprecated output until it is removed: each configuration of a
+        # frozen-phonon potential gives the outputs of its run alone
+        atoms = ase.build.bulk("Si", cubic=True)
+        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
+        kwargs = dict(gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1)
+        detectors = [abtem.AnnularDetector(0, 20), abtem.PixelatedDetector()]
+        algorithm = RealSpaceMultislice(expansion_scope="full")
+
+        def run(potential, lazy):
+            results = abtem.PlaneWave(energy=100e3).multislice(
+                potential,
+                detectors=detectors,
+                algorithm=algorithm,
+                return_backscattered=True,
+                lazy=lazy,
+            )
+            if lazy:
+                results = [
+                    r.compute(scheduler="synchronous", progress_bar=False)
+                    for r in results
+                ]
+            return [to_host_array(r.array) for r in results]
+
+        members = [
+            run(abtem.Potential(config, **kwargs), False) for config in frozen_phonons
+        ]
+        result = run(abtem.Potential(frozen_phonons, **kwargs), lazy)
+        assert len(result) == 3
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    def test_a_lazy_deprecated_call_warns_once(self):
+        # the tasks of a lazy run rebuild the transform, and must not warn again
+        with pytest.warns(FutureWarning) as record:
+            outputs = abtem.PlaneWave(energy=100e3).multislice(
+                _random_slices(1),
+                algorithm=RealSpaceMultislice(expansion_scope="full"),
+                return_backscattered=True,
+                lazy=True,
+            )
+            for output in outputs:
+                output.compute(scheduler="synchronous", progress_bar=False)
+        messages = [str(r.message) for r in record]
+        assert sum("return_backscattered" in m for m in messages) == 1
+
+
+@pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
+class TestDeprecatedExpansionScope:
+    """The deprecated expansion_scope: each value warns at the caller's line, and the
+    algorithms compare equal as before."""
+
+    @pytest.mark.parametrize(
+        "make, match",
+        [
+            (lambda: RealSpaceMultislice(expansion_scope="full"), "series of the full"),
+            (lambda: RealSpaceMultislice(expansion_scope="propagator"), "leave it out"),
+            (lambda: FourierMultislice(expansion_scope="propagator"), "no effect"),
+        ],
+    )
+    def test_an_expansion_scope_warns_at_the_callers_line(self, make, match):
+        with pytest.warns(FutureWarning, match=match) as record:
+            make()
+        assert all(os.path.samefile(r.filename, __file__) for r in record)
+
+    def test_the_algorithms_compare_as_before(self):
+        with pytest.warns(FutureWarning):
+            assert RealSpaceMultislice() == RealSpaceMultislice(
+                expansion_scope="propagator"
+            )
+            assert FourierMultislice() == FourierMultislice(
+                expansion_scope="propagator"
+            )
+        assert RealSpaceMultislice().expansion_scope == "propagator"
+        assert FourierMultislice().expansion_scope == "propagator"
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: RealSpaceMultislice(expansion_scope="bogus"),
+            lambda: FourierMultislice(expansion_scope="full"),
+        ],
+    )
+    def test_an_unknown_expansion_scope_is_refused(self, make):
+        with pytest.raises(ValueError, match="expansion_scope"):
+            make()
+
 
 class TestBackscattering:
     """The wave reflected at the entrance, measured by detectors with
@@ -555,6 +648,56 @@ class TestBackscattering:
         s_matrix = abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
         with pytest.raises(ValueError, match="cannot be used here"):
             s_matrix.scan(detectors=abtem.AnnularDetector(0, 20, reflected=True))
+
+    def test_the_multislice_function_refuses_what_the_transform_refuses(self):
+        # multislice_and_detect is also called directly, without MultisliceTransform
+        from abtem.multislice import (
+            MultisliceTransform,
+            multislice_and_detect,
+            transition_potential_multislice_and_detect,
+        )
+
+        potential = _random_slices(None)
+        waves = abtem.PlaneWave(energy=100e3).match_grid(potential).build(lazy=False)
+        reflected = [abtem.WavesDetector(reflected=True)]
+        with pytest.raises(ValueError, match="needs an algorithm that reflects"):
+            multislice_and_detect(waves, potential, reflected, RealSpaceMultislice())
+        with pytest.warns(FutureWarning):
+            full = RealSpaceMultislice(expansion_scope="full")
+        with pytest.raises(ValueError, match="not both"):
+            multislice_and_detect(
+                waves, _random_slices(1), reflected, full, return_backscattered=True
+            )
+        with pytest.raises(ValueError, match="only for the elastic multislice"):
+            MultisliceTransform(
+                potential,
+                reflected,
+                multislice_func=transition_potential_multislice_and_detect,
+                algorithm=full,
+            )
+
+    def test_the_automatic_batch_counts_the_waves_a_reflected_detector_keeps(self):
+        # a reflected detector keeps the backscattered wave of every slice of a block
+        from abtem.core.chunks import estimate_scan_batch_size
+        from abtem.waves import _max_batch_with_exit_planes
+
+        potential = abtem.Potential(
+            ase.build.bulk("Si", cubic=True) * (1, 1, 6), gpts=64, slice_thickness=0.5
+        )
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20).match_grid(potential)
+        annular = abtem.AnnularDetector(0, 20)
+        assert _max_batch_with_exit_planes(probe, potential, [annular], "auto") == (
+            "auto"
+        )
+        batch = _max_batch_with_exit_planes(
+            probe,
+            potential,
+            [annular, abtem.AnnularDetector(0, 20, reflected=True)],
+            "auto",
+        )
+        unreduced = estimate_scan_batch_size(probe.gpts, probe.dtype, "cpu")
+        # the kept waves, and one more for the two annular outputs
+        assert batch == unreduced // (potential.num_slices + 1)
 
     @pytest.mark.parametrize("lazy", [False, True])
     def test_the_reflected_wave_is_minus_the_deprecated_one_at_the_entrance(
@@ -609,7 +752,8 @@ class TestBackscattering:
             abtem.AnnularDetector(inner=0, outer=20),
             abtem.AnnularDetector(inner=0, outer=20, reflected=True),
         ]
-        scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(2, 1))
+        # three positions: no scan axis has the size of the two configurations
+        scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 1))
         probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
         algorithm = RealSpaceMultislice(expansion_scope="full")
         eager = probe.scan(
@@ -618,7 +762,7 @@ class TestBackscattering:
         lazy = probe.scan(
             potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
         )
-        assert eager[0].shape == (4, 2, 1) and eager[1].shape == (2, 1)
+        assert eager[0].shape == (4, 3, 1) and eager[1].shape == (3, 1)
         for e, measurement in zip(eager, lazy):
             assert measurement.shape == e.shape
             # synchronously, as the other tests here: Numba's workqueue layer aborts
