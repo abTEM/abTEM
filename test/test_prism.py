@@ -608,3 +608,195 @@ class TestBatchCrop2D:
             assert np.array_equal(
                 to_host_array(got)[i], array[i, cx : cx + 3, cy : cy + 2]
             )
+
+
+@pytest.mark.filterwarnings("ignore:The interpolation factor does not exactly divide")
+@devices
+def test_prism_cutoff_angles_are_equal_along_x_and_y_on_an_odd_grid(device):
+    # a cubic cell on a (57, 63) grid, interpolated by 2: the extent of the
+    # waves in units of the full sampling is 28.5 along x and 31.5 along y, which
+    # floating point rounds to either neighbour, so the angles within the antialias
+    # cutoff must not follow that rounding
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(57, 63), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        device=device,
+    )
+
+    cutoff_angles = s_matrix.dummy_probes().cutoff_angles
+
+    assert cutoff_angles[0] == pytest.approx(cutoff_angles[1])
+
+
+@pytest.mark.filterwarnings("ignore:The interpolation factor does not exactly divide")
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_reduces_without_changing_the_ctf_it_is_given(lazy, device):
+    # the CTF is matched to the (56, 64) grid at interpolation 2 on a copy
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(56, 64), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        device=device,
+    )
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=10)
+
+    result = s_matrix.reduce(
+        scan=abtem.GridScan(
+            (0, 0),
+            (1, 1),
+            gpts=(2, 4),
+            fractional=True,
+            endpoint=False,
+            potential=potential,
+        ),
+        ctf=ctf,
+        detectors=abtem.PixelatedDetector(max_angle="full"),
+        lazy=lazy,
+    )
+    if lazy:
+        result.compute()
+
+    assert (ctf.gpts, ctf.extent, ctf.energy) == (None, None, None)
+
+
+@pytest.fixture
+def multislice_blocks(monkeypatch):
+    """The (start, stop) plane-wave ranges of the multislice runs of an S-matrix
+    build, appended in the order they run."""
+    from abtem.prism.s_matrix import SMatrix
+
+    blocks = []
+    build_s_matrix = SMatrix._build_s_matrix
+
+    def recording(s_matrix, wave_vector_range=slice(None), pbar=False):
+        if isinstance(wave_vector_range, slice):
+            blocks.append((wave_vector_range.start, wave_vector_range.stop))
+        else:
+            blocks.append(tuple(wave_vector_range.item()))
+        return build_s_matrix(s_matrix, wave_vector_range, pbar)
+
+    monkeypatch.setattr(SMatrix, "_build_s_matrix", staticmethod(recording))
+    return blocks
+
+
+@devices
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, "auto"), (True, True)],
+    ids=["eager", "lazy", "lazy, one task per S-matrix"],
+)
+def test_reduce_multislices_max_batch_multislice_plane_waves_at_a_time(
+    device, lazy, disable_s_matrix_chunks, multislice_blocks
+):
+    # 9 plane waves, which a batch of 4 does not divide. The oracle is the
+    # multislice of the same probe, to which PRISM at interpolation 1 is equal.
+    import ase.build
+
+    import abtem
+
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True),
+        gpts=(16, 20),
+        slice_thickness=2,
+        device=device,
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 9
+    scan = abtem.GridScan(gpts=(2, 3))
+    detector = abtem.AnnularDetector(0, 20)
+
+    def reduce(**kwargs):
+        multislice_blocks.clear()
+        measurement = s_matrix.reduce(
+            scan=scan,
+            detectors=detector,
+            lazy=lazy,
+            disable_s_matrix_chunks=disable_s_matrix_chunks,
+            **kwargs,
+        )
+        if lazy:
+            measurement = measurement.compute(progress_bar=False)
+        return to_host_array(measurement.array), sorted(multislice_blocks)
+
+    default, default_blocks = reduce()
+    batched, batched_blocks = reduce(max_batch_multislice=4)
+
+    assert default_blocks == [(0, 9)]
+    assert batched_blocks == [(0, 4), (4, 8), (8, 9)]
+    np.testing.assert_allclose(batched, default, rtol=1e-5)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=10, device=device)
+    expected = to_host_array(probe.scan(potential, scan, detector, lazy=False).array)
+    np.testing.assert_allclose(batched, expected, atol=1e-5)
+
+
+@devices
+def test_a_small_max_batch_multislice_builds_each_reseeded_pool_once(
+    device, monkeypatch
+):
+    """An eager reduction in plane-wave batches of 4 builds the frozen-phonon pool of
+    each of 3 crystal members once, since the batches of a member share its pool,
+    not once per batch (6 batches here)."""
+    import collections
+
+    import ase.build
+
+    import abtem
+    from abtem.potentials.iam import CrystalPotential, _FieldBuilder
+
+    builds = collections.Counter()
+    build = _FieldBuilder.build
+
+    def counting(self, *args, **kwargs):
+        if isinstance(getattr(self, "frozen_phonons", None), abtem.FrozenPhonons):
+            builds[int(self.frozen_phonons.seed[0])] += 1
+        return build(self, *args, **kwargs)
+
+    monkeypatch.setattr(_FieldBuilder, "build", counting)
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+        gpts=(16, 20),
+        slice_thickness=atoms.cell[2, 2] / 2,
+        device=device,
+    )
+    crystal = CrystalPotential(unit, (1, 2, 2), seeds=(1, 2, 3))
+    s_matrix = abtem.SMatrix(
+        potential=crystal,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 21
+    s_matrix.reduce(
+        scan=abtem.GridScan(gpts=(2, 3)),
+        detectors=abtem.AnnularDetector(0, 20),
+        max_batch_multislice=4,
+        lazy=False,
+    )
+
+    assert list(builds.values()) == [1, 1, 1]
