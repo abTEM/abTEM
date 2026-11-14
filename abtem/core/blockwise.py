@@ -96,7 +96,7 @@ def map_kernel(
     base_shape_out: Optional[tuple[int, ...]] = None,
     dtype: Optional[np.dtype | type] = None,
     base_ndim: Optional[int] = None,
-    device: Optional[str] = None,
+    out_device: Optional[str] = None,
     **kwargs: Any,
 ):
     """Apply a kernel to every member of an array object or array, lazy or eager.
@@ -123,10 +123,11 @@ def map_kernel(
     base_ndim : int, optional
         The number of base axes; required for a bare array, otherwise the number of
         base axes of the array object.
-    device : str, optional
+    out_device : str, optional
         The device of the array the kernel returns, when it differs from that of
         `source` (e.g. a kernel that moves host input to the GPU). Default is the
-        device of `source`.
+        device of `source`. It only describes the result: a kernel that takes its
+        own ``device`` keyword receives it through `kwargs`.
     kwargs :
         Keyword arguments passed to the kernel. They are baked into every task of a
         lazy array.
@@ -151,7 +152,8 @@ def map_kernel(
 
     if dtype is None:
         dtype = array.dtype
-    meta = get_array_module(array if device is None else device).array((), dtype=dtype)
+    xp = get_array_module(array if out_device is None else out_device)
+    meta = xp.array((), dtype=dtype)
 
     # A gufunc signature such as "(b0,b1),(m0_0,m0_1)->(o0)": every core dimension
     # its own name, so dask neither aligns nor checks any of them against another.

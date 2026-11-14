@@ -674,6 +674,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             base_ndim=2,
             base_shape_out=(len(hkl),),
             dtype=get_dtype(complex=True),
+            out_device=self._device,
             device=self._device,
             atoms=self.atoms,
             parametrization=self._parametrization,
@@ -2022,7 +2023,7 @@ class BlochWaves:
             base_ndim=1,
             base_shape_out=(len(hkl), len(hkl)),
             dtype=get_dtype(complex=True),
-            device=self._device,
+            out_device=self._device,
             hkl=structure_factor.hkl,
             hkl_selected=hkl,
             cell=self.cell,
@@ -2071,7 +2072,7 @@ class BlochWaves:
             calculate_scattering_matrix,
             base_ndim=2,
             dtype=get_dtype(complex=True),
-            device=self._device,
+            out_device=self._device,
             **kwargs,
         )
 
@@ -2102,7 +2103,7 @@ class BlochWaves:
             base_ndim=1,
             base_shape_out=thicknesses.shape + (len(hkl),),
             dtype=get_dtype(complex=True),
-            device=self._device,
+            out_device=self._device,
             **kwargs,
         )
 

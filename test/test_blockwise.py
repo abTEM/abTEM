@@ -7,7 +7,9 @@ import dask.array as da
 import numpy as np
 import pytest
 from scipy.ndimage import gaussian_filter
+from utils import gpu
 
+from abtem.core.backend import get_array_module
 from abtem.core.blockwise import map_kernel, map_overlapping_kernel, merge_base_chunks
 
 CHUNKINGS = [
@@ -161,3 +163,33 @@ def test_map_overlapping_kernel_rejects_unknown_boundary(array):
         map_overlapping_kernel(
             da.from_array(array), gaussian_filter, {2: 1}, boundary="wrap", sigma=1
         )
+
+
+def _kernel_with_device_keyword(a, device="not passed"):
+    # A kernel keyword named `device` (as calculate_structure_factors has) must
+    # reach the kernel, lazy or eager: map_kernel's own device argument is `out_device`.
+    assert device == "cpu"
+    return a
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_map_kernel_forwards_a_kernel_keyword_named_device(array, lazy):
+    source = da.from_array(array, chunks=(1, 2, 16, 12)) if lazy else array
+
+    result = map_kernel(source, _kernel_with_device_keyword, base_ndim=2, device="cpu")
+
+    np.testing.assert_array_equal(np.asarray(result), array)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_map_kernel_out_device_sets_the_meta_not_the_kernel_keywords(array, device):
+    xp = get_array_module(device)
+    result = map_kernel(
+        da.from_array(array, chunks=(1, 2, 16, 12)),
+        lambda a: xp.asarray(a),
+        base_ndim=2,
+        out_device=device,
+    )
+
+    assert get_array_module(result._meta) is xp
+    assert get_array_module(result.compute()) is xp
