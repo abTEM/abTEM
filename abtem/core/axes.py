@@ -833,12 +833,23 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     positive step is represented exactly by an axis of the same class, except that
     a `ReciprocalSpaceAxis` keeps its class only for a step of one and only with
     ``fftshift=True`` (with ``fftshift=False`` its coordinates are not linear in
-    storage order). Every other slice and an index array give a `NonLinearAxis`
-    with the selected coordinates, except that a reversed slice of a `ScanAxis`
-    raises, since a scan axis increases.
+    storage order). On a `ScanAxis`, an index array selecting evenly spaced members
+    in increasing order is treated as the equivalent slice. Every other slice and
+    index array give a `NonLinearAxis` with the selected coordinates, except that a
+    reversed slice of a `ScanAxis` raises, since a scan axis increases.
     """
     if not isinstance(axis, LinearAxis):
         return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
+
+    # scan reductions find their scan axes by class, so an index array that a
+    # slice could express keeps a scan axis as the slice does
+    if isinstance(axis, ScanAxis) and not isinstance(item, slice):
+        indices = np.arange(n)[item]
+        if len(indices):
+            start, stop = int(indices[0]), int(indices[-1]) + 1
+            step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
+            if step > 0 and np.array_equal(indices, np.arange(start, stop, step)):
+                item = slice(start, stop, step)
 
     if isinstance(item, slice):
         indices = range(n)[item]

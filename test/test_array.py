@@ -27,7 +27,7 @@ from abtem.core.axes import (
     ScanAxis,
 )
 from abtem.core.backend import asnumpy, copy_to_device, get_array_module
-from abtem.measurements import Images
+from abtem.measurements import DiffractionPatterns, Images
 
 # The full set of `has_array` strategies exercised by most array-object tests.
 ALL_HAS_ARRAY = [
@@ -1003,35 +1003,42 @@ def _linear_axis_id(axis):
     return type(axis).__name__
 
 
-# (item, step of the slice or None for an index array), over 9 members
+# (item, step of the slice or None for an index array, spacing of the members
+# when they increase evenly), over 9 members
 _LINEAR_AXIS_ITEMS = [
-    (slice(None), 1),
-    (slice(1, 8, 2), 2),
-    (slice(None, None, 3), 3),
-    (slice(-4, None), 1),
-    (slice(1, -2), 1),
-    (slice(-7, -1, 2), 2),
-    (slice(None, None, -1), -1),
-    (slice(7, 1, -2), -2),
-    ([0, 3, 4, 8], None),
-    (np.array([True, False, False, True, True, False, False, False, True]), None),
+    (slice(None), 1, 1),
+    (slice(1, 8, 2), 2, 2),
+    (slice(None, None, 3), 3, 3),
+    (slice(-4, None), 1, 1),
+    (slice(1, -2), 1, 1),
+    (slice(-7, -1, 2), 2, 2),
+    (slice(None, None, -1), -1, None),
+    (slice(7, 1, -2), -2, None),
+    ([0, 3, 4, 8], None, None),
+    (np.array([True, False, False, True, True, False, False, False, True]), None, None),
+    ([1, 3, 5, 7], None, 2),
+    (np.array([-8, -5, -2]), None, 3),
+    ([4], None, 1),
+    (np.arange(9) % 4 == 1, None, 4),
 ]
 
 
 @lazy_params
 @devices
 @pytest.mark.parametrize("axis", _linear_axes(), ids=_linear_axis_id)
-@pytest.mark.parametrize("item, step", _LINEAR_AXIS_ITEMS)
+@pytest.mark.parametrize("item, step, spacing", _LINEAR_AXIS_ITEMS)
 def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
-    axis, item, step, lazy, device, request
+    axis, item, step, spacing, lazy, device, request
 ):
-    if lazy and device == "mps" and step is None:
+    # dask gathers members from several chunks (of 4, below) through numpy.take
+    chunks_spanned = len(set(np.arange(9)[item] // 4))
+    if lazy and device == "mps" and step is None and chunks_spanned > 1:
         request.applymarker(
             pytest.mark.xfail(
                 raises=TypeError,
                 strict=True,
-                reason="dask indexes with an array through numpy.take, which torch "
-                "lacks (#689)",
+                reason="dask gathers members from several chunks through "
+                "numpy.take, which torch lacks (#689)",
             )
         )
     host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
@@ -1061,13 +1068,16 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
 
     # a positive step keeps the class, except that a ReciprocalSpaceAxis rounds
     # its offset to a whole multiple of its sampling, which a step breaks, and an
-    # unshifted one is not linear in storage order; selecting every member keeps it
+    # unshifted one is not linear in storage order; selecting every member keeps it.
+    # A scan axis also keeps it for an index array of evenly increasing members.
     keeps_class = step is not None and step > 0
+    if isinstance(axis, ScanAxis) and step is None:
+        keeps_class = spacing is not None
     if isinstance(axis, ReciprocalSpaceAxis):
         keeps_class = step == 1 and (axis.fftshift or item == slice(None))
     if keeps_class:
         assert type(new_axis) is type(axis)
-        assert new_axis.sampling == pytest.approx(0.7 * step)
+        assert new_axis.sampling == pytest.approx(0.7 * spacing)
     else:
         assert type(new_axis) is NonLinearAxis
         assert (new_axis.label, new_axis.units) == (axis.label, axis.units)
@@ -1088,6 +1098,24 @@ def test_a_decreasing_index_array_on_a_scan_axis_gives_a_non_linear_axis(device)
 
     assert type(new_axis) is NonLinearAxis
     assert new_axis.values == pytest.approx((2.75, 2.25, 1.75, 1.25, 0.75, 0.25))
+
+
+def test_evenly_spaced_scan_positions_from_an_index_array_still_give_images():
+    """Scan reductions find their scan axes by class, so patterns at evenly spaced
+    scan positions listed by an index array still integrate to images. The test
+    reduces host arrays only, so it pins no device."""
+    scan_axes = [ScanAxis(label=label, sampling=0.5, offset=0.25) for label in "xy"]
+    patterns = DiffractionPatterns(
+        np.ones((5, 6, 8, 8)),
+        sampling=0.1,
+        ensemble_axes_metadata=scan_axes,
+        metadata={"energy": 100e3},
+    )
+
+    images = patterns[[0, 2, 4]].integrate_radial(0, 10)
+
+    assert type(images) is Images
+    assert images.sampling == pytest.approx((1.0, 0.5))
 
 
 def test_the_hint_of_a_refused_empty_reversed_slice_names_the_slice():
