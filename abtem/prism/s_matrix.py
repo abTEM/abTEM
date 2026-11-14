@@ -1099,7 +1099,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _packed_wave_vectors(wave_vectors):
         return _pack_wave_vectors(wave_vectors)
 
-    def from_array_and_metadata(array, axes_metadata, metadata):
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     @property
