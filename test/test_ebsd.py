@@ -3,7 +3,7 @@ import warnings
 import ase
 import numpy as np
 import pytest
-from utils import gpu
+from utils import devices, gpu
 
 import abtem
 import abtem.ebsd.reciprocity as reciprocity
@@ -1712,6 +1712,100 @@ class TestDevices:
 
         self.agree(reference, device)
         self.agree(detector, device)
+
+
+def _lazy_ebsd(device, detector):
+    potential = abtem.Potential(
+        silicon_slab(thickness=4.0),
+        sampling=0.2,
+        slice_thickness=2.0,
+        projection="finite",
+        device=device,
+    )
+    return EBSD(potential, detector, 30e3, device=device).build(lazy=True)
+
+
+_LAZY_BUILDS = {
+    "EBSD.build": lambda device: _lazy_ebsd(
+        device, BackscatterDetector(max_angle=50, gpts=3)
+    ),
+    # a SphericalPattern
+    "EBSD.build directions": lambda device: _lazy_ebsd(
+        device,
+        BackscatterDetector(directions=np.array([[0.0, 0.0, 1.0], [0.0, 0.6, 0.8]])),
+    ),
+    "EBSDDetectorPattern.build": lambda device: detector_builder(
+        n_patches=None, sampling=0.25, device=device
+    ).build(lazy=True),
+    "EBSDDetectorPattern.scan": lambda device: detector_builder(
+        n_patches=None, sampling=0.25, device=device
+    ).scan(
+        abtem.Probe(semiangle_cutoff=10, energy=30e3),
+        scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]),
+        lazy=True,
+    ),
+    # a SphericalPattern
+    "EBSDReferencePattern.build": lambda device: tiny_reference(device=device).build(
+        lazy=True, pbar=False
+    ),
+}
+
+
+@devices
+@pytest.mark.filterwarnings(PARTIAL)
+@pytest.mark.parametrize("build", list(_LAZY_BUILDS))
+def test_lazy_builds_compute_on_the_scheduler_of_their_device(
+    device, build, monkeypatch
+):
+    """The tasks of a lazy build return host arrays; the graph records the
+    builder's device, so that with the global device left at 'cpu' the work of
+    an accelerator is computed with the synchronous scheduler, also for the
+    SphericalPatterns, which are not array objects."""
+    schedulers = []
+    compute = abtem.array.dask.compute
+
+    def spy(*args, **kwargs):
+        schedulers.append(kwargs.get("scheduler"))
+        return compute(*args, **kwargs)
+
+    with abtem.config.set({"device": "cpu"}):
+        result = _LAZY_BUILDS[build](device)
+        assert abtem.array._graph_holds_work_on(result, device, None)
+        monkeypatch.setattr(abtem.array.dask, "compute", spy)
+        result.compute()
+
+    assert schedulers[0] == (None if device == "cpu" else "synchronous")
+
+
+@devices
+@pytest.mark.filterwarnings(PARTIAL)
+def test_spherical_pattern_compute_respects_an_explicit_scheduler(device, monkeypatch):
+    """A scheduler passed to SphericalPattern.compute is used for any device."""
+    schedulers = []
+    compute = abtem.array.dask.compute
+
+    def spy(*args, **kwargs):
+        schedulers.append(kwargs.get("scheduler"))
+        return compute(*args, **kwargs)
+
+    pattern = tiny_reference(device=device).build(lazy=True, pbar=False)
+    monkeypatch.setattr(abtem.array.dask, "compute", spy)
+    pattern.compute(scheduler="threads")
+
+    assert schedulers == ["threads"]
+
+
+@pytest.mark.filterwarnings(PARTIAL)
+def test_spherical_pattern_compute_returns_the_profilers_it_is_asked_for():
+    """As ArrayObject.compute does, compute(profiler=True) also returns the
+    profilers, and without one it returns the pattern alone."""
+    pattern = tiny_reference().build(lazy=True, pbar=False)
+
+    computed, profilers = pattern.compute(profiler=True)
+
+    assert not computed.is_lazy
+    assert len(profilers) == 1
+    assert not pattern.compute().is_lazy
 
 
 # --------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.antialias import AntialiasAperture
-from abtem.array import validate_lazy
+from abtem.array import _mark_device_work, validate_lazy
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
@@ -609,13 +609,13 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                     task = dask.delayed(_detector_patch, pure=True)(
                         self, block_argument, **arguments
                     )
-                    pieces.append(
-                        da.from_delayed(
-                            task,
-                            shape=(n_sources, len(indices)),
-                            dtype=get_dtype(complex=False),
-                        )
+                    piece = da.from_delayed(
+                        task,
+                        shape=(n_sources, len(indices)),
+                        dtype=get_dtype(complex=False),
                     )
+                    _mark_device_work(piece, self._device)
+                    pieces.append(piece)
                 else:
                     pieces.append(_detector_patch(self, block_argument, **arguments))
                 order.append(indices)

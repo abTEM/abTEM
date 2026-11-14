@@ -2007,6 +2007,45 @@ class TestTransitionPotentialDeviceMemo:
         assert a.array is b.array, "the array data itself should be memoized"
         assert a._local_potential is b._local_potential
 
+    @devices
+    def test_compute_drops_the_copies_cached_while_lazy(self, device):
+        tp = self._make().copy_to_device(device)
+        lazy = tp.ensure_lazy()
+        lazy.copy_to_device(device)  # caches the lazy array and local potential
+        lazy.compute()
+
+        on_device = lazy.copy_to_device(device)
+        assert not on_device.is_lazy
+        np.testing.assert_array_equal(
+            to_host_array(on_device.array), to_host_array(tp.array)
+        )
+        # tp's local potential was derived on the host and copied over; the
+        # computed one is derived on the device, by another FFT.
+        expected = to_host_array(tp._local_potential)
+        np.testing.assert_allclose(
+            to_host_array(on_device._local_potential),
+            expected,
+            rtol=0,
+            atol=1e-5 * np.abs(expected).max(),
+        )
+
+    @devices
+    def test_setting_the_array_derives_the_local_potential_from_it(self, device):
+        tp = self._make().copy_to_device(device)
+        doubled = 2 * tp.array
+        tp.array = doubled
+
+        expected = TransitionPotentialArray(
+            Z=14,
+            array=doubled,
+            energy=ENERGY,
+            extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+        np.testing.assert_array_equal(
+            to_host_array(tp._local_potential), to_host_array(expected._local_potential)
+        )
+
     def test_mutating_one_wrapper_does_not_corrupt_the_cache(self):
         """The defect this guards against: if the memo cached the *wrapper*
         rather than its array data, mutating one task's copy (as ``scatter``

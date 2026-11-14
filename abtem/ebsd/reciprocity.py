@@ -36,7 +36,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.antialias import AntialiasAperture, antialias_aperture
-from abtem.array import validate_lazy
+from abtem.array import _mark_device_work, validate_lazy
 from abtem.core.axes import (
     AxisMetadata,
     BackscatterEnergyAxis,
@@ -850,13 +850,13 @@ class EBSD(CopyMixin, EqualityMixin):
                     block = dask.delayed(_propagate_block_intensities, pure=True)(
                         self, prepared, block_arguments(i, start, stop)
                     )
-                    columns.append(
-                        da.from_delayed(
-                            block,
-                            shape=block_shape + (stop - start,),
-                            dtype=get_dtype(complex=False),
-                        )
+                    column = da.from_delayed(
+                        block,
+                        shape=block_shape + (stop - start,),
+                        dtype=get_dtype(complex=False),
                     )
+                    _mark_device_work(column, self._device)
+                    columns.append(column)
                 rows.append(da.concatenate(columns, axis=-1))
 
             stacked = configuration_weight * da.stack(rows, axis=0)
