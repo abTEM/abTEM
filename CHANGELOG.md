@@ -274,9 +274,10 @@ Bugfixes:
   package "could not be imported" and carries the original import error, where it said the package was not
   installed. A CuPy that fails to import warns at `import abtem` when the device is `"gpu"` (once, not twice), a
   plain `ImportError` from mkl_fft no longer makes `import abtem` fail whichever FFT library is configured, and the
-  message of a missing FFT library now has the space it lacked. The same holds for GPAW (`GPAWPotential`, and
-  `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`) and ipywidgets (the interactive `show`, which
-  failed with an `AttributeError`)
+  message of a missing FFT library now has the space it lacked. The error of `GPAWPotential` without a usable GPAW
+  carries the import error. `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`, and the
+  interactive `show`, which failed with an `AttributeError`, raise the import error of a missing or broken GPAW or
+  ipywidgets itself
 - `slider_from_axes_metadata` starts a slider at the coordinate nearest a `default_value` given as a plain Python
   number (it started at the first item), and builds range sliders over axes whose coordinates are Python floats (it
   raised `TypeError`)
