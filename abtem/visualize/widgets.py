@@ -32,6 +32,18 @@ def _format_options(options):
     return formatted_options
 
 
+def _nearest_index(values, value) -> int:
+    """The index of the coordinate in `values` nearest to `value`.
+
+    Raises a TypeError or ValueError for coordinates that are not numbers, such as
+    names or tilt angle pairs.
+    """
+    coordinates = np.asarray(values, dtype=float)
+    if coordinates.ndim != 1:
+        raise TypeError("the coordinates of the axis are not numbers")
+    return int(np.argmin(np.abs(coordinates - value)))
+
+
 def slider_from_axes_metadata(
     axis_metadata: AxisMetadata,
     length,
@@ -56,8 +68,8 @@ def slider_from_axes_metadata(
             default_value = (values[0], values[-1])
 
         index = (
-            int(np.argmin(np.abs(values - default_value[0]))),
-            int(np.argmin(np.abs(values - default_value[1]))),
+            _nearest_index(values, default_value[0]),
+            _nearest_index(values, default_value[1]),
         )
 
         slider = widgets.SelectionRangeSlider(
@@ -71,8 +83,8 @@ def slider_from_axes_metadata(
             index = default_ensemble_index(axis_metadata, length)
         else:
             try:
-                index = int(np.argmin(np.abs(values - default_value)))
-            except Exception:
+                index = _nearest_index(values, default_value)
+            except (TypeError, ValueError):
                 index = 0
 
         slider = widgets.SelectionSlider(
