@@ -270,6 +270,15 @@ Dependencies:
 
 Bugfixes:
 
+- A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
+  compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
+  declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
+  configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
+  configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
+  are now in the configured precision, and floating point counts keep their dtype
+- `ChargeDensityPotential` built in chunks of several configurations (`chunks` greater than 1) gives each chunk the
+  charge densities of its own configurations. It paired density *k* with chunk *k* and dropped the rest, so
+  per-configuration charge densities were wrong unless every chunk held one configuration, the default
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
