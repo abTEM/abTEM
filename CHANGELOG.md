@@ -288,6 +288,11 @@ Bugfixes:
 - Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
   selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
   ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error
+- `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`
+  is `bloch_waves.rotate(a, b)`: the rotations are about fixed axes, in the order given, whether they come in one call
+  or several, for angles and for distributions of angles. **Behaviour change:** rotating an already rotated object used
+  to discard its rotation and keep only the last. `BlochWaves.orientation_matrix` returns the (3, 3) orientation, and an
+  `orientation_matrix` that is not (3, 3) raises a `ValueError` naming its shape
 - PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis and
   on the measurements it reduces, as `Probe` and `PlaneWave` do; the batches of the lattice and streamed reductions
   count the real size of an element, so at double precision they hold half the rows instead of exceeding their memory
