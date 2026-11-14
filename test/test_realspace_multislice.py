@@ -940,40 +940,48 @@ class TestFullExpansionChunking:
         assert not np.any(backscattered)
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
-    @pytest.mark.parametrize("order", [1, 2])
-    def test_the_backscattered_wave_of_a_flat_slab_is_the_airy_reflection(
-        self, order, device
-    ):
+    def test_the_backscattered_wave_of_a_flat_slab_is_the_airy_reflection(self, device):
         # Oracle: the reflection of a medium of wave number k2 = sqrt(k^2 + 2 k sigma
-        # V0), which oscillates with the thickness d, as the reflections of the two
-        # faces add with the round-trip phase exp(2 i k2 d). d covers two periods.
-        energy, v0, dz = 1000.0, 10.0, 0.01
-        k1 = 2 * np.pi / abtem.core.energy.energy2wavelength(energy)
-        k2 = np.sqrt(k1**2 + 2 * k1 * abtem.core.energy.energy2sigma(energy) * v0)
-        r12 = (k1 - k2) / (k1 + k2)
+        # V0) for a wave along (tan x, tan y, 1), with the longitudinal wave numbers
+        # k_z of the two media; the reflections of the faces add with the round trip
+        # exp(2 i k2_z d). The stored amplitude is compared, not |r|^2: it is -r (the
+        # backscattered component B) times the round trip exp(2 i k1_z z0) to the
+        # front face at z0, so a wrong depth, a missing step through the slab (d up to
+        # 2.5 Å) or the untilted k for a tilted member would fail.
+        energy, v0, dz, vacuum = 1000.0, 10.0, 0.01, 20
+        k = 2 * np.pi / abtem.core.energy.energy2wavelength(energy)
+        k2 = k**2 + 2 * k * abtem.core.energy.energy2sigma(energy) * v0
+        tilts_x = [0.0, 100.0]
 
-        expected, reflected = [], []
-        for n in (2, 6, 10, 14, 18, 26, 34):
-            phase = np.exp(2j * k2 * n * dz)
-            expected.append(abs(r12 * (1 - phase) / (1 - r12**2 * phase)) ** 2)
-            profile = np.r_[np.zeros(20), np.full(n, v0 * dz), np.zeros(20)]
+        for n in (2, 6, 18, 250):
+            profile = np.r_[np.zeros(vacuum), np.full(n, v0 * dz), np.zeros(vacuum)]
             with abtem.config.set({"device": device}):
                 potential = abtem.PotentialArray(
                     np.ones((len(profile), 8, 8), np.float32) * profile[:, None, None],
                     slice_thickness=dz,
                     sampling=0.5,
                 )
-                wave = abtem.PlaneWave(energy=energy).multislice(
+                reflected = abtem.PlaneWave(
+                    energy=energy, tilt=(tilts_x, 0.0)
+                ).multislice(
                     potential,
                     detectors=abtem.WavesDetector(reflected=True),
-                    algorithm=RealSpaceMultislice(order=order, expansion_scope="full"),
+                    algorithm=RealSpaceMultislice(order=1, expansion_scope="full"),
                     lazy=False,
                 )
-            reflected.append(abs(to_host_array(wave.array).mean()) ** 2)
+            stored = to_host_array(reflected.array).mean(axis=(-2, -1))
 
-        np.testing.assert_allclose(
-            reflected, expected, rtol=0.03, atol=0.01 * max(expected)
-        )
+            expected = []
+            for tilt in tilts_x:
+                transverse = (k * np.sin(tilt / 1e3)) ** 2
+                k1z, k2z = np.sqrt(k**2 - transverse), np.sqrt(k2 - transverse)
+                r12 = (k1z - k2z) / (k1z + k2z)
+                phase = np.exp(2j * k2z * n * dz)
+                r = r12 * (1 - phase) / (1 - r12**2 * phase)
+                expected.append(-r * np.exp(2j * k1z * vacuum * dz))
+            np.testing.assert_allclose(
+                stored, expected, rtol=0.03, err_msg=f"{n} slices"
+            )
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_backscattering_of_a_slab_followed_by_vacuum(self, device):
