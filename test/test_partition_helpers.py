@@ -1,18 +1,21 @@
 """Tests of the ensemble partition helpers in abtem.core.ensemble: a lazy partition
 must deliver the same entries to its tasks as an eager one delivers to its blocks."""
 
+import ase.build
 import dask
 import dask.array as da
 import numpy as np
 import pytest
 
-from abtem.core.chunks import validate_chunks
+from abtem.core.axes import UnknownAxis
+from abtem.core.chunks import iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import (
     block_rebuilder,
     partition_blocks,
     partition_entries,
     unpack_blockwise_args,
 )
+from abtem.inelastic.phonons import AtomsEnsemble
 
 
 def _unpack(block):
@@ -137,3 +140,41 @@ def test_block_rebuilder_round_trips_partitioned_blocks(lazy):
         ).shape
         == ()
     )
+
+
+def _marked_trajectory(shape):
+    """A trajectory whose atoms carry their own index in the x position."""
+    base = ase.build.bulk("Si", cubic=True)
+    trajectory = np.empty(shape, dtype=object)
+    for index in np.ndindex(*shape):
+        atoms = base.copy()
+        atoms.positions[0, 0] += 0.01 * np.ravel_multi_index(index, shape)
+        trajectory[index] = atoms
+    return trajectory
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "chunks", [1, (1, 3), (2, 1), (2, 3)], ids=["ones", "rows", "columns", "whole"]
+)
+def test_atoms_ensemble_blocks_hold_their_slices_of_every_axis(chunks, lazy):
+    # A 2-D trajectory used to give every block of a row the whole row (or fail).
+    trajectory = _marked_trajectory((2, 3))
+    ensemble = AtomsEnsemble(
+        trajectory, ensemble_axes_metadata=[UnknownAxis(), UnknownAxis()]
+    )
+
+    if lazy:
+        blocks = list(ensemble.ensemble_blocks(chunks).compute().ravel())
+        slices = [s for _, s in iterate_chunk_ranges(validate_chunks((2, 3), chunks))]
+    else:
+        generated = list(ensemble.generate_blocks(chunks))
+        slices = [s for _, s, _ in generated]
+        blocks = [block.item() for _, _, block in generated]
+
+    assert len(blocks) == len(slices)
+    for block, block_slices in zip(blocks, slices):
+        expected = trajectory[block_slices]
+        assert block.ensemble_shape == expected.shape
+        for atoms, expected_atoms in zip(block.trajectory.ravel(), expected.ravel()):
+            assert atoms == expected_atoms

@@ -841,3 +841,40 @@ def test_prism_reduction_scheme_is_deprecated_and_has_no_effect(lazy):
 
     with pytest.warns(FutureWarning, match="`reduction_scheme` is deprecated"):
         s_matrix_array.reduce(scan=scan, detectors=detector, reduction_scheme="auto")
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_prism_no_chunks_reduction_scheme_at_interpolation_one_no_longer_raises(lazy):
+    # `reduction_scheme="no-chunks"` with interpolation 1 used to raise
+    # NotImplementedError (eager and lazy); it now only warns, once, at the caller.
+    import warnings
+
+    import ase.build
+
+    import abtem
+
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True), gpts=(32, 32), slice_thickness=2
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
+    )
+    scan = abtem.GridScan(gpts=(2, 2), potential=potential)
+    detector = abtem.AnnularDetector(inner=10, outer=40)
+
+    expected = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy).compute()
+
+    for method in (s_matrix.scan, s_matrix.reduce):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = method(
+                scan=scan,
+                detectors=detector,
+                lazy=lazy,
+                reduction_scheme="no-chunks",
+            )
+        future = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert len(future) == 1
+        # attributed to this test, not to a frame inside abtem
+        assert future[0].filename == __file__
+        np.testing.assert_allclose(result.compute().array, expected.array)

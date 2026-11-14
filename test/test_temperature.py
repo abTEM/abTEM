@@ -162,3 +162,34 @@ def test_gpaw_lazy_partition_args_ship_the_calculator_once():
         eager_atoms, eager_seeds = eager_args["frozen_phonons"].item()
         assert lazy_atoms == eager_atoms
         assert tuple(lazy_seeds) == tuple(eager_seeds)
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "chunks, expected_blocks",
+    [(2, [(0, 2), (2, 4)]), (((1, 3),), [(0, 1), (1, 4)]), (4, [(0, 4)])],
+    ids=["two-by-two", "uneven", "one block"],
+)
+def test_gpaw_partition_builds_one_block_per_chunk(lazy, chunks, expected_blocks):
+    # With several configurations per chunk the partition used to be sized by
+    # configurations, not chunks, so the blocks no longer matched the chunks.
+    # GPAW is not needed: _partition_args only reads the calculator.
+    from abtem.potentials.gpaw import GPAWPotential
+
+    calculator = object()
+    potential = GPAWPotential.__new__(GPAWPotential)
+    potential._calculators = calculator
+    potential._frozen_phonons = FrozenPhonons(
+        ase.build.bulk("Au", cubic=True), num_configs=4, sigmas=0.1, seed=1
+    )
+    seeds = tuple(potential._frozen_phonons.seed)
+
+    (partition,) = potential._partition_args(chunks=chunks, lazy=lazy)
+    blocks = partition.compute() if lazy else partition
+
+    assert len(blocks) == len(expected_blocks)
+    for block, (start, stop) in zip(blocks, expected_blocks):
+        args = block if lazy else block.item()
+        assert args["calculators"] is calculator
+        _, block_seeds = np.asarray(args["frozen_phonons"]).item()
+        assert tuple(block_seeds) == seeds[start:stop]
