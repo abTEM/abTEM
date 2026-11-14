@@ -955,6 +955,10 @@ def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> N
     atoms.set_scaled_positions(scaled % 1.0)
 
 
+class _NoWholeRepetitionError(ValueError):
+    """The box holds no whole repetition of the cell along some direction."""
+
+
 def _box_repetitions(cell, box) -> np.ndarray:
     """
     The lattice vectors of the repetition of `cell` that fills `box`, as an integer
@@ -962,15 +966,15 @@ def _box_repetitions(cell, box) -> np.ndarray:
 
     Raises
     ------
-    ValueError
-        If the box holds no whole repetition of the cell along some direction, i.e.
-        the integer matrix is singular. A direction shorter than about half a period
-        rounds to no repetition.
+    _NoWholeRepetitionError
+        A ValueError, if the box holds no whole repetition of the cell along some
+        direction, i.e. the integer matrix is singular. A direction shorter than
+        about half a period rounds to no repetition.
     """
     vectors = np.round(np.dot(np.diag(box), np.linalg.inv(cell)))
 
     if np.round(abs(np.linalg.det(vectors))) == 0:
-        raise ValueError(
+        raise _NoWholeRepetitionError(
             f"The box {tuple(float(b) for b in box)} holds no whole repetition of "
             "the atoms' cell along at least one direction (it is shorter than "
             "about half a period), so the periodicity cannot be preserved. Use a "
@@ -1158,7 +1162,7 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except ValueError:
+    except _NoWholeRepetitionError:
         if default:
             return
         raise

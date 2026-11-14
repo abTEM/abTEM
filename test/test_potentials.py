@@ -2957,6 +2957,29 @@ def test_default_box_warns_once_when_it_strains_the_atoms():
         assert records == [], repetitions
 
 
+def test_default_box_without_a_whole_repetition_of_the_cell_is_not_checked():
+    # The default box of this skewed cell holds no whole repetition of it. The
+    # check of the box abTEM chose stays silent, and the potential is made.
+    atoms = Atoms("C", cell=[[0, 2, 0], [-1, -1, 1], [3, 0, -2]], pbc=True)
+    with pytest.raises(ValueError, match="no whole repetition"):
+        orthogonalize_cell(atoms)
+
+    _, records = _construct_chosen(abtem.Potential, atoms, **STRAIN_GRID)
+
+    assert records == []
+
+
+def test_default_box_check_lets_an_unrelated_error_through(monkeypatch):
+    # The check of the box abTEM chose is silent only for a box that holds no whole
+    # repetition of the cell; any other error (here numpy's) is raised.
+    def in_plane_frame(cell, plane="xy"):
+        raise np.linalg.LinAlgError("stand-in for an unrelated error")
+
+    monkeypatch.setattr(abtem.atoms, "_cell_in_plane_frame", in_plane_frame)
+    with pytest.raises(np.linalg.LinAlgError, match="stand-in"):
+        abtem.Potential(_bn((3, 1, 1)), **STRAIN_GRID)
+
+
 @ignore_strain_warning
 def test_non_periodic_default_box_is_silent():
     for repetitions in STRAINED:
