@@ -13,9 +13,11 @@ Features:
 
 - Detectors take `reflected=True` to measure the wave reflected at the entrance of the specimen instead of the
   transmitted one, e.g. `WavesDetector(reflected=True)` or `AnnularDetector(..., reflected=True)`, alongside the
-  detectors of the transmitted wave. Angles are measured from -z. A reflected detector has no exit-plane axis and
-  needs no `exit_planes=1`; it needs a multislice algorithm that reflects, and is refused elsewhere (PRISM, the
-  core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686))
+  detectors of the transmitted wave. It is the reflected wave with its sign, `-B psi` of the method (the deprecated
+  `return_backscattered` gives `B psi`), and angles are measured from -z. A reflected detector has no exit-plane axis
+  and needs no `exit_planes=1`, but a block of waves keeps the wave backscattered at every slice, which the automatic
+  batch size counts. It needs a multislice algorithm that reflects (`LanczosMultislice`, with #629), and is refused
+  elsewhere (PRISM, the core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 - `LanczosMultislice`, a multislice algorithm with the exact one-way root of the full operator,
   `sqrt(k^2 + laplacian + 2 k sigma V) - k`, by a Lanczos iteration on the Fourier coefficients of the wave (an exact
   Laplacian), with the backscatter correction of every slice. The Taylor series of that operator diverges where
@@ -284,17 +286,20 @@ Deprecated (removed in 1.2):
 
 - `return_backscattered=True`: use a detector with `reflected=True`. `RealSpaceMultislice(expansion_scope="full")`,
   the series of the full operator, which diverges below about 5 keV: use `LanczosMultislice`. The `expansion_scope`
-  argument of `RealSpaceMultislice` and `FourierMultislice`. Each warns with a `FutureWarning`
-  ([PR #686](https://github.com/abTEM/abTEM/pull/686))
+  argument of `RealSpaceMultislice` and `FourierMultislice`. Each warns with a `FutureWarning`; an algorithm still
+  equals one given `expansion_scope="propagator"`. An unknown `expansion_scope` now raises, and so does
+  `FourierMultislice(expansion_scope="full")`, which failed when the multislice ran
+  ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 
 Bugfixes:
 
-- The backscattered wave of `RealSpaceMultislice(expansion_scope="full")` (`return_backscattered=True`) is the
-  reflected wave. Its back-propagation conjugated the waves and left out the round-trip phase `exp(2ikz)` of a
-  reflection at depth `z`, so the reflections at different depths added with the wrong phases: the reflection of a
-  flat slab was 4e-11 at every thickness instead of the Airy reflection, up to 2.5e-5 for 10 V at 1 keV, and that of
-  graphene at 1 keV 4 times the exact two-way value. It now matches the Airy reflection to 1 %. The transmitted wave
-  is unchanged
+- The backscattered wave of `RealSpaceMultislice(expansion_scope="full")` (`return_backscattered=True`) at the
+  entrance is the reflected wave (up to its sign: it is the component `B psi` of the method, and the reflection is
+  `-B psi`). Its back-propagation conjugated the waves and left out the round-trip phase `exp(2ikz)` of a reflection
+  at depth `z`, so the reflections at different depths added with the wrong phases: a flat slab reflected 4e-11 at
+  every thickness instead of the Airy reflection, up to 2.5e-5 for 10 V at 1 keV. It now matches the Airy reflection
+  to 1.5 %, also for a tilted wave, whose round trip is that of `k cos(theta)`. The transmitted wave is unchanged
+  ([PR #685](https://github.com/abTEM/abTEM/pull/685)).
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
