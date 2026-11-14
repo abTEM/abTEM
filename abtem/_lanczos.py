@@ -46,13 +46,20 @@ def exponential_of_root(
     return function
 
 
-def wave_number(k: float) -> Callable:
-    """``t -> k sqrt(1 + 2 t / k)``, the local wave number operator."""
+def excess_wave_number(k: float) -> Callable:
+    """``t -> k (sqrt(1 + 2 t / k) - 1)``, the local wave number operator less ``k``.
+
+    The backscatter is the difference of the wave numbers of two slices, so ``k`` drops
+    out. Left in, it makes each function about ``k`` times the wave, and the difference
+    of two of them has an absolute error of ``k`` times the rounding of the precision:
+    in single precision ``k = 90`` rad/Å at 30 keV gives a specular beam of 1e-13 of the
+    incident intensity where the reflection is 1e-14. Without it the functions are of
+    the size of the difference."""
 
     def function(values):
         argument = 1.0 + 2.0 * values / k
         _check_propagating(argument)
-        return (k * np.sqrt(argument)).astype(complex)
+        return (2.0 * values / (np.sqrt(argument) + 1.0)).astype(complex)
 
     return function
 
