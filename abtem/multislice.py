@@ -1143,12 +1143,13 @@ def _reflected_waves(
     reference_wave_number: Optional[float | np.ndarray] = None,
 ) -> Waves:
     """
-    The wave reflected at the entrance: `backscattered[i]` is the wave that slice `i`
-    of `forward_slices` backscatters at its exit. The reflected wave has the carrier
-    exp(-i K z), and its envelope obeys the forward step, so the reflection of every
-    plane, with its round-trip phase, is added to those from below it and stepped
-    through the slice
-    above it (see `_with_round_trip_phase`).
+    The wave reflected at the entrance: `backscattered[i]` is the component B psi
+    (Eq. 7 in Micron 190 (2025) 103778) that slice `i` of `forward_slices`
+    backscatters at its exit. The reflected wave has the carrier exp(-i K z), and its
+    envelope obeys the forward step, so the reflection of every plane, with its
+    round-trip phase, is added to those from below it and stepped through the slice
+    above it (see `_with_round_trip_phase`). The reflection of an interface is -B, so
+    the result is the negative of the sum of the components.
     """
     depths = np.cumsum([float(s.thickness) for s in forward_slices])
     reflected = None
@@ -1159,6 +1160,7 @@ def _reflected_waves(
         if reflected is not None:
             contribution._array += reflected._array
         reflected, _ = multislice_step(contribution, forward_slices[i], next_slice=None)
+    reflected._array *= -1
     return reflected
 
 

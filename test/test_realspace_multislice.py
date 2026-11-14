@@ -557,13 +557,17 @@ class TestBackscattering:
             s_matrix.scan(detectors=abtem.AnnularDetector(0, 20, reflected=True))
 
     @pytest.mark.parametrize("lazy", [False, True])
-    def test_the_reflected_wave_is_the_deprecated_one_at_the_entrance(self, lazy):
+    def test_the_reflected_wave_is_minus_the_deprecated_one_at_the_entrance(
+        self, lazy
+    ):
+        # the deprecated output is the backscattered component B psi, the reflected
+        # wave is -B psi
         with pytest.warns(FutureWarning, match="return_backscattered is deprecated"):
             _, old = _deprecated_backscattered_arrays(_random_slices(1), lazy)
         transmitted, reflected = _multislice_arrays(_random_slices(None), lazy)
         assert reflected.shape == transmitted.shape
         assert np.abs(reflected).max() > 0
-        np.testing.assert_allclose(reflected, old[0], rtol=1e-5, atol=1e-9)
+        np.testing.assert_allclose(reflected, -old[0], rtol=1e-5, atol=1e-9)
 
     @pytest.mark.parametrize("lazy", [False, True])
     def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy):
@@ -944,10 +948,10 @@ class TestFullExpansionChunking:
         # Oracle: the reflection of a medium of wave number k2 = sqrt(k^2 + 2 k sigma
         # V0) for a wave along (tan x, tan y, 1), with the longitudinal wave numbers
         # k_z of the two media; the reflections of the faces add with the round trip
-        # exp(2 i k2_z d). The stored amplitude is compared, not |r|^2: it is -r (the
-        # backscattered component B) times the round trip exp(2 i k1_z z0) to the
-        # front face at z0, so a wrong depth, a missing step through the slab (d up to
-        # 2.5 Å) or the untilted k for a tilted member would fail.
+        # exp(2 i k2_z d). The amplitude is compared, not |r|^2: it is r times the
+        # round trip exp(2 i k1_z z0) to the front face at z0, so a wrong sign or
+        # depth, a missing step through the slab (d up to 2.5 Å) or the untilted k for
+        # a tilted member would fail.
         energy, v0, dz, vacuum = 1000.0, 10.0, 0.01, 20
         k = 2 * np.pi / abtem.core.energy.energy2wavelength(energy)
         k2 = k**2 + 2 * k * abtem.core.energy.energy2sigma(energy) * v0
@@ -978,7 +982,7 @@ class TestFullExpansionChunking:
                 r12 = (k1z - k2z) / (k1z + k2z)
                 phase = np.exp(2j * k2z * n * dz)
                 r = r12 * (1 - phase) / (1 - r12**2 * phase)
-                expected.append(-r * np.exp(2j * k1z * vacuum * dz))
+                expected.append(r * np.exp(2j * k1z * vacuum * dz))
             np.testing.assert_allclose(
                 stored, expected, rtol=0.03, err_msg=f"{n} slices"
             )
