@@ -9,10 +9,10 @@ from numba import njit, prange  # type: ignore
 from scipy.special import binom  # type: ignore
 
 from abtem._lanczos import (
+    excess_wave_number,
     exponential_of_root,
     inverse_wave_number,
     lanczos_function,
-    wave_number,
 )
 from abtem.antialias import AntialiasAperture
 from abtem.core import config
@@ -876,12 +876,14 @@ def _exact_root_step(
             # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
             # (2025) 103778 with the operators of both slices
             # (the two wave numbers act on the same wave: one batch of two halves, one
-            # iteration, instead of two, which is what a GPU, not the arithmetic, pays)
+            # iteration, instead of two, which is what a GPU, not the arithmetic, pays;
+            # both less k, which drops out of the difference but would leave it
+            # k times the rounding of the precision)
             members = batch.shape[0]
             both = lanczos_function(
                 xp.concatenate([batch, batch]),
                 operator(xp.stack([potentials[1], potentials[0]])[:, None], True),
-                wave_number(k),
+                excess_wave_number(k),
                 correction_tolerance,
                 max_iterations,
                 xp,

@@ -734,7 +734,7 @@ class FourierMultislice:
         If True, reverse the order of propagation and transmission (default is False)
     expansion_scope : str, optional
         Deprecated, and without effect: the Fourier multislice always takes the split
-        step.
+        step (``"propagator"``, the only value it takes).
     """
 
     order: Literal[1, 2, "exact"] = "exact"
@@ -743,6 +743,11 @@ class FourierMultislice:
     transpose: bool = False
 
     def __post_init__(self):
+        if self.expansion_scope not in (None, "propagator"):
+            raise ValueError(
+                "FourierMultislice takes the split step only: expansion_scope must be "
+                f"'propagator', got {self.expansion_scope!r}"
+            )
         if self.expansion_scope is not None:
             warnings.warn(
                 "FourierMultislice(expansion_scope=...) is deprecated, has no effect "
@@ -750,6 +755,8 @@ class FourierMultislice:
                 FutureWarning,
                 stacklevel=3,
             )
+        # equal to an instance given "propagator", as before the deprecation
+        object.__setattr__(self, "expansion_scope", "propagator")
 
 
 @dataclass(frozen=True)
@@ -808,6 +815,8 @@ class RealSpaceMultislice:
                 "so leave it out."
             )
         else:
+            # equal to an instance given "propagator", as before the deprecation
+            object.__setattr__(self, "expansion_scope", "propagator")
             return
         warnings.warn(message, FutureWarning, stacklevel=3)
 
@@ -1161,6 +1170,7 @@ def multislice_and_detect(
                 ],
                 forward_slices,
                 multislice_step,
+                _reference_wave_numbers(waves_input),
             )
 
         if reflected_detectors:
@@ -1168,7 +1178,7 @@ def multislice_and_detect(
                 backscattered,
                 forward_slices,
                 multislice_step,
-                _reference_wave_number(algorithm, waves_input),
+                _reference_wave_numbers(waves_input),
             )
             del backscattered
             if measurements is not None:
@@ -1201,17 +1211,6 @@ _REFLECTED_DETECTORS_MESSAGE = (
 )
 
 
-def _reference_wave_number(algorithm, waves: Waves) -> Optional[np.ndarray]:
-    """The wave number [rad/Å] that a step of `algorithm` takes out of `waves`, per
-    member: the tilted k_z of the Lanczos step, or None for 2 pi / wavelength."""
-    if not isinstance(algorithm, LanczosMultislice):
-        return None
-    from abtem.finite_difference import _member_tilts
-
-    tangent = np.tan(_member_tilts(waves) / 1e3)
-    return 2 * np.pi / waves.wavelength / np.sqrt(1 + np.sum(tangent**2, axis=-1))
-
-
 def _reflects(algorithm) -> bool:
     """Whether a multislice algorithm makes a backscattered wave at every slice."""
     return isinstance(algorithm, LanczosMultislice) or _is_full_expansion_scope(
@@ -1222,8 +1221,8 @@ def _reflects(algorithm) -> bool:
 def _with_round_trip_phase(waves: Waves, depth: float, reference_wave_number):
     """Multiply `waves`, backscattered at `depth` [Å], in place by the round-trip
     phase exp(2 i K depth) with which they leave the forward wave. `K` [rad/Å] is the
-    wave number that the step takes out: 2 pi / wavelength, unless
-    `reference_wave_number` gives it, as a number or per member."""
+    wave number that the step takes out, k_z of each member for a tilted wave
+    (`reference_wave_number`, as a number or per member; 2 pi / wavelength if None)."""
     xp = get_array_module(waves.device)
     if reference_wave_number is None:
         reference_wave_number = 2 * np.pi / waves.wavelength
@@ -1240,11 +1239,13 @@ def _reflected_waves(
     reference_wave_number: Optional[float | np.ndarray] = None,
 ) -> Waves:
     """
-    The wave reflected at the entrance: `backscattered[i]` is the wave that slice `i`
-    of `forward_slices` backscatters at its exit. The reflected wave has the carrier
-    exp(-i K z), and its envelope obeys the forward step, so the reflection of every
-    plane, with its round-trip phase, is added to those from below it and stepped
-    through the slice above it (see `_with_round_trip_phase`).
+    The wave reflected at the entrance: `backscattered[i]` is the component B psi
+    (Eq. 7 in Micron 190 (2025) 103778) that slice `i` of `forward_slices`
+    backscatters at its exit. The reflected wave has the carrier exp(-i K z), and its
+    envelope obeys the forward step, so the reflection of every plane, with its
+    round-trip phase, is added to those from below it and stepped through the slice
+    above it (see `_with_round_trip_phase`). The reflection of an interface is -B, so
+    the result is the negative of the sum of the components.
     """
     depths = np.cumsum([float(s.thickness) for s in forward_slices])
     reflected = None
@@ -1255,7 +1256,25 @@ def _reflected_waves(
         if reflected is not None:
             contribution._array += reflected._array
         reflected, _ = multislice_step(contribution, forward_slices[i], next_slice=None)
+    reflected._array *= -1
     return reflected
+
+
+def _reference_wave_numbers(waves: Waves) -> np.ndarray:
+    """The longitudinal wave number k_z = k / N [rad/Å] of every member of `waves`,
+    with N = sqrt(1 + tan^2(tilt_x) + tan^2(tilt_y)) of its base tilt plus its tilt
+    axes: the wave number that a step takes out of a wave along its direction."""
+    shape = waves.shape[:-2]
+    tilts = np.broadcast_to(np.asarray(waves.base_tilt, dtype=float), shape + (2,))
+    tilts = tilts.copy()
+    for i, axis in enumerate(waves.ensemble_axes_metadata):
+        if hasattr(axis, "tilt"):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            extent = [1] * len(shape) + [2]
+            extent[i] = len(values)
+            tilts += values.reshape(extent)
+    tangent = np.tan(tilts / 1e3)
+    return 2 * np.pi / waves.wavelength / np.sqrt(1 + np.sum(tangent**2, axis=-1))
 
 
 def _back_propagate_backscattered_waves(
@@ -1271,7 +1290,16 @@ def _back_propagate_backscattered_waves(
 
     `backscattered_waves` are those of one configuration, with one exit plane after
     every slice and the entrance plane first, and `forward_slices` are the slices its
-    forward pass used.
+    forward pass used. The reflected wave has the carrier exp(-i K z), and its envelope
+    obeys the forward step, so it is stepped through slice `i` from plane `i + 1` to
+    plane `i`. A wave backscattered at depth z leaves the forward wave, of carrier
+    exp(i K z), with the round-trip phase exp(2 i K z). `K` [rad/Å] is the wave number
+    that the step takes out, k_z = k cos(theta) of each member for a tilted wave
+    (`reference_wave_number`, as a number or per member; 2 pi / wavelength if None).
+
+    The stored waves are the backscattered components B psi of Eq. 7 in Micron 190
+    (2025) 103778, which are minus the reflected wave: the reflection of an interface
+    is -B to first order.
     """
     depths = np.cumsum([0.0] + [float(s.thickness) for s in forward_slices])
 
@@ -1745,6 +1773,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         potential: BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         multislice_func: Optional[Callable] = None,
+        *,
+        _warn_deprecated: bool = True,
         **multislice_func_kwargs,
     ):
         if multislice_func is None:
@@ -1766,17 +1796,19 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             if not _reflects(multislice_func_kwargs.get("algorithm")):
                 raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
 
+        # the per-task rebuild of a lazy run does not warn again
         if multislice_func_kwargs.get("return_backscattered", False):
             from abtem.atoms import _stacklevel_outside_package
 
-            warnings.warn(
-                "return_backscattered is deprecated and will be removed in abTEM 1.2: "
-                "add a detector with reflected=True, e.g. WavesDetector(reflected="
-                "True), which gives the wave reflected at the entrance without "
-                "exit_planes=1.",
-                FutureWarning,
-                stacklevel=_stacklevel_outside_package(),
-            )
+            if _warn_deprecated:
+                warnings.warn(
+                    "return_backscattered is deprecated and will be removed in abTEM "
+                    "1.2: add a detector with reflected=True, e.g. WavesDetector("
+                    "reflected=True), which gives the wave reflected at the entrance "
+                    "without exit_planes=1.",
+                    FutureWarning,
+                    stacklevel=_stacklevel_outside_package(),
+                )
             detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
@@ -2031,7 +2063,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         potential = potential_partial(*args)
         potential = potential.item()
-        transform = MultisliceTransform(potential, **kwargs)
+        transform = MultisliceTransform(potential, _warn_deprecated=False, **kwargs)
 
         ndims = len(transform.ensemble_shape)
         wrapped_transform = _wrap_with_array(transform, ndims)

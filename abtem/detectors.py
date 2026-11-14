@@ -376,10 +376,13 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        If True, the detector measures the wave reflected at the entrance of the
        specimen instead of the transmitted one, with angles measured from -z and x, y
        in the specimen's frame. It has no exit-plane axis. Only for a multislice
-       algorithm that reflects (default False). A face of the specimen reflects only
-       if the potential has a vacuum slice on that side of it, so the potential needs
-       at least one vacuum slice before and one after the specimen. With a vacuum
-       slice on one side only, the transmitted wave is biased as well.
+       algorithm that reflects (default False); applied to waves directly with
+       `detect`, it measures those waves. A face of the specimen reflects only if the
+       potential has a vacuum slice on that side of it, so the potential needs at least
+       one vacuum slice before and one after the specimen. With a vacuum slice on one
+       side only, the transmitted wave is biased as well. The multislice keeps the wave
+       backscattered at every slice until the end of the pass, so a block of waves takes
+       the memory of one wave per slice more, and the automatic batch is smaller.
     """
 
     _splits_energy_ensembles = True
@@ -2853,12 +2856,12 @@ class WavesDetector(BaseDetector):
        detectors are given, so the data is left on the calculation device rather
        than forcing a device-to-host copy of every exit wave.
     url : str, optional
-    reflected : bool, optional
-        If True, measure the wave reflected at the entrance (see
-        :class:`BaseDetector`). Default is False.
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    reflected : bool, optional
+        If True, measure the wave reflected at the entrance (see
+        :class:`BaseDetector`). Default is False.
     average_frozen_phonons : bool, optional
        If True, return the configuration-averaged wave function <ψ> of a
        frozen-phonon ensemble, the coherent (elastic) wave, instead of the wave

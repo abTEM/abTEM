@@ -295,3 +295,29 @@ def test_the_reflection_of_a_tilted_flat_slab_is_the_airy_reflection():
         np.testing.assert_allclose(
             np.abs(array.mean(axis=(-2, -1))) ** 2, expected, rtol=0.01
         )
+
+
+def test_a_weak_reflection_is_the_same_in_single_and_in_double_precision():
+    # Oracle: double precision. Graphene at 30 keV reflects about 1e-14 of the incident
+    # intensity into the specular beam. The backscatter of a slice is the difference
+    # of two wave numbers of 90 rad/Å, which in single precision has an absolute error
+    # of about 1e-5 rad/Å unless the common wave number is left out of both; over 100
+    # slices that was a specular beam 4 to 10 times too intense.
+    atoms = abtem.orthogonalize_cell(ase.build.graphene(vacuum=1.0))
+
+    def specular_intensity(precision):
+        with abtem.config.set({"precision": precision, "fft": "numpy"}):
+            potential = abtem.Potential(
+                atoms, sampling=0.25, slice_thickness=0.02, projection="finite"
+            )
+            reflected = abtem.PlaneWave(energy=30e3).multislice(
+                potential,
+                algorithm=LanczosMultislice(),
+                detectors=abtem.WavesDetector(reflected=True),
+                lazy=False,
+            )
+        return abs(to_host_array(reflected).mean()) ** 2
+
+    double = specular_intensity("float64")
+    assert 1e-15 < double < 1e-13
+    assert specular_intensity("float32") == pytest.approx(double, rel=0.5, abs=0)

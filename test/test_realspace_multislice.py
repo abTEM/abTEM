@@ -1,3 +1,5 @@
+import os
+
 import ase
 import ase.build
 import numpy as np
@@ -534,6 +536,97 @@ def _random_slices(exit_planes):
         array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
     )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_the_deprecated_output_of_two_configurations_and_detectors(self, lazy):
+        # guards the deprecated output until it is removed: each configuration of a
+        # frozen-phonon potential gives the outputs of its run alone
+        atoms = ase.build.bulk("Si", cubic=True)
+        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
+        kwargs = dict(gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1)
+        detectors = [abtem.AnnularDetector(0, 20), abtem.PixelatedDetector()]
+        algorithm = RealSpaceMultislice(expansion_scope="full")
+
+        def run(potential, lazy):
+            results = abtem.PlaneWave(energy=100e3).multislice(
+                potential,
+                detectors=detectors,
+                algorithm=algorithm,
+                return_backscattered=True,
+                lazy=lazy,
+            )
+            if lazy:
+                results = [
+                    r.compute(scheduler="synchronous", progress_bar=False)
+                    for r in results
+                ]
+            return [to_host_array(r.array) for r in results]
+
+        members = [
+            run(abtem.Potential(config, **kwargs), False) for config in frozen_phonons
+        ]
+        result = run(abtem.Potential(frozen_phonons, **kwargs), lazy)
+        assert len(result) == 3
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    def test_a_lazy_deprecated_call_warns_once(self):
+        # the tasks of a lazy run rebuild the transform, and must not warn again
+        with pytest.warns(FutureWarning) as record:
+            outputs = abtem.PlaneWave(energy=100e3).multislice(
+                _random_slices(1),
+                algorithm=RealSpaceMultislice(expansion_scope="full"),
+                return_backscattered=True,
+                lazy=True,
+            )
+            for output in outputs:
+                output.compute(scheduler="synchronous", progress_bar=False)
+        messages = [str(r.message) for r in record]
+        assert sum("return_backscattered" in m for m in messages) == 1
+
+
+@pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
+class TestDeprecatedExpansionScope:
+    """The deprecated expansion_scope: each value warns at the caller's line, and the
+    algorithms compare equal as before."""
+
+    @pytest.mark.parametrize(
+        "make, match",
+        [
+            (lambda: RealSpaceMultislice(expansion_scope="full"), "series of the full"),
+            (lambda: RealSpaceMultislice(expansion_scope="propagator"), "leave it out"),
+            (lambda: FourierMultislice(expansion_scope="propagator"), "no effect"),
+        ],
+    )
+    def test_an_expansion_scope_warns_at_the_callers_line(self, make, match):
+        with pytest.warns(FutureWarning, match=match) as record:
+            make()
+        assert all(os.path.samefile(r.filename, __file__) for r in record)
+
+    def test_the_algorithms_compare_as_before(self):
+        with pytest.warns(FutureWarning):
+            assert RealSpaceMultislice() == RealSpaceMultislice(
+                expansion_scope="propagator"
+            )
+            assert FourierMultislice() == FourierMultislice(
+                expansion_scope="propagator"
+            )
+        assert RealSpaceMultislice().expansion_scope == "propagator"
+        assert FourierMultislice().expansion_scope == "propagator"
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: RealSpaceMultislice(expansion_scope="bogus"),
+            lambda: FourierMultislice(expansion_scope="full"),
+        ],
+    )
+    def test_an_unknown_expansion_scope_is_refused(self, make):
+        with pytest.raises(ValueError, match="expansion_scope"):
+            make()
+
 
 class TestBackscattering:
     """The wave reflected at the entrance, measured by detectors with
@@ -556,14 +649,68 @@ class TestBackscattering:
         with pytest.raises(ValueError, match="cannot be used here"):
             s_matrix.scan(detectors=abtem.AnnularDetector(0, 20, reflected=True))
 
+    def test_the_multislice_function_refuses_what_the_transform_refuses(self):
+        # multislice_and_detect is also called directly, without MultisliceTransform
+        from abtem.multislice import (
+            MultisliceTransform,
+            multislice_and_detect,
+            transition_potential_multislice_and_detect,
+        )
+
+        potential = _random_slices(None)
+        waves = abtem.PlaneWave(energy=100e3).match_grid(potential).build(lazy=False)
+        reflected = [abtem.WavesDetector(reflected=True)]
+        with pytest.raises(ValueError, match="needs an algorithm that reflects"):
+            multislice_and_detect(waves, potential, reflected, RealSpaceMultislice())
+        with pytest.warns(FutureWarning):
+            full = RealSpaceMultislice(expansion_scope="full")
+        with pytest.raises(ValueError, match="not both"):
+            multislice_and_detect(
+                waves, _random_slices(1), reflected, full, return_backscattered=True
+            )
+        with pytest.raises(ValueError, match="only for the elastic multislice"):
+            MultisliceTransform(
+                potential,
+                reflected,
+                multislice_func=transition_potential_multislice_and_detect,
+                algorithm=full,
+            )
+
+    def test_the_automatic_batch_counts_the_waves_a_reflected_detector_keeps(self):
+        # a reflected detector keeps the backscattered wave of every slice of a block
+        from abtem.core.chunks import estimate_scan_batch_size
+        from abtem.waves import _max_batch_with_exit_planes
+
+        potential = abtem.Potential(
+            ase.build.bulk("Si", cubic=True) * (1, 1, 6), gpts=64, slice_thickness=0.5
+        )
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20).match_grid(potential)
+        annular = abtem.AnnularDetector(0, 20)
+        assert _max_batch_with_exit_planes(probe, potential, [annular], "auto") == (
+            "auto"
+        )
+        batch = _max_batch_with_exit_planes(
+            probe,
+            potential,
+            [annular, abtem.AnnularDetector(0, 20, reflected=True)],
+            "auto",
+        )
+        unreduced = estimate_scan_batch_size(probe.gpts, probe.dtype, "cpu")
+        # the kept waves, and one more for the two annular outputs
+        assert batch == unreduced // (potential.num_slices + 1)
+
     @pytest.mark.parametrize("lazy", [False, True])
-    def test_the_reflected_wave_is_the_deprecated_one_at_the_entrance(self, lazy):
+    def test_the_reflected_wave_is_minus_the_deprecated_one_at_the_entrance(
+        self, lazy
+    ):
+        # the deprecated output is the backscattered component B psi, the reflected
+        # wave is -B psi
         with pytest.warns(FutureWarning, match="return_backscattered is deprecated"):
             _, old = _deprecated_backscattered_arrays(_random_slices(1), lazy)
         transmitted, reflected = _multislice_arrays(_random_slices(None), lazy)
         assert reflected.shape == transmitted.shape
         assert np.abs(reflected).max() > 0
-        np.testing.assert_allclose(reflected, old[0], rtol=1e-5, atol=1e-9)
+        np.testing.assert_allclose(reflected, -old[0], rtol=1e-5, atol=1e-9)
 
     @pytest.mark.parametrize("lazy", [False, True])
     def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy):
@@ -605,7 +752,8 @@ class TestBackscattering:
             abtem.AnnularDetector(inner=0, outer=20),
             abtem.AnnularDetector(inner=0, outer=20, reflected=True),
         ]
-        scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(2, 1))
+        # three positions: no scan axis has the size of the two configurations
+        scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 1))
         probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
         algorithm = RealSpaceMultislice(expansion_scope="full")
         eager = probe.scan(
@@ -614,7 +762,7 @@ class TestBackscattering:
         lazy = probe.scan(
             potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
         )
-        assert eager[0].shape == (4, 2, 1) and eager[1].shape == (2, 1)
+        assert eager[0].shape == (4, 3, 1) and eager[1].shape == (3, 1)
         for e, measurement in zip(eager, lazy):
             assert measurement.shape == e.shape
             # synchronously, as the other tests here: Numba's workqueue layer aborts
@@ -940,40 +1088,48 @@ class TestFullExpansionChunking:
         assert not np.any(backscattered)
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
-    @pytest.mark.parametrize("order", [1, 2])
-    def test_the_backscattered_wave_of_a_flat_slab_is_the_airy_reflection(
-        self, order, device
-    ):
+    def test_the_backscattered_wave_of_a_flat_slab_is_the_airy_reflection(self, device):
         # Oracle: the reflection of a medium of wave number k2 = sqrt(k^2 + 2 k sigma
-        # V0), which oscillates with the thickness d, as the reflections of the two
-        # faces add with the round-trip phase exp(2 i k2 d). d covers two periods.
-        energy, v0, dz = 1000.0, 10.0, 0.01
-        k1 = 2 * np.pi / abtem.core.energy.energy2wavelength(energy)
-        k2 = np.sqrt(k1**2 + 2 * k1 * abtem.core.energy.energy2sigma(energy) * v0)
-        r12 = (k1 - k2) / (k1 + k2)
+        # V0) for a wave along (tan x, tan y, 1), with the longitudinal wave numbers
+        # k_z of the two media; the reflections of the faces add with the round trip
+        # exp(2 i k2_z d). The amplitude is compared, not |r|^2: it is r times the
+        # round trip exp(2 i k1_z z0) to the front face at z0, so a wrong sign or
+        # depth, a missing step through the slab (d up to 2.5 Å) or the untilted k for
+        # a tilted member would fail.
+        energy, v0, dz, vacuum = 1000.0, 10.0, 0.01, 20
+        k = 2 * np.pi / abtem.core.energy.energy2wavelength(energy)
+        k2 = k**2 + 2 * k * abtem.core.energy.energy2sigma(energy) * v0
+        tilts_x = [0.0, 100.0]
 
-        expected, reflected = [], []
-        for n in (2, 6, 10, 14, 18, 26, 34):
-            phase = np.exp(2j * k2 * n * dz)
-            expected.append(abs(r12 * (1 - phase) / (1 - r12**2 * phase)) ** 2)
-            profile = np.r_[np.zeros(20), np.full(n, v0 * dz), np.zeros(20)]
+        for n in (2, 6, 18, 250):
+            profile = np.r_[np.zeros(vacuum), np.full(n, v0 * dz), np.zeros(vacuum)]
             with abtem.config.set({"device": device}):
                 potential = abtem.PotentialArray(
                     np.ones((len(profile), 8, 8), np.float32) * profile[:, None, None],
                     slice_thickness=dz,
                     sampling=0.5,
                 )
-                wave = abtem.PlaneWave(energy=energy).multislice(
+                reflected = abtem.PlaneWave(
+                    energy=energy, tilt=(tilts_x, 0.0)
+                ).multislice(
                     potential,
                     detectors=abtem.WavesDetector(reflected=True),
-                    algorithm=RealSpaceMultislice(order=order, expansion_scope="full"),
+                    algorithm=RealSpaceMultislice(order=1, expansion_scope="full"),
                     lazy=False,
                 )
-            reflected.append(abs(to_host_array(wave.array).mean()) ** 2)
+            stored = to_host_array(reflected.array).mean(axis=(-2, -1))
 
-        np.testing.assert_allclose(
-            reflected, expected, rtol=0.03, atol=0.01 * max(expected)
-        )
+            expected = []
+            for tilt in tilts_x:
+                transverse = (k * np.sin(tilt / 1e3)) ** 2
+                k1z, k2z = np.sqrt(k**2 - transverse), np.sqrt(k2 - transverse)
+                r12 = (k1z - k2z) / (k1z + k2z)
+                phase = np.exp(2j * k2z * n * dz)
+                r = r12 * (1 - phase) / (1 - r12**2 * phase)
+                expected.append(r * np.exp(2j * k1z * vacuum * dz))
+            np.testing.assert_allclose(
+                stored, expected, rtol=0.03, err_msg=f"{n} slices"
+            )
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_backscattering_of_a_slab_followed_by_vacuum(self, device):
