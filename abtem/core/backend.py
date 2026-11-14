@@ -21,17 +21,21 @@ import scipy.ndimage  # type: ignore
 from abtem.core.config import config
 from abtem.core.config import get as _config_get
 
+# The import error is kept and chained into the error raised when CuPy is used.
+_cupy_import_error: ImportError | None = None
 try:
     import cupy as cp  # type: ignore
-except ModuleNotFoundError:
+except ImportError as error:
     cp = None
-except ImportError:
-    if config.get("device") == "gpu":
+    _cupy_import_error = error
+    # "No module named 'cupy'" means not installed; any other error, a broken install.
+    if config.get("device") == "gpu" and not (
+        isinstance(error, ModuleNotFoundError) and error.name == "cupy"
+    ):
         warnings.warn(
             "The CuPy library could not be imported. Please check your installation, or"
             " change your configuration to use CPU."
         )
-    cp = None
 
 
 try:
@@ -121,10 +125,12 @@ logger = logging.getLogger(__name__)
 
 def check_cupy_is_installed():
     """
-    Check if CuPy is installed, raise an error if not.
+    Raise an error if CuPy could not be imported, chained from the import error.
     """
     if cp is None:
-        raise RuntimeError("CuPy is not installed, GPU calculations disabled")
+        raise RuntimeError(
+            "CuPy could not be imported, GPU calculations disabled"
+        ) from _cupy_import_error
 
 
 def check_mps_is_available():
