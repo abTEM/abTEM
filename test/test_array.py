@@ -962,6 +962,8 @@ _LINEAR_AXIS_ITEMS = [
 def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
     axis, item, step, lazy, device
 ):
+    if lazy and device == "mps" and step is None:
+        pytest.skip("dask indexes with an array through numpy.take, which torch lacks")
     host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
     images = Images(
         copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]
