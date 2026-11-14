@@ -1000,6 +1000,7 @@ def multislice_and_detect(
                 ],
                 forward_slices,
                 multislice_step,
+                _reference_wave_numbers(waves_input),
             )
 
     # Handle final output if not using intermediate measurements
@@ -1013,6 +1014,23 @@ def multislice_and_detect(
     tqdm_pbar.close_if_exists()
 
     return measurements
+
+
+def _reference_wave_numbers(waves: Waves) -> np.ndarray:
+    """The longitudinal wave number k_z = k / N [rad/Å] of every member of `waves`,
+    with N = sqrt(1 + tan^2(tilt_x) + tan^2(tilt_y)) of its base tilt plus its tilt
+    axes: the wave number that a step takes out of a wave along its direction."""
+    shape = waves.shape[:-2]
+    tilts = np.broadcast_to(np.asarray(waves.base_tilt, dtype=float), shape + (2,))
+    tilts = tilts.copy()
+    for i, axis in enumerate(waves.ensemble_axes_metadata):
+        if hasattr(axis, "tilt"):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            extent = [1] * len(shape) + [2]
+            extent[i] = len(values)
+            tilts += values.reshape(extent)
+    tangent = np.tan(tilts / 1e3)
+    return 2 * np.pi / waves.wavelength / np.sqrt(1 + np.sum(tangent**2, axis=-1))
 
 
 def _back_propagate_backscattered_waves(
@@ -1031,8 +1049,12 @@ def _back_propagate_backscattered_waves(
     obeys the forward step, so it is stepped through slice `i` from plane `i + 1` to
     plane `i`. A wave backscattered at depth z leaves the forward wave, of carrier
     exp(i K z), with the round-trip phase exp(2 i K z). `K` [rad/Å] is the wave number
-    that the step takes out: 2 pi / wavelength, unless `reference_wave_number` gives
-    it, as a number or per member.
+    that the step takes out, k_z = k cos(theta) of each member for a tilted wave
+    (`reference_wave_number`, as a number or per member; 2 pi / wavelength if None).
+
+    The stored waves are the backscattered components B psi of Eq. 7 in Micron 190
+    (2025) 103778, which are minus the reflected wave: the reflection of an interface
+    is -B to first order.
     """
     xp = get_array_module(backscattered_waves.device)
     if reference_wave_number is None:
