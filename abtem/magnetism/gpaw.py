@@ -586,8 +586,7 @@ class _GPAWMagnetics(_FieldBuilder):
         return _fourier_slice_integrals(array, self.slice_limits, self.box[2])
 
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
-        if last_slice is None:
-            last_slice = self.num_slices
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         # The field is computed from the calculator once and its slices kept, so
         # that building or chunking the slices range by range does not repeat it.

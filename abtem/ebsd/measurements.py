@@ -9,6 +9,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
+from abtem.array import _compute
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis
 from abtem.core.utils import CopyMixin, EqualityMixin
 from abtem.ebsd.projections import (
@@ -243,28 +244,47 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         """Whether the intensities are a dask array awaiting computation."""
         return isinstance(self._array, da.core.Array)
 
-    def compute(self, **kwargs) -> "SphericalPattern":
+    def compute(self, **kwargs) -> "SphericalPattern | tuple[SphericalPattern, tuple]":
         """Compute a lazy pattern, returning one holding a plain array.
+
+        The scheduler is chosen as in :meth:`abtem.array.ArrayObject.compute`: the
+        synchronous one (or the dask-cuda client) for a graph that holds GPU or
+        Metal work, and dask's default one otherwise. A ``scheduler`` in `kwargs`
+        overrides it.
 
         Parameters
         ----------
         kwargs :
-            Passed to :meth:`dask.array.Array.compute`.
+            As for :meth:`abtem.array.ArrayObject.compute`: ``progress_bar``, which
+            displays a progress bar during computation with a local scheduler (by
+            default the one set by ``diagnostics.progress_bar``), ``profiler`` and
+            ``resource_profiler``, and additional keyword arguments passed to
+            `dask.compute`.
 
         Returns
         -------
         pattern : SphericalPattern
-            Self, if the pattern was not lazy.
+            Self, if the pattern was not lazy. With ``profiler`` or
+            ``resource_profiler``, a tuple of the pattern and the profilers.
         """
         if not isinstance(self._array, da.core.Array):
             return self
 
-        return self.__class__(
-            self._array.compute(**kwargs),
+        computed = self.__class__(
+            self._array,
             self._directions,
             ensemble_axes_metadata=self._ensemble_axes_metadata,
             metadata=self._metadata,
         )
+        _, profilers = _compute([computed], **kwargs)
+        if profilers:
+            return computed, profilers
+        return computed
+
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `_compute` stores the computed array through
+        here, as it does for an `ArrayObject`."""
+        self._array = array
 
     @property
     def directions(self) -> np.ndarray:

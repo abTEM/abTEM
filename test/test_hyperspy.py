@@ -192,6 +192,45 @@ def test_to_hyperspy_of_reciprocal_space_waves(lazy, device):
     np.testing.assert_array_equal(_host(signal.data), expected)
 
 
+@pytest.mark.parametrize("transpose", [True, False])
+@lazy_params
+@devices
+def test_to_hyperspy_axes_describe_the_axes_of_the_data(transpose, lazy, device):
+    pytest.importorskip("hyperspy")
+    # Every axis has its own size (3 and 4 members, 16 x 21 pixels), so an axis
+    # list in an order other than the data's gives a wrong size or coordinates.
+    shape = (3, 4, 16, 21)
+    array = np.arange(np.prod(shape), dtype=get_dtype()).reshape(shape)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 2, -1, -1))
+    images = Images(
+        array,
+        sampling=SAMPLING,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=(0.0, 1.0, 2.0)),
+            OrdinalAxis(label="b", values=(0.0, 1.0, 2.0, 3.0)),
+        ],
+    ).copy_to_device(device)
+
+    signal = images.to_hyperspy(transpose=transpose)
+
+    # transpose=True reverses the base axes only
+    order = (0, 1, 3, 2) if transpose else (0, 1, 2, 3)
+    data = _host(signal.data)
+    np.testing.assert_array_equal(data, np.transpose(_host(images.array), order))
+    manager = signal.axes_manager
+    axes = sorted(
+        manager.navigation_axes + manager.signal_axes, key=lambda a: a.index_in_array
+    )
+    assert [axis.name for axis in axes] == [
+        images.axes_metadata[i].label for i in order
+    ]
+    assert [axis.size for axis in axes] == list(data.shape)
+    for axis, i in zip(axes, order):
+        expected = images.axes_metadata[i].coordinates(images.shape[i])
+        np.testing.assert_allclose(axis.axis, expected, rtol=1e-12)
+
+
 @lazy_params
 @devices
 def test_to_quantem_of_reciprocal_space_waves(lazy, device, quantem_records):
