@@ -15,10 +15,9 @@ Features:
   periodic slab, as a reference for the multislice algorithms at low energies. It solves the relativistically corrected
   Helmholtz equation in a basis of beams (evanescent ones included) by the Numerov method and a block-tridiagonal solve, and
   returns the transmitted and the reflected wave. The basis is reduced by the translation and point symmetry of the structure.
-  The beam cutoff follows the energy by default (twice 1 / wavelength, at least 4.5 1/Å), which converges the propagating
-  beams to about a percent; that is expensive, and `cutoff` takes a smaller value for a cheaper solution
-  Normal incidence, on the CPU, without absorption
-  ([PR #633](https://github.com/abTEM/abTEM/pull/633))
+  A plane wave of any direction, in single or double precision (the `precision` of the configuration), on the CPU and on CUDA
+  devices, without absorption
+  ([PR #633](https://github.com/abTEM/abTEM/pull/633), [PR #634](https://github.com/abTEM/abTEM/pull/634))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
