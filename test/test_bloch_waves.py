@@ -2452,3 +2452,50 @@ def test_auto_solver_chooses_eigh_for_small_problems_on_a_gpu():
     A = cp.asarray(_hermitian(100, np.float32))
     assert _select_solver("auto", A, np.array([50.0]))[0] == "eigh"
     assert _select_solver("auto", np.asarray(A.get()), np.array([50.0]))[0] == "eigh"
+
+
+def test_structure_factor_scattering_factors_follow_the_occupancy():
+    # calculate_scattering_factors left the occupancy out, whatever it was set to
+    atoms = bulk("Si", cubic=True)
+
+    def factors(occupancy):
+        return StructureFactor(
+            atoms,
+            g_max=2.0,
+            parametrization="lobato",
+            thermal_sigma=0.0,
+            occupancy=occupancy,
+        ).calculate_scattering_factors()
+
+    np.testing.assert_allclose(factors(0.5), 0.5 * factors(1.0))
+
+
+def test_beam_selection_for_one_orientation_matches_the_plain_selection():
+    # An orientation selects with the same `<= sg_max` as no orientation: with an
+    # sg_max equal to a beam's excitation error the two disagreed, and the eager
+    # ensemble then wrote more beams than the mask it had made.
+    from ase.cell import Cell
+
+    from abtem.bloch.utils import (
+        excitation_errors,
+        filter_reciprocal_space_vectors,
+        reciprocal_cell,
+    )
+
+    cell = Cell(np.diag([5.43, 5.43, 5.43]))
+    hkl = np.array(
+        [[h, k, l] for h in range(-3, 4) for k in range(-3, 4) for l in range(-3, 4)]
+    )
+    errors = np.abs(
+        excitation_errors(hkl @ reciprocal_cell(cell), 200e3, use_wave_eq=False)
+    )
+    sg_max = np.sort(errors)[40]  # the excitation error of a beam, exactly
+    assert (errors == sg_max).any()
+
+    plain = filter_reciprocal_space_vectors(hkl, cell, 200e3, sg_max, 100.0)
+    oriented = filter_reciprocal_space_vectors(
+        hkl, cell, 200e3, sg_max, 100.0, orientation_matrices=np.eye(3)
+    )
+
+    np.testing.assert_array_equal(oriented, plain)
+    assert plain[errors == sg_max].all()
