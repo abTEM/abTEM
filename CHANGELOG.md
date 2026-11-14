@@ -18,6 +18,13 @@ Features:
   and needs no `exit_planes=1`, but a block of waves keeps the wave backscattered at every slice, which the automatic
   batch size counts. It needs a multislice algorithm that reflects (`LanczosMultislice`, with #629), and is refused
   elsewhere (PRISM, the core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
+- `LanczosMultislice`, a multislice algorithm with the exact one-way root of the full operator,
+  `sqrt(k^2 + laplacian + 2 k sigma V) - k`, by a Lanczos iteration on the Fourier coefficients of the wave (an exact
+  Laplacian), with the backscatter correction of every slice. The Taylor series of that operator diverges where
+  `2 sigma V / k` reaches 1, at low energies for the whole band and at the nuclei of heavy atoms: on graphene at 1 keV
+  `LanczosMultislice` is within 1.4 % of an exact two-way solution, where the series of order 1 is 7 % and the split
+  step 8 % off. It reflects, so detectors with `reflected=True` measure its reflected wave
+  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
@@ -452,6 +459,10 @@ Bugfixes:
   stopped the elastic `reduce` and `scan` without `upsample`, eager and lazy. With `ensemble_mean=True`, the eager
   `upsample=True` reduction and the eager `transition_potential_scan` raised an `IndexError`. Results with at
   most one potential ensemble axis are unchanged ([PR #650](https://github.com/abTEM/abTEM/pull/650))
+- `RealSpaceMultislice(expansion_scope="full")` now warns about a potential with the default infinite projection, which
+  puts the whole projected potential of an atom in one slice, so that the potential per unit thickness it needs grows as
+  1 / thickness and the result does not converge: use `projection="finite"`
+  ([PR #629](https://github.com/abTEM/abTEM/pull/629))
 - `RealSpaceMultislice` applies the tilt of the wave function, as `FourierMultislice` does at orders 1 and 2: the
   beams are translated by `tan(tilt)` per unit depth. It ignored the tilt (of `Waves`, `Probe`, `PlaneWave` and tilt
   ensembles) without any message, in both expansion scopes and in the core-loss multislice

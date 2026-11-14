@@ -30,7 +30,7 @@ from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
-from abtem.finite_difference import LaplaceOperator
+from abtem.finite_difference import LaplaceOperator, _exact_root_step
 from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.inelastic.core_loss import (
     TransitionPotential,
@@ -815,6 +815,66 @@ class RealSpaceMultislice:
         warnings.warn(message, FutureWarning, stacklevel=3)
 
 
+@dataclass(frozen=True)
+class LanczosMultislice:
+    """
+    Multislice algorithm with the exact one-way root of the full operator,
+    ``sqrt(k^2 + laplacian + 2 k sigma V) - k``, evaluated by a Lanczos iteration on
+    the Fourier coefficients of the wave (where the Laplacian is exact), with the
+    backscatter correction of every slice (Eq. 10 in Micron 190 (2025) 103778).
+
+    The potential is inside the root, not a phase grating after it, and the wave
+    backscattered at each slice is subtracted from the forward wave: against an exact
+    two-way solution the beams at large angles are within a few percent from 1 to 30
+    keV, where the split step is 30 to 40 % off below 5 keV and the Taylor series of
+    the operator diverges. Detectors with ``reflected=True`` measure the reflected
+    wave. A tilted wave is propagated in the frame of its direction, as in
+    ``FourierMultislice``. The potential must have finite projection.
+
+    Parameters
+    ----------
+    propagating_cutoff : float, optional
+        Fraction of the wave number 1 / wavelength kept (default 0.95): beams beyond
+        it, evanescent and grazing, are removed.
+    tolerance : float, optional
+        Change of the coefficients of the Lanczos iteration below which a function of
+        the operator is converged (default 1e-8). The functions of the backscattered
+        component, itself a correction of a few percent, are converged to at most
+        1e-5.
+    max_iterations : int, optional
+        Maximum number of Lanczos iterations (default 60).
+    """
+
+    propagating_cutoff: float = 0.95
+    tolerance: float = 1e-8
+    max_iterations: int = 60
+
+    def __post_init__(self):
+        if not 0.0 < self.propagating_cutoff < 1.0:
+            raise ValueError("propagating_cutoff must be between 0 and 1")
+        if self.tolerance <= 0.0:
+            raise ValueError("tolerance must be positive")
+        if self.max_iterations < 2:
+            raise ValueError("max_iterations must be at least 2")
+
+
+def _warn_if_infinite_projection(potential) -> None:
+    """Warn that the full operator does not converge with the infinite projection."""
+    from abtem.integrals import ScatteringFactorProjectionIntegrals
+
+    if isinstance(
+        getattr(potential, "integrator", None), ScatteringFactorProjectionIntegrals
+    ):
+        warnings.warn(
+            "the full operator needs the potential per unit thickness, but the "
+            "infinite projection (the default) puts the whole projected potential of "
+            "an atom in the slice that holds it, which grows as 1 / thickness when the "
+            "slices get thinner, so the result does not converge. Build the potential "
+            "with projection='finite'.",
+            UserWarning,
+        )
+
+
 def multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -890,9 +950,11 @@ def multislice_and_detect(
     waves = waves.copy()
 
     if return_backscattered:
+        # the deprecated flag is only for the deprecated series of the full operator
         if not _is_full_expansion_scope(algorithm):
             raise ValueError(
-                "Backscattering contributions require expansion_scope='full'."
+                "Backscattering contributions require expansion_scope='full'; "
+                "for LanczosMultislice use a detector with reflected=True."
             )
         # A slice's backscattered wave is kept only at an exit plane, and the
         # back-propagation sums the kept waves into the entrance plane.
@@ -920,7 +982,23 @@ def multislice_and_detect(
                 order=algorithm.order,
             )
 
+    elif isinstance(algorithm, LanczosMultislice):
+        _warn_if_infinite_projection(potential)
+
+        # the operator has the tilt of the beams in it: no translation
+        def multislice_step(waves, potential_slice, next_slice=None):
+            return _exact_root_step(
+                waves,
+                potential_slice,
+                next_slice,
+                algorithm.propagating_cutoff,
+                algorithm.tolerance,
+                algorithm.max_iterations,
+            )
+
     else:
+        if _is_full_expansion_scope(algorithm):
+            _warn_if_infinite_projection(potential)
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
@@ -1121,14 +1199,16 @@ def multislice_and_detect(
 
 
 _REFLECTED_DETECTORS_MESSAGE = (
-    "a detector with reflected=True needs an algorithm that reflects; only "
-    "RealSpaceMultislice(expansion_scope='full') does"
+    "a detector with reflected=True needs an algorithm that reflects: "
+    "LanczosMultislice (or the deprecated RealSpaceMultislice(expansion_scope='full'))"
 )
 
 
 def _reflects(algorithm) -> bool:
     """Whether a multislice algorithm makes a backscattered wave at every slice."""
-    return _is_full_expansion_scope(algorithm)
+    return isinstance(algorithm, LanczosMultislice) or _is_full_expansion_scope(
+        algorithm
+    )
 
 
 def _with_round_trip_phase(waves: Waves, depth: float, reference_wave_number):
@@ -1244,8 +1324,9 @@ _DETECTORS_ELASTIC_MESSAGE = (
 
 
 _FULL_EXPANSION_SCOPE_MESSAGE = (
-    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
-    "core-loss multislice. Use FourierMultislice or RealSpaceMultislice()."
+    "LanczosMultislice and RealSpaceMultislice(expansion_scope='full') are not "
+    "supported by the core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice()."
 )
 
 
@@ -1298,7 +1379,7 @@ def transition_potential_multislice_and_detect(
         # before a graph is built, but the driver is also a public entry point.
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
-    if _is_full_expansion_scope(algorithm):
+    if _reflects(algorithm):
         raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(

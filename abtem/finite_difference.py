@@ -8,10 +8,19 @@ import scipy.ndimage  # type: ignore
 from numba import njit, prange  # type: ignore
 from scipy.special import binom  # type: ignore
 
+from abtem._lanczos import (
+    excess_wave_number,
+    exponential_of_root,
+    inverse_wave_number,
+    lanczos_function,
+    step_and_current_wave_number,
+)
 from abtem.antialias import AntialiasAperture
+from abtem.core import config
 from abtem.core._numba_threads import numba_thread_cap
 from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.fft import fft2, ifft2
 from abtem.core.utils import get_dtype
 
 if TYPE_CHECKING:
@@ -142,7 +151,7 @@ def _build_matrix(offsets: list[int]):
     import sympy  # type: ignore
 
     """Constructs the equation system matrix for the finite difference coefficients"""
-    A = [([1 for _ in offsets])]
+    A = [[1 for _ in offsets]]
     for i in range(1, len(offsets)):
         A.append([j**i for j in offsets])
     return sympy.Matrix(A)
@@ -228,6 +237,51 @@ __device__ __forceinline__ void laplace_stencil_impl(
     }
 }
 
+// The same stencil with periodic boundaries, on all of H x W: the offsets wrap around
+// (needs n < H and n < W), so that no padded copy and no crop is needed.
+template<typename T>
+__device__ __forceinline__ void laplace_stencil_wrap_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c,
+    const int n,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= H || j >= W) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n; k <= n; k++) {
+            int ii = i + k;
+            ii += (ii < 0) ? H : 0;
+            ii -= (ii >= H) ? H : 0;
+            int jj = j + k;
+            jj += (jj < 0) ? W : 0;
+            jj -= (jj >= W) ? W : 0;
+            cumul += c[k + n] * (am[(long long)ii * W + j]
+                                 + am[(long long)i * W + jj]);
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul;
+    }
+}
+
+extern "C" __global__ void laplace_stencil_wrap_c64(
+    complex<float>* out, const complex<float>* a, const complex<float>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_wrap_impl<complex<float> >(out, a, c, n, M, H, W);
+}
+
+extern "C" __global__ void laplace_stencil_wrap_c128(
+    complex<double>* out, const complex<double>* a, const complex<double>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_wrap_impl<complex<double> >(out, a, c, n, M, H, W);
+}
+
 extern "C" __global__ void laplace_stencil_c64(
     complex<float>* out, const complex<float>* a, const complex<float>* c,
     int n, int M, int H, int W
@@ -245,10 +299,13 @@ extern "C" __global__ void laplace_stencil_c128(
 
 _laplace_stencil_c64 = None
 _laplace_stencil_c128 = None
+_laplace_stencil_wrap_c64 = None
+_laplace_stencil_wrap_c128 = None
 
 
 def _init_laplace_stencil_kernels():
     global _laplace_stencil_c64, _laplace_stencil_c128
+    global _laplace_stencil_wrap_c64, _laplace_stencil_wrap_c128
     if _laplace_stencil_c64 is None:
         # no --std option: the dialect requirement comes from CuPy's bundled
         # headers, and each backend's default tracks them (CuPy itself pins no
@@ -259,6 +316,8 @@ def _init_laplace_stencil_kernels():
         # assigned last: a concurrent thread that observes it non-None is then
         # guaranteed to also observe _laplace_stencil_c128 (redundant module
         # compilation from two racing threads is harmless — CuPy caches it)
+        _laplace_stencil_wrap_c128 = mod.get_function("laplace_stencil_wrap_c128")
+        _laplace_stencil_wrap_c64 = mod.get_function("laplace_stencil_wrap_c64")
         _laplace_stencil_c128 = mod.get_function("laplace_stencil_c128")
         _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
 
@@ -309,18 +368,19 @@ def _laplace_operator_stencil(
         # offset k), so undo the roll applied for the CPU stencil above
         c_gpu = cp.asarray(np.roll(c, n))
 
-    def _laplace_stencil_gpu(a):
+    def _laplace_stencil_gpu(a, periodic=False):
         xp = get_array_module(a)
         a = xp.ascontiguousarray(a)
-        out = xp.zeros_like(a)
+        # the periodic kernel writes every element, the other leaves the border zero
+        out = xp.empty_like(a) if periodic else xp.zeros_like(a)
 
         M, H, W = a.shape
 
         _init_laplace_stencil_kernels()
         if a.dtype == xp.complex128:
-            kernel = _laplace_stencil_c128
+            kernel = _laplace_stencil_wrap_c128 if periodic else _laplace_stencil_c128
         elif a.dtype == xp.complex64:
-            kernel = _laplace_stencil_c64
+            kernel = _laplace_stencil_wrap_c64 if periodic else _laplace_stencil_c64
         else:
             raise TypeError(
                 "the GPU Laplacian stencil requires a complex64 or complex128 "
@@ -391,7 +451,7 @@ def _laplace_operator_stencil(
         out[:, rows, columns] = total
         return out
 
-    def _laplace_stencil(a):
+    def _laplace_stencil(a, periodic=False):
         # Store original shape and reshape to 3D
         original_shape = a.shape
         if a.ndim == 2:
@@ -405,7 +465,7 @@ def _laplace_operator_stencil(
         if device == "cpu":
             result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
-            result = _laplace_stencil_gpu(a)
+            result = _laplace_stencil_gpu(a, periodic)
         elif device == "mps":
             result = _laplace_stencil_mps(a)
         else:
@@ -438,7 +498,18 @@ def _laplace_operator_stencil(
         return stencil_with_boundary
 
     if mode != "none":
-        return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
+        padded = _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
+        if device != "gpu":
+            return padded
+
+        def _laplace_stencil_gpu_periodic(a):
+            # the kernel wraps the offsets itself, which needs an array larger than the
+            # stencil; the padding of a copy, and the crop, are for the smaller ones
+            if min(a.shape[-2:]) <= n:
+                return padded(a)
+            return _laplace_stencil(a, periodic=True)
+
+        return _laplace_stencil_gpu_periodic
     else:
         return _laplace_stencil
 
@@ -475,8 +546,11 @@ class LaplaceOperator:
         wavelength, sampling = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap",
-            dtype=get_dtype(complex=True), device=device
+            self._accuracy,
+            prefactor,
+            mode="wrap",
+            dtype=get_dtype(complex=True),
+            device=device,
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
@@ -688,6 +762,171 @@ def full_series(
         temp = conventional_operator(temp, laplace, transmission_function, wavelength)
         series += temp * prefactor
     return series * 1.0j * thickness
+
+
+def _member_tilts(waves: Waves) -> np.ndarray:
+    """The total tilt [mrad] of every member of the ensemble of ``waves``: the base tilt
+    plus the value of each tilt axis, in the order of the axes. Shape (..., 2)."""
+    axes = waves.ensemble_axes_metadata
+    shape = waves.shape[:-2]
+    tilts = np.broadcast_to(
+        np.asarray(waves.base_tilt, dtype=float), shape + (2,)
+    ).copy()
+    for i, axis in enumerate(axes):
+        if hasattr(axis, "tilt"):
+            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
+            extent = [1] * len(axes) + [2]
+            extent[i] = len(values)
+            tilts += values.reshape(extent)
+    return tilts
+
+
+def _propagating_band(waves: Waves, propagating_cutoff: float, shift, xp):
+    """Mask of the Fourier components that the exact root keeps: the propagating band
+    ``|q + k_t| < propagating_cutoff / wavelength`` around the in-plane wave vector of
+    a tilted wave (``shift`` = k_t), within the antialiasing aperture ``|q|``."""
+    nx, ny = waves._valid_gpts
+    dx, dy = waves._valid_sampling
+    qx = xp.asarray(np.fft.fftfreq(nx, dx))[:, None]
+    qy = xp.asarray(np.fft.fftfreq(ny, dy))[None, :]
+    antialias = config.get("antialias.cutoff") / (2 * max(dx, dy))
+    band = propagating_cutoff / energy2wavelength(waves._valid_energy)
+    return ((qx + shift[0]) ** 2 + (qy + shift[1]) ** 2 < band**2) & (
+        qx**2 + qy**2 < antialias**2
+    )
+
+
+def _kinetic_symbol(waves: Waves, shift, k: float, xp) -> np.ndarray:
+    """The kinetic part of the operator on the Fourier coefficients of a wave stored
+    without the carrier of the in-plane wave vector ``shift`` = k_t [1/Å]: the
+    Laplacian of the plane wave q + k_t over 2 k, ``-4 pi^2 |q + k_t|^2 / (2 k)``."""
+    nx, ny = waves._valid_gpts
+    dx, dy = waves._valid_sampling
+    qx = np.fft.fftfreq(nx, dx)[:, None] + shift[0]
+    qy = np.fft.fftfreq(ny, dy)[None, :] + shift[1]
+    symbol = -4 * np.pi**2 * (qx**2 + qy**2) / (2 * k)
+    return xp.asarray(symbol.astype(get_dtype(complex=False)))
+
+
+def _exact_root_step(
+    waves: Waves,
+    potential_slice: PotentialArray,
+    next_slice: PotentialArray | None,
+    propagating_cutoff: float,
+    tolerance: float,
+    max_iterations: int,
+) -> Sequence[Waves]:
+    """A multislice step with the exact one-way root of the full operator, and the
+    backscattered wave of the next slice, by Lanczos iterations (no Taylor series).
+
+    The iterations act on the Fourier coefficients of the waves, where the kinetic
+    part of the operator is exact, so an application of the operator costs one pair
+    of FFTs (for the potential, which acts in real space). A tilted wave travels along
+    (tan x, tan y, 1) and, as in multislice, is stored without its carrier
+    exp(2 pi i (k_t . r + k_zt z)): its coefficient q is the plane wave q + k_t, on
+    the band around -k_t, and the step removes the phase of k_zt."""
+    xp = get_array_module(waves.array)
+
+    if waves.device != potential_slice.device:
+        potential_slice = potential_slice.copy_to_device(device=waves.device)
+        if next_slice is not None:
+            next_slice = next_slice.copy_to_device(device=waves.device)
+
+    thickness = potential_slice.thickness
+    sigma = energy2sigma(waves._valid_energy)
+    wavelength = energy2wavelength(waves._valid_energy)
+    k = 2 * np.pi / wavelength
+    potentials = [potential_slice.array[0] * sigma / thickness]
+    if next_slice is not None:
+        potentials.append(next_slice.array[0] * sigma / thickness)
+
+    def advance(batch, tilt):
+        """The forward and the backscattered wave of a batch of one tilt."""
+        tangent = np.tan(np.asarray(tilt, dtype=float) / 1e3)
+        norm = np.sqrt(1.0 + np.sum(tangent**2))
+        shift = tangent / (wavelength * norm)  # k_t [1/Å]
+        reference = k / norm  # k_zt
+        band = _propagating_band(waves, propagating_cutoff, shift, xp)
+        kinetic = _kinetic_symbol(waves, shift, k, xp) * band
+
+        def operator(potential):
+            """The operator of a potential on the band, on the Fourier coefficients."""
+
+            def apply(spectrum):
+                return kinetic * spectrum + band * fft2(potential * ifft2(spectrum))
+
+            return apply
+
+        current = operator(potentials[0])
+        spectrum = fft2(batch) * band
+        if next_slice is None:
+            batch = lanczos_function(
+                spectrum,
+                current,
+                exponential_of_root(k, thickness, reference),
+                tolerance,
+                max_iterations,
+                xp,
+            )
+            return ifft2(batch), ifft2(xp.zeros_like(batch))
+
+        # B = (k_next - k_current) / (2 k_next), of the paper: Eq. 7 in Micron 190
+        # (2025) 103778 with the operators of both slices. The wave number of the
+        # current slice acts on the stepped wave, a function of the same operator of
+        # the wave that is stepped: (excess * step)(O_current) on the wave before the
+        # step, from the Krylov space of the step itself, at no application of the
+        # operator more, and from one evaluation of the functions. The wave numbers are
+        # less k, which drops out of the difference but would leave it k times the
+        # rounding of the precision. The backscattered
+        # component is a correction of a few percent: its functions are converged to at
+        # most 1e-5, which changes the intensity of a beam by less than 1e-4 of itself
+        # and saves about 40 % of the iterations.
+        correction_tolerance = max(tolerance, 1e-5)
+        batch, current_wave_number = lanczos_function(
+            spectrum,
+            current,
+            step_and_current_wave_number(k, thickness, reference),
+            [tolerance, correction_tolerance],
+            max_iterations,
+            xp,
+        )
+        following = operator(potentials[1])
+        next_wave_number = lanczos_function(
+            batch,
+            following,
+            excess_wave_number(k),
+            correction_tolerance,
+            max_iterations,
+            xp,
+        )
+        backscatter = 0.5 * lanczos_function(
+            next_wave_number - current_wave_number,
+            following,
+            inverse_wave_number(k),
+            correction_tolerance,
+            max_iterations,
+            xp,
+        )
+        batch = batch - backscatter
+        return ifft2(batch), ifft2(backscatter)
+
+    shape = waves._array.shape
+    members = waves._array.reshape((-1,) + shape[-2:])
+    # the members of an ensemble of tilts have a band and an operator each
+    unique, inverse = np.unique(
+        _member_tilts(waves).reshape(-1, 2), axis=0, return_inverse=True
+    )
+    if len(unique) == 1:
+        forward, backscatter = advance(members, tuple(unique[0]))
+    else:
+        forward, backscatter = xp.empty_like(members), xp.empty_like(members)
+        for number, tilt in enumerate(unique):
+            group = xp.asarray(np.flatnonzero(inverse.ravel() == number))
+            forward[group], backscatter[group] = advance(members[group], tuple(tilt))
+
+    waves._array = forward.reshape(shape)
+    kwargs = waves._copy_kwargs(exclude=("array",))
+    return waves, waves.__class__(backscatter.reshape(shape), **kwargs)
 
 
 def multislice_step(
