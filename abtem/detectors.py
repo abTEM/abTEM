@@ -377,9 +377,12 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        specimen instead of the transmitted one, with angles measured from -z and x, y
        in the specimen's frame. It has no exit-plane axis. Only for a multislice
        algorithm that reflects (default False); applied to waves directly with
-       `detect`, it measures those waves. The multislice keeps the wave backscattered
-       at every slice until the end of the pass, so a block of waves takes the memory
-       of one wave per slice more, and the automatic batch is smaller.
+       `detect`, it measures those waves. A face of the specimen reflects only if the
+       potential has a vacuum slice on that side of it, so the potential needs at least
+       one vacuum slice before and one after the specimen. With a vacuum slice on one
+       side only, the transmitted wave is biased as well. The multislice keeps the wave
+       backscattered at every slice until the end of the pass, so a block of waves takes
+       the memory of one wave per slice more, and the automatic batch is smaller.
     """
 
     _splits_energy_ensembles = True

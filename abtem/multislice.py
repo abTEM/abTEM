@@ -781,7 +781,13 @@ class RealSpaceMultislice:
         Deprecated. ``"full"`` expands the transmission operator too, with the
         backscatter correction of each slice (Eq. 10 in Micron 190 (2025) 103778):
         the series of the full operator, which diverges below about 5 keV and will be
-        removed. ``LanczosMultislice`` evaluates that operator exactly.
+        removed. The inverse wave number of the backscatter is the series of Eq. 13,
+        which converges only for in-plane frequencies below 1/wavelength; above it the
+        truncated series grows with the order. The antialiasing aperture passes such
+        frequencies when the sampling is below about wavelength / 3.
+        ``LanczosMultislice`` evaluates that operator exactly and keeps only the
+        frequencies below 0.95/wavelength. The reflected wave needs vacuum slices
+        around the specimen, see :class:`.BaseDetector`.
     """
 
     order: int = 1
@@ -829,7 +835,8 @@ class LanczosMultislice:
     keV, where the split step is 30 to 40 % off below 5 keV and the Taylor series of
     the operator diverges. Detectors with ``reflected=True`` measure the reflected
     wave. A tilted wave is propagated in the frame of its direction, as in
-    ``FourierMultislice``. The potential must have finite projection.
+    ``FourierMultislice``. The potential must have finite projection. The reflected
+    wave needs vacuum slices around the specimen, see :class:`.BaseDetector`.
 
     Parameters
     ----------
