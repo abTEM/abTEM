@@ -1286,3 +1286,37 @@ class TestSMatrixReduceEnergyEnsemble:
         assert isinstance(sma, SMatrixArray)
         assert sma.array.shape[0] == len(TEST_ENERGIES)
         assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
+
+
+def test_smatrix_energy_distribution_keeps_its_weights_and_ensemble_mean():
+    # The axis was built from the energies alone, so the weights were lost and the
+    # ensemble mean dropped, unlike for Probe and PlaneWave.
+    import ase.build
+
+    import abtem
+    from abtem.distributions import gaussian
+
+    energy = gaussian(1e3, 5, center=200e3, sampling_limit=2, ensemble_mean=True)
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True), gpts=(32, 32), slice_thickness=2
+    )
+    probe_axis = abtem.Probe(
+        energy=energy, semiangle_cutoff=20, extent=potential.extent, gpts=32
+    ).ensemble_axes_metadata[0]
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=20, interpolation=1
+    )
+
+    assert s_matrix.ensemble_axes_metadata[0] == probe_axis
+    assert s_matrix.ensemble_axes_metadata[0].weights is not None
+
+    built = s_matrix.build(lazy=False)
+    scanned = s_matrix.scan(
+        scan=abtem.GridScan(gpts=(2, 2), potential=potential),
+        detectors=abtem.AnnularDetector(10, 40),
+        lazy=False,
+    )
+    for result in (built, scanned):
+        axis = result.ensemble_axes_metadata[0]
+        assert axis._ensemble_mean
+        np.testing.assert_allclose(axis.weights, probe_axis.weights)
