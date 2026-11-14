@@ -500,10 +500,6 @@ class _GPAWMagnetics(_FieldBuilder):
         return 1
 
     @property
-    def base_axes_metadata(self):
-        pass
-
-    @property
     def plane(self):
         assert isinstance(self._plane, str)
         return self._plane

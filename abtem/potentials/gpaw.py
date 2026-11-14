@@ -457,7 +457,7 @@ class GPAWPotential(_PotentialBuilder):
         Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in the propagation direction in [Å]
-        (default is 0.5 Å).
+        (default is 1.0 Å).
         If given as a float the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if

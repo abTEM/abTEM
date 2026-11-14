@@ -317,14 +317,12 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         self, ax=None, num_excitations: Union[int, List[int]] = 1, **kwargs
     ):
         if isinstance(num_excitations, int):
-            num_excitations = [1]
+            num_excitations = [num_excitations]
 
         if ax is None:
             fig, axes = plt.subplots(1, len(num_excitations), sharey=True)
         else:
             axes = [ax]
-
-        print(axes)
 
         if isinstance(axes, Axes):
             axes = [axes]

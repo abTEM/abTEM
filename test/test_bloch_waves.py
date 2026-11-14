@@ -2510,3 +2510,162 @@ def test_auto_solver_chooses_eigh_for_small_problems_on_a_gpu():
     A = cp.asarray(_hermitian(100, np.float32))
     assert _select_solver("auto", A, np.array([50.0]))[0] == "eigh"
     assert _select_solver("auto", np.asarray(A.get()), np.array([50.0]))[0] == "eigh"
+
+
+def test_structure_factor_scattering_factors_follow_the_occupancy():
+    # calculate_scattering_factors left the occupancy out, whatever it was set to
+    atoms = bulk("Si", cubic=True)
+
+    def factors(occupancy):
+        return StructureFactor(
+            atoms,
+            g_max=2.0,
+            parametrization="lobato",
+            thermal_sigma=0.0,
+            occupancy=occupancy,
+        ).calculate_scattering_factors()
+
+    np.testing.assert_allclose(factors(0.5), 0.5 * factors(1.0))
+
+
+def test_beam_selection_for_one_orientation_matches_the_plain_selection():
+    # An orientation selects with the same `<= sg_max` as no orientation: with an
+    # sg_max equal to a beam's excitation error the two disagreed, and the eager
+    # ensemble then wrote more beams than the mask it had made.
+    from ase.cell import Cell
+
+    from abtem.bloch.utils import (
+        excitation_errors,
+        filter_reciprocal_space_vectors,
+        reciprocal_cell,
+    )
+
+    cell = Cell(np.diag([5.43, 5.43, 5.43]))
+    hkl = np.array(
+        [[h, k, l] for h in range(-3, 4) for k in range(-3, 4) for l in range(-3, 4)]
+    )
+    errors = np.abs(
+        excitation_errors(hkl @ reciprocal_cell(cell), 200e3, use_wave_eq=False)
+    )
+    sg_max = np.sort(errors)[40]  # the excitation error of a beam, exactly
+    assert (errors == sg_max).any()
+
+    plain = filter_reciprocal_space_vectors(hkl, cell, 200e3, sg_max, 100.0)
+    oriented = filter_reciprocal_space_vectors(
+        hkl, cell, 200e3, sg_max, 100.0, orientation_matrices=np.eye(3)
+    )
+
+    np.testing.assert_array_equal(oriented, plain)
+    assert plain[errors == sg_max].all()
+
+
+def test_rotating_a_rotation_continues_it():
+    # rotate() rebuilt the Bloch waves from the structure factor, so the rotation
+    # of an already rotated object replaced the first rotation
+    bloch_waves = _silicon_bloch_waves("cpu")
+    assert np.allclose(bloch_waves.orientation_matrix, np.eye(3))
+
+    once = bloch_waves.rotate("x", 0.02, "y", 0.015)
+    chained = bloch_waves.rotate("x", 0.02).rotate("y", 0.015)
+    only_the_last = bloch_waves.rotate("y", 0.015)
+
+    np.testing.assert_allclose(chained.orientation_matrix, once.orientation_matrix)
+    assert not np.allclose(chained.orientation_matrix, only_the_last.orientation_matrix)
+    np.testing.assert_allclose(
+        chained.calculate_diffraction_patterns([50.0], lazy=False).array,
+        once.calculate_diffraction_patterns([50.0], lazy=False).array,
+    )
+
+
+def test_rotations_are_about_fixed_axes_in_the_order_given():
+    # the rotations of one call or of a chain compose as R_n ... R_1
+    from scipy.spatial.transform import Rotation
+
+    bloch_waves = _silicon_bloch_waves("cpu")
+    first = Rotation.from_euler("x", 0.3).as_matrix()
+    second = Rotation.from_euler("y", 0.2).as_matrix()
+
+    rotated = bloch_waves.rotate("x", 0.3).rotate("y", 0.2)
+
+    np.testing.assert_allclose(rotated.orientation_matrix, second @ first)
+
+
+def test_rotating_a_rotation_with_a_distribution_continues_it():
+    bloch_waves = _silicon_bloch_waves("cpu")
+    y_angles = np.array([0.0, 0.3, 0.5])
+    ensemble = bloch_waves.rotate("x", 0.4, degrees=True).rotate(
+        "y", abtem.distributions.from_values(y_angles), degrees=True
+    )
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+
+    for i, y in enumerate(y_angles):
+        single = bloch_waves.rotate("x", 0.4, "y", y, degrees=True)
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
+
+
+def test_orientation_matrix_must_be_three_by_three():
+    structure_factor = _silicon_bloch_waves("cpu").structure_factor
+    with pytest.raises(ValueError, match="shape"):
+        BlochWaves(
+            structure_factor=structure_factor,
+            energy=200e3,
+            sg_max=0.1,
+            orientation_matrix=np.eye(2),
+        )
+
+
+def _exit_wave_calculators():
+    bloch_waves = _silicon_bloch_waves("cpu")
+    ensemble = bloch_waves.rotate(
+        "x", abtem.distributions.from_values(np.array([0.0, 0.2])), degrees=True
+    )
+    return {"BlochWaves": bloch_waves, "BlochwaveEnsemble": ensemble}
+
+
+@pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy):
+    # the argument only wrote a label to the metadata, and the exit waves did not
+    # change: normalize=False is the incident wave of PlaneWave() (one in every pixel),
+    # normalize=True that of PlaneWave(normalize=True)
+    source = _exit_wave_calculators()[calculator]
+    gpts = (16, 20)
+
+    def exit_waves(normalize, thickness=(50.0, 200.0)):
+        waves = source.calculate_exit_waves(
+            thickness, gpts=gpts, extent=(5.43, 5.43), normalize=normalize, lazy=lazy
+        )
+        return waves.compute() if lazy else waves
+
+    plain, normalized = exit_waves(False), exit_waves(True)
+
+    assert plain.metadata["normalization"] == "values"
+    assert normalized.metadata["normalization"] == "reciprocal_space"
+    np.testing.assert_allclose(
+        np.asarray(normalized.array), np.asarray(plain.array) / np.prod(gpts)
+    )
+    # a thin crystal leaves the incident wave: one in every pixel, or one over N
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(False, thickness=0.001).array)), 1.0, atol=1e-3
+    )
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(True, thickness=0.001).array)),
+        1.0 / np.prod(gpts),
+        atol=1e-3 / np.prod(gpts),
+    )
+    # either way the diffraction patterns are those of the same wave
+    np.testing.assert_allclose(
+        plain.diffraction_patterns(max_angle=None).array,
+        normalized.diffraction_patterns(max_angle=None).array,
+        atol=1e-6,
+    )
+
+
+def test_exit_waves_no_longer_take_a_normalization_label():
+    with pytest.raises(TypeError, match="normalization"):
+        _silicon_bloch_waves("cpu").calculate_exit_waves(
+            [50.0], gpts=(16, 16), normalization="values"
+        )

@@ -644,3 +644,19 @@ class TestLazyPoissonNoise:
         np.testing.assert_array_equal(
             _to_cpu_array(lazy.copy()), _to_cpu_array(lazy.copy())
         )
+
+
+def test_scan_noise_keeps_the_units_and_label_of_the_images():
+    # the transform only moves pixels; it used to relabel the values as counts
+    from abtem.measurements import Images
+
+    images = Images(
+        np.random.default_rng(0).random((16, 24)),
+        sampling=0.1,
+        metadata={"label": "intensity", "units": "arb. unit"},
+    )
+    transform = ScanNoiseTransform(1.0, 1e-6, 1e-4, num_components=10)
+
+    for source in (images, images.ensure_lazy()):
+        result = transform.apply(source).compute()
+        assert result.metadata == {"label": "intensity", "units": "arb. unit"}

@@ -430,3 +430,34 @@ def test_chunks_of_several_configurations_get_their_own_charge_densities(
         np.testing.assert_allclose(
             built[i], expected, rtol=0, atol=1e-6 * expected.max()
         )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_repeated_cell_displaces_each_frozen_phonon_configuration(
+    carbon_atoms, charge_density_3d, lazy
+):
+    """With `repetitions` the potential was made from the undisplaced repeated atoms,
+    so every configuration was the same."""
+
+    def build(sigmas, seed=4):
+        frozen_phonons = FrozenPhonons(
+            carbon_atoms, num_configs=3, sigmas=sigmas, seed=seed, ensemble_mean=False
+        )
+        potential = ChargeDensityPotential(
+            frozen_phonons, charge_density_3d, sampling=0.4, repetitions=(2, 1, 1)
+        )
+        built = potential.build(lazy=lazy)
+        return (built.compute() if lazy else built).array
+
+    displaced = build(0.1)
+    undisplaced = build(0.0)
+    scale = np.abs(undisplaced).max()
+
+    for i, j in [(0, 1), (0, 2), (1, 2)]:
+        assert np.abs(displaced[i] - displaced[j]).max() > 1e-3 * scale
+    # no displacement: the configurations are the repeated cell, all alike
+    np.testing.assert_allclose(undisplaced[0], undisplaced[1], atol=1e-6 * scale)
+    assert np.abs(displaced[0] - undisplaced[0]).max() > 1e-3 * scale
+    # a seed gives the same configurations again, another seed other ones
+    np.testing.assert_array_equal(displaced, build(0.1))
+    assert np.abs(displaced - build(0.1, seed=5)).max() > 1e-3 * scale

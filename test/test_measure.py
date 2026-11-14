@@ -38,6 +38,7 @@ from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    IndexedDiffractionPatterns,
     MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
@@ -4119,3 +4120,46 @@ def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function
 
     assert not np.array_equal(averaged, np.round(averaged))  # fractional averages
     np.testing.assert_allclose(averaged, expected, rtol=1e-5)
+
+
+def test_poisson_noise_needs_exactly_one_dose():
+    # with neither, the dose was NaN and NumPy failed with "lam value too large"
+    images = Images(np.ones((4, 4)), sampling=0.1)
+
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise()
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise(dose_per_area=1.0, total_dose=1.0)
+
+    assert images.poisson_noise(total_dose=1e3, seed=0).shape == images.shape
+
+
+def _indexed_patterns():
+    return IndexedDiffractionPatterns(
+        np.array([1.0, 2.0, 4.0]),
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]]),
+        np.eye(3) * 0.2,
+    )
+
+
+@pytest.mark.parametrize(
+    "spot, expected", [(None, [0.25, 0.5, 1.0]), ((1, 0, 0), [0.5, 1, 2])]
+)
+def test_indexed_patterns_normalize_to_a_spot_and_keep_their_lattice(spot, expected):
+    # the reciprocal lattice vectors were replaced by the spot positions
+    patterns = _indexed_patterns()
+
+    normalized = patterns.normalize_to_spot(spot)
+
+    np.testing.assert_allclose(normalized.array, expected)
+    np.testing.assert_array_equal(normalized.miller_indices, patterns.miller_indices)
+    np.testing.assert_array_equal(
+        normalized.reciprocal_lattice_vectors, patterns.reciprocal_lattice_vectors
+    )
+    np.testing.assert_allclose(normalized.positions, patterns.positions)
+
+
+def test_indexed_patterns_cannot_infer_a_pixel_area():
+    # a missing @property made this a TypeError (method * float)
+    with pytest.raises(RuntimeError, match="Cannot infer pixel area"):
+        _indexed_patterns().poisson_noise(dose_per_area=1.0)

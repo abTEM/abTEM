@@ -470,23 +470,17 @@ def test_images(data, lazy, device):
     max_angle=st.just("valid")
     | st.just("cutoff")
     | st.floats(min_value=10, max_value=100),
-    normalization=st.sampled_from(["intensity", "values"]),
 )
 @pytest.mark.parametrize("lazy", [True, False])
 @devices
-def test_downsample(data, max_angle, normalization, lazy, device):
+def test_downsample(data, max_angle, lazy, device):
     probe = data.draw(abtem_st.probe(device=device, allow_distribution=False))
     waves = probe.build(lazy=lazy)
     old_gpts = waves.gpts
     valid_gpts = waves.antialias_valid_gpts
     cutoff_gpts = waves.antialias_cutoff_gpts
-    old_mean_intensity = asnumpy(
-        waves.intensity().compute().array.mean(axis=(-2, -1))
-    )
 
-    downsampled_waves = waves.downsample(
-        max_angle=max_angle, normalization=normalization
-    )
+    downsampled_waves = waves.downsample(max_angle=max_angle)
 
     if isinstance(max_angle, float):
         assume(max_angle < 0.8 * max(downsampled_waves.cutoff_angles))
@@ -509,17 +503,8 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     elif max_angle == "cutoff":
         assert downsampled_waves.gpts == cutoff_gpts
 
-    if normalization == "intensity":
-        assert_is_normalized(downsampled_waves)
-    elif normalization == "values":
-        # 'values' keeps the wave function's point values. The probe is band
-        # limited well inside the kept frequencies (assumed above), so by
-        # Parseval the cell-averaged intensity mean(|psi|^2) is independent of
-        # the sampling and must be unchanged.
-        new_mean_intensity = asnumpy(
-            downsampled_waves.intensity().compute().array.mean(axis=(-2, -1))
-        )
-        np.testing.assert_allclose(new_mean_intensity, old_mean_intensity, rtol=1e-4)
+    # a probe is normalized, and downsampling keeps it so
+    assert_is_normalized(downsampled_waves)
 
 
 @pytest.mark.parametrize("gpts", [None, (45, 45), (39, 41)])
@@ -1465,3 +1450,43 @@ def test_auto_multislice_batch_of_an_integrating_detector_ignores_the_exit_plane
 
     assert measurement.array.shape[0] == 4
     assert measurement.array.chunks[1:3] == probes.array.chunks[:2]
+
+
+@pytest.mark.parametrize("normalize", [False, True], ids=["values", "normalized"])
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_downsample_keeps_the_normalization_of_the_waves(normalize, lazy):
+    # Downsampling used to preserve the pixel values of every wave, so the diffraction
+    # patterns of a downsampled probe or normalized plane wave summed to
+    # (N_new / N_old)^2 instead of one.
+    old_gpts, new_gpts = (64, 64), (32, 32)
+    waves = abtem.PlaneWave(
+        energy=100e3, gpts=old_gpts, extent=10.0, normalize=normalize
+    ).build(lazy=lazy)
+
+    downsampled = waves.downsample(gpts=new_gpts)
+    detected = abtem.WavesDetector(gpts=new_gpts).detect(waves)
+
+    for result in (downsampled, detected):
+        result = result.compute() if lazy else result
+        assert result.metadata["normalization"] == waves.metadata["normalization"]
+        assert_is_normalized(result)
+        # the wave still has the normalization of its builder, on the new grid
+        expected = 1 / np.prod(new_gpts) if normalize else 1.0
+        np.testing.assert_allclose(np.abs(result.array), expected, rtol=1e-4)
+
+
+def test_normalize_labels_the_waves_as_a_normalized_builder_does():
+    # normalize() left the label 'values', so diffraction_patterns() divided by the
+    # number of pixels once more and its intensity summed to 1 / N^2
+    waves = abtem.PlaneWave(energy=100e3, gpts=32, extent=10.0).build(lazy=False)
+    assert waves.metadata["normalization"] == "values"
+
+    normalized = waves.normalize()
+
+    assert normalized.metadata["normalization"] == "reciprocal_space"
+    assert_is_normalized(normalized)
+    np.testing.assert_allclose(
+        normalized.diffraction_patterns(max_angle=None).array,
+        waves.diffraction_patterns(max_angle=None).array,
+        atol=1e-6,
+    )

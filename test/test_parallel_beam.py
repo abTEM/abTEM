@@ -80,15 +80,17 @@ def test_explicit_scan_of_a_parallel_beam_works(potential):
     np.testing.assert_allclose(one_position.ravel(), grid.flat[0], atol=1e-6 * scale)
 
 
-def test_default_scan_with_a_positive_cutoff_is_unchanged(potential):
+def test_default_scan_with_a_positive_cutoff_has_the_nyquist_sampling(potential):
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
     probe.grid.match(potential)
     scan = abtem.GridScan()
     scan.match_probe(probe)
 
-    expected = 0.99 * nyquist_sampling(20, ENERGY)
+    expected = nyquist_sampling(20, ENERGY)
     extent = np.array(potential.extent)
-    assert scan.gpts == tuple(int(n) for n in np.ceil(extent / expected))
+    assert scan.gpts == tuple(int(n) for n in np.ceil(np.round(extent / expected, 7)))
+    # the points are rounded up, so the pitch is never coarser than Nyquist
+    assert all(pitch <= expected * (1 + 1e-9) for pitch in scan.sampling)
 
 
 def test_prism_rejects_a_non_positive_cutoff(potential):
