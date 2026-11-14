@@ -756,13 +756,15 @@ class AtomsEnsemble(BaseFrozenPhonons):
         trajectory = self.trajectory
         if not lazy and isinstance(trajectory, da.core.Array):
             trajectory = trajectory.compute()
-        return (partition_blocks(chunks, lambda s: trajectory[s[0]], lazy),)
+        # every axis of the trajectory is an ensemble axis, so a block is the part of
+        # the trajectory in its slices of all of them
+        return (partition_blocks(chunks, lambda s: trajectory[s], lazy),)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("trajectory", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
-        return block_rebuilder(AtomsEnsemble, 1, **kwargs)
+        return block_rebuilder(AtomsEnsemble, len(self.ensemble_shape), **kwargs)
 
     def randomize(self, atoms: Atoms) -> Atoms:
         return atoms

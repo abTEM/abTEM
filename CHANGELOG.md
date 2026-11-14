@@ -276,6 +276,10 @@ Bugfixes:
   configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
   configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
   are now in the configured precision, and floating point counts keep their dtype
+- `AtomsEnsemble` with a multi-dimensional trajectory partitions along every axis, so each block holds its own part
+  of the trajectory. Its blocks were built along the first axis only: `generate_blocks` raised an `AssertionError`
+  before the partition helpers of [PR #679](https://github.com/abTEM/abTEM/pull/679), and gave every block of a row the
+  whole row with them
 - `ChargeDensityPotential` built in chunks of several configurations (`chunks` greater than 1) gives each chunk the
   charge densities of its own configurations. It paired density *k* with chunk *k* and dropped the rest, so
   per-configuration charge densities were wrong unless every chunk held one configuration, the default
