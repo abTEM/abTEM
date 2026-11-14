@@ -661,6 +661,10 @@ def shrink_cell(
     atoms : ase.Atoms
         Smallest non-repeating cell for the given atoms.
     """
+
+    if len(atoms) == 0:
+        raise ValueError("shrink_cell needs at least one atom")
+
     atoms = wrap_with_tolerance(atoms, tol=tol)
 
     for repetition in repetitions:
