@@ -635,10 +635,13 @@ def _band_matrix_problem(n, seed, complex_=True):
     return A
 
 
+@pytest.mark.parametrize("recurrence", ["host", "gpu"])
 @pytest.mark.parametrize("complex_", [True, False])
-@pytest.mark.parametrize("n, direct, bandwidth", [(150, 0, 16), (211, 7, 32), (40, 3, 64)])
+@pytest.mark.parametrize(
+    "n, direct, bandwidth", [(150, 0, 16), (211, 7, 32), (40, 3, 64), (97, 0, None)]
+)
 def test_band_solver_on_the_gpu_matches_the_eigendecomposition(
-    n, direct, bandwidth, complex_
+    n, direct, bandwidth, complex_, recurrence
 ):
     from abtem.bloch._band_double_float import propagate_incident_beam
 
@@ -648,7 +651,9 @@ def test_band_solver_on_the_gpu_matches_the_eigendecomposition(
     reference = v @ (np.exp(1j * scales[None] * w[:, None]) * v[direct].conj()[:, None])
 
     original = A.copy()
-    amplitudes = propagate_incident_beam(A, scales, direct=direct, bandwidth=bandwidth)
+    amplitudes = propagate_incident_beam(
+        A, scales, direct=direct, bandwidth=bandwidth, recurrence=recurrence
+    )
 
     np.testing.assert_array_equal(A, original)
     assert amplitudes.dtype == np.complex128 and amplitudes.shape == (n, 3)

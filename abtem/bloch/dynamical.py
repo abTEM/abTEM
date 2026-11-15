@@ -1289,9 +1289,11 @@ def calculate_dynamical_scattering(
 
 _SOLVERS = ("auto", "eigh", "band")
 
-# From this many beams 'auto' takes the band solver on the GPU in emulated double
-# precision (see abtem.bloch._band_double_float) over the host eigendecomposition.
-_EMULATED_BAND_MIN_BEAMS = 1000
+# From this many beams 'auto' takes the band solver with its reduction on the GPU in
+# emulated double precision (see abtem.bloch._band_double_float) over the host
+# eigendecomposition: on an Apple M2, for quartz at 1000 Å, 319 beams take 30 ms
+# against 22 ms, 759 beams 135 against 174 ms and 1299 beams 330 against 680 ms.
+_EMULATED_BAND_MIN_BEAMS = 600
 
 
 def _band_is_emulated(structure_matrix: np.ndarray) -> bool:

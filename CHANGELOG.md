@@ -21,6 +21,15 @@ Features:
   faster per pixel, and which grid would be faster; the automatic grids stay the same on every device.
   The test suite now runs its double-precision tests on Metal at the same tolerances as elsewhere
   ([PR #620](https://github.com/abTEM/abTEM/pull/620))
+- Bloch waves on Apple Metal in double precision: with `device: mps` and `precision: float64` (or
+  `torch.emulate-float64`), `BlochWaves` takes the band solver (`bloch.solver: auto`, from 600 beams; `band` always)
+  instead of the host eigendecomposition. The structure matrix is reduced to band form by double-float matrix
+  products on the GPU (a lean multiply-add, 160 GFLOP/s on an Apple M2, with the panels and block reflectors in float64
+  on the host), and the Chebyshev expansion of the incident beam runs on the host for fewer than 1600 beams and on the
+  GPU above. A quartz rotation series of 1000 Å took 0.36 s a frame at 1299 beams instead of 0.93 s and 0.90 s instead
+  of 6.1 s at 2195 beams, with intensities within 3e-12 (100 Å) to 4e-11 (2000 Å) of the eigendecomposition at 1299
+  beams: the double-float matrix products limit the accuracy to about 1e-14 a product, against 5e-14 to 6e-13 for the
+  band solver in float64 on the host
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
