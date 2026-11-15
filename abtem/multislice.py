@@ -627,7 +627,6 @@ def _update_measurements(
     detectors: list[BaseDetector],
     measurements: list[BaseMeasurements | Waves],
     measurement_index: tuple[int, ...] = (0,),
-    additive: bool = False,
 ) -> None:
     assert len(detectors) == len(measurements)
 
@@ -637,10 +636,7 @@ def _update_measurements(
         for i, detector in enumerate(detectors):
             new_measurement = detector.detect(waves)
 
-            if additive:
-                measurements[i].array[measurement_index] += new_measurement.array
-            else:
-                measurements[i].array[measurement_index] = new_measurement.array
+            measurements[i].array[measurement_index] = new_measurement.array
     return
 
 

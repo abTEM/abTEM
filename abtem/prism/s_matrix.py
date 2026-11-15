@@ -44,7 +44,6 @@ from abtem.core.chunks import (
     Chunks,
     _chunk_bytes,
     chunk_ranges,
-    equal_sized_chunks,
     validate_chunks,
 )
 from abtem.core.complex import complex_exponential
@@ -678,17 +677,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
         return kwargs
 
-        # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
-
     def copy_to_device(self, device: str) -> "SMatrixArray":
         """Copy SMatrixArray to specified device."""
         s_matrix = super().copy_to_device(device)
         s_matrix._wave_vectors = copy_to_device(self._wave_vectors, device)
         return s_matrix
-
-    @staticmethod
-    def _packed_wave_vectors(wave_vectors):
-        return _pack_wave_vectors(wave_vectors)
 
     def from_array_and_metadata(array, axes_metadata, metadata):
         raise NotImplementedError
@@ -958,31 +951,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         pbar.close_if_exists()
 
         return tuple(measurements)
-
-    def _chunks_for_reduction(self):
-        chunks = (
-            -(self.gpts[0] // -(self.interpolation[0] * 2)),
-            -(self.gpts[1] // -(self.interpolation[1] * 2)),
-        )
-
-        num_chunks = self.gpts[0] // chunks[0], self.gpts[1] // chunks[1]
-
-        if num_chunks[1] > num_chunks[0]:
-            num_chunks = (1, num_chunks[1])
-        else:
-            num_chunks = (num_chunks[0], 1)
-
-        chunks = tuple(
-            equal_sized_chunks(n, num_chunks=nsc)
-            for n, nsc in zip(self.shape[-2:], num_chunks)
-        )
-
-        if chunks is None:
-            chunks = self.array.chunks[-2:]
-        else:
-            chunks = validate_chunks(self.shape[-2:], chunks)
-
-        return chunks
 
     def _validate_max_batch_reduction(
         self, scan, max_batch_reduction: int | str = "auto"
@@ -2398,8 +2366,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         indexed by the displacement from the probe; the result matches the
         reduction of the expanded scattering matrix to floating point precision.
         """
-        xp = self._xp
-
         gpts = self.gpts
 
         flat_indices = self._flat_indices(-snapped_pixels, gpts, gpts)
@@ -4404,15 +4370,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
 
     @staticmethod
-    def _wave_vector_blocks(wave_vector_chunks, lazy: bool = True):
+    def _wave_vector_blocks(wave_vector_chunks):
         wave_vector_blocks = chunk_ranges(wave_vector_chunks)[0]
 
         array = np.zeros(len(wave_vector_blocks), dtype=object)
         for i, wave_vector_block in enumerate(wave_vector_blocks):
             itemset(array, i, wave_vector_block)
 
-        if lazy:
-            array = da.from_array(array, chunks=1)
         return array
 
     @staticmethod
@@ -4995,9 +4959,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         wave_vector_chunks = self._wave_vector_chunks(max_batch)
 
         if lazy:
-            wave_vector_blocks = self._wave_vector_blocks(
-                wave_vector_chunks, lazy=False
-            )
+            wave_vector_blocks = self._wave_vector_blocks(wave_vector_chunks)
 
             # one block per member of every potential ensemble axis, as
             # MultisliceTransform._default_ensemble_chunks gives multislice
@@ -5042,9 +5004,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         else:
-            wave_vector_blocks = self._wave_vector_blocks(
-                wave_vector_chunks, lazy=False
-            )
+            wave_vector_blocks = self._wave_vector_blocks(wave_vector_chunks)
 
             shape = (
                 self.ensemble_shape
