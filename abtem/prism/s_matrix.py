@@ -3830,7 +3830,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._max_batch_expansion = max_batch_expansion
 
         self._set_energies(energy)
-        # self._beam_tilt = BeamTilt(tilt=tilt)
 
         # window_gpts is only used by the compressed (upsampled) reduction; it is
         # rejected above otherwise. Copies pass back the value given here rather
@@ -4364,7 +4363,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             def potential_partial(*args, **kwargs):
                 return _wrap_with_array(None, 1)
 
-            # potential_partial = lambda *args, **kwargs: _wrap_with_array(None, 1)
             kwargs = self._copy_kwargs(exclude=("potential",))
 
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
@@ -5765,7 +5763,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             squeeze=False,
             max_batch_multislice=max_batch_multislice,
         )
-        # measurements = ensure_list(measurements)
 
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         itemset(array, 0, measurements)

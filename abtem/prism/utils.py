@@ -30,16 +30,12 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
     else:
         old_shape = None
 
-    # if xp is cp:
     i = xp.arange(array.shape[0])[:, None, None]
     ix = xp.arange(new_shape[0]) + xp.asarray(corners[:, 0, None])
     iy = xp.arange(new_shape[1]) + xp.asarray(corners[:, 1, None])
     ix = ix[:, :, None]
     iy = iy[:, None]
     array = array[i, ix, iy]
-    # else:
-    #     array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
-    #     array = array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
 
     if old_shape is not None:
         array = array.reshape(old_shape[:-2] + array.shape[-2:])
@@ -153,12 +149,9 @@ def plane_waves(
 
 def _planewave_shift_coefficients(positions, wave_vectors):
     xp = get_array_module(positions)
-    # wave_vectors = xp.asarray(wave_vectors)
-
     coefficients = complex_exponential(
         -2.0 * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None]
     )
-    # print(coefficients.shape, coefficients.dtype)
     coefficients *= complex_exponential(
         -2.0 * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None]
     )

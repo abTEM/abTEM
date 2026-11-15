@@ -840,9 +840,6 @@ def multislice_and_detect(
                 "every slice, starting with the entrance plane -1 (exit_planes=1)."
             )
 
-        # moved to MultisliceTransform
-        # detectors = list(detectors) + [WavesDetector()]
-
     if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
@@ -1834,6 +1831,5 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             The wave functions after running the multislice algorithm.
         """
         output = waves.apply_transform(self, max_batch=max_batch)
-        # assert is_waves_base_measurements_or_list(output)
 
         return output

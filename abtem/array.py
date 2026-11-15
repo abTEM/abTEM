@@ -2506,11 +2506,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
             )
 
-            # drop_axes = tuple(
-            #     tuple(range(self.ensemble_dims, self.ensemble_dims + num_dropped_axis))
-            #     for num_dropped_axis in num_dropped_axes
-            # )
-
             n = len(transform.ensemble_shape)
             drop_axes = tuple(
                 tuple(
@@ -3250,9 +3245,6 @@ def stack(
     array_object : ArrayObject
         The stacked array object of the same type as the input.
     """
-
-    # if not all(isinstance(array, ArrayObject) for array in arrays):
-    #    raise ValueError("arrays must be a sequence of array objects.")
 
     assert axis <= len(arrays[0].ensemble_shape)
     assert axis >= 0

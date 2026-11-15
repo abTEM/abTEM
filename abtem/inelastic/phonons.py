@@ -682,7 +682,6 @@ class AtomsEnsemble(BaseFrozenPhonons):
             trajectory_array = trajectory
         else:
             raise ValueError(f"Invalid type for `trajectory`, got {type(trajectory)}")
-        # assert isinstance(trajectory, (np.ndarray, da.core.Array))
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = [FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
