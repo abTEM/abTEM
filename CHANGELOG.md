@@ -287,6 +287,9 @@ Bugfixes:
   infinite projection, reach the caller unchanged instead of being replaced by an unrelated error. The fallbacks
   for `distributed` without `Client.register_plugin` and CuPy without `ufunc.at`, which the dependencies exclude,
   are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- `config.get` with a default warns when a nested key is read through a value that is not a section (for example
+  `diagnostics: true` in a configuration file, read as `diagnostics.task_progress`), and still returns the default;
+  it returned the default silently ([PR #697](https://github.com/abTEM/abTEM/pull/697))
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
