@@ -599,10 +599,10 @@ def test_emulated_multislice_runs_on_the_processes_of_a_distributed_cluster():
     assert np.abs(emulated - reference).max() < 1e-12 * np.abs(reference).max()
 
 
-def test_bloch_waves_run_on_the_host_with_the_option_on():
-    # Bloch waves have no multislice and their linear algebra is faster on the
-    # host's BLAS and LAPACK than it could be in double-float on the GPU, so the
-    # option leaves them alone: the same float64 result, to the last bit.
+def test_small_bloch_calculations_run_on_the_host_with_the_option_on():
+    # Below `_EMULATED_BAND_MIN_BEAMS` beams the host's LAPACK eigendecomposition
+    # is the faster solver, so the option leaves the calculation alone: the same
+    # float64 result, to the last bit.
     atoms = bulk("Si", cubic=True)
 
     def exit_waves(emulate):
@@ -622,6 +622,90 @@ def test_bloch_waves_run_on_the_host_with_the_option_on():
     assert waves_gpu.dtype == np.complex128
     np.testing.assert_allclose(waves_gpu, waves_host, rtol=0, atol=1e-12)
     np.testing.assert_allclose(patterns_gpu, patterns_host, rtol=0, atol=1e-12)
+
+
+def _band_matrix_problem(n, seed, complex_=True):
+    """A matrix like a structure matrix: a large diagonal, small couplings."""
+    rng = np.random.default_rng(seed)
+    coupling = rng.normal(size=(n, n)) + (
+        1j * rng.normal(size=(n, n)) if complex_ else 0.0
+    )
+    A = 0.15 * (coupling + coupling.conj().T) / np.sqrt(n)
+    A += np.diag(rng.uniform(-12.0, 12.0, size=n))
+    return A
+
+
+@pytest.mark.parametrize("complex_", [True, False])
+@pytest.mark.parametrize("n, direct, bandwidth", [(150, 0, 16), (211, 7, 32), (40, 3, 64)])
+def test_band_solver_on_the_gpu_matches_the_eigendecomposition(
+    n, direct, bandwidth, complex_
+):
+    from abtem.bloch._band_double_float import propagate_incident_beam
+
+    A = _band_matrix_problem(n, seed=n, complex_=complex_)
+    scales = np.array([0.5, 7.0, 40.0])
+    w, v = np.linalg.eigh(A)
+    reference = v @ (np.exp(1j * scales[None] * w[:, None]) * v[direct].conj()[:, None])
+
+    original = A.copy()
+    amplitudes = propagate_incident_beam(A, scales, direct=direct, bandwidth=bandwidth)
+
+    np.testing.assert_array_equal(A, original)
+    assert amplitudes.dtype == np.complex128 and amplitudes.shape == (n, 3)
+    # float32 would be good to ~1e-5 here
+    np.testing.assert_allclose(amplitudes, reference, rtol=0, atol=1e-10)
+
+
+def test_bloch_waves_use_the_band_solver_on_the_gpu_with_the_option_on(monkeypatch):
+    from abtem.bloch import _band_double_float as emulated
+    from abtem.bloch import dynamical
+
+    calls = []
+    propagate = emulated.propagate_incident_beam
+    monkeypatch.setattr(
+        emulated,
+        "propagate_incident_beam",
+        lambda *args, **kwargs: calls.append(1) or propagate(*args, **kwargs),
+    )
+    atoms = bulk("Si", cubic=True)
+    thicknesses = [50.0, 100.0, 400.0]
+
+    def patterns(solver, emulate, rotated=False):
+        with config.set(
+            {
+                "precision": "float64",
+                "torch.emulate-float64": emulate,
+                "bloch.solver": solver,
+            }
+        ):
+            bloch = abtem.BlochWaves(atoms, energy=200e3, sg_max=0.1, g_max=3.0)
+            if rotated:
+                bloch = bloch.rotate("x", np.array([0.0, 0.5, 1.0]), degrees=True)
+            return np.asarray(
+                bloch.calculate_diffraction_patterns(thicknesses, lazy=False).array
+            )
+
+    reference = patterns("eigh", False)
+    assert not calls
+
+    # 'auto' leaves a small problem to the eigendecomposition, as asked for 'eigh'
+    np.testing.assert_array_equal(patterns("auto", True), reference)
+    assert not calls
+
+    emulated_patterns = patterns("band", True)
+    assert calls
+    np.testing.assert_allclose(
+        emulated_patterns, reference, rtol=0, atol=1e-9 * reference.max()
+    )
+
+    calls.clear()
+    monkeypatch.setattr(dynamical, "_EMULATED_BAND_MIN_BEAMS", 0)
+    rotated_reference = patterns("eigh", False, rotated=True)
+    rotated = patterns("auto", True, rotated=True)
+    assert len(calls) == 3
+    np.testing.assert_allclose(
+        rotated, rotated_reference, rtol=0, atol=1e-9 * rotated_reference.max()
+    )
 
 
 @pytest.mark.parametrize("config_device", ["cpu", "mps"])

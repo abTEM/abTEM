@@ -53,6 +53,7 @@ from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAx
 from abtem.core.backend import (
     asnumpy,
     cp,
+    emulates_float64,
     get_array_module,
     validate_device,
 )
@@ -1241,13 +1242,22 @@ def calculate_dynamical_scattering(
     solver, bounds = _select_solver(solver, structure_matrix, scales)
 
     if solver == "band" and len(direct):
-        array = propagate_incident_beam(
-            structure_matrix,
-            scales,
-            direct=int(direct[0]),
-            bounds=bounds,
-            overwrite_a=overwrite_structure_matrix,
-        )
+        if _band_is_emulated(structure_matrix):
+            from abtem.bloch._band_double_float import (
+                propagate_incident_beam as propagate_emulated,
+            )
+
+            array = propagate_emulated(
+                structure_matrix, scales, direct=int(direct[0]), bounds=bounds
+            )
+        else:
+            array = propagate_incident_beam(
+                structure_matrix,
+                scales,
+                direct=int(direct[0]),
+                bounds=bounds,
+                overwrite_a=overwrite_structure_matrix,
+            )
         del structure_matrix
         if not use_wave_eq:
             array *= xp.asarray(
@@ -1279,6 +1289,20 @@ def calculate_dynamical_scattering(
 
 _SOLVERS = ("auto", "eigh", "band")
 
+# From this many beams 'auto' takes the band solver on the GPU in emulated double
+# precision (see abtem.bloch._band_double_float) over the host eigendecomposition.
+_EMULATED_BAND_MIN_BEAMS = 1000
+
+
+def _band_is_emulated(structure_matrix: np.ndarray) -> bool:
+    """Whether the band solver runs on the Metal GPU in emulated double precision: for
+    a host matrix, when float64 work does (see `abtem.core.backend.emulates_float64`)."""
+    return (
+        isinstance(structure_matrix, np.ndarray)
+        and structure_matrix.dtype in (np.float64, np.complex128)
+        and emulates_float64()
+    )
+
 
 def _select_solver(
     solver: Optional[str], structure_matrix: np.ndarray, scales: np.ndarray
@@ -1292,6 +1316,8 @@ def _select_solver(
     if solver != "auto":
         return solver, None
     xp = get_array_module(structure_matrix)
+    if _band_is_emulated(structure_matrix):
+        return ("band" if len(structure_matrix) >= _EMULATED_BAND_MIN_BEAMS else "eigh"), None
     if cp is None or xp is not cp:
         return "eigh", None
     bounds = gershgorin_bounds(structure_matrix)
