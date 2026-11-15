@@ -9,11 +9,11 @@ truncated Taylor series, which diverges where ``2 O / k`` reaches 1.
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
-from abtem.core.backend import asnumpy, cp
+from abtem.core.backend import asnumpy, cp, get_array_module
 
 
 def inner(a, b, xp):
@@ -64,6 +64,28 @@ def excess_wave_number(k: float) -> Callable:
     return function
 
 
+def step_and_current_wave_number(
+    k: float, thickness: float, reference: float | None = None
+) -> Callable:
+    """The step of :func:`exponential_of_root` and the wave number of the same slice
+    (:func:`excess_wave_number`) acting on the stepped wave, ``excess * step``, stacked,
+    (2, B, m). The wave number of a slice acts on the wave that its step made, a
+    function of the same operator of the wave before it, so both come from one Krylov
+    space (:func:`lanczos_function`, ``outputs``), and from one evaluation: the
+    eigenvalues are checked once, and on a device each kernel counts."""
+    reference = k if reference is None else reference
+
+    def function(values):
+        argument = 1.0 + 2.0 * values / k
+        _check_propagating(argument)
+        root = np.sqrt(argument)
+        step = np.exp(1j * thickness * (k * root - reference))
+        return _stack_of(values)([step, 2.0 * values / (root + 1.0) * step])
+
+    function.outputs = 2
+    return function
+
+
 def inverse_wave_number(k: float) -> Callable:
     """``t -> 1 / (k sqrt(1 + 2 t / k))``."""
 
@@ -76,10 +98,23 @@ def inverse_wave_number(k: float) -> Callable:
 
 
 def lanczos_function(
-    a0, apply: Callable, function: Callable, tolerance: float, max_iterations: int, xp
+    a0,
+    apply: Callable,
+    function: Callable | Sequence[Callable],
+    tolerance: float | Sequence[float],
+    max_iterations: int,
+    xp,
 ):
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny).
+
+    ``function`` may be a sequence of functions, which are all evaluated in the one
+    Krylov space (a list of results, at the cost of one function more per iteration,
+    not of one application of the operator more), each converged to its own entry of
+    ``tolerance``, a sequence of the same length (or one number for all). Or it is one
+    callable with an attribute ``outputs``, the number of functions, that returns their
+    values stacked, (outputs, B, m): functions that share what they compute, and on a
+    device a smaller number of kernels, which is what an iteration costs there.
 
     One application of the Hermitian operator ``apply`` per iteration, with full
     reorthogonalisation (the number of iterations is small). The small tridiagonal
@@ -95,16 +130,53 @@ def lanczos_function(
     one transfer to the host per iteration, since there the cost is the number of
     kernels and of transfers, not the arithmetic.
     """
-    if xp is np:
-        return _lanczos_host(a0, apply, function, tolerance, max_iterations, xp)
-    return _lanczos_device(a0, apply, function, tolerance, max_iterations, xp)
+    implementation = _lanczos_host if xp is np else _lanczos_device
+    return implementation(a0, apply, function, tolerance, max_iterations, xp)
+
+
+def _functions_and_tolerances(function, tolerance):
+    """Whether a single function was given, a function ``evaluate`` of the eigenvalues
+    (B, m) to the values of all functions, (n, B, m), and the tolerances (n,) of
+    :func:`lanczos_function`."""
+    outputs = getattr(function, "outputs", None)
+    if outputs is not None:  # one callable that returns all of them, stacked
+        single, count, evaluate = False, int(outputs), function
+    elif callable(function):
+        single, count = True, 1
+
+        def evaluate(values):
+            return function(values)[None]
+
+    else:
+        functions = list(function)
+        single, count = False, len(functions)
+
+        def evaluate(values):
+            stack = np.stack if isinstance(values, np.ndarray) else _stack_of(values)
+            return stack([f(values) for f in functions])
+
+    tolerances = np.asarray(tolerance, dtype=np.float64)
+    if tolerances.ndim and tolerances.shape != (count,):
+        raise ValueError("one tolerance for each function")
+    return single, evaluate, np.broadcast_to(tolerances, (count,)).copy()
+
+
+def _stack_of(array):
+    """The ``stack`` of the array module of an array (CuPy's)."""
+    return get_array_module(array).stack
 
 
 def _lanczos_host(
-    a0, apply: Callable, function: Callable, tolerance: float, max_iterations: int, xp
+    a0,
+    apply: Callable,
+    function: Callable | Sequence[Callable],
+    tolerance: float | Sequence[float],
+    max_iterations: int,
+    xp,
 ):
     """
-    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny).
+    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), and
+    every function of ``functions`` (a list of results).
 
     One application of the Hermitian operator ``apply`` per iteration, with full
     reorthogonalisation (the number of iterations is small). The small tridiagonal
@@ -116,12 +188,14 @@ def _lanczos_host(
     """
     from abtem.finite_difference import NotConvergedError
 
+    single, evaluate, tolerances = _functions_and_tolerances(function, tolerance)
     dtype = a0.dtype
     real_dtype = np.empty(0, dtype=dtype).real.dtype
     norm0 = xp.sqrt(inner(a0, a0, xp).real)
     norm0_host = asnumpy(norm0).astype(np.float64)
     if (norm0_host == 0).all():
-        return xp.zeros_like(a0)
+        zeros = [xp.zeros_like(a0) for _ in tolerances]
+        return zeros[0] if single else zeros
 
     safe = xp.asarray(np.where(norm0_host > 0, norm0_host, 1.0).astype(real_dtype))
     basis = [a0 / safe[:, None, None]]
@@ -149,12 +223,13 @@ def _lanczos_host(
         values, vectors = np.linalg.eigh(tridiagonal)
 
         coefficients = np.einsum(
-            "bij,bj,bj->bi", vectors, function(values), vectors[:, 0, :].conj()
+            "bij,nbj,bj->nbi", vectors, evaluate(values), vectors[:, 0, :].conj()
         )
 
         if coefficients_previous is not None:
-            padded = np.pad(coefficients_previous, ((0, 0), (0, 1)))
-            if np.linalg.norm(coefficients - padded, axis=1).max() < tolerance:
+            padded = np.pad(coefficients_previous, ((0, 0), (0, 0), (0, 1)))
+            change = np.linalg.norm(coefficients - padded, axis=2).max(axis=1)
+            if (change < tolerances).all():
                 break
 
         beta = asnumpy(xp.sqrt(inner(w, w, xp).real)).astype(np.float64)
@@ -170,15 +245,20 @@ def _lanczos_host(
         coefficients_previous = coefficients
     else:
         raise NotConvergedError(
-            f"the Lanczos iteration did not converge to {tolerance} in "
+            f"the Lanczos iteration did not converge to {tolerances} in "
             f"{max_iterations} iterations"
         )
 
-    result = xp.zeros_like(a0)
-    for j, vector in enumerate(basis[: coefficients.shape[1]]):
-        weight = xp.asarray((coefficients[:, j] * norm0_host).astype(dtype))
-        result = result + weight[:, None, None] * vector
-    return result
+    results = []
+    for function_coefficients in coefficients:
+        result = xp.zeros_like(a0)
+        for j, vector in enumerate(basis[: function_coefficients.shape[1]]):
+            weight = xp.asarray(
+                (function_coefficients[:, j] * norm0_host).astype(dtype)
+            )
+            result = result + weight[:, None, None] * vector
+        results.append(result)
+    return results[0] if single else results
 
 
 # the batch from which CuPy diagonalises the tridiagonal matrices on the device
@@ -188,15 +268,16 @@ _DEVICE_EIGH_MEMBERS = 32
 def _lanczos_device(
     a0,
     apply: Callable,
-    function: Callable,
-    tolerance: float,
+    function: Callable | Sequence[Callable],
+    tolerance: float | Sequence[float],
     max_iterations: int,
     xp,
     diagonalise_on_device: bool | None = None,
 ):
     """
-    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), as
-    :func:`_lanczos_host`, with the cost of a device in mind: the number of kernels and
+    ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), and
+    every function of ``functions`` (a list of results), as :func:`_lanczos_host`, with
+    the cost of a device in mind: the number of kernels and
     of transfers, and the host work that the device waits for, not the arithmetic.
 
     The basis is one array, and everything that the next iteration needs stays on the
@@ -216,6 +297,7 @@ def _lanczos_device(
     """
     from abtem.finite_difference import NotConvergedError
 
+    single, evaluate, tolerances = _functions_and_tolerances(function, tolerance)
     if diagonalise_on_device is None:
         # the host takes about 8 us per matrix of a batch (europa: 2.0 ms for 256), the
         # device about 0.5 ms for any batch (cuSOLVER, a few kernels): it wins above
@@ -235,6 +317,7 @@ def _lanczos_device(
         a0 / xp.where(norm0 > 0, norm0, 1.0).astype(real_dtype)[:, None, None]
     ).reshape(members, size_xy)
     coefficients_previous = None
+    device_tolerances = xp.asarray(tolerances)
     if diagonalise_on_device:
         tridiagonal = xp.zeros((members, max_iterations, max_iterations), np.float64)
     else:
@@ -275,21 +358,24 @@ def _lanczos_device(
             values, eigenvectors = xp.linalg.eigh(
                 xp.ascontiguousarray(tridiagonal[:, :size, :size])
             )
+            # the coefficients of all the functions in one product
             coefficients = xp.matmul(
-                eigenvectors * function(values)[:, None, :],
-                eigenvectors[:, 0, :].conj()[:, :, None],
-            )[:, :, 0]
+                eigenvectors[None] * evaluate(values)[:, :, None, :],
+                eigenvectors[:, 0, :].conj()[None, :, :, None],
+            )[..., 0]
             if coefficients_previous is None:
                 change = xp.full((), np.inf)
             else:
                 difference = coefficients.copy()
-                difference[:, :-1] -= coefficients_previous
-                change = xp.linalg.norm(difference, axis=1).max()
+                difference[..., :-1] -= coefficients_previous
+                change = (
+                    xp.linalg.norm(difference, axis=2).max(axis=1) / device_tolerances
+                ).max()
             largest_beta = beta_device.max()
             stats = asnumpy(
                 xp.stack([change.astype(np.float64), largest_beta.astype(np.float64)])
             )
-            converged, closed = stats[0] < tolerance, stats[1] < 1e-14
+            converged, closed = stats[0] < 1.0, stats[1] < 1e-14
         else:
             host = asnumpy(xp.stack([alpha, beta_device])).astype(np.float64)
             alphas.append(host[0])
@@ -303,16 +389,18 @@ def _lanczos_device(
                 matrix[:, index[1:], index[:-1]] = off
             values, eigenvectors = np.linalg.eigh(matrix)
             coefficients = np.einsum(
-                "bij,bj,bj->bi",
+                "bij,nbj,bj->nbi",
                 eigenvectors,
-                function(values),
+                evaluate(values),
                 eigenvectors[:, 0, :].conj(),
             )
             converged = False
             if coefficients_previous is not None:
                 difference = coefficients.copy()
-                difference[:, :-1] -= coefficients_previous
-                converged = np.linalg.norm(difference, axis=1).max() < tolerance
+                difference[..., :-1] -= coefficients_previous
+                converged = bool(
+                    (np.linalg.norm(difference, axis=2).max(axis=1) < tolerances).all()
+                )
             closed = (beta < 1e-14).all()
             if not (converged or closed):
                 betas.append(beta)
@@ -326,12 +414,17 @@ def _lanczos_device(
         beta_last = beta_device
     else:
         raise NotConvergedError(
-            f"the Lanczos iteration did not converge to {tolerance} in "
+            f"the Lanczos iteration did not converge to {tolerances} in "
             f"{max_iterations} iterations"
         )
 
-    # the result: one contraction (and, if the coefficients are on the host, one
-    # transfer to the device)
-    weights = xp.asarray(coefficients).astype(dtype) * norm0.astype(dtype)[:, None]
-    result = xp.sum(weights[:, :, None] * basis[:, : coefficients.shape[1]], axis=1)
-    return result.reshape((members,) + shape)
+    # the results: one contraction for each function (and, if the coefficients are on
+    # the host, one transfer to the device)
+    weights = (
+        xp.asarray(coefficients).astype(dtype) * norm0.astype(dtype)[None, :, None]
+    )
+    stacked = xp.matmul(weights[:, :, None, :], basis[None, :, : weights.shape[2], :])[
+        :, :, 0, :
+    ]
+    results = [stacked[i].reshape((members,) + shape) for i in range(len(tolerances))]
+    return results[0] if single else results
