@@ -144,6 +144,16 @@ def other_function(values):
     return np.cos(0.5 * values) / (3.0 + values**2)
 
 
+def stacked(*functions):
+    """The functions as one callable that returns their values stacked."""
+
+    def evaluate(values):
+        return np.stack([f(values) for f in functions])
+
+    evaluate.outputs = len(functions)
+    return evaluate
+
+
 @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
 def test_several_functions_come_from_one_krylov_space(implementation):
     # Oracle: each function on its own, with the dense evaluation of the first as a
@@ -159,7 +169,9 @@ def test_several_functions_come_from_one_krylov_space(implementation):
         applications.append(1)
         return apply_matrix(matrix)(a)
 
-    together = implementation(a0, apply, [function, other_function], 1e-10, 60, np)
+    together = implementation(
+        a0, apply, stacked(function, other_function), 1e-10, 60, np
+    )
     count_together, applications = len(applications), []
     alone = [
         implementation(a0, apply, f, 1e-10, 60, np) for f in (function, other_function)
@@ -189,7 +201,12 @@ def test_a_function_of_the_stepped_wave_is_the_product_of_the_functions(implemen
     stepped = implementation(a0, apply, function, 1e-10, 60, np)
     twice = implementation(stepped, apply, other_function, 1e-10, 60, np)
     product = implementation(
-        a0, apply, [function, lambda v: other_function(v) * function(v)], 1e-10, 60, np
+        a0,
+        apply,
+        stacked(function, lambda v: other_function(v) * function(v)),
+        1e-10,
+        60,
+        np,
     )[1]
     np.testing.assert_allclose(product, twice, atol=1e-7)
 
@@ -204,36 +221,13 @@ def test_each_function_is_converged_to_its_own_tolerance():
     )
     apply = apply_matrix(matrix)
     tight, loose = lanczos_function(
-        a0, apply, [function, other_function], [1e-10, 1e-2], 60, np
+        a0, apply, stacked(function, other_function), [1e-10, 1e-2], 60, np
     )
     np.testing.assert_allclose(
         tight, dense_reference(matrix, a0).reshape(a0.shape), atol=1e-7
     )
     with pytest.raises(ValueError, match="one tolerance for each function"):
-        lanczos_function(a0, apply, [function, other_function], [1e-6], 60, np)
-
-
-@pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
-def test_a_callable_with_outputs_returns_all_functions_stacked(implementation):
-    # Oracle: the same functions given one by one.
-    matrix = hermitian_matrix(12)
-    rng = np.random.default_rng(13)
-    a0 = (rng.normal(size=(2,) + SHAPE) + 1j * rng.normal(size=(2,) + SHAPE)).astype(
-        np.complex128
-    )
-
-    def both(values):
-        return np.stack([function(values), other_function(values)])
-
-    both.outputs = 2
-    apply = apply_matrix(matrix)
-    stacked = implementation(a0, apply, both, [1e-10, 1e-6], 60, np)
-    separate = implementation(
-        a0, apply, [function, other_function], [1e-10, 1e-6], 60, np
-    )
-    assert len(stacked) == 2
-    for a, b in zip(stacked, separate):
-        np.testing.assert_allclose(a, b, atol=1e-12)
+        lanczos_function(a0, apply, stacked(function, other_function), [1e-6], 60, np)
 
 
 def test_the_step_and_the_wave_number_of_a_slice_are_the_functions_stacked():
