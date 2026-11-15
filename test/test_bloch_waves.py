@@ -2234,6 +2234,42 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
     np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
 
 
+@pytest.mark.parametrize("blas", [True, False])
+@pytest.mark.parametrize("complex_", [True, False])
+@pytest.mark.parametrize("bandwidth", [None, 5, 24])
+def test_band_solver_on_the_cpu_matches_the_eigendecomposition(
+    bandwidth, complex_, blas, monkeypatch
+):
+    """The band solver of a double-precision matrix on the host: the Hermitian BLAS3
+    reduction (reading the lower triangle only, through SciPy's BLAS) or the general
+    products, and the compiled recurrence."""
+    from abtem.bloch import band_chebyshev
+
+    if not blas:
+        monkeypatch.setattr(band_chebyshev, "_host_blas", lambda dtype_char: None)
+    n, direct = 120, 5
+    rng = np.random.default_rng(3)
+    coupling = rng.normal(size=(n, n)) + (
+        1j * rng.normal(size=(n, n)) if complex_ else 0.0
+    )
+    A = np.asfortranarray(
+        0.1 * (coupling + coupling.conj().T) / np.sqrt(n)
+        + np.diag(rng.uniform(-9.0, 9.0, size=n))
+    )
+    scales = np.array([0.5, 6.0, 30.0])
+    w, v = np.linalg.eigh(A)
+    reference = v @ (np.exp(1j * scales[None] * w[:, None]) * v[direct].conj()[:, None])
+
+    original = A.copy()
+    amplitudes = band_chebyshev.propagate_incident_beam(
+        A, scales, direct=direct, bandwidth=bandwidth
+    )
+
+    np.testing.assert_array_equal(A, original)
+    assert amplitudes.dtype == np.complex128
+    np.testing.assert_allclose(amplitudes, reference, rtol=0, atol=1e-11)
+
+
 def test_dynamical_scattering_keeps_the_structure_matrix_by_default():
     with abtem.config.set({"precision": "float64"}):
         bloch_waves = _silicon_bloch_waves("cpu")

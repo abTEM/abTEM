@@ -20,12 +20,12 @@ double-float, with ~1e-14 relative accuracy, and
 from __future__ import annotations
 
 import numpy as np
-from numba import njit  # type: ignore
 
 from abtem.bloch.band_chebyshev import (
     _TRUNCATION,
     _block_reflector,
     chebyshev_coefficients,
+    chebyshev_propagate_host,
     gershgorin_bounds,
 )
 from abtem.core import _double_float as df
@@ -252,90 +252,6 @@ def mirror(c, n: int, view: tuple[int, int]) -> None:
     """Set the upper triangle, beyond the diagonal tiles, of the n x n Hermitian matrix
     at the view `(offset, row stride)` of `c` to the conjugate of its lower one."""
     _library().mirror_df(c.data, n, view[0], view[1], threads=(n, n), group_size=(32, 8))
-
-
-@njit(nogil=True, fastmath=True)
-def _chebyshev_recurrence(lre, lim, cre, cim, scale1, shift1, scale, shift, ore, oim):
-    """The Chebyshev recurrence on the host, in float64: `lre`, `lim` the real and
-    imaginary parts of the lower band (bandwidth + 1, n), `cre`, `cim` the
-    coefficients (terms, thicknesses), `ore`, `oim` the result (thicknesses, n).
-
-    Loops over the offsets of the band with the rows inside, which the compiler
-    makes into vector operations; one thread, and `nogil`, so that it can run next to
-    the GPU work of another frame."""
-    b = lre.shape[0] - 1
-    n = lre.shape[1]
-    terms, nz = cre.shape
-    pre = np.zeros(n)
-    pim = np.zeros(n)
-    cur_re = np.zeros(n)
-    cur_im = np.zeros(n)
-    cur_re[0] = 1.0
-    nre = np.zeros(n)
-    nim = np.zeros(n)
-    sre = np.zeros(n)
-    sim = np.zeros(n)
-    for z in range(nz):
-        ore[z, 0] += cre[0, z]
-        oim[z, 0] += cim[0, z]
-    for k in range(1, terms):
-        sc = scale1 if k == 1 else scale
-        sh = shift1 if k == 1 else shift
-        for i in range(n):
-            sre[i] = lre[0, i] * cur_re[i] - lim[0, i] * cur_im[i]
-            sim[i] = lre[0, i] * cur_im[i] + lim[0, i] * cur_re[i]
-        for o in range(1, b + 1):
-            m = n - o
-            for i in range(m):
-                cr = lre[o, i]
-                ci = lim[o, i]
-                tr = cur_re[i + o]
-                ti = cur_im[i + o]
-                sre[i] += cr * tr + ci * ti
-                sim[i] += cr * ti - ci * tr
-            for i in range(m):
-                cr = lre[o, i]
-                ci = lim[o, i]
-                tr = cur_re[i]
-                ti = cur_im[i]
-                sre[i + o] += cr * tr - ci * ti
-                sim[i + o] += cr * ti + ci * tr
-        for i in range(n):
-            nre[i] = sc * sre[i] - sh * cur_re[i] - pre[i]
-            nim[i] = sc * sim[i] - sh * cur_im[i] - pim[i]
-        for z in range(nz):
-            ar = cre[k, z]
-            ai = cim[k, z]
-            for i in range(n):
-                ore[z, i] += ar * nre[i] - ai * nim[i]
-                oim[z, i] += ar * nim[i] + ai * nre[i]
-        pre, cur_re, nre = cur_re, nre, pre
-        pim, cur_im, nim = cur_im, nim, pim
-
-
-def chebyshev_propagate_host(
-    band: np.ndarray, scales: np.ndarray, bounds: tuple[float, float]
-) -> np.ndarray:
-    """`chebyshev_propagate` in float64 on the host, by a compiled kernel."""
-    n = band.shape[1]
-    coefficients, center, half = chebyshev_coefficients(
-        scales, bounds, float(np.finfo(np.float64).eps) * _TRUNCATION
-    )
-    real = np.zeros((len(scales), n))
-    imaginary = np.zeros((len(scales), n))
-    _chebyshev_recurrence(
-        np.ascontiguousarray(band.real),
-        np.ascontiguousarray(band.imag),
-        np.ascontiguousarray(coefficients.real),
-        np.ascontiguousarray(coefficients.imag),
-        1.0 / half,
-        center / half,
-        2.0 / half,
-        2.0 * center / half,
-        real,
-        imaginary,
-    )
-    return (real + 1j * imaginary).T
 
 
 # From this many beams the recurrence runs on the GPU: measured on an Apple M2 (1299

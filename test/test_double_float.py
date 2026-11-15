@@ -600,7 +600,7 @@ def test_emulated_multislice_runs_on_the_processes_of_a_distributed_cluster():
 
 
 def test_small_bloch_calculations_run_on_the_host_with_the_option_on():
-    # Below `_EMULATED_BAND_MIN_BEAMS` beams the host's LAPACK eigendecomposition
+    # Below `_HOST_BAND_MIN_BEAMS` beams the host's LAPACK eigendecomposition
     # is the faster solver, so the option leaves the calculation alone: the same
     # float64 result, to the last bit.
     atoms = bulk("Si", cubic=True)
@@ -697,6 +697,15 @@ def test_bloch_waves_use_the_band_solver_on_the_gpu_with_the_option_on(monkeypat
     np.testing.assert_array_equal(patterns("auto", True), reference)
     assert not calls
 
+    # a small problem is the host's band solver, whatever is asked for, ...
+    host_patterns = patterns("band", True)
+    assert not calls
+    np.testing.assert_allclose(
+        host_patterns, reference, rtol=0, atol=1e-9 * reference.max()
+    )
+
+    # ... and the GPU's from `_GPU_BAND_MIN_BEAMS` beams
+    monkeypatch.setattr(dynamical, "_GPU_BAND_MIN_BEAMS", 0)
     emulated_patterns = patterns("band", True)
     assert calls
     np.testing.assert_allclose(
@@ -704,7 +713,7 @@ def test_bloch_waves_use_the_band_solver_on_the_gpu_with_the_option_on(monkeypat
     )
 
     calls.clear()
-    monkeypatch.setattr(dynamical, "_EMULATED_BAND_MIN_BEAMS", 0)
+    monkeypatch.setattr(dynamical, "_HOST_BAND_MIN_BEAMS", 0)
     rotated_reference = patterns("eigh", False, rotated=True)
     rotated = patterns("auto", True, rotated=True)
     assert len(calls) == 3

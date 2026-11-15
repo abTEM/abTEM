@@ -11,10 +11,10 @@ paste the Markdown it prints into the pull request or issue. Two parts:
    the largest difference between the two results.
 
 3. A Bloch-wave rotation series of quartz (the diffraction patterns of a tilt series,
-   as for 3D electron diffraction), float64 on the CPU with the eigendecomposition
-   and with ``device="mps"``, where the structure matrix is reduced to band form on
-   the GPU in double-float: the time per frame and the largest difference between
-   the patterns of the two.
+   as for 3D electron diffraction) in float64: the eigendecomposition, the band
+   solver on the host, and the band solver with its reduction on the GPU in
+   double-float (``device="mps"``): the time per frame and the largest difference
+   of the patterns to those of the eigendecomposition.
 
 Usage
 -----
@@ -229,8 +229,12 @@ def benchmark_multislice(grids, probe_counts, slices, repeats, exit_planes=None)
 
 
 def benchmark_bloch(configurations, frames, repeats):
-    """The table of a quartz rotation series for each `(g_max, sg_max)`."""
+    """The table of a quartz rotation series for each `(g_max, sg_max)`: the
+    eigendecomposition, the band solver on the host and the band solver with its
+    reduction on the GPU, in float64."""
     from ase.spacegroup import crystal
+
+    from abtem.bloch import dynamical
 
     atoms = crystal(
         ["Si", "O"],
@@ -239,41 +243,61 @@ def benchmark_bloch(configurations, frames, repeats):
         cellpar=[4.9134, 4.9134, 5.4052, 90, 90, 120],
     )
     angles = np.array([(0.0, a, 0.0) for a in np.linspace(-30, 30, frames)])
+    variants = (
+        ("eigh", "cpu", "eigh", np.inf),
+        ("host band", "cpu", "band", np.inf),
+        ("GPU band", "mps", "band", 0),
+    )
     rows = []
     for g_max, sg_max in configurations:
         times, patterns, beams = {}, {}, 0
-        for label, device, solver in (("cpu", "cpu", "eigh"), ("mps", "mps", "auto")):
+        for label, device, solver, gpu_from in variants:
             settings = {
                 "device": device,
                 "precision": "float64",
                 "bloch.solver": solver,
                 "dask.lazy": False,
             }
-            with config.set(settings):
-                factor = abtem.bloch.StructureFactor(atoms, g_max=2 * g_max)
-                bloch = abtem.BlochWaves(factor, energy=200e3, sg_max=sg_max, g_max=g_max)
-                beams = len(bloch)
-                series = bloch.rotate("zxz", angles, degrees=True)
-
-                def run():
-                    return np.asarray(
-                        series.calculate_diffraction_patterns(
-                            1000.0, lazy=False
-                        ).array
+            # the beam count from which the reduction runs on the GPU, forced to 0
+            # (every size) or off, as `auto` would choose it only from 3000 beams
+            original = dynamical._GPU_BAND_MIN_BEAMS
+            dynamical._GPU_BAND_MIN_BEAMS = gpu_from
+            try:
+                with config.set(settings):
+                    factor = abtem.bloch.StructureFactor(atoms, g_max=2 * g_max)
+                    bloch = abtem.BlochWaves(
+                        factor, energy=200e3, sg_max=sg_max, g_max=g_max
                     )
+                    beams = len(bloch)
+                    series = bloch.rotate("zxz", angles, degrees=True)
 
-                patterns[label] = run()
-                times[label] = min(timed(run)[1] for _ in range(repeats))
-        reference = patterns["cpu"]
-        difference = np.abs(patterns["mps"] - reference).max() / reference.max()
+                    def run():
+                        return np.asarray(
+                            series.calculate_diffraction_patterns(
+                                1000.0, lazy=False
+                            ).array
+                        )
+
+                    patterns[label] = run()
+                    times[label] = min(timed(run)[1] for _ in range(repeats))
+            finally:
+                dynamical._GPU_BAND_MIN_BEAMS = original
+        reference = patterns["eigh"]
+        difference = {
+            label: np.abs(patterns[label] - reference).max() / reference.max()
+            for label in ("host band", "GPU band")
+        }
         rows.append(
             (
                 beams,
                 frames,
-                f"{times['cpu'] / frames:.3f}",
-                f"{times['mps'] / frames:.3f}",
-                f"{times['cpu'] / times['mps']:.1f}x",
-                f"{difference:.1e}",
+                f"{times['eigh'] / frames:.3f}",
+                f"{times['host band'] / frames:.3f}",
+                f"{times['GPU band'] / frames:.3f}",
+                f"{times['eigh'] / times['host band']:.1f}x",
+                f"{times['eigh'] / times['GPU band']:.1f}x",
+                f"{difference['host band']:.1e}",
+                f"{difference['GPU band']:.1e}",
             )
         )
         print(f"  bloch {beams} beams done", file=sys.stderr, flush=True)
@@ -281,10 +305,13 @@ def benchmark_bloch(configurations, frames, repeats):
         (
             "beams",
             "frames",
-            "float64 CPU [s/frame]",
-            "emulated Metal [s/frame]",
-            "speedup",
-            "max difference",
+            "eigh [s/frame]",
+            "host band [s/frame]",
+            "GPU band [s/frame]",
+            "host band speedup",
+            "GPU band speedup",
+            "host band difference",
+            "GPU band difference",
         ),
         rows,
     )
@@ -363,9 +390,9 @@ def main():
         frames = 3 if args.quick else 5
         sections.append(
             "## Bloch-wave rotation series\n\nQuartz, 200 keV, 1000 Å, a rotation about "
-            f"x from -30 to 30 degrees in {frames} frames. The structure matrix of each "
-            "frame has about as many rows as beams; above a few hundred the band "
-            "solver on the GPU is the faster one.\n\n"
+            f"x from -30 to 30 degrees in {frames} frames, the structure matrix of each "
+            "with about as many rows as beams. `auto` takes the band solver on the "
+            "host from 500 beams on a Mac, and on the GPU from 3000.\n\n"
             + benchmark_bloch(configurations, frames, 1 if args.quick else 2)
         )
     report = "\n\n".join(sections) + "\n"

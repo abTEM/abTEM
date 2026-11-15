@@ -21,15 +21,19 @@ Features:
   faster per pixel, and which grid would be faster; the automatic grids stay the same on every device.
   The test suite now runs its double-precision tests on Metal at the same tolerances as elsewhere
   ([PR #620](https://github.com/abTEM/abTEM/pull/620))
-- Bloch waves on Apple Metal in double precision: with `device: mps` and `precision: float64` (or
-  `torch.emulate-float64`), `BlochWaves` takes the band solver (`bloch.solver: auto`, from 600 beams; `band` always)
-  instead of the host eigendecomposition. The structure matrix is reduced to band form by double-float matrix
-  products on the GPU (a lean multiply-add, 160 GFLOP/s on an Apple M2, with the panels and block reflectors in float64
-  on the host), and the Chebyshev expansion of the incident beam runs on the host for fewer than 1600 beams and on the
-  GPU above. A quartz rotation series of 1000 Å took 0.36 s a frame at 1299 beams instead of 0.93 s and 0.90 s instead
-  of 6.1 s at 2195 beams, with intensities within 3e-12 (100 Å) to 4e-11 (2000 Å) of the eigendecomposition at 1299
-  beams: the double-float matrix products limit the accuracy to about 1e-14 a product, against 5e-14 to 6e-13 for the
-  band solver in float64 on the host ([PR #700](https://github.com/abTEM/abTEM/pull/700))
+- Bloch waves on a Mac in double precision: `bloch.solver: auto` takes the band solver (see `solver='band'`) over the
+  eigendecomposition of the structure matrix from 500 beams for float64 matrices on macOS (other platforms keep the
+  eigendecomposition). On the host the band reduction now runs on the lower triangle only, through the Hermitian
+  matrix product and rank-2k update of the BLAS that SciPy is built with (called with a leading dimension, so nothing is
+  copied), and the Chebyshev recurrence is a compiled kernel, with a bandwidth of 32 instead of 128. A quartz rotation
+  series of 1000 Å took 0.23 s a frame at 1299 beams instead of 0.92 s and 0.80 s instead of 5.9 s at 2195 beams on an
+  Apple M2, with intensities within 1e-12 of the eigendecomposition, and 2.9 s instead of 13 s at 3233 beams. With
+  `device: mps` and `precision: float64` (or `torch.emulate-float64`) the matrix of 3000 beams or more is reduced on the
+  GPU instead, by double-float matrix products (a lean multiply-add, 160 GFLOP/s on the M2, with the panels and block
+  reflectors in float64 on the host) and the recurrence runs on the GPU for 1600 beams or more: 1.25 to 1.3x faster than
+  the host band solver from 3000 to 9000 beams (33 against 42 s at 9009), with intensities within 3e-12 (100 Å) to
+  4e-11 (2000 Å) of the eigendecomposition at 1299 beams, against 5e-14 to 6e-13 on the host
+  ([PR #700](https://github.com/abTEM/abTEM/pull/700))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
