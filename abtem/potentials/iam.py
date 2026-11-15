@@ -87,11 +87,6 @@ if TYPE_CHECKING:
 
 
 class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
-    # @property
-    # @abstractmethod
-    # def device(self) -> str:
-    #    pass
-
     @property
     def base_shape(self):
         """Shape of the base axes of the potential."""
@@ -494,8 +489,6 @@ def validate_potential(
             device = waves.device
 
         potential = Potential(potential, device=device)
-    # elif not isinstance(potential, BasePotential):
-    #    raise ValueError()
 
     if waves is not None and potential is not None:
         potential.match_grid(waves)
@@ -779,17 +772,13 @@ class _FieldBuilder(BaseField):
             chunks = validate_chunks(self.ensemble_shape, self._default_ensemble_chunks)
             chunks = chunks + (last_slice - first_slice,) + self.base_shape[1:]
 
-            if self.ensemble_shape:
-                new_axis = tuple(
-                    range(
-                        len(self.ensemble_shape),
-                        len(self.ensemble_shape) + len(self.base_shape),
-                    )
+            # the base axes follow the ensemble axes (none, for no ensemble)
+            new_axis = tuple(
+                range(
+                    len(self.ensemble_shape),
+                    len(self.ensemble_shape) + len(self.base_shape),
                 )
-            else:
-                new_axis = tuple(range(0, len(self.base_shape)))
-
-            # new_axis = (0, 1, 2) # This was causing problems with FrozenPhonons
+            )
 
             array = da.map_blocks(
                 self._wrap_build_potential,
@@ -1956,8 +1945,6 @@ class FieldArray(BaseField, ArrayObject):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
-        # assert len(array.shape) == self._base_dims
-
         self._slice_thickness = _validate_slice_thickness(
             slice_thickness, num_slices=array.shape[-self._base_dims]
         )
@@ -2039,7 +2026,6 @@ class FieldArray(BaseField, ArrayObject):
         first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         exit_plane_after = self._exit_plane_after
-        # cum_thickness = np.cumsum(self.slice_thickness)
         start = first_slice
         stop = first_slice + 1
 
@@ -3183,7 +3169,6 @@ class CrystalPotential(_PotentialBuilder):
             chunks = 1
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        # print(self.ensemble_shape)
 
         if chunks == ():
             old_chunks = ()

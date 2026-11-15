@@ -754,9 +754,6 @@ def rotate_atoms(
         assert isinstance(angles, tuple)
         assert len(angles) == 3
         padded_angles = (float(angles[0]), float(angles[1]), float(angles[2]))
-        # padded_angles = tuple(
-        #     float(angles[i]) if i < len(angles) else 0.0 for i in range(3)
-        # )
 
     assert isinstance(padded_angles, tuple) and len(padded_angles) == 3
 
@@ -1355,9 +1352,6 @@ def orthogonalize_cell(
         atoms.cell[:] = np.diag(box)
         _rotate_pseudovector_arrays(atoms, A)
 
-    # elif not np.allclose(A, np.eye(3)):
-    #    raise RuntimeError()
-
     if return_transform:
         rotation, scale, shear = decompose_affine_transform(A)
         return atoms, (np.array(rotation_matrix_to_euler(rotation)), scale, shear)
@@ -1517,7 +1511,6 @@ def cut_cell(
     missed.cell = cell
     new_atoms.extend(atoms_in_cell(missed, margin=margin))
 
-    # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
 
 
@@ -1920,9 +1913,6 @@ def pad_atoms(
     padded : ase.Atoms
         Padded atoms.
     """
-
-    # if not is_cell_orthogonal(atoms):
-    #    raise RuntimeError('The cell of the atoms must be orthogonal.')
 
     if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3

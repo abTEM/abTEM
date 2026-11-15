@@ -95,9 +95,6 @@ class _DummyGPAW:
 
     @classmethod
     def from_gpaw(cls, gpaw, lazy: bool = True):
-        # if lazy:
-        #    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
-
         with _GPAW_LOCK:
             return cls._from_gpaw(gpaw)
 
@@ -389,8 +386,6 @@ def _generate_slices(
         valence_potential = _grid_to_plane(valence_potential, potential.plane)
         repetitions = tuple(repetitions[axis] for axis in axes)
         transform_valence_potential = False
-    # else:
-    #    atoms = ewald_potential.frozen_phonons.atoms
 
     transformed_atoms = potential.get_transformed_atoms()
 
@@ -656,8 +651,6 @@ class GPAWPotential(_PotentialBuilder):
         except AttributeError:
             pass
 
-        # assert len(self.calculators) == 1
-
         calculator = _DummyGPAW.from_generic(calculator)
 
         atoms = self.frozen_phonons.atoms.copy()
@@ -667,16 +660,7 @@ class GPAWPotential(_PotentialBuilder):
         valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
-            # cell_cv = calculator.gd.cell_cv * self.repetitions
-            # N_c = tuple(
-            #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
-            # )
-            # gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
             atoms = atoms * self.repetitions
-            # nt_sG = np.tile(calculator.nt_sG, self.repetitions)
-        # else:
-        # gd = calculator.gd
-        # nt_sG = calculator.nt_sG
 
         # The atoms are displaced along their own axes, before _generate_slices
         # transforms them, while `directions` refers to the axes of the
@@ -693,14 +677,6 @@ class GPAWPotential(_PotentialBuilder):
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
         )
 
-        # calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        # calc.initialize(random_atoms)
-
-        # ewald_potential = self._get_ewald_potential()
-
-        # array = self._get_all_electron_density()
-        # array = calculator.valence_potential
-
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
@@ -714,10 +690,6 @@ class GPAWPotential(_PotentialBuilder):
             repetitions=self.repetitions,
         ):
             yield slic
-        # for slic in _generate_slices(
-        #     array, ewald_potential, first_slice=first_slice, last_slice=last_slice
-        # ):
-        #     yield slic
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
