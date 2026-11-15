@@ -398,7 +398,8 @@ def test_multislice_step_array_identity_and_contents(si_atoms, device):
             "below to be meaningful"
         )
 
-    if device == "cpu":
+    # pyFFTW transforms in place; NumPy's and MKL's FFTs return a new array
+    if device == "cpu" and abtem.config.get("fft") == "fftw":
         assert len(array_ids) == 1, (
             "the CPU in-place propagate path is expected to reuse one array "
             "object across depths -- if this changed, revisit the rationale "

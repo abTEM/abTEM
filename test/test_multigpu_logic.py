@@ -572,3 +572,116 @@ def test_cpu_distributed_compute_pushes_config(process_client):
         images.compute(progress_bar=False)
 
         assert set(client.run(_worker_precision).values()) == {"float64"}
+
+
+def test_config_plugin_does_not_overwrite_the_clients_own_config():
+    # In-process workers (LocalCluster(processes=False)) share the client's
+    # config dict. A worker that joins later runs the plugin's setup, which must
+    # not replay the old snapshot over configuration changed after the push.
+    pytest.importorskip("distributed")
+    import copy
+
+    from abtem.core import config
+    from abtem.core.config import config as config_dict
+
+    snapshot = copy.deepcopy(config_dict)
+    snapshot["precision"] = "float64"
+    plugin = backend._make_config_plugin(snapshot)
+
+    with config.set({"precision": "float32"}):
+        plugin.setup()
+        assert config.get("precision") == "float32"
+
+        # A worker in another process still receives the snapshot.
+        plugin._origin_pid = -1
+        plugin.setup()
+        assert config.get("precision") == "float64"
+
+
+def test_adding_an_in_process_worker_keeps_the_clients_config():
+    distributed = pytest.importorskip("distributed")
+    from abtem.core import config
+
+    backend._pushed_config_token = None
+    try:
+        with distributed.LocalCluster(
+            n_workers=1, processes=False, threads_per_worker=1, dashboard_address=":0"
+        ) as cluster, distributed.Client(cluster, set_as_default=False) as client:
+            with config.set({"precision": "float64"}):
+                backend.push_config_to_workers(client)
+            assert config.get("precision") == "float32"
+
+            cluster.scale(2)
+            client.wait_for_workers(2, timeout=60)
+            assert config.get("precision") == "float32"
+    finally:
+        backend._pushed_config_token = None
+        config.set({"precision": "float32"})
+
+
+class _RecordingTifffile:
+    """Stands in for tifffile, which abTEM does not install, and records what
+    ``imwrite`` is given."""
+
+    def __init__(self):
+        self.written = {}
+
+    def imwrite(self, filename, data, **kwargs):
+        self.written[filename] = data
+
+    def imread(self, filename):
+        return self.written[filename]
+
+
+@pytest.fixture(params=["recorded", "tifffile"])
+def tifffile_module(request, monkeypatch):
+    if request.param == "tifffile":
+        return pytest.importorskip("tifffile")
+
+    recorder = _RecordingTifffile()
+    monkeypatch.setattr(abtem.array, "_optional_module", lambda *a, **k: recorder)
+    return recorder
+
+
+def test_cpu_distributed_to_tiff_uses_the_clients_config(
+    process_client, tmp_path, tifffile_module
+):
+    import numpy as np
+
+    from abtem.core import config
+
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    path = str(tmp_path / "intensity.tiff")
+    with client.as_current(), config.set({"precision": "float64"}):
+        intensity = (
+            abtem.PlaneWave(energy=100e3, extent=5, gpts=16)
+            .build(lazy=True)
+            .intensity()
+        )
+        with pytest.warns(UserWarning, match="computed in memory"):
+            intensity.to_tiff(path)
+
+    assert tifffile_module.imread(path).dtype == np.float64
+
+
+def test_cpu_distributed_to_zarr_compute_false_uses_the_clients_config(
+    process_client, tmp_path
+):
+    import numpy as np
+
+    from abtem.core import config
+
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    path = str(tmp_path / "waves.zarr")
+    with client.as_current(), config.set({"precision": "float64"}):
+        waves = abtem.PlaneWave(energy=100e3, extent=5, gpts=16).build(lazy=True)
+        delayed = waves.to_zarr(path, compute=False)
+
+        # The workers hold the configuration of the call, not of whenever the
+        # delayed object happens to be computed.
+        assert set(client.run(_worker_precision).values()) == {"float64"}
+        delayed.compute()
+
+    assert abtem.from_zarr(path).array.dtype == np.complex128

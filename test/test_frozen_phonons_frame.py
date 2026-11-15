@@ -165,8 +165,10 @@ def test_rotated_potential_equals_displacing_the_input_atoms(plane):
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    actual = abtem.Potential(fp, sampling=0.05, plane=plane).build().compute()
-    expected = abtem.Potential(displaced, sampling=0.05, plane=plane).build().compute()
+    # Pinned: the default slicing follows the atoms, which differ between the two.
+    kwargs = dict(sampling=0.05, plane=plane, slice_thickness=1.0)
+    actual = abtem.Potential(fp, **kwargs).build().compute()
+    expected = abtem.Potential(displaced, **kwargs).build().compute()
 
     np.testing.assert_allclose(actual.array[0], expected.array, rtol=1e-6, atol=1e-6)
 
@@ -321,8 +323,10 @@ def test_anisotropic_sigmas_follow_the_strain_of_an_orthogonalization():
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    actual = abtem.Potential(fp, sampling=0.05).build().compute().array[0]
-    expected = abtem.Potential(displaced, sampling=0.05).build().compute().array
+    # Pinned: the default slicing follows the atoms, which differ between the two.
+    kwargs = dict(sampling=0.05, slice_thickness=1.0)
+    actual = abtem.Potential(fp, **kwargs).build().compute().array[0]
+    expected = abtem.Potential(displaced, **kwargs).build().compute().array
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * expected.max())
 
 

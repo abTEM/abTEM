@@ -62,6 +62,11 @@ class ArrayObjectTransform(
     CopyMixin,
     metaclass=ABCMeta,
 ):
+    # Whether the transform may be applied to lazy blocks that hold only a part of
+    # the base array (the grid of a wave function or an image). When False,
+    # `ArrayObject.apply_transform` first rechunks the base axes into one chunk.
+    # `_map_whole_base_arrays` (noise.py) relies on the noise transforms leaving it
+    # False.
     _allow_base_chunks: bool = False
     # Whether the output depends on the wavelength, so that a multi-energy
     # ensemble must be transformed one energy at a time (see

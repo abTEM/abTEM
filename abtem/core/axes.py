@@ -682,6 +682,33 @@ class EnergyLossAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class BackscatterEnergyAxis(NonLinearAxis):
+    """Ensemble axis for the energy of backscattered electrons (EBSD), distinct
+    from the incident beam's :class:`.EnergyAxis`, which ``metadata["energy"]``
+    keeps referring to.
+    """
+
+    label: str = "backscatter energy"
+    units: str = "eV"
+
+    def item_metadata(self, item, metadata=None):
+        return {"backscatter_energy": self.values[item]}
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy in keV regardless of stored eV units."""
+        if formatting is None:
+            formatting = ".3g"
+        value_kev = self.values[0] / 1000.0
+        formatted = f"{value_kev:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} keV"
+        else:
+            return f"{formatted} keV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"

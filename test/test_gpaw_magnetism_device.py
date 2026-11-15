@@ -689,3 +689,13 @@ def test_auto_rotation_breaks_a_round_off_tie_by_a_fixed_rule(y_over_x, expected
     np.testing.assert_array_equal(
         _auto_rotation_matrix_for_vector_field(field), expected
     )
+
+
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_slice_range_outside_the_field_raises(builder):
+    field = builder(
+        _SpinPolarizedCalculator(), sampling=0.25, slice_thickness=0.8, gridrefinement=2
+    )
+    for first_slice, last_slice in ((-1, None), (0, len(field) + 1)):
+        with pytest.raises(ValueError, match="slice range"):
+            list(field.generate_slices(first_slice, last_slice))

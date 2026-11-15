@@ -800,27 +800,42 @@ class LineScan(BaseScan):
         return (blocks,)
 
     def get_positions(
-        self, chunks: int | None = None, lazy: bool = False
+        self,
+        chunks: int | None = None,
+        lazy: bool = False,
+        dtype: type | np.dtype | None = None,
     ) -> np.ndarray:
+        """
+        Get the positions of the scan as an array of shape (gpts, 2) [Å].
+
+        Parameters
+        ----------
+        dtype : dtype, optional
+            The data type of the positions. By default, the real data type of the
+            configured precision.
+        """
         if self.gpts is None:
             raise RuntimeError("gpts is not defined")
 
         if self.start is None or self.end is None:
             raise RuntimeError("start and end is not defined")
 
+        if dtype is None:
+            dtype = get_dtype(complex=False)
+
         x = np.linspace(
             self.start[0],
             self.end[0],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         y = np.linspace(
             self.start[1],
             self.end[1],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 

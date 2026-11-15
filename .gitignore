@@ -20,3 +20,6 @@ uv.lock
 
 # tools/gpu/run_gpu_tests.sh in-place mode logs
 .gpu-test-logs/
+
+# benchmark outputs
+benchmarks/results/

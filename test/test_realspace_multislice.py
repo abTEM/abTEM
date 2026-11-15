@@ -5,6 +5,12 @@ import pytest
 from utils import devices, gpu, requires_gpu, to_host_array
 
 import abtem
+from abtem.core.energy import energy2wavelength
+from abtem.finite_difference import (
+    _series_prefactor,
+    full_series,
+    propagator_taylor_series,
+)
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 # Suppress Numba performance warnings during tests
@@ -241,6 +247,99 @@ class TestRealSpaceMultislice:
         # the exponential series needs more than 3 terms
         with pytest.raises(NotConvergedError, match="in 3terms"):
             run(RealSpaceMultislice(max_terms=3))
+
+
+class TestOperatorSeries:
+    """The per-slice operator series on a plane-wave eigenstate.
+
+    The Laplacian of a plane wave is a number, so the series can be compared with
+    the exact forward wavenumber offset without a finite-difference stencil. The
+    functions are plain arithmetic on the arrays they are given, so the tests are
+    not parametrised over devices.
+    """
+
+    wavelength = energy2wavelength(30e3)
+    K = 2 * np.pi / wavelength
+    thickness = 0.2
+
+    def series_offset(self, function, order, laplacian, potential):
+        # per-slice phase rate (rad / Angstrom), the series divided by i * thickness
+        wave = np.ones(1, dtype=complex)
+        args = (wave, lambda w: laplacian * w, np.full(1, potential))
+        if function is full_series:
+            result = function(*args, order, self.wavelength, self.thickness)
+        else:
+            result = function(wave, order, *args[1:], self.wavelength, self.thickness)
+        return (result / (1j * self.thickness))[0].real
+
+    @pytest.mark.parametrize(
+        "function, sine_angle, potential",
+        [
+            (full_series, 0.3, 0.0),
+            (full_series, 0.3, 1.5),
+            (full_series, 0.0, 1.5),
+            (propagator_taylor_series, 0.3, 0.0),
+        ],
+    )
+    def test_error_falls_with_every_order_up_to_six(
+        self, function, sine_angle, potential
+    ):
+        # K (sqrt(1 + 2C / K) - 1) with C = Laplacian / (2K) + potential. The
+        # propagator scope expands only the Laplacian part. Measured relative
+        # errors for the 300 mrad vacuum case, orders 1 to 6: 2.2e-2, 9.9e-4,
+        # 5.4e-5, 3.3e-6, 2.2e-7, 1.5e-8; each order gains at least 14x, against
+        # the asserted 5x. Coefficients that are not the binomial ones stall the
+        # error, for example a geometric series at 1.2e-5 from order 4 on.
+        laplacian = -((self.K * np.sin(sine_angle)) ** 2)
+        c_laplacian = laplacian / (2 * self.K)
+        c_total = c_laplacian + potential
+        if function is full_series:
+            exact = self.K * (np.sqrt(1 + 2 * c_total / self.K) - 1)
+        else:
+            exact = self.K * (np.sqrt(1 + 2 * c_laplacian / self.K) - 1) + potential
+        errors = [
+            abs(self.series_offset(function, n, laplacian, potential) - exact)
+            for n in range(1, 7)
+        ]
+        for lower, higher in zip(errors[:-1], errors[1:]):
+            assert higher < lower / 5, errors
+        assert errors[-1] < 1e-7 * abs(exact), errors
+
+    @pytest.mark.parametrize("energy", [30e3, 200e3])
+    def test_coefficients_are_the_binomial_ones(self, energy):
+        # coefficient of C^i in K (sqrt(1 + 2C / K) - 1), times K^(i - 1)
+        wavelength = energy2wavelength(energy)
+        k = 2 * np.pi / wavelength
+        binomial = {2: -1 / 2, 3: 1 / 2, 4: -5 / 8, 5: 7 / 8, 6: -21 / 16}
+        for i, coefficient in binomial.items():
+            np.testing.assert_allclose(
+                _series_prefactor(i, wavelength) * k ** (i - 1),
+                coefficient,
+                rtol=1e-12,
+            )
+
+    @pytest.mark.parametrize(
+        "potential, offsets",
+        [
+            (0.0, (-3.931207462702469, -4.017037704469395, -4.020785576069488)),
+            (1.5, (-2.431207462702469, -2.464034557479313, -2.4649210455047244)),
+        ],
+    )
+    def test_orders_one_to_three_of_full_series_are_unchanged(self, potential, offsets):
+        # 300 mrad plane wave at 30 keV. The coefficients of orders 1 to 3 are
+        # 1, -1/(2K), 1/(2K^2), so these hard-coded values do not depend on the
+        # coefficients of the higher orders.
+        laplacian = -((self.K * np.sin(0.3)) ** 2)
+        for order, offset in enumerate(offsets, start=1):
+            result = self.series_offset(full_series, order, laplacian, potential)
+            np.testing.assert_allclose(result, offset, rtol=1e-13)
+
+    def test_orders_one_to_three_of_propagator_series_are_unchanged(self):
+        laplacian = -((self.K * np.sin(0.3)) ** 2)
+        offsets = (-2.431207462702469, -2.5170377044693955, -2.520785576069488)
+        for order, offset in enumerate(offsets, start=1):
+            result = self.series_offset(propagator_taylor_series, order, laplacian, 1.5)
+            np.testing.assert_allclose(result, offset, rtol=1e-13)
 
 
 class TestOutputShapes:

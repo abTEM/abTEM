@@ -137,6 +137,33 @@ jobs:
           ABTEM_TORCH__DEVICE: cpu
         run: uv run pytest test -n logical -m torch ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
+  # The whole suite with NumPy's FFT (`fft: numpy`), where the default is pyFFTW
+  # (`fft: fftw`). The transforms of real data (`rfft2`, `irfft2`) that the
+  # potential of the default projection uses are available for NumPy, CuPy and
+  # torch only, so the jobs above, which run the default, test the complex path
+  # of the CPU and not the real one. Not part of `all-tests-passed`, like the
+  # torch backend.
+  numpy-fft:
+    name: numpy fft / python 3.13
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and set python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --group test
+
+      - name: Run tests
+        env:
+          ABTEM_FFT: numpy
+        run: uv run pytest test -n logical ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+
   # The quantem export (`to_quantem`) against the real quantem package. quantem
   # is not in the `test` group: it requires torch, torchvision, tensorboard and
   # optuna, which would add several GB (torch's default Linux wheel bundles

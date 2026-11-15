@@ -136,3 +136,42 @@ def test_multislice_of_a_lazy_slice_range(exit_planes, device):
     np.testing.assert_allclose(
         result, expected, rtol=0, atol=1e-12 * np.abs(expected).max()
     )
+
+
+# A negative index, a reversed range, and ranges one past the last slice, as
+# functions of the number of slices.
+INVALID_RANGES = {
+    "negative first": lambda n: (-1, None),
+    "negative last": lambda n: (0, -1),
+    "reversed": lambda n: (3, 2),
+    "last past the end": lambda n: (0, n + 1),
+    "first past the end": lambda n: (n + 1, None),
+}
+
+
+def _range_calls(potential, first_slice, last_slice):
+    calls = [
+        lambda: list(potential.generate_slices(first_slice, last_slice)),
+        lambda: list(potential.generate_chunked_slices(first_slice, last_slice)),
+    ]
+    if not isinstance(potential, abtem.PotentialArray):
+        calls += [
+            lambda lazy=lazy: potential.build(first_slice, last_slice, lazy=lazy)
+            for lazy in (False, True)
+        ]
+    return calls
+
+
+@pytest.mark.parametrize("name", list(_potentials()) + ["PotentialArray"])
+@pytest.mark.parametrize("invalid_range", list(INVALID_RANGES))
+def test_a_slice_range_outside_the_potential_raises(name, invalid_range):
+    """The range is checked before any slice is calculated, so the CPU alone is
+    enough."""
+    if name == "PotentialArray":
+        potential = _potentials()["Potential"].build(lazy=False)
+    else:
+        potential = _potentials()[name]
+    first_slice, last_slice = INVALID_RANGES[invalid_range](len(potential))
+    for call in _range_calls(potential, first_slice, last_slice):
+        with pytest.raises(ValueError, match="slice range"):
+            call()

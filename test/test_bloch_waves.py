@@ -2,26 +2,44 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.linalg
 import strategies as abtem_st
 from ase import Atoms
 from ase.build import bulk, graphene
+from ase.spacegroup import crystal
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from utils import gpu, requires_gpu
+from utils import assert_array_objects_equal, gpu, requires_gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
-from abtem.bloch.dynamical import BlochwaveEnsemble, calculate_structure_factors
+from abtem.bloch.band_chebyshev import (
+    band_is_faster,
+    gershgorin_bounds,
+    propagate_incident_beam,
+)
+from abtem.bloch.dynamical import (
+    BlochwaveEnsemble,
+    _eigh,
+    calculate_dynamical_scattering,
+    calculate_structure_factors,
+    calculate_structure_matrix,
+    plane_wave_expansion,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
+    calculate_g_vec,
+    find_inversion_center,
     get_reflection_condition,
     relative_positions_for_centering,
+    structure_factor_coupling_matrix,
     wrapped_is_close,
 )
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
+from abtem.tilt import precession_tilts
 
 
 @st.composite
@@ -359,7 +377,8 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
     assert isinstance(patterns.ensemble_axes_metadata[0], NonLinearAxis)
     assert isinstance(patterns.ensemble_axes_metadata[1], EnergyAxis)
     assert patterns.ensemble_axes_metadata[1].values == tuple(energies)
-    assert patterns.metadata["energy"] == energies
+    # the EnergyAxis is the one record of the energies
+    assert patterns.metadata["energy"] is None
     waves = ensemble.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=lazy)
     assert waves.shape == (3, 2, 2, 16, 16)
     assert isinstance(waves.ensemble_axes_metadata[1], EnergyAxis)
@@ -423,7 +442,8 @@ def test_energy_ensemble_blocks_keep_every_energy():
     ensemble = BlochWaves(structure_factor, energy=[100e3, 200e3], sg_max=0.1).rotate(
         "x", np.array([0.0, 0.02])
     )
-    assert ensemble.energy == 100e3  # backward compatible
+    # a distribution of the energies, as PlaneWave(energy=[...]).energy
+    np.testing.assert_array_equal(ensemble.energy.values, [100e3, 200e3])
     blocks = ensemble.ensemble_blocks(1).compute()
     assert blocks.shape == (2,)
     np.testing.assert_array_equal(blocks[1]._energies, [100e3, 200e3])
@@ -464,6 +484,38 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     for potential in potentials.values():
         assert potential.slice_thickness == potentials[False].slice_thickness
         np.testing.assert_allclose(potential.compute().array, expected, atol=1e-6)
+
+
+def test_a_structure_factor_array_built_from_lists_gives_the_same_patterns():
+    """The Miller indices and the cell are converted in the constructor, so a
+    `StructureFactorArray` built from nested lists holds an integer `ndarray`
+    and a `Cell` and gives the diffraction patterns of the original.
+
+    CPU only: `hkl` and `cell` are host data on every device.
+    """
+    from ase.cell import Cell
+
+    from abtem.bloch.dynamical import StructureFactorArray
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0).build(
+        lazy=False
+    )
+    kwargs = structure_factor._copy_kwargs(exclude=("array",))
+    kwargs.update(
+        hkl=structure_factor.hkl.tolist(),
+        cell=np.asarray(structure_factor.cell).tolist(),
+    )
+    from_lists = StructureFactorArray(structure_factor.array.copy(), **kwargs)
+
+    assert isinstance(from_lists.hkl, np.ndarray)
+    assert from_lists.hkl.dtype == structure_factor.hkl.dtype
+    assert isinstance(from_lists.cell, Cell)
+
+    def patterns(structure_factor):
+        bloch_waves = BlochWaves(structure_factor, energy=100e3, sg_max=0.05)
+        return bloch_waves.calculate_diffraction_patterns(10.0, lazy=False)
+
+    assert_array_objects_equal(patterns(from_lists), patterns(structure_factor))
 
 
 @settings(max_examples=5)
@@ -1245,7 +1297,7 @@ def test_projected_potential_sampling_and_integer_gpts(lazy):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
     # NumPy excitation errors / reciprocal vectors used to meet CuPy data
-    from abtem.core.backend import asnumpy
+    from abtem.core.backend import asnumpy, get_array_module
 
     sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
     reference_sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device="cpu")
@@ -1644,3 +1696,756 @@ def test_cupy_expm_matches_scipy(dtype, tolerance):
     np.testing.assert_allclose(
         result, reference, atol=tolerance * np.abs(reference).max()
     )
+
+
+def _cbed_silicon(device="cpu", semiangle_cutoff=9.0, cells=4, **probe_kwargs):
+    # Si [001] in a 2 x 2 cell window at 200 kV, with 2.3 mrad pixels: 9 mrad
+    # discs overlap the (220) discs, 13 mrad away. The multislice reference uses
+    # the potential of the same structure factor, built on the host.
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+
+    def structure_factor(device):
+        return StructureFactor(
+            atoms, g_max=3.0, parametrization="lobato", thermal_sigma=0.0, device=device
+        )
+
+    bloch_waves = BlochWaves(
+        structure_factor=structure_factor(device),
+        energy=200e3,
+        sg_max=0.3,
+        g_max=1.5,
+        device=device,
+    )
+    potential = abtem.CrystalPotential(
+        structure_factor("cpu").get_projected_potential(
+            slice_thickness=atoms.cell[2, 2] / 4, lazy=False
+        ),
+        repetitions=(2, 2, cells),
+    )
+    probe = abtem.Probe(
+        semiangle_cutoff=semiangle_cutoff, energy=200e3, device=device, **probe_kwargs
+    ).match_grid(potential)
+    return bloch_waves, probe, potential
+
+
+@pytest.fixture(scope="module")
+def silicon_cbed():
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves, probe, potential = _cbed_silicon(defocus=50.0)
+        position = (1.6, 3.0)
+        thicknesses = [0.0, potential.thickness]
+        pacbed = bloch_waves.calculate_cbed_patterns(probe, thicknesses).compute()
+        coherent = bloch_waves.calculate_cbed_patterns(
+            probe, thicknesses, scan=[position]
+        ).compute()
+    return probe, potential, position, pacbed.array, coherent.array
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_at_zero_thickness_is_the_probe(silicon_cbed):
+    # Only the direct beam leaves a crystal of zero thickness, so every plane
+    # wave stays in its pixel: both patterns are the probe's own diffraction
+    # pattern, zero outside the aperture, with its soft edge.
+    probe, _, _, pacbed, coherent = silicon_cbed
+    expected = probe.build(lazy=False).diffraction_patterns(max_angle=None).array
+    np.testing.assert_allclose(pacbed[0], expected, atol=1e-12)
+    np.testing.assert_allclose(coherent[0], expected, atol=1e-12)
+
+
+def _r_factor(result, reference):
+    return np.abs(result - reference).sum() / reference.sum()
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_matches_multislice(silicon_cbed):
+    # Oracle: multislice of the same potential. Without a scan the plane waves
+    # add incoherently, which is the pattern averaged over probe positions (a
+    # 4 x 4 grid in one cell averages out the interference of the overlapping
+    # discs); at one position they add coherently, with the probe's defocus.
+    probe, potential, position, pacbed, coherent = silicon_cbed
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=4, endpoint=False)
+    averaged = probe.multislice(potential, scan=scan, lazy=False)
+    averaged = averaged.diffraction_patterns(max_angle=None).array.mean((0, 1))
+    at_position = probe.multislice(potential, scan=[position], lazy=False)
+    at_position = at_position.diffraction_patterns(max_angle=None).array
+
+    assert _r_factor(pacbed[1], averaged) < 0.01
+    assert _r_factor(coherent[1], at_position) < 0.01
+    # the discs overlap: the averaged pattern is not that at one position
+    assert _r_factor(pacbed[1], at_position) > 10 * _r_factor(coherent[1], at_position)
+
+
+@pytest.mark.usefixtures("float64")
+def test_cbed_of_a_tilted_beam_matches_multislice():
+    # A probe tilted by -tau in x meets the crystal as in multislice, with the
+    # pattern centred on the beam. Rotating the crystal by +tau about y instead
+    # sends the beam along -tau in x of the crystal: the same pattern, unlike
+    # that of a tilt of +tau.
+    bloch_waves, probe, potential = _cbed_silicon(semiangle_cutoff=4.0, cells=12)
+    references = {}
+    for tilt in (-10.0, 10.0):
+        tilted = probe.copy()
+        tilted.tilt = (tilt, 0.0)
+        reference = tilted.multislice(potential, lazy=False)
+        references[tilt] = reference.diffraction_patterns(max_angle=None).array
+
+    tilted.tilt = (-10.0, 0.0)
+    result = bloch_waves.calculate_cbed_patterns(tilted, potential.thickness)
+    assert _r_factor(result.compute().array, references[-10.0]) < 0.03
+
+    rotated = bloch_waves.rotate("y", 0.01).calculate_cbed_patterns(
+        probe, potential.thickness
+    )
+    rotated = rotated.compute().array
+    assert _r_factor(rotated, references[-10.0]) < 0.03
+    assert _r_factor(rotated, references[10.0]) > 0.1
+
+    # Looking along x, Si shows the same projected lattice. The orientations
+    # are passed as matrices, so a 90 degree rotation meets no gimbal lock.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="Gimbal lock")
+        along_x = bloch_waves.rotate("y", np.pi / 2).calculate_cbed_patterns(
+            probe, potential.thickness
+        )
+    along_z = bloch_waves.calculate_cbed_patterns(probe, potential.thickness)
+    assert _r_factor(along_x.compute().array, along_z.compute().array) < 0.01
+
+
+def test_cbed_axes_and_laziness():
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=(2, 3))
+    for kwargs, ensemble_shape in (
+        (dict(thicknesses=20.0), ()),
+        (dict(thicknesses=[10.0, 20.0]), (2,)),
+        (dict(thicknesses=20.0, scan=[(1.0, 2.0)]), ()),
+        (dict(thicknesses=[10.0, 20.0], scan=scan), (2, 3, 2)),
+    ):
+        lazy = bloch_waves.calculate_cbed_patterns(probe, **kwargs)
+        assert isinstance(lazy, abtem.DiffractionPatterns)
+        assert lazy.ensemble_shape == ensemble_shape
+        assert lazy.base_shape == probe.gpts
+        assert lazy.sampling == pytest.approx(probe.reciprocal_space_sampling)
+        assert lazy.metadata["energy"] == 200e3
+
+        eager = bloch_waves.calculate_cbed_patterns(probe, lazy=False, **kwargs)
+        np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+
+    # a probe's own scan positions are the scan
+    own_positions = probe.copy()
+    own_positions.scan_positions = scan
+    result = bloch_waves.calculate_cbed_patterns(own_positions, [10.0, 20.0])
+    assert result.ensemble_axes_metadata == lazy.ensemble_axes_metadata
+    np.testing.assert_allclose(result.compute().array, eager.array, atol=1e-6)
+
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            result = bloch_waves.calculate_cbed_patterns(probe, 20.0)
+            assert result.compute().array.dtype == np.dtype(precision)
+
+
+def test_cbed_probe_ensembles_match_their_members():
+    # Aberration and aperture series share the Bloch-wave solutions, a tilt
+    # series and several energies do not; every member is the pattern of the
+    # probe with that member's values.
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    bloch_waves = BlochWaves(
+        structure_factor=bloch_waves.structure_factor,
+        energy=[150e3, 200e3],
+        sg_max=0.3,
+        g_max=1.5,
+    )
+    tilts = abtem.distributions.from_values([0.0, 2.0])
+    semiangles = abtem.distributions.from_values([2.5, 3.5])
+    ensemble = abtem.Probe(
+        semiangle_cutoff=semiangles,
+        defocus=[0.0, 40.0],
+        tilt=(tilts, 1.0),
+        extent=probe.extent,
+        gpts=probe.gpts,
+    )
+    scan = abtem.GridScan(start=(0, 0), end=(5.43, 5.43), gpts=(1, 2))
+    patterns = bloch_waves.calculate_cbed_patterns(ensemble, [10.0, 20.0], scan=scan)
+
+    assert patterns.ensemble_shape == (2, 2, 2, 1, 2, 2, 2)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "AxisAlignedTiltAxis",
+        "ParameterAxis",
+        "ParameterAxis",
+        "ScanAxis",
+        "ScanAxis",
+        "EnergyAxis",
+        "ThicknessAxis",
+    ]
+    assert patterns.metadata["energy"] is None
+
+    patterns = patterns.compute().array
+    for tilt, defocus, semiangle, energy in ((0, 1, 0, 1), (1, 0, 1, 0)):
+        member = abtem.Probe(
+            semiangle_cutoff=semiangles.values[semiangle],
+            defocus=[0.0, 40.0][defocus],
+            tilt=(tilts.values[tilt], 1.0),
+            energy=bloch_waves._energies[energy],
+            extent=probe.extent,
+            gpts=probe.gpts,
+        )
+        expected = bloch_waves.calculate_cbed_patterns(member, [10.0, 20.0], scan=scan)
+        np.testing.assert_allclose(
+            patterns[tilt, defocus, semiangle, :, :, energy],
+            expected.compute().array,
+            atol=1e-6,
+        )
+
+    # paired tilts, as in precession, are members as well
+    tilts = precession_tilts(2.0, 3)
+    precession = probe.copy()
+    precession.tilt = tilts
+    patterns = bloch_waves.calculate_cbed_patterns(precession, 20.0)
+    assert [type(axis).__name__ for axis in patterns.ensemble_axes_metadata] == [
+        "TiltAxis"
+    ]
+    patterns = patterns.compute().array
+    for i, tilt in enumerate(tilts):
+        member = probe.copy()
+        member.tilt = tuple(tilt)
+        expected = bloch_waves.calculate_cbed_patterns(member, 20.0)
+        np.testing.assert_allclose(patterns[i], expected.compute().array, atol=1e-6)
+
+
+def test_cbed_rejects_invalid_inputs():
+    bloch_waves, probe, _ = _cbed_silicon(semiangle_cutoff=3.0)
+    other_energy = abtem.Probe(
+        semiangle_cutoff=3.0, energy=100e3, extent=probe.extent, gpts=probe.gpts
+    )
+    with pytest.raises(ValueError, match="not among"):
+        bloch_waves.calculate_cbed_patterns(other_energy, 20.0)
+
+    off_grid = abtem.Probe(semiangle_cutoff=3.0, energy=200e3, extent=15.0, gpts=48)
+    with pytest.warns(UserWarning, match="projected lattice"):
+        bloch_waves.calculate_cbed_patterns(off_grid, 20.0)
+
+    own_positions = probe.copy()
+    own_positions.scan_positions = [(1.0, 2.0)]
+    with pytest.raises(ValueError, match="not both"):
+        bloch_waves.calculate_cbed_patterns(own_positions, 20.0, scan=[(1.0, 2.0)])
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_cbed_matches_cpu(device):
+    kwargs = dict(thicknesses=[10.0, 20.0], scan=[(1.0, 2.0)])
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves, probe, _ = _cbed_silicon("cpu", semiangle_cutoff=3.0)
+        reference = bloch_waves.calculate_cbed_patterns(probe, **kwargs)
+        reference = reference.compute().array
+    bloch_waves, probe, _ = _cbed_silicon(device, semiangle_cutoff=3.0)
+    result = asnumpy(
+        bloch_waves.calculate_cbed_patterns(probe, **kwargs).compute().array
+    )
+    np.testing.assert_allclose(result, reference, atol=1e-5 * reference.max())
+
+
+def _direct_plane_wave_sum(amplitudes, g, x, y, z):
+    # the sum over the full (thickness, beam, x, y) array of plane waves
+    phase = (
+        g[:, 0, None, None] * x[None, :, None]
+        + g[:, 1, None, None] * y[None, None, :]
+        + g[:, 2, None, None] * np.asarray(z)[..., None, None, None]
+    )
+    return (amplitudes[..., None, None] * np.exp(2j * np.pi * phase)).sum(-3)
+
+
+@pytest.mark.parametrize("precision, tol", [("float64", 1e-12), ("float32", 1e-5)])
+@pytest.mark.parametrize("shape", [(), (3,), (2, 3)], ids=["scalar", "z", "batch-z"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plane_wave_expansion_matches_direct_summation(precision, tol, shape, device):
+    if device == "mps" and precision == "float64":
+        pytest.skip("Metal has no double precision")
+    xp = get_array_module(device)
+    rng = np.random.default_rng(0)
+    n_beams, gpts = 40, (24, 20)
+    g = rng.uniform(-1, 1, (n_beams, 3))
+    x = np.linspace(0, 5.4, gpts[0], endpoint=False)
+    y = np.linspace(0, 3.1, gpts[1], endpoint=False)
+    z = rng.uniform(0, 10, shape[-1:])  # a scalar z has no thickness axis
+    amplitudes = rng.normal(size=shape + (n_beams,)) + 1j * rng.normal(
+        size=shape + (n_beams,)
+    )
+    amplitudes /= np.sqrt(n_beams)
+
+    dtype = np.dtype(precision)
+    cdtype = np.result_type(dtype, np.complex64)
+    amplitudes = amplitudes.astype(cdtype)
+    with abtem.config.set({"precision": precision}):
+        # the arrays are on the device, as they are in a calculation on it
+        result = plane_wave_expansion(
+            xp.asarray(amplitudes),
+            xp.asarray(g.astype(dtype)),
+            xp.asarray(x.astype(dtype)),
+            xp.asarray(y.astype(dtype)),
+            xp.asarray(z.astype(dtype)),
+        )
+    assert get_array_module(result) is xp
+    assert result.dtype == cdtype
+    result = asnumpy(result)
+
+    # the reference sees the inputs rounded to the working precision
+    cast = lambda a: a.astype(dtype).astype(np.float64)
+    reference = _direct_plane_wave_sum(
+        amplitudes.astype(complex), cast(g), cast(x), cast(y), cast(z)
+    )
+    assert result.shape == shape + gpts
+    np.testing.assert_allclose(result, reference, atol=tol * np.abs(reference).max())
+
+
+def test_plane_wave_expansion_does_not_form_the_plane_wave_basis():
+    import tracemalloc
+
+    rng = np.random.default_rng(1)
+    n_beams, n_z, gpts = 200, 4, (128, 128)
+    g = rng.uniform(-3, 3, (n_beams, 3))
+    x = np.linspace(0, 5, gpts[0], endpoint=False)
+    y = np.linspace(0, 5, gpts[1], endpoint=False)
+    z = np.linspace(10, 40, n_z)
+    amplitudes = rng.normal(size=(n_z, n_beams)) + 0j
+
+    tracemalloc.start()
+    plane_wave_expansion(amplitudes, g, x, y, z)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+
+    basis_bytes = n_z * n_beams * gpts[0] * gpts[1] * 16
+    assert peak < basis_bytes / 10
+
+
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("thicknesses", [50.0, [20.0, 50.0, 80.0]])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_exit_waves_match_direct_summation(device, thicknesses, lazy):
+    bloch_waves = _silicon_bloch_waves(device)
+    gpts = (32, 28)
+    with abtem.config.set({"precision": "float64" if device == "cpu" else "float32"}):
+        waves = bloch_waves.calculate_exit_waves(thicknesses, gpts=gpts, lazy=lazy)
+        result = asnumpy(waves.compute().array if lazy else waves.array)
+        z = np.array(thicknesses)
+        amplitudes = asnumpy(
+            bloch_waves._calculate_array(z.astype(abtem.core.utils.get_dtype()), lazy=False)
+        )
+
+    extent = waves.extent
+    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
+    reference = _direct_plane_wave_sum(
+        amplitudes.astype(complex), np.asarray(bloch_waves.g_vec), x, y, z
+    )
+
+    assert result.shape == z.shape + gpts
+    tol = 1e-12 if device == "cpu" else 1e-5
+    np.testing.assert_allclose(result, reference, atol=tol * np.abs(reference).max())
+
+
+def _baddeleyite():
+    # monoclinic ZrO2 (P2_1/c): centrosymmetric, with a non-orthogonal cell
+    return crystal(
+        ["Zr", "O", "O"],
+        basis=[
+            (0.2754, 0.0395, 0.2083),
+            (0.0700, 0.3317, 0.3447),
+            (0.4496, 0.7569, 0.4792),
+        ],
+        spacegroup=14,
+        cellpar=[5.1505, 5.2116, 5.3173, 90, 99.23, 90],
+    )
+
+
+def test_coupling_matrix_matches_lookup_of_miller_index_differences():
+    structure_factor = StructureFactor(_baddeleyite(), g_max=3.0).build(lazy=False)
+    hkl = BlochWaves(structure_factor, energy=200e3, sg_max=0.1).hkl
+    values = dict(zip(map(tuple, structure_factor.hkl), structure_factor.array))
+    expected = np.array([[values[tuple(gj - gi)] for gj in hkl] for gi in hkl])
+
+    # a small block size gathers the matrix in several blocks
+    A = structure_factor_coupling_matrix(
+        structure_factor.array,
+        structure_factor.hkl,
+        hkl,
+        structure_factor.gpts,
+        max_block_size=10 * len(hkl),
+    )
+
+    assert len(hkl) > 50
+    assert A.flags.f_contiguous
+    np.testing.assert_array_equal(A, expected)
+
+
+def test_couplings_beyond_the_structure_factor_g_max_are_zero():
+    # With g_max above half the structure factor's, beams couple through reflection
+    # differences beyond its g_max and off its grid; they used to raise a ValueError
+    # in ravel_multi_index although the warning says they are left out.
+    atoms = bulk("Si", cubic=True)
+    small = StructureFactor(atoms, g_max=3.0, cutoff="hard").build(lazy=False)
+    large = StructureFactor(atoms, g_max=6.0, cutoff="hard").build(lazy=False)
+    with pytest.warns(UserWarning, match="not included"):
+        bloch_waves = BlochWaves(small, energy=200e3, sg_max=0.2, g_max=2.5)
+    hkl = bloch_waves.hkl
+
+    A = structure_factor_coupling_matrix(small.array, small.hkl, hkl, small.gpts)
+    full = structure_factor_coupling_matrix(large.array, large.hkl, hkl, large.gpts)
+
+    differences = calculate_g_vec(hkl[None] - hkl[:, None], atoms.cell)
+    beyond = np.linalg.norm(differences, axis=-1) > 3.0
+    assert beyond.any()
+    np.testing.assert_array_equal(A[beyond], 0.0)
+    np.testing.assert_allclose(A[~beyond], full[~beyond], rtol=1e-5)
+    bloch_waves.calculate_diffraction_patterns(50.0, lazy=False)
+
+
+@pytest.mark.parametrize("shift", [(0.0, 0.0, 0.0), (0.37, 0.11, 0.52)])
+def test_find_inversion_center(shift):
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + shift)
+
+    center = find_inversion_center(atoms)
+
+    positions = atoms.get_scaled_positions()
+    assert center is not None
+    assert wrapped_is_close(2 * center - positions, positions).all(-1).any(0).all()
+
+
+def test_find_inversion_center_needs_matching_atoms():
+    assert find_inversion_center(bulk("GaN", "wurtzite", a=3.19, c=5.19)) is None
+
+    # diamond's centers are at bond midpoints, between two atoms of the same kind
+    silicon = bulk("Si", cubic=True)
+    assert np.allclose(find_inversion_center(silicon) % 0.5, 0.125)
+    sigmas = np.full(len(silicon), 0.1)
+    sigmas[0] = 0.2
+    assert find_inversion_center(silicon, thermal_sigma=sigmas) is None
+    occupancies = np.ones(len(silicon))
+    occupancies[0] = 0.5
+    assert find_inversion_center(silicon, occupancy=occupancies) is None
+    # a second atom on one site doubles its occupancy, which its partner lacks
+    assert find_inversion_center(silicon + silicon[:1]) is None
+
+
+def test_structure_factor_carries_its_inversion_center():
+    atoms = _baddeleyite()
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    built = structure_factor.build(lazy=False)
+
+    np.testing.assert_allclose(
+        structure_factor.inversion_center, find_inversion_center(atoms)
+    )
+    np.testing.assert_array_equal(
+        built.inversion_center, structure_factor.inversion_center
+    )
+    assert built.centering == structure_factor.centering
+    without = StructureFactor(atoms, g_max=2.0, inversion_center=None)
+    assert without.inversion_center is None
+    with pytest.raises(ValueError, match="inversion_center"):
+        StructureFactor(atoms, g_max=2.0, inversion_center="yes")
+
+
+def test_centrosymmetric_structure_matrix_is_real():
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    structure_factor = StructureFactor(atoms, g_max=3.0).build(lazy=False)
+    bloch_waves = BlochWaves(structure_factor, energy=200e3, sg_max=0.1)
+    center = structure_factor.inversion_center
+    kwargs = dict(
+        structure_factor=structure_factor.array,
+        hkl=structure_factor.hkl,
+        hkl_selected=bloch_waves.hkl,
+        cell=bloch_waves.cell,
+        energy=bloch_waves.energy,
+        gpts=structure_factor.gpts,
+    )
+
+    real = calculate_structure_matrix(**kwargs, inversion_center=center)
+    A = calculate_structure_matrix(**kwargs)
+
+    assert real.dtype == A.real.dtype
+    d = np.exp(2j * np.pi * bloch_waves.hkl @ center)
+    np.testing.assert_allclose(
+        real, d[:, None] * A * d.conj()[None], atol=1e-5 * np.abs(A).max()
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", ["exact", True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_centrosymmetric_solve_matches_complex_solve(device, use_wave_eq):
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    thicknesses = [50.0, 300.0]
+
+    # Metal is single precision only
+    precision, tol = ("float32", 1e-4) if device == "mps" else ("float64", 1e-10)
+    results = {}
+    with abtem.config.set({"precision": precision}):
+        for inversion_center in ("auto", None):
+            structure_factor = StructureFactor(
+                atoms, g_max=3.0, inversion_center=inversion_center, device=device
+            )
+            bloch_waves = BlochWaves(
+                structure_factor,
+                energy=200e3,
+                sg_max=0.1,
+                use_wave_eq=use_wave_eq,
+                device=device,
+            )
+            patterns = bloch_waves.calculate_diffraction_patterns(
+                thicknesses, return_complex=True, lazy=False
+            )
+            results[inversion_center] = asnumpy(patterns.array)
+
+    assert structure_factor.inversion_center is None
+    reference = results[None]
+    np.testing.assert_allclose(
+        results["auto"], reference, atol=tol * np.abs(reference).max()
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype", [np.float32, np.float64, np.complex64, np.complex128]
+)
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
+    if device == "mps":
+        pytest.skip("torch has no in-place eigh")
+    xp = get_array_module(device)
+    rng = np.random.default_rng(0)
+    matrix = rng.normal(size=(40, 40))
+    if np.issubdtype(dtype, np.complexfloating):
+        matrix = matrix + 1j * rng.normal(size=(40, 40))
+    matrix = (matrix + matrix.conj().T).astype(dtype)
+    a = xp.asarray(np.asfortranarray(matrix))
+
+    w, v = _eigh(a, overwrite_a=True)
+
+    # on the CPU single precision is copied, to keep numpy's double-precision solve;
+    # checked before asnumpy, which with CuPy installed copies a host array to C order
+    single = dtype in (np.float32, np.complex64)
+    in_place = device != "cpu" or not single
+    if device == "cpu":
+        assert np.shares_memory(v, a) == in_place
+    else:
+        assert v.data.ptr == a.data.ptr
+    w, v = asnumpy(w), asnumpy(v)
+    tol = 40 * (1e-4 if single else 1e-12)
+    np.testing.assert_allclose(w, np.linalg.eigvalsh(matrix.astype(complex)), atol=tol)
+    np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
+
+
+def test_dynamical_scattering_keeps_the_structure_matrix_by_default():
+    with abtem.config.set({"precision": "float64"}):
+        bloch_waves = _silicon_bloch_waves("cpu")
+        A = bloch_waves.calculate_structure_matrix(lazy=False)
+        copy = A.copy()
+        kwargs = dict(
+            hkl=bloch_waves.hkl,
+            cell=bloch_waves.cell,
+            energy=bloch_waves.energy,
+            thicknesses=[50.0, 100.0],
+        )
+
+        kept = calculate_dynamical_scattering(A, **kwargs)
+        np.testing.assert_array_equal(A, copy)
+        overwritten = calculate_dynamical_scattering(
+            A, **kwargs, overwrite_structure_matrix=True
+        )
+
+    np.testing.assert_allclose(overwritten, kept, atol=1e-12)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize(
+    "method, kwargs",
+    [
+        ("calculate_diffraction_patterns", {}),
+        ("calculate_exit_waves", {"gpts": (16, 16)}),
+    ],
+)
+def test_rotation_series_builds_the_structure_factors_once(
+    monkeypatch, method, kwargs, lazy
+):
+    builds = []
+    build = StructureFactor.build
+
+    def counting_build(self, lazy=True):
+        builds.append(lazy)
+        return build(self, lazy=lazy)
+
+    monkeypatch.setattr(StructureFactor, "build", counting_build)
+    ensemble = _silicon_bloch_waves("cpu").rotate(
+        "x", abtem.distributions.uniform(0.0, 0.02, 3)
+    )
+
+    result = getattr(ensemble, method)([50.0], lazy=lazy, **kwargs)
+    if lazy:
+        result.compute(scheduler="synchronous")
+
+    assert builds == [False]
+
+
+def _hermitian(n, dtype, seed=0, spread=20.0):
+    # a Bloch-like matrix: a spread diagonal and weaker couplings
+    rng = np.random.default_rng(seed)
+    a = rng.normal(size=(n, n))
+    if np.issubdtype(dtype, np.complexfloating):
+        a = a + 1j * rng.normal(size=(n, n))
+    a = (a + a.conj().T) / 4 + np.diag(rng.uniform(-spread, spread, n))
+    return a.astype(dtype)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize(
+    "n, bandwidth, direct",
+    [(1, 8, 0), (5, 8, 3), (60, 8, 0), (60, 8, 17), (97, 16, 96)],
+)
+def test_band_propagation_matches_the_matrix_exponential(n, bandwidth, direct, dtype):
+    A = _hermitian(n, dtype)
+    scales = np.array([0.0, 0.1, 0.7])
+
+    result = propagate_incident_beam(A, scales, direct=direct, bandwidth=bandwidth)
+
+    expected = np.stack(
+        [scipy.linalg.expm(1j * s * A.astype(complex))[:, direct] for s in scales], 1
+    )
+    np.testing.assert_allclose(result, expected, atol=1e-11)
+
+
+def test_band_propagation_with_identity_reflectors():
+    # decoupled blocks leave panels that are already zero below the band: the QR
+    # gives tau = 0, reflectors that are the identity
+    blocks = (_hermitian(20, np.float64), _hermitian(20, np.float64, seed=1))
+    A = scipy.linalg.block_diag(*blocks)
+    scales = np.array([0.3, 1.0])
+
+    result = propagate_incident_beam(A, scales, direct=25, bandwidth=8)
+
+    expected = np.stack([scipy.linalg.expm(1j * s * A)[:, 25] for s in scales], 1)
+    np.testing.assert_allclose(result, expected, atol=1e-11)
+
+
+def test_band_propagation_keeps_the_matrix_unless_overwritten():
+    A = _hermitian(40, np.float64)
+    copy = A.copy()
+    kept = propagate_incident_beam(A, [0.5], bandwidth=8)
+    np.testing.assert_array_equal(A, copy)
+    overwritten = propagate_incident_beam(
+        np.asfortranarray(A), [0.5], bandwidth=8, overwrite_a=True
+    )
+    np.testing.assert_allclose(overwritten, kept, atol=1e-13)
+
+
+def test_gershgorin_bounds_contain_the_spectrum():
+    A = _hermitian(70, np.complex128)
+    low, high = gershgorin_bounds(A, block=16)
+    eigenvalues = np.linalg.eigvalsh(A)
+    assert low <= eigenvalues[0] and eigenvalues[-1] <= high
+
+
+def test_band_solver_is_chosen_for_large_problems_on_a_gpu_only():
+    # the eigendecomposition grows as N**3, the expansion as the thickness
+    assert band_is_faster(20000, 8000)
+    assert not band_is_faster(2000, 8000)
+    assert not band_is_faster(14000, 10**6)
+
+
+@pytest.mark.parametrize("use_wave_eq", ["exact", True, False])
+@pytest.mark.parametrize("centrosymmetric", [True, False], ids=["real", "complex"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_band_solver_matches_eigh(device, centrosymmetric, use_wave_eq):
+    # Metal is single precision only, and has no eigh
+    if device == "mps":
+        pytest.skip("Metal has no eigh to compare with")
+    atoms = _baddeleyite()
+    atoms.set_scaled_positions(atoms.get_scaled_positions() + (0.37, 0.11, 0.52))
+    thicknesses = [50.0, 500.0]
+
+    results = {}
+    with abtem.config.set({"precision": "float64"}):
+        structure_factor = StructureFactor(
+            atoms,
+            g_max=3.0,
+            inversion_center="auto" if centrosymmetric else None,
+            device=device,
+        )
+        bloch_waves = BlochWaves(
+            structure_factor,
+            energy=200e3,
+            sg_max=0.2,
+            use_wave_eq=use_wave_eq,
+            device=device,
+        )
+        for solver in ("eigh", "band"):
+            with abtem.config.set({"bloch.solver": solver}):
+                patterns = bloch_waves.calculate_diffraction_patterns(
+                    thicknesses, return_complex=True, lazy=False
+                )
+            results[solver] = asnumpy(patterns.array)
+
+    assert len(bloch_waves) > 128  # several panels
+    reference = results["eigh"]
+    np.testing.assert_allclose(
+        results["band"], reference, atol=1e-10 * np.abs(reference).max()
+    )
+
+
+def test_band_solver_in_single_precision_is_as_accurate_as_eigh():
+    atoms = _baddeleyite()
+    kwargs = dict(energy=200e3, sg_max=0.5, use_wave_eq=True)
+    thicknesses = [100.0, 1000.0]
+
+    def amplitudes(precision, solver):
+        with abtem.config.set({"precision": precision, "bloch.solver": solver}):
+            bloch_waves = BlochWaves(StructureFactor(atoms, g_max=3.0), **kwargs)
+            return bloch_waves.calculate_diffraction_patterns(
+                thicknesses, return_complex=True, lazy=False
+            ).array
+
+    reference = amplitudes("float64", "eigh")
+    single = amplitudes("float32", "band")
+    # numpy solves a single-precision eigh in double precision, so the error of the
+    # GPU's single-precision eigh (~3e-5 at these sizes) is the yardstick
+    assert np.abs(single - reference).max() < 3e-5 * np.abs(reference).max()
+
+
+def test_band_solver_through_lazy_rotation_series():
+    ensemble = _silicon_bloch_waves("cpu", g_max=6.0, sg_max=0.3).rotate(
+        "x", np.array([0.0, 0.02])
+    )
+    with abtem.config.set({"precision": "float64", "bloch.solver": "eigh"}):
+        expected = ensemble.calculate_diffraction_patterns([50.0]).compute().array
+    with abtem.config.set({"precision": "float64", "bloch.solver": "band"}):
+        result = ensemble.calculate_diffraction_patterns([50.0]).compute().array
+    np.testing.assert_allclose(result, expected, atol=1e-10 * expected.max())
+
+
+def test_invalid_bloch_solver_is_rejected():
+    bloch_waves = _silicon_bloch_waves("cpu")
+    with abtem.config.set({"bloch.solver": "lanczos"}):
+        with pytest.raises(ValueError, match="solver must be one of"):
+            bloch_waves.calculate_diffraction_patterns(50.0, lazy=False)
+
+
+@requires_gpu
+def test_fused_band_propagation_matches_plain():
+    import cupy as cp
+
+    for dtype in (np.float32, np.complex64, np.float64, np.complex128):
+        A = cp.asarray(_hermitian(300, dtype))
+        scales = np.array([0.2, 0.9])
+        fused = propagate_incident_beam(A, scales, direct=7, bandwidth=32, fused=True)
+        plain = propagate_incident_beam(A, scales, direct=7, bandwidth=32, fused=False)
+        tolerance = 1e-4 if dtype in (np.float32, np.complex64) else 1e-11
+        np.testing.assert_allclose(asnumpy(fused), asnumpy(plain), atol=tolerance)
+
+
+@requires_gpu
+def test_auto_solver_chooses_eigh_for_small_problems_on_a_gpu():
+    import cupy as cp
+
+    from abtem.bloch.dynamical import _select_solver
+
+    A = cp.asarray(_hermitian(100, np.float32))
+    assert _select_solver("auto", A, np.array([50.0]))[0] == "eigh"
+    assert _select_solver("auto", np.asarray(A.get()), np.array([50.0]))[0] == "eigh"

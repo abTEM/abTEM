@@ -1,7 +1,9 @@
 """Tests verifying that potential chunking does not affect numerical results."""
 
+import gc
 import sys
 import types
+import weakref
 
 import ase
 import numpy as np
@@ -28,6 +30,7 @@ from abtem.magnetism.iam import (
     VectorPotentialArray,
 )
 from abtem.potentials.iam import BasePotential, CrystalPotential, PotentialArray
+from abtem.prism.s_matrix import SMatrixArray
 
 
 @pytest.fixture
@@ -63,11 +66,12 @@ class TestNearestPowerOfTwo:
             assert _nearest_power_of_two(n) == expected, n
 
 
-def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
+def _install_fake_cupy(monkeypatch, free, total, pool_used=0, pool_free=0):
     """Install a minimal cupy stand-in exposing the memory-probing API."""
     fake = types.ModuleType("cupy")
     fake.get_default_memory_pool = lambda: types.SimpleNamespace(
-        used_bytes=lambda: pool_used
+        used_bytes=lambda: pool_used,
+        free_bytes=lambda: pool_free,
     )
     fake.cuda = types.SimpleNamespace(
         Device=lambda: types.SimpleNamespace(mem_info=(free, total))
@@ -102,22 +106,69 @@ class TestEstimatePotentialChunkSize:
         2271 = 3*757 force the Bluestein fallback; 2625 = 3*5^3*7 and
         2268 = 2^2*3^4*7 do not, and the two grids differ in area by 0.06 %.
         Both must give the same chunk, fixed by bytes alone:
-        int(0.35 * 40 GB / (2623*2271*4 * 5)) = 117.  A doubled overhead like
-        the one in ``estimate_scan_batch_size`` would give 58.
+        int(0.35 * 40 GB / (2623*2271*4 * 2)) = 293.  A doubled overhead like
+        the one in ``estimate_scan_batch_size`` would give 146.
         """
         _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
         dtype = np.dtype(np.float32)
         bluestein = estimate_potential_chunk_size((2623, 2271), "gpu", dtype)
         fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
-        assert bluestein == fast == 117
+        assert bluestein == fast == 293
+
+    def test_idle_pool_cache_counts_as_available(self, monkeypatch):
+        """A pool that has grown but is mostly idle must not be treated as scarce.
+
+        Reproduces the scan-workload regression: after the pool grows once
+        (e.g. during an earlier batch) and stops requesting more from CUDA,
+        cp.cuda.Device().mem_info()'s free figure never recovers even when
+        most of that reservation later sits idle in the pool's own cache.
+        Counting pool.free_bytes() as available fixes this without calling
+        free_all_blocks().
+        """
+        # 20.86 GB reserved total, of which 9.47 GB is live and 11.39 GB is
+        # idle pool cache; only 3.93 GB is unclaimed CUDA-level free memory --
+        # the exact figures observed on real hardware (RTX 4090, 25.25 GB) at
+        # the start of the second probe batch of a scan run.
+        total = 25_251_000_000
+        pool_used = 9_472_000_000
+        pool_free = 11_392_000_000
+        cuda_free = total - pool_used - pool_free
+        _install_fake_cupy(
+            monkeypatch, free=cuda_free, total=total,
+            pool_used=pool_used, pool_free=pool_free,
+        )
+        dtype = np.dtype(np.float32)
+        # slice_bytes = 8000*8000*4 = 256,000,000; effective_per_slice x2.
+        # Without pool_free: effective_free=4.39 GB -> budget 1.54 GB -> chunk_size=3.
+        # With pool_free:    effective_free=15.78 GB -> budget 5.52 GB -> chunk_size=10.
+        chunk_size = estimate_potential_chunk_size((8000, 8000), "gpu", dtype)
+        assert chunk_size == 10
+
+    def test_pool_used_still_caps_effective_free(self, monkeypatch):
+        """Live (non-idle) pool usage must still shrink the estimate.
+
+        Guards against a fix that naively adds the pool's *total* reservation
+        back in regardless of how much of it is actually live right now.
+        """
+        _install_fake_cupy(
+            monkeypatch, free=1_000_000_000, total=40_000_000_000,
+            pool_used=39_000_000_000, pool_free=0,
+        )
+        dtype = np.dtype(np.float32)
+        # effective_free = min(free+pool_free, total-pool_used) = min(1, 1) = 1 GB
+        # -> budget 0.35 GB / (2048*2048*4*2 bytes/slice) = 10.
+        # The point isn't the exact number -- it's that heavy live pool usage
+        # (39/40 GB) still caps this near the CPU-reported free memory, unlike
+        # a fix that added pool_used back in too and ignored it entirely.
+        assert estimate_potential_chunk_size((2048, 2048), "gpu", dtype) == 10
 
     def test_device_chunk_size_counts_every_element_of_a_slice(self, monkeypatch):
         """The shape of a slice may carry a component axis: a magnetic slice of
         (3, 2623, 2271) takes three times the bytes of a (2623, 2271) one.
-        int(0.35 * 40 GB / (3*2623*2271*4 * 5)) = 39."""
+        int(0.35 * 40 GB / (3*2623*2271*4 * 2)) = 97."""
         _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
         dtype = np.dtype(np.float32)
-        assert estimate_potential_chunk_size((3, 2623, 2271), "gpu", dtype) == 39
+        assert estimate_potential_chunk_size((3, 2623, 2271), "gpu", dtype) == 97
 
 
 class TestEstimateScanBatchSize:
@@ -144,6 +195,21 @@ class TestEstimateScanBatchSize:
         )
         # effective free = min(free, total - pool_used) = 10 GB -> budget 5 GB
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "gpu") <= 16
+
+    def test_idle_pool_cache_counts_as_available(self, monkeypatch):
+        """Same pool-aware fix as estimate_potential_chunk_size: an idle,
+        already-reserved pool cache must not be treated as scarce."""
+        _install_fake_cupy(
+            monkeypatch,
+            free=1_000_000_000,
+            total=40_000_000_000,
+            pool_used=1_000_000_000,
+            pool_free=28_000_000_000,
+        )
+        # Without pool_free: effective_free=1 GB -> a batch of 1.
+        # With pool_free:    effective_free=29 GB -> budget 14.5 GB -> big batch.
+        batch_size = estimate_scan_batch_size((2048, 2048), np.complex128, "gpu")
+        assert batch_size >= 32
 
     def test_cpu_falls_back_to_chunk_size(self):
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "cpu") >= 1
@@ -413,16 +479,88 @@ class TestFiniteProjectionChunked:
 
 
 def _frozen_phonon_crystal(
-    num_configs, repetitions, unit_seed=1, device="cpu", **kwargs
+    num_configs,
+    repetitions,
+    unit_seed=1,
+    device="cpu",
+    projection="infinite",
+    **kwargs,
 ):
     atoms = bulk("Si", cubic=True)
+    if projection == "finite":
+        # off the entrance and exit planes, which the surface correction warns of
+        atoms.center(axis=2)
     unit = Potential(
         abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=unit_seed),
         gpts=(16, 16),
         slice_thickness=atoms.cell[2, 2] / 4,  # 4 slices per unit
+        projection=projection,
         device=device,
     )
     return CrystalPotential(unit, repetitions, **kwargs)
+
+
+class TestEnsembleChunksShareTheirMembers:
+    """Each build of an ensemble made its members again, and sliced their atoms
+    again, for every chunk: 193 times for one orientation of a 3DED series."""
+
+    @staticmethod
+    def _potential(device, num_configs=2):
+        atoms = bulk("Si", cubic=True) * (2, 2, 3)
+        return Potential(
+            FrozenPhonons(atoms, num_configs, sigmas=0.05, seed=3),
+            gpts=(32, 32),
+            slice_thickness=1.0,
+            device=device,
+        )
+
+    @devices
+    def test_the_atoms_are_sliced_once_per_member_not_once_per_chunk(
+        self, device, monkeypatch
+    ):
+        from abtem.potentials.iam import _FieldBuilderFromAtoms
+
+        sliced = []
+        prepare = _FieldBuilderFromAtoms._prepare_atoms
+
+        def counting(self):
+            sliced.append(self)
+            return prepare(self)
+
+        monkeypatch.setattr(_FieldBuilderFromAtoms, "_prepare_atoms", counting)
+        potential = self._potential(device)
+
+        chunks = list(potential.generate_chunked_slices(chunk_size=2))
+        assert len(chunks) > 2
+        assert len(sliced) == 2  # one per member of the ensemble
+
+        # a direct build keeps making its own, as it always did
+        potential.build(lazy=False)
+        assert len(sliced) == 4
+
+    @devices
+    def test_the_chunks_equal_the_built_potential(self, device):
+        potential = self._potential(device)
+        built = asnumpy(potential.build(lazy=False).array)
+        for chunk_size in (1, 2, 5, 100):
+            chunked = np.concatenate(
+                [
+                    asnumpy(chunk.array)
+                    for chunk in potential.generate_chunked_slices(
+                        chunk_size=chunk_size
+                    )
+                ],
+                axis=-3,
+            )
+            assert np.array_equal(chunked, built)
+
+    def test_an_ensemble_of_one_still_chunks(self):
+        potential = self._potential("cpu", num_configs=1)
+        chunks = list(potential.generate_chunked_slices(chunk_size=3))
+        assert np.array_equal(
+            np.concatenate([asnumpy(c.array) for c in chunks], axis=-3),
+            asnumpy(potential.build(lazy=False).array),
+        )
 
 
 class TestCrystalPotentialChunking:
@@ -1056,19 +1194,6 @@ class TestCrystalPotentialChunking:
 
         assert len(builds) == expected
 
-    @staticmethod
-    def _count_pool_builds(monkeypatch):
-        """The frozen-phonon seeds of every pool built, one entry per build."""
-        builds = []
-        build = Potential.build
-
-        def counting(self, *args, **kwargs):
-            builds.append(tuple(int(seed) for seed in self.frozen_phonons.seed))
-            return build(self, *args, **kwargs)
-
-        monkeypatch.setattr(Potential, "build", counting)
-        return builds
-
     # The threaded scheduler is the one that can race; the synchronous one runs
     # the same blocks in order.
     @pytest.mark.parametrize("scheduler", ["threads"])
@@ -1100,7 +1225,7 @@ class TestCrystalPotentialChunking:
             crystal = _frozen_phonon_crystal(6, (2, 3, 3), **kwargs)
             expected = probe.scan(crystal, lazy=False, max_batch=2, **scan_kwargs)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             num_blocks = {}
             pools = {}
             results = {}
@@ -1125,6 +1250,176 @@ class TestCrystalPotentialChunking:
         # moves the atoms, which changes the result by far more.
         for result in results.values():
             np.testing.assert_allclose(result.array, expected.array, rtol=1e-5)
+
+    @staticmethod
+    def _count_pool_array_builds(monkeypatch):
+        """The frozen-phonon seeds of every pool built, one entry per build. The
+        pool of a finite projection is built from plain atoms, not by
+        `Potential.build`, so `_build_pool_array` is the counted call."""
+        builds = []
+        build = CrystalPotential._build_pool_array.__func__
+
+        def counting(cls, pool_unit, *args):
+            builds.append(tuple(int(seed) for seed in pool_unit.frozen_phonons.seed))
+            return build(cls, pool_unit, *args)
+
+        monkeypatch.setattr(
+            CrystalPotential, "_build_pool_array", classmethod(counting)
+        )
+        return builds
+
+    @devices
+    @pytest.mark.parametrize("projection", ["infinite", "finite"])
+    @pytest.mark.parametrize(
+        "kwargs",
+        [dict(seeds=(1, 2, 3)), dict(num_frozen_phonons=3), dict(seeds=(7,))],
+        ids=["seeds", "num_frozen_phonons", "one member"],
+    )
+    def test_a_reseeded_pool_is_built_once_in_an_eager_s_matrix(
+        self, monkeypatch, kwargs, projection, device
+    ):
+        """The eager S-matrix runs every plane-wave block of a member through its
+        own multislice. Each member's pool, with the surface slices of a finite
+        projection, is built once, not once per block (3 members over 14 blocks
+        build 3 pools), and the result is that of the lazy build, which builds
+        each pool once."""
+        crystal = _frozen_phonon_crystal(
+            6, (2, 3, 3), device=device, projection=projection, **kwargs
+        )
+        s_matrix = abtem.SMatrix(
+            potential=crystal,
+            energy=100e3,
+            semiangle_cutoff=10,
+            interpolation=1,
+            device=device,
+        )
+        expected = s_matrix.build(lazy=True, max_batch=4).compute(
+            scheduler="synchronous", progress_bar=False
+        )
+
+        builds = self._count_pool_array_builds(monkeypatch)
+        result = s_matrix.build(lazy=False, max_batch=4)
+
+        # 55 plane waves in blocks of 4
+        assert result.array.shape[-3:] == (55, 22, 32)
+        assert len(builds) == len(set(builds)) == len(crystal.seeds)
+        expected = asnumpy(expected.array)
+        np.testing.assert_allclose(
+            asnumpy(result.array), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+        )
+
+    @devices
+    def test_the_pool_of_an_eager_build_is_released_when_the_build_returns(
+        self, monkeypatch, device
+    ):
+        """A guard against keeping a pool beyond the build: an eager reduce builds
+        its members one at a time, and a member holds its pool only while its
+        S-matrix is built, not through the reduction. The crystal the caller holds
+        never holds one."""
+        pools = []
+        build = CrystalPotential._build_member_pool.__func__
+
+        def recording(cls, *args):
+            pool = build(cls, *args)
+            pools.append(weakref.ref(pool))
+            return pool
+
+        monkeypatch.setattr(
+            CrystalPotential, "_build_member_pool", classmethod(recording)
+        )
+        reduced = []
+        reduce = SMatrixArray._reduce
+
+        def checking(self, *args, **kwargs):
+            gc.collect()
+            reduced.append(len(pools))
+            assert all(pool() is None for pool in pools)
+            return reduce(self, *args, **kwargs)
+
+        monkeypatch.setattr(SMatrixArray, "_reduce", checking)
+
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), device=device, seeds=(1, 2, 3))
+        abtem.SMatrix(
+            potential=crystal,
+            energy=100e3,
+            semiangle_cutoff=10,
+            interpolation=1,
+            device=device,
+        ).reduce(
+            scan=abtem.GridScan(gpts=(2, 2)),
+            detectors=abtem.AnnularDetector(0, 20),
+            lazy=False,
+        )
+
+        assert reduced == [1, 2, 3]
+        assert crystal._member_pools is None
+
+    def test_a_crystal_holds_the_pools_built_inside_its_build_state_context(
+        self, monkeypatch
+    ):
+        """The pools it holds on exit are those it held on entry, also when the
+        body raises."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        builds = self._count_pool_array_builds(monkeypatch)
+
+        with pytest.raises(RuntimeError):
+            with crystal._holding_build_state():
+                crystal.build(lazy=False)
+                crystal.build(lazy=False)
+                assert crystal._member_pools is not None
+                raise RuntimeError
+        assert len(builds) == 1
+        assert crystal._member_pools is None
+
+        crystal.build(lazy=False)
+        assert len(builds) == 2
+
+        held = crystal._member_pools = (
+            crystal._build_member_pool(
+                crystal.potential_unit,
+                crystal._n_lateral_tiles,
+                7,
+                crystal._surface_repetitions,
+            ),
+        )
+        builds.clear()
+        with crystal._holding_build_state():
+            crystal.build(lazy=False)
+        assert crystal._member_pools is held and builds == []
+
+    def test_a_nested_build_state_context_keeps_the_hold_of_the_outer_one(
+        self, monkeypatch
+    ):
+        """The inner context drops the pools built inside it and leaves the hold
+        on: the outer context builds the pool once, and on its exit the crystal is
+        as before the first entry."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        builds = self._count_pool_array_builds(monkeypatch)
+
+        with crystal._holding_build_state():
+            with crystal._holding_build_state():
+                crystal.build(lazy=False)
+            assert crystal._hold_member_pools and crystal._member_pools is None
+            crystal.build(lazy=False)
+            crystal.build(lazy=False)
+        assert len(builds) == 2
+        assert not crystal._hold_member_pools and crystal._member_pools is None
+
+    def test_a_reseeded_crystal_regridded_after_an_eager_build_takes_the_new_grid(
+        self,
+    ):
+        """A guard: the crystal the caller holds keeps no pool of the grid it was
+        built on. The crystal is on the CPU, as the grid is device-independent."""
+        crystal = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        abtem.SMatrix(
+            potential=crystal, energy=100e3, semiangle_cutoff=10, interpolation=1
+        ).build(lazy=False)
+        crystal.gpts = (64, 96)
+        regridded = crystal.build(lazy=False).array
+
+        fresh = _frozen_phonon_crystal(6, (2, 3, 3), seeds=(7,))
+        fresh.gpts = (64, 96)
+        np.testing.assert_array_equal(regridded, fresh.build(lazy=False).array)
 
     @pytest.mark.parametrize("scheduler", ["threads"])
     def test_a_reseeded_pool_is_built_once_in_a_lazy_transition_potential_scan(
@@ -1164,7 +1459,7 @@ class TestCrystalPotentialChunking:
         with abtem.config.set({"potential.slice-chunk-size": 2}):
             expected = scan(lazy=False)
 
-            builds = self._count_pool_builds(monkeypatch)
+            builds = self._count_pool_array_builds(monkeypatch)
             lazy = scan(lazy=True)
             assert lazy.array.npartitions == 4
             result = lazy.compute(scheduler=scheduler, progress_bar=False)
@@ -1756,8 +2051,9 @@ class TestAutoChunkSizeCountsTheEnsembleAxis:
     def test_a_chunk_shrinks_with_the_number_of_configurations(self, monkeypatch):
         """The estimate of a 4-configuration builder is a quarter of the
         estimate of a single member, on a device with a fixed amount of free
-        memory."""
-        _install_fake_cupy(monkeypatch, free=150_000, total=1_000_000)
+        memory. int(0.35 * 60 kB / (16*20*4 * 2)) = 8 slices of the 16, and
+        int(0.35 * 60 kB / (4*16*20*4 * 2)) = 2."""
+        _install_fake_cupy(monkeypatch, free=60_000, total=1_000_000)
         monkeypatch.setattr(
             "abtem.core.chunks.estimate_potential_chunk_size",
             lambda slice_shape, device="cpu", dtype=None: estimate_potential_chunk_size(

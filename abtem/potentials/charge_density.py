@@ -630,8 +630,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
-        if last_slice is None:
-            last_slice = len(self)
+        first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if len(self.charge_density.shape) == 4:
             if self.charge_density.shape[0] > 1:

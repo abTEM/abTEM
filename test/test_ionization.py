@@ -11,8 +11,10 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 ``gpu`` is a ``pytest.param`` defined in ``test/utils.py`` that skips when
 CuPy isn't present.
 """
+import builtins
 import sys
 import warnings
+import weakref
 
 import ase
 import numpy as np
@@ -598,6 +600,65 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
     np.testing.assert_allclose(
         arr_beam_basis, arr_multislice, rtol=1e-4, atol=1e-6 * scale
     )
+
+
+@devices
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_prism_eels_beam_basis_handles_undersampled_scan(device, double_channel):
+    """A scan too coarse relative to ``interpolation`` can leave an ionization
+    site with NO scan position inside its PRISM window (extent /
+    interpolation, cropped to half that per axis) -- that site contributes
+    exactly zero and must be skipped rather than reaching the empty-batch FFT
+    that CuPy (unlike NumPy) rejects with 'Invalid number of FFT data points
+    (0)'. Regression test: this must not raise, must warn exactly once (not
+    once per site/slice), and must stay finite.
+    """
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (2, 2, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
+    )
+    energy = 100e3
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy
+    )
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    # A 2x2 scan over the whole (2x2-tiled) cell is far coarser than the
+    # interpolation=4 PRISM window -- deliberately triggers the empty mask.
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent, gpts=(2, 2), endpoint=False
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=20.0,
+        interpolation=4, downsample=False, device=device,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = prism_transition_potential_scan_beam_basis(
+            s_matrix,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=double_channel,
+        )
+        undersampled_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "no scan position within its PRISM window" in str(w.message)
+        ]
+
+    arr = np.asarray(res.array)
+    assert len(undersampled_warnings) == 1, (
+        f"expected exactly one undersampled-scan warning, got "
+        f"{len(undersampled_warnings)}"
+    )
+    assert np.all(np.isfinite(arr))
 
 
 @devices
@@ -1231,6 +1292,45 @@ def test_double_channel_transmissions_belong_to_their_slices(monkeypatch, seeds)
     np.testing.assert_array_equal(first, expected)
 
 
+class _ReusedIds:
+    """``id`` as an allocator that gives each freed object's number to the next new
+    object, as CPython often does, so that a cache keyed on the number alone meets a
+    reused one at every step."""
+
+    def __init__(self):
+        self._live = {}
+        self._free = []
+
+    def __call__(self, obj):
+        key = builtins.id(obj)
+        if key not in self._live:
+            self._live[key] = self._free.pop() if self._free else len(self._live)
+            weakref.finalize(obj, self._release, key)
+        return self._live[key]
+
+    def _release(self, key):
+        self._free.append(self._live.pop(key))
+
+
+def test_double_channel_transmissions_do_not_follow_a_reused_id(monkeypatch):
+    """A potential without frozen phonons also yields a new slice every time. When
+    each slice takes the id of the one before, as here, every slice still gets its
+    own transmission function: the result equals that under the real ids. Whether
+    freed ids are reused in a run depends on the interpreter, so the ids are
+    replaced by an allocator that always reuses them. The cache is independent of
+    the device, and `_double_channel_scan` runs on the CPU."""
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 4
+    )
+    expected = _double_channel_scan(potential)
+
+    monkeypatch.setattr(abtem.multislice, "id", _ReusedIds(), raising=False)
+    result = _double_channel_scan(potential)
+
+    np.testing.assert_array_equal(result, expected)
+
+
 def test_double_channel_shares_the_transmissions_of_shared_slices(monkeypatch):
     """A crystal without frozen phonons yields one slice object for every
     z-repetition of a unit slice, and the driver builds one transmission
@@ -1386,9 +1486,35 @@ def test_filter_sites_aligns_mask_with_mixed_element_atoms(device):
     # (normalised, unit-intensity) probe is O(1) >> 1e-12: the B site must
     # survive, and the N site must never appear. A mask misaligned with the
     # original Atoms (length 2) would raise or return the N position (1, 1);
-    # a filter that drops everything returns an empty array.
-    assert isinstance(filtered, np.ndarray)
-    np.testing.assert_array_equal(filtered, np.array([[4.0, 4.0]]))
+    # a filter that drops everything returns an empty Atoms. The kept atoms are
+    # returned as Atoms for Atoms input, as in 1.0.10.
+    assert isinstance(filtered, ase.Atoms)
+    assert list(filtered.numbers) == [5]
+    np.testing.assert_array_equal(filtered.positions[:, :2], np.array([[4.0, 4.0]]))
+
+
+@devices
+def test_filter_sites_returns_the_form_of_its_input(device):
+    """Atoms give the kept atoms, positions give positions, and nothing is
+    filtered without a threshold."""
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2, device=device,
+    )
+    waves = _probe_waves(device=device)
+    positions = [(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)]
+    atoms = ase.Atoms("BBB", positions=positions, cell=(8, 8, 4))
+
+    kept_all = tp.filter_sites(waves, atoms, threshold=1e-30)
+    kept_none = tp.filter_sites(waves, atoms, threshold=1e30)
+    kept_array = tp.filter_sites(waves, atoms.positions[:, :2], threshold=1e-30)
+    unfiltered = tp.filter_sites(waves, atoms, threshold=None)
+
+    assert isinstance(kept_all, ase.Atoms) and len(kept_all) == 3
+    np.testing.assert_allclose(kept_all.positions, atoms.positions)
+    assert isinstance(kept_none, ase.Atoms) and len(kept_none) == 0
+    assert isinstance(kept_array, np.ndarray)
+    np.testing.assert_allclose(kept_array, atoms.positions[:, :2])
+    assert unfiltered is atoms
 
 
 def _symmetric_gaussian_transition_potential(gpts, extent, width=0.5, device="cpu"):
@@ -1473,7 +1599,7 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
         kept = tp.filter_sites(
             waves, sites, threshold=tp.absolute_threshold(waves, t)
         )
-        kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+        kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
         kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
         assert len(kept) < len(ij), f"t={t}: no site was dropped"
         assert kept_overlap >= t * total, (
@@ -1497,7 +1623,7 @@ def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     kept = tp.filter_sites(
         waves, sites, threshold=tp.absolute_threshold(waves, 1e-3)
     )
-    kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+    kept_ij = np.rint(kept.positions[:, :2] / np.array(tp.sampling)).astype(int)
     kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
     # The top pixel is unique (the next-ranked group of four ties sits ~15%
     # below it), so it survives alone.

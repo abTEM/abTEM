@@ -142,7 +142,20 @@ class Grid(CopyMixin, EqualityMixin):
         If true the gpts cannot be modified. Default is False.
     lock_sampling : bool
         If true the sampling cannot be modified. Default is False.
+    gpts_is_default : bool
+        If true the gpts were chosen automatically rather than requested, so a grid
+        that is matched to this one and has an explicit `gpts` or `sampling` of its
+        own overrides them, instead of the other way around. Setting the `gpts` or
+        `sampling` clears this. Default is False.
+    gpts_are_auto : bool
+        If true the gpts were requested as 'auto'. Unlike a default, an explicit
+        `gpts` or `sampling` of a grid that is matched to this one does not override
+        them, but it is warned about. Setting the `gpts` or `sampling` clears this.
+        Default is False.
     """
+
+    # Where the gpts came from is bookkeeping, not part of the grid.
+    _eq_exclude = ("_gpts_is_default", "_gpts_are_auto", "_gpts_adopted")
 
     def __init__(
         self,
@@ -155,6 +168,8 @@ class Grid(CopyMixin, EqualityMixin):
         lock_gpts: bool = False,
         lock_sampling: bool = False,
         fft_grid: bool = True,
+        gpts_is_default: bool = False,
+        gpts_are_auto: bool = False,
     ):
         self._dimensions = dimensions
         # Only a grid that is Fourier transformed benefits from a fast FFT
@@ -183,6 +198,11 @@ class Grid(CopyMixin, EqualityMixin):
         self._lock_extent = lock_extent
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
+        self._gpts_is_default = gpts_is_default
+        self._gpts_are_auto = gpts_are_auto
+        # Whether the gpts were taken from another grid in `match`, in which case
+        # they are not something this grid asked for.
+        self._gpts_adopted = False
 
         if self.extent is None:
             self._adjust_extent(self.gpts, self.sampling)
@@ -252,6 +272,21 @@ class Grid(CopyMixin, EqualityMixin):
         self._extent = validated_extent
 
     @property
+    def gpts_is_default(self) -> bool:
+        """Whether the gpts were chosen automatically and yield to an explicit grid."""
+        return self._gpts_is_default
+
+    @property
+    def gpts_are_auto(self) -> bool:
+        """Whether the gpts were requested as 'auto'."""
+        return self._gpts_are_auto
+
+    def _clear_gpts_origin(self):
+        self._gpts_is_default = False
+        self._gpts_are_auto = False
+        self._gpts_adopted = False
+
+    @property
     def gpts(self) -> tuple[int, ...] | None:
         """Number of grid points in each dimension."""
         return self._gpts
@@ -271,6 +306,7 @@ class Grid(CopyMixin, EqualityMixin):
             self._adjust_extent(validated_gpts, self.sampling)
 
         self._gpts = validated_gpts
+        self._clear_gpts_origin()
 
     @property
     def sampling(self) -> tuple[float, ...] | None:
@@ -295,6 +331,8 @@ class Grid(CopyMixin, EqualityMixin):
             self._sampling = sampling
         else:
             self._adjust_sampling(self.extent, self.gpts)
+
+        self._clear_gpts_origin()
 
     @property
     def reciprocal_space_sampling(self) -> tuple[float, ...]:
@@ -384,7 +422,18 @@ class Grid(CopyMixin, EqualityMixin):
         A grid with locked gpts (built `Waves`, `PotentialArray`, `SMatrixArray`) is
         checked, not changed: it raises on a mismatch and is assigned only where its
         own value is undefined.
+
+        If the gpts of the other grid are a default (see `gpts_is_default`), a grid
+        with an explicit `gpts` or `sampling` of its own takes precedence: the other
+        grid is changed to match it. Without one, this grid adopts the default.
         """
+        # Whether this grid asked for particular gpts or sampling, as opposed to
+        # having none (yet) or having taken them from a grid it was matched to
+        # before, has to be read before the extent is matched below, since that
+        # derives gpts from a sampling.
+        explicit = (
+            self.gpts is not None or self.sampling is not None
+        ) and not self._gpts_adopted
 
         if check_match or self._lock_gpts:
             # the gpts of a locked grid are those of its data: a grid that differs
@@ -409,7 +458,20 @@ class Grid(CopyMixin, EqualityMixin):
 
         if other.gpts is None:
             other.gpts = self.gpts
+        elif self._yields_gpts_to(other, explicit=explicit):
+            if np.any(self.gpts != other.gpts):
+                other.gpts = self.gpts
         elif np.any(self.gpts != other.gpts):
+            if explicit and self._has_auto_gpts(other):
+                warnings.warn(
+                    f"The grid requested for the waves (gpts={self.gpts}) is "
+                    f"overridden by the potential, which was given sampling='auto' "
+                    f"(gpts={other.gpts}). Leave the `sampling` and `gpts` of the "
+                    f"potential unset to let the waves choose the grid, or give the "
+                    f"potential the grid explicitly.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             self.gpts = other.gpts
 
         if other.sampling is None:
@@ -422,6 +484,21 @@ class Grid(CopyMixin, EqualityMixin):
             )
         ):
             self.sampling = other.sampling
+
+        if not explicit and self.gpts is not None:
+            self._gpts_adopted = True
+
+    @staticmethod
+    def _has_auto_gpts(other: Grid | HasGrid2DMixin) -> bool:
+        return bool(getattr(getattr(other, "grid", other), "gpts_are_auto", False))
+
+    @staticmethod
+    def _has_default_gpts(other: Grid | HasGrid2DMixin) -> bool:
+        return bool(getattr(getattr(other, "grid", other), "gpts_is_default", False))
+
+    def _yields_gpts_to(self, other: Grid | HasGrid2DMixin, explicit: bool) -> bool:
+        """Whether the other grid should take the gpts of this one, not the reverse."""
+        return explicit and self.gpts is not None and self._has_default_gpts(other)
 
     def check_match(self, other: Grid | HasGrid2DMixin):
         """
@@ -439,7 +516,12 @@ class Grid(CopyMixin, EqualityMixin):
                     f"Inconsistent grid extent ({self.extent} != {other.extent})"
                 )
 
-        if self.gpts is not None and other.gpts is not None:
+        # Default gpts yield to the gpts of this grid rather than conflict with them.
+        if (
+            self.gpts is not None
+            and other.gpts is not None
+            and not self._has_default_gpts(other)
+        ):
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError(
                     f"Inconsistent grid gpts ({self.gpts} != {other.gpts})"

@@ -9,7 +9,7 @@ from ase import Atoms
 from hypothesis import given
 from utils import devices, to_host_array
 
-from abtem import AnnularDetector, PixelatedDetector, PlaneWave
+from abtem import AnnularDetector, PixelatedDetector, PlaneWave, Potential
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import itemset
@@ -260,12 +260,15 @@ def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
 
     waves = PlaneWave(energy=100e3, gpts=(32, 32), device=device)
 
-    result_eager = waves.multislice(ensemble, lazy=False)
-    result_lazy = waves.multislice(ensemble, lazy=True).compute()
+    # The slicing is pinned: by default it follows the atoms, which differ between
+    # the ensemble members and the reference configurations compared against.
+    potential = Potential(ensemble, slice_thickness=1.0)
+    result_eager = waves.multislice(potential, lazy=False)
+    result_lazy = waves.multislice(potential, lazy=True).compute()
 
     for index in np.ndindex(shape):
         reference = PlaneWave(energy=100e3, gpts=(32, 32), device=device).multislice(
-            trajectory[index], lazy=False
+            Potential(trajectory[index], slice_thickness=1.0), lazy=False
         )
 
         reference_array = to_host_array(reference.array)
