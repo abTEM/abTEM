@@ -19,3 +19,9 @@ packages = ["abtem_bench", "abtem_bench.cases"]
 
 [tool.setuptools.dynamic]
 version = {attr = "abtem_bench.__version__"}
+
+[tool.pytest.ini_options]
+# The harness tests' own configuration, so pytest does not read the root one: it names
+# abtem warning classes, and resolving them imports the environment's abtem before
+# conftest.py points `import abtem` at this checkout.
+filterwarnings = ["error"]
