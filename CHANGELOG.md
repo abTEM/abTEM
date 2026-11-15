@@ -17,8 +17,9 @@ Features:
   `return_backscattered` gives `B psi`), and angles are measured from -z. A reflected detector has no exit-plane axis
   and needs no `exit_planes=1`, but a block of waves keeps the wave backscattered at every slice. The automatic
   `max_batch` of `Probe.multislice`, `Probe.scan` and `PlaneWave.multislice` counts it; a lazy `Waves` array keeps its
-  chunks, and an eager run keeps it for all its waves at once. It needs a multislice algorithm that reflects (`LanczosMultislice`, with #629), and is refused
-  elsewhere (PRISM, the core-loss multislice) ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
+  chunks, and an eager run keeps it for all its waves at once. It needs a multislice algorithm that reflects
+  (`LanczosMultislice`, with #629), and is refused elsewhere (PRISM, the core-loss multislice)
+  ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
