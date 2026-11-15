@@ -29,7 +29,7 @@ Features:
   GPU above. A quartz rotation series of 1000 Å took 0.36 s a frame at 1299 beams instead of 0.93 s and 0.90 s instead
   of 6.1 s at 2195 beams, with intensities within 3e-12 (100 Å) to 4e-11 (2000 Å) of the eigendecomposition at 1299
   beams: the double-float matrix products limit the accuracy to about 1e-14 a product, against 5e-14 to 6e-13 for the
-  band solver in float64 on the host
+  band solver in float64 on the host ([PR #700](https://github.com/abTEM/abTEM/pull/700))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
