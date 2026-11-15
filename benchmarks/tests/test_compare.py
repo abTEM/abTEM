@@ -1,9 +1,12 @@
 """Compare's inputs and gates: accepted changes, --fail-on, refusals, rendering."""
 
+import subprocess
+
 import numpy as np
 import pytest
 from abtem_bench import cli, store
 from abtem_bench import compare as cmp
+from abtem_bench.compare import _contains as real_contains  # before patching
 from conftest import CID, bundle, one, record
 
 ARR = np.linspace(1.0, 2.0, 16).reshape(4, 4)
@@ -11,9 +14,19 @@ ARR = np.linspace(1.0, 2.0, 16).reshape(4, 4)
 LOOSE = "max_abs_norm = 10"
 
 
+#: the commit an entry names when a test does not name one
+COMMIT = "abcdef0"
+
+
 def _toml(tmp_path, *entries):
+    """An accepted-changes file; entries without a ``commit`` get ``COMMIT``."""
     path = tmp_path / "accepted.toml"
-    path.write_text("\n".join(f"[[accepted]]\n{e}" for e in entries))
+    path.write_text(
+        "\n".join(
+            f"[[accepted]]\n{e}" + ("" if "commit =" in e else f'\ncommit = "{COMMIT}"')
+            for e in entries
+        )
+    )
     return path
 
 
@@ -111,9 +124,97 @@ def test_an_entry_applies_only_against_its_since_reference(
     assert report.failures({"drift": None}) == [f"{CID}: DRIFT"]
     assert [a.case for a in report.not_applicable] == ["demo.*"]
     assert report.stale_accepted == []
-    assert "other references (not applied): `demo.*` since v0" in cmp.to_markdown(
-        report
+    assert "candidate does not contain): `demo.*` since v0." in cmp.to_markdown(report)
+
+
+@pytest.mark.parametrize(
+    "contains, note",
+    [
+        (False, "the candidate does not contain abcdef0"),
+        (None, "git could not tell whether the candidate contains abcdef0"),
+    ],
+)
+def test_an_entry_applies_only_when_the_candidate_contains_its_commit(
+    tmp_path, registry_with_demo, monkeypatch, contains, note
+):
+    seen = []
+
+    def fake(commit, sha):
+        seen.append((commit, sha))
+        return contains
+
+    monkeypatch.setattr(cmp, "_contains", fake)
+    ref, cand = _drift(tmp_path)
+    toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert seen == [(COMMIT, cand.read_manifest()["ref"]["sha"])]
+    assert report.rows[0].verdict == cmp.DRIFT
+    assert [a.scope_note for a in report.not_applicable] == [note]
+    assert f"`demo.*` since v0 ({note})" in cmp.to_markdown(report)
+    assert cmp.to_json(report)["not_applicable"][0]["scope_note"] == note
+
+
+def test_contains_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+            + list(args),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "a")
+    first = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "b")
+    second = git("rev-parse", "HEAD")
+    monkeypatch.setattr(cmp.prepare, "repo_root", lambda: tmp_path)
+    contains = real_contains.__wrapped__  # uncached
+    assert contains(first[:7], second) is True
+    assert contains(second[:7], first) is False
+    assert contains("1234567", second) is None  # unknown to git
+
+    def no_repo():
+        raise FileNotFoundError("no .git")
+
+    monkeypatch.setattr(cmp.prepare, "repo_root", no_repo)
+    assert contains(first, second) is None
+
+
+def test_of_two_changes_the_one_whose_entries_hold_accepts_the_drift(
+    tmp_path, registry_with_demo
+):
+    # dev holds both a large change and a small ported one: the small one's tight
+    # bound does not turn the large one's accepted drift back into DRIFT
+    ref, cand = _drift(tmp_path, factor=1.5)
+    toml = _toml(
+        tmp_path,
+        f'case = "demo.*"\nsince = "v0"\ncommit = "aaaaaaa"\nreason = "large"\n{LOOSE}',
+        'case = "demo.*"\nsince = "v0"\ncommit = "bbbbbbb"\nreason = "small"\n'
+        "max_abs_norm = 1e-3",
     )
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    assert report.rows[0].accepted_by == ["large"]
+    large, small = report.accepted
+    assert large.matched == [CID] and small.matched == []
+    assert small.dominated == [CID] and small.exceeded == []
+    assert report.stale_accepted == []
+
+
+def test_a_drift_beyond_every_change_stays_drift(tmp_path, registry_with_demo):
+    ref, cand = _drift(tmp_path, factor=1.5)
+    toml = _toml(
+        tmp_path,
+        'case = "demo.*"\nsince = "v0"\ncommit = "aaaaaaa"\nreason = "a"\n'
+        "max_abs_norm = 1e-3",
+        'case = "demo.*"\nsince = "v0"\ncommit = "bbbbbbb"\nreason = "b"\n'
+        "max_abs_norm = 1e-2",
+    )
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert report.rows[0].verdict == cmp.DRIFT
+    assert [a.exceeded for a in report.accepted] == [[CID], [CID]]
 
 
 def test_since_matches_a_sha_prefix_of_seven_or_more(tmp_path, registry_with_demo):
@@ -178,6 +279,16 @@ def test_every_matching_entry_is_credited(tmp_path, registry_with_demo):
     assert report.stale_accepted == []
 
 
+def test_an_entry_without_a_commit_is_refused(tmp_path, registry_with_demo):
+    ref, cand = _drift(tmp_path)
+    path = tmp_path / "accepted.toml"
+    path.write_text(
+        f'[[accepted]]\ncase = "demo.*"\nsince = "v0"\nreason = "x"\n{LOOSE}'
+    )
+    with pytest.raises(cmp.CompareError, match="'commit' must be the sha"):
+        cmp.compare(ref, cand, registry_with_demo, accepted_path=path)
+
+
 @pytest.mark.parametrize(
     "entry, message",
     [
@@ -199,6 +310,22 @@ def test_every_matching_entry_is_credited(tmp_path, registry_with_demo):
         ('case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rel = nan', "'max_rel'"),
         ('case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rell = 1', "unknown keys"),
         ('case = "demo.*"\nsince = "v0"\nreason = "x"', "'max_abs_norm' is required"),
+        (
+            f'case = "demo.*"\nsince = "v0"\ncommit = ""\nreason = "x"\n{LOOSE}',
+            "'commit'",
+        ),
+        (
+            f'case = "demo.*"\nsince = "v0"\ncommit = "abc"\nreason = "x"\n{LOOSE}',
+            "'commit'",
+        ),
+        (
+            f'case = "demo.*"\nsince = "v0"\ncommit = "v1.0.11"\nreason = "x"\n{LOOSE}',
+            "'commit'",
+        ),
+        (
+            f'case = "demo.*"\nsince = "v0"\ncommit = 1234567\nreason = "x"\n{LOOSE}',
+            "'commit'",
+        ),
         (
             'case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rel = 1\n'
             "max_intensity = 1",

@@ -7,8 +7,10 @@ vector.
 
 from __future__ import annotations
 
+import functools
 import math
 import string
+import subprocess
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from abtem_bench import registry, store
+from abtem_bench import prepare, registry, store
 
 IDENTICAL = "IDENTICAL"
 OK = "OK"
@@ -51,7 +53,7 @@ BOUND_LABELS = {
     "max_intensity": "intensity",
     "max_abs_norm": "max_abs",
 }
-ENTRY_KEYS = {"case", "since", "reason", "pr", *BOUND_KEYS}
+ENTRY_KEYS = {"case", "since", "commit", "reason", "pr", *BOUND_KEYS}
 
 #: Axis fields that only name or typeset an axis; differences are reported but
 #: are not a change of the result. Fields starting with ``_`` are abtem's
@@ -84,17 +86,20 @@ def _within(value: float | None, bound: float) -> bool:
 class Accepted:
     """One accepted_changes entry and what it matched in this comparison.
 
-    ``since`` scopes the entry: it applies only when the reference bundle was
-    captured at that ref (its label, its ``git describe``, or a prefix of at
-    least 7 hex digits of its sha). The optional bounds cap how large the
-    accepted drift may be, per output; a drift beyond a bound stays ``DRIFT``.
-    A non-finite value that differs between the two outputs is never accepted.
+    ``since`` and ``commit`` scope the entry: it applies only when the reference
+    bundle was captured at ``since`` (its label, its ``git describe``, or a
+    prefix of at least 7 hex digits of its sha) and the candidate contains
+    ``commit``, the commit that made the change. The optional bounds cap how
+    large the accepted drift may be, per output; a drift beyond a bound stays
+    ``DRIFT``. A non-finite value that differs between the two outputs is never
+    accepted.
     """
 
     case: str
     since: str
     reason: str
     pr: int | None = None
+    commit: str = ""
     max_rel: float | None = None
     max_intensity: float | None = None
     max_abs_norm: float | None = None
@@ -102,7 +107,11 @@ class Accepted:
     #: whether the entry's glob matches a case id both compared bundles hold
     covers: bool = False
     exceeded: list[str] = field(default_factory=list)
+    #: drifting case ids accepted by another change's entries, not by this one
+    dominated: list[str] = field(default_factory=list)
     worst: dict[str, float] = field(default_factory=dict)
+    #: why the entry was not applied, for the report; empty when it applies
+    scope_note: str = ""
 
     def matches(self, case_id: str) -> bool:
         cid = registry.CaseId.parse(case_id)
@@ -177,7 +186,8 @@ def load_accepted(
 ) -> list[Accepted]:
     """Read and validate accepted_changes.toml.
 
-    Every entry needs a non-empty ``case``, ``since`` and ``reason``; ``pr`` is
+    Every entry needs a non-empty ``case``, ``since`` and ``reason``, and a
+    ``commit`` of at least 7 hex digits; ``pr`` is
     a positive integer; bounds are positive finite numbers; unknown keys are
     refused (a misspelt bound would otherwise be silently unbounded).
     ``max_abs_norm`` is required: the integrated intensity is unchanged by a
@@ -218,6 +228,16 @@ def load_accepted(
             value = entry.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise CompareError(f"{where}: {key!r} must be a non-empty string")
+        commit = entry.get("commit")
+        if not (
+            isinstance(commit, str)
+            and len(commit.strip()) >= 7
+            and all(ch in string.hexdigits for ch in commit.strip())
+        ):
+            raise CompareError(
+                f"{where}: 'commit' must be the sha (7 or more hex digits) of the "
+                "commit that made the change"
+            )
         pr = entry.get("pr")
         if pr is not None and not (
             isinstance(pr, int) and not isinstance(pr, bool) and pr > 0
@@ -232,7 +252,11 @@ def load_accepted(
                 "flipped or rescaled output cannot pass"
             )
         acc = Accepted(
-            entry["case"].strip(), entry["since"].strip(), entry["reason"].strip(), pr
+            entry["case"].strip(),
+            entry["since"].strip(),
+            entry["reason"].strip(),
+            pr,
+            commit.strip().lower(),
         )
         for key in BOUND_KEYS:
             if key in entry:
@@ -800,17 +824,31 @@ def _pair_row(
     row.verdict = worst
 
     if worst == DRIFT and kind == SAME:
+        # Every entry of one change must hold its bounds; of several changes in
+        # the candidate, the drift is accepted when one change's entries all hold.
         matching = [a for a in accepted if a.matches(cand_id)]
-        over = [v for a in matching for v in a.violations(row.outputs)]
+        changes: dict[str, list[Accepted]] = {}
         for a in matching:
-            a.record(cand_id, row.outputs)
-            if a.violations(row.outputs):
-                a.exceeded.append(cand_id)
-        if matching and not over:
+            changes.setdefault(a.commit, []).append(a)
+        held = {
+            commit
+            for commit, group in changes.items()
+            if not any(a.violations(row.outputs) for a in group)
+        }
+        if held:
             row.verdict = ACCEPTED
-            row.accepted_by = [a.reason for a in matching]
-        elif over:
+            row.accepted_by = [a.reason for a in matching if a.commit in held]
+            for a in matching:
+                if a.commit in held:
+                    a.record(cand_id, row.outputs)
+                else:
+                    a.dominated.append(cand_id)
+        elif matching:
+            over = [v for a in matching for v in a.violations(row.outputs)]
             row.notes.append("exceeds accepted bound: " + "; ".join(over))
+            for a in matching:
+                a.record(cand_id, row.outputs)
+                a.exceeded.append(cand_id)
 
     tr, tc = rr["timings"].get("median"), rc["timings"].get("median")
     if tr and tc:
@@ -886,7 +924,36 @@ def _stale(accepted: list[Accepted], rows: list[Row]) -> list[Accepted]:
     ]
     for a in accepted:
         a.covers = any(a.matches(c) for c in paired)
-    return [a for a in accepted if a.covers and not a.matched]
+    return [a for a in accepted if a.covers and not (a.matched or a.dominated)]
+
+
+@functools.lru_cache(maxsize=None)
+def _contains(commit: str, sha: str) -> bool | None:
+    """Whether commit ``sha`` contains ``commit``, asked of git in the harness's
+    repository; None when git cannot tell (no git, no repository, or a commit
+    it does not know).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(prepare.repo_root())]
+            + ["merge-base", "--is-ancestor", commit, sha],
+            capture_output=True,
+        )
+    except OSError:  # no git executable, or no repository above the harness
+        return None
+    return {0: True, 1: False}.get(proc.returncode)
+
+
+def _in_scope(a: Accepted, ref: dict[str, Any], cand: dict[str, Any]) -> bool:
+    """Whether ``a`` applies to this pair; records why not in ``a.scope_note``."""
+    if not a.applies_to(ref):
+        return False
+    contains = _contains(a.commit, str(cand.get("sha") or ""))
+    if contains is None:
+        a.scope_note = f"git could not tell whether the candidate contains {a.commit}"
+    elif not contains:
+        a.scope_note = f"the candidate does not contain {a.commit}"
+    return bool(contains)
 
 
 def compare(
@@ -930,9 +997,10 @@ def compare(
     fp_match = man_r.get("fingerprint_short") == man_c.get("fingerprint_short")
     entries = load_accepted(accepted_path, reg)
     used_path = accepted_path if accepted_path is not None else ACCEPTED_CHANGES_PATH
-    ref_info = man_r.get("ref", {})
-    accepted = [a for a in entries if a.applies_to(ref_info)]
-    not_applicable = [a for a in entries if not a.applies_to(ref_info)]
+    ref_info, cand_info = man_r.get("ref", {}), man_c.get("ref", {})
+    accepted, not_applicable = [], []
+    for a in entries:
+        (accepted if _in_scope(a, ref_info, cand_info) else not_applicable).append(a)
     noise = noise or {}
     thresholds = {
         "speed": speed_threshold,
@@ -1168,15 +1236,16 @@ def to_markdown(report: Report) -> str:
         )
         lines.append("")
         lines.append(
-            "| case glob | since | PR | reason | bounds | matched | measured |"
+            "| case glob | since | commit | PR | reason | bounds | matched | measured |"
         )
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|")
         for a in changelog:
             matched = str(len(a.matched))
             if a.exceeded:
                 matched += f" ({len(a.exceeded)} over bound)"
             lines.append(
-                f"| `{_cell(a.case)}` | {_cell(a.since)} | {a.pr or ''} "
+                f"| `{_cell(a.case)}` | {_cell(a.since)} | {a.commit} "
+                f"| {a.pr or ''} "
                 f"| {_cell(a.reason)} | {_bounds_text(a)} | {matched} "
                 f"| {_measured_text(a)} |"
             )
@@ -1191,8 +1260,13 @@ def to_markdown(report: Report) -> str:
         lines.append("")
     if report.not_applicable:
         lines.append(
-            "Accepted entries for other references (not applied): "
-            + ", ".join(f"`{a.case}` since {a.since}" for a in report.not_applicable)
+            "Accepted entries not applied (another reference, or a change the "
+            "candidate does not contain): "
+            + ", ".join(
+                f"`{a.case}` since {a.since}"
+                + (f" ({a.scope_note})" if a.scope_note else "")
+                for a in report.not_applicable
+            )
             + "."
         )
         lines.append("")
@@ -1215,6 +1289,8 @@ def _entry_json(a: Accepted) -> dict[str, Any]:
     return {
         "case": a.case,
         "since": a.since,
+        "commit": a.commit,
+        "scope_note": a.scope_note,
         "pr": a.pr,
         "reason": a.reason,
         "bounds": a.bounds(),

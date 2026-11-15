@@ -13,6 +13,11 @@
 #   since         the reference the entry applies against: a bundle's ref
 #                 label, its git describe, or a sha prefix of 7+ hex digits.
 #                 Against any other reference the entry is not applied.
+#   commit        the commit that made the change, as a sha prefix of 7+ hex
+#                 digits; the entry applies only to a candidate that contains
+#                 it (git merge-base --is-ancestor in the harness's repository;
+#                 where git cannot tell, the entry is not applied). Entries of
+#                 one change name it with the same prefix.
 #   reason        one line, present tense: what changed and why the result is
 #                 right
 #   pr            pull request number that introduced the change
@@ -21,8 +26,11 @@
 #                 or phase-scrambled output
 #   max_rel, max_intensity
 #                 optional bounds per output on rel and |intensity|
-# A drift beyond any bound stays DRIFT, and so does a non-finite value present
-# in one output only.
+# A drift beyond any bound of a change's entries is not accepted by that
+# change; when several changes in the candidate cover a case (dev holds both
+# #298 and the 1.0.11 port of the #269 accumulator), the drift is accepted when
+# the entries of one of them all hold. A non-finite value present in one output
+# only is never accepted.
 #
 # Each bound is twice the largest drift measured on the CPU at the quick and
 # standard tiers (2026-10-03), rounded up to one significant digit, so two to
@@ -45,6 +53,7 @@
 [[accepted]]
 case = "hrtem.exitwave@quick/*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
 pr = 298
 max_rel = 4e-1
@@ -54,6 +63,7 @@ max_abs_norm = 6e-3
 [[accepted]]
 case = "hrtem.exitwave@standard/*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); through 157 slices the order-1 phase error moved the exit wave by up to a quarter of its maximum."
 pr = 298
 max_rel = 2e1
@@ -63,6 +73,7 @@ max_abs_norm = 6e-1
 [[accepted]]
 case = "diffraction.cbed@quick/*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
 pr = 298
 max_rel = 3
@@ -72,6 +83,7 @@ max_abs_norm = 5e-3
 [[accepted]]
 case = "diffraction.cbed@standard/*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles, more so through 157 slices."
 pr = 298
 max_rel = 2e1
@@ -81,6 +93,7 @@ max_abs_norm = 2e-1
 [[accepted]]
 case = "stem.multidetector@*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
 pr = 298
 max_rel = 2e-2
@@ -90,6 +103,7 @@ max_abs_norm = 1e-2
 [[accepted]]
 case = "stem.multidetector[eager]@*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
 pr = 298
 max_rel = 2e-2
@@ -99,6 +113,7 @@ max_abs_norm = 1e-2
 [[accepted]]
 case = "stem.multidetector[auto]@*"
 since = "v1.0.10"
+commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
 pr = 298
 max_rel = 2e-2
@@ -117,6 +132,7 @@ max_abs_norm = 1e-2
 [[accepted]]
 case = "potential.infinite@*"
 since = "v1.0.10"
+commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, which moved the potential by up to 7e-8 relative."
 pr = 269
 max_rel = 2e-7
@@ -126,6 +142,7 @@ max_abs_norm = 2e-7
 [[accepted]]
 case = "hrtem.exitwave[order1]@*"
 since = "v1.0.10"
+commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
 max_rel = 1e-5
@@ -135,6 +152,7 @@ max_abs_norm = 2e-6
 [[accepted]]
 case = "diffraction.cbed[order1]@*"
 since = "v1.0.10"
+commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
 max_rel = 6e-5
@@ -144,7 +162,26 @@ max_abs_norm = 6e-7
 [[accepted]]
 case = "stem.multidetector[order1]@*"
 since = "v1.0.10"
+commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2, and segmented-detector bins accumulate in the working precision instead of float32 (#269); the segmented signal moves by up to 4e-6 relative."
+pr = 269
+max_rel = 8e-6
+max_intensity = 2e-6
+max_abs_norm = 7e-6
+
+# 1.0.11 carries the accumulator half of #269 as a port on its release branch
+# (0a2f4965), without the Lobato pi change or #298. Against v1.0.10 every STEM
+# variant moves in the segmented signal only (quick tier: rel 8.8e-7,
+# intensity 1.8e-7, max_abs 5.1e-7; 2026-11-15); hrtem, cbed and the
+# potential stay within 4e-13. The bounds are the [order1] #269 entry's, which
+# bound the same accumulator plus the pi change at the quick and standard
+# tiers; the standard tier of 1.0.11 itself is not measured.
+
+[[accepted]]
+case = "stem.multidetector*@*"
+since = "v1.0.10"
+commit = "0a2f4965"
+reason = "Segmented-detector bins accumulate in the working precision instead of float32 (port of #269 to 1.0.11); the segmented signal moves by up to 1e-6 relative."
 pr = 269
 max_rel = 8e-6
 max_intensity = 2e-6

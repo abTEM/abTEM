@@ -61,6 +61,14 @@ def one(tmp_path, name, array, axes=(), cid=CID, **record_kw):
     )
 
 
+@pytest.fixture(autouse=True)
+def candidate_contains_every_commit(monkeypatch):
+    """Synthetic bundles carry made-up shas that git cannot resolve, so every
+    accepted entry's commit counts as contained in the candidate; tests of the
+    candidate scope patch ``cmp._contains`` themselves."""
+    monkeypatch.setattr(cmp, "_contains", lambda commit, sha: True)
+
+
 @pytest.fixture
 def registry_with_demo(monkeypatch, tmp_path):
     reg = {}
