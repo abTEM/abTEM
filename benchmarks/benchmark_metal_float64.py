@@ -386,7 +386,7 @@ def main():
             + benchmark_fft(torch, fft_grids, repeats)
         )
     if not args.skip_bloch:
-        configurations = [(2.0, 0.15)] if args.quick else [(2.0, 0.3), (2.5, 0.3), (2.8, 0.4)]
+        configurations = [(2.0, 0.15)] if args.quick else [(2.0, 0.3), (2.5, 0.3), (2.8, 0.4), (3.0, 0.5)]
         frames = 3 if args.quick else 5
         sections.append(
             "## Bloch-wave rotation series\n\nQuartz, 200 keV, 1000 Å, a rotation about "

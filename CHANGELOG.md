@@ -26,11 +26,12 @@ Features:
   eigendecomposition). On the host the band reduction now runs on the lower triangle only, through the Hermitian
   matrix product and rank-2k update of the BLAS that SciPy is built with (called with a leading dimension, so nothing is
   copied), and the Chebyshev recurrence is a compiled kernel, with a bandwidth of 32 instead of 128. A quartz rotation
-  series of 1000 Å took 0.23 s a frame at 1299 beams instead of 0.92 s and 0.80 s instead of 5.9 s at 2195 beams on an
-  Apple M2, with intensities within 1e-12 of the eigendecomposition, and 2.9 s instead of 13 s at 3233 beams. With
+  series of 1000 Å took 0.23 s a frame at 1299 beams instead of 0.69 s, 0.79 s instead of 3.5 s at 2195 beams and
+  2.1 s instead of 11.3 s at 3233 beams on an Apple M2 (against `zheevr`, see the fix above), with intensities
+  within 1e-12 of the eigendecomposition. With
   `device: mps` and `precision: float64` (or `torch.emulate-float64`) the matrix of 3000 beams or more is reduced on the
   GPU instead, by double-float matrix products (a lean multiply-add, 160 GFLOP/s on the M2, with the panels and block
-  reflectors in float64 on the host) and the recurrence runs on the GPU for 1600 beams or more: 1.25 to 1.3x faster than
+  reflectors in float64 on the host) and the recurrence runs on the GPU for 1600 beams or more: 1.1 to 1.3x faster than
   the host band solver from 3000 to 9000 beams (33 against 42 s at 9009), with intensities within 3e-12 (100 Å) to
   4e-11 (2000 Å) of the eigendecomposition at 1299 beams, against 5e-14 to 6e-13 on the host
   ([PR #700](https://github.com/abTEM/abTEM/pull/700))
@@ -293,6 +294,15 @@ Dependencies:
 
 Bugfixes:
 
+- `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
+  more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
+  returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
+  2²⁴ down below the minimum, so LAPACK refused the call with "Illegal value in argument 10 of internal zheevd"
+  (SciPy) or "Eigenvalues did not converge" (NumPy). The complex Hermitian solver on macOS is now `ZHEEVR`, which
+  needs a far smaller workspace and was also faster on an Apple M2: 0.60 against 0.87 s at 1300 beams, 12.5 against
+  22.7 s at 3233, and a rotation series of 11 frames at 1299 beams 7.7 instead of 10.4 s. The diffraction patterns
+  are unchanged to rounding. Real matrices and other platforms are not affected. The eigenvectors of a complex
+  matrix are written to an array of their own, not over the matrix when it may be overwritten
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
