@@ -14,7 +14,7 @@ Features:
 - Double precision on Apple Metal: the device `mps` with `precision: float64` (it was refused before) keeps
   the data as float64 on the host and runs the Fourier multislice (also the core-loss one), the
   infinite-projection potential and the large host FFTs on the GPU in double-float arithmetic (pairs of
-  float32, ~1e-14 relative accuracy), up to ~14x faster than float64 on the CPU. What the GPU cannot do
+  float32, ~1e-14 relative accuracy), up to ~16x faster than float64 on the CPU. What the GPU cannot do
   (real-space multislice, a grid side with a prime factor above 7) runs on the host in the same float64,
   with a `SlowFFTSizeWarning`; `torch.emulate-float64` asks for the same with the device `cpu`. A
   `SlowFFTSizeWarning` also says when a grid is markedly slow on Metal, whose FFT runs powers of two 2-4x
