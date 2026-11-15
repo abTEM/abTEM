@@ -379,7 +379,8 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        algorithm that reflects (default False); applied to waves directly with
        `detect`, it measures those waves. The multislice keeps the wave backscattered
        at every slice until the end of the pass, so a block of waves takes the memory
-       of one wave per slice more, and the automatic batch is smaller.
+       of one wave per slice more. The automatic batch of a `Probe` or `PlaneWave` is
+       smaller; a lazy `Waves` array keeps its chunks.
     """
 
     _splits_energy_ensembles = True
