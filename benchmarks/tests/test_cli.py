@@ -113,8 +113,8 @@ def test_compare_warns_when_git_cannot_check_the_candidate(
     monkeypatch.setattr(cli.cmp, "_resolve", lambda commit: None)
     assert cli.main(argv) == 0
     assert (
-        "warning: 1 accepted entries not applied, git could not check the "
-        "candidate (first: git could not resolve abcdef0"
+        "warning: accepted entries not applied because git could not check the "
+        "candidate: 1 (first: git could not resolve abcdef0"
     ) in capsys.readouterr().err
 
 

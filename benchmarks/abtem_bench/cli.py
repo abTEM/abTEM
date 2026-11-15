@@ -234,12 +234,12 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "case id(s): the noise file has no memory floor for them",
             file=sys.stderr,
         )
-    unscoped = [a for a in report.not_applicable if "could not" in a.scope_note]
-    if unscoped:
+    unchecked = [a for a in report.not_applicable if a.unchecked]
+    if unchecked:
         print(
-            f"warning: {len(unscoped)} accepted entries not applied, git could not "
-            "check the candidate (first: "
-            f"{unscoped[0].scope_note}); run compare where git sees the repository",
+            f"warning: accepted entries not applied because git could not check "
+            f"the candidate: {len(unchecked)} (first: {unchecked[0].scope_note}); "
+            "run compare where git sees the repository",
             file=sys.stderr,
         )
     for f in failures:

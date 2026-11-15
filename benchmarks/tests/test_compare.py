@@ -155,6 +155,7 @@ def test_an_entry_applies_only_when_the_candidate_contains_its_commit(
     assert seen == ([(COMMIT, sha)] if resolves else [])
     assert report.rows[0].verdict == cmp.DRIFT
     assert [a.scope_note for a in report.not_applicable] == [note]
+    assert report.not_applicable[0].unchecked == (contains is None)
     assert f"`demo.*` since v0 ({note})" in cmp.to_markdown(report)
     assert cmp.to_json(report)["not_applicable"][0]["scope_note"] == note
 

@@ -113,6 +113,8 @@ class Accepted:
     scope_note: str = ""
     #: the full sha ``commit`` resolves to: entries of one change share it
     change: str = ""
+    #: git could not check the candidate for this entry, so it was not applied
+    unchecked: bool = False
 
     def matches(self, case_id: str) -> bool:
         cid = registry.CaseId.parse(case_id)
@@ -968,6 +970,7 @@ def _in_scope(a: Accepted, ref: dict[str, Any], cand: dict[str, Any]) -> bool:
     elif not contains:
         a.scope_note = f"the candidate does not contain {a.commit}"
     a.change = full or ""
+    a.unchecked = contains is None
     return bool(contains)
 
 
