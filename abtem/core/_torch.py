@@ -1497,6 +1497,18 @@ def allclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False) -> bool:
     )
 
 
+@_serialized
+def array_equal(a1, a2, equal_nan=False) -> bool:
+    """``numpy.array_equal``, compared on the device rather than on the host."""
+    a1, a2 = _unwrap(asarray(a1)), _unwrap(asarray(a2))
+    if a1.shape != a2.shape:
+        return False
+    equal = a1 == a2
+    if equal_nan:
+        equal |= torch.isnan(a1) & torch.isnan(a2)
+    return bool(torch.all(equal))
+
+
 class _TorchNumpyNamespace:
     """The ``numpy``-module stand-in for arrays living on the Metal device.
 
@@ -1587,6 +1599,7 @@ class _TorchNumpyNamespace:
     cumsum = staticmethod(_reduction("cumsum"))
     all = staticmethod(_boolean_reduction("all"))
     any = staticmethod(_boolean_reduction("any"))
+    array_equal = staticmethod(array_equal)
     diff = staticmethod(diff)
     std = staticmethod(_reduction("std"))
     min = staticmethod(_reduction("amin"))
@@ -1667,6 +1680,7 @@ _ARRAY_FUNCTIONS.update(
         np.nonzero: nonzero,
         np.einsum: einsum,
         np.allclose: allclose,
+        np.array_equal: array_equal,
         np.isclose: isclose,
         np.roll: roll,
         np.fft.fftshift: _fft.fftshift,
