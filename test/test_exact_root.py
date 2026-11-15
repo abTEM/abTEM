@@ -314,3 +314,26 @@ def test_a_weak_reflection_is_the_same_in_single_and_in_double_precision():
     double = specular_intensity("float64")
     assert 1e-15 < double < 1e-13
     assert specular_intensity("float32") == pytest.approx(double, rel=0.5, abs=0)
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_two_identical_slices_backscatter_exactly_nothing(precision):
+    # Oracle: slices of the same potential per length have the same wave number, so
+    # B = (k_next - k_current) / (2 k_next) is exactly zero, and not the difference of
+    # two functions each with its own rounding. A laterally structured potential and a
+    # tilted wave, so that nothing but the identity of the slices makes it zero; a
+    # different next slice does backscatter (the shortcut is not always taken).
+    rng = np.random.default_rng(0)
+    layer = rng.random((12, 20)).astype(np.float32)
+    array = np.stack([layer, layer, 2 * layer]) * 0.1
+    with abtem.config.set({"precision": precision}):
+        slices = abtem.PotentialArray(array, slice_thickness=0.1, extent=(4.0, 6.0))
+        waves = (
+            abtem.PlaneWave(energy=5000.0, tilt=(40.0, 10.0))
+            .match_grid(slices)
+            .build(lazy=False)
+        )
+        _, same = exact_step(waves.copy(), slices[0], slices[1])
+        _, different = exact_step(waves.copy(), slices[0], slices[2])
+    assert np.abs(to_host_array(same)).max() == 0.0
+    assert np.abs(to_host_array(different)).max() > 1e-6

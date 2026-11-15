@@ -30,7 +30,7 @@ from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
-from abtem.finite_difference import LaplaceOperator, _exact_root_step
+from abtem.finite_difference import LaplaceOperator, _exact_root_step, _member_tilts
 from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.inelastic.core_loss import (
     TransitionPotential,
@@ -1146,15 +1146,7 @@ def _reference_wave_numbers(waves: Waves) -> np.ndarray:
     """The longitudinal wave number k_z = k / N [rad/Å] of every member of `waves`,
     with N = sqrt(1 + tan^2(tilt_x) + tan^2(tilt_y)) of its base tilt plus its tilt
     axes: the wave number that a step takes out of a wave along its direction."""
-    shape = waves.shape[:-2]
-    tilts = np.broadcast_to(np.asarray(waves.base_tilt, dtype=float), shape + (2,))
-    tilts = tilts.copy()
-    for i, axis in enumerate(waves.ensemble_axes_metadata):
-        if hasattr(axis, "tilt"):
-            values = np.asarray(axis.tilt, dtype=float).reshape(-1, 2)
-            extent = [1] * len(shape) + [2]
-            extent[i] = len(values)
-            tilts += values.reshape(extent)
+    tilts = _member_tilts(waves)
     tangent = np.tan(tilts / 1e3)
     return 2 * np.pi / waves.wavelength / np.sqrt(1 + np.sum(tangent**2, axis=-1))
 
