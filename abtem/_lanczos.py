@@ -30,6 +30,23 @@ def _check_propagating(argument: np.ndarray) -> None:
         )
 
 
+def _root(values, k):
+    """``sqrt(1 + 2 t / k)`` of the eigenvalues, checked to be propagating."""
+    argument = 1.0 + 2.0 * values / k
+    _check_propagating(argument)
+    return np.sqrt(argument)
+
+
+def _step(root, k, thickness, reference):
+    return np.exp(1j * thickness * (k * root - reference))
+
+
+def _excess(values, root):
+    """``k (sqrt(1 + 2 t / k) - 1)`` as ``2 t / (sqrt(1 + 2 t / k) + 1)``: the
+    difference of two numbers of the size of ``k`` is not formed."""
+    return 2.0 * values / (root + 1.0)
+
+
 def exponential_of_root(
     k: float, thickness: float, reference: float | None = None
 ) -> Callable:
@@ -39,9 +56,7 @@ def exponential_of_root(
     reference = k if reference is None else reference
 
     def function(values):
-        argument = 1.0 + 2.0 * values / k
-        _check_propagating(argument)
-        return np.exp(1j * thickness * (k * np.sqrt(argument) - reference))
+        return _step(_root(values, k), k, thickness, reference)
 
     return function
 
@@ -52,14 +67,13 @@ def excess_wave_number(k: float) -> Callable:
     The backscatter is the difference of the wave numbers of two slices, so ``k`` drops
     out. Left in, it makes each function about ``k`` times the wave, and the difference
     of two of them has an absolute error of ``k`` times the rounding of the precision:
-    in single precision ``k = 90`` rad/Å at 30 keV gives a specular beam of 1e-13 of the
-    incident intensity where the reflection is 1e-14. Without it the functions are of
-    the size of the difference."""
+    in single precision ``k = 90`` rad/Å at 30 keV gave a specular reflection of
+    graphene (0.25 Å sampling, slices of 0.02 Å) 5e-14 to 1e-13 of the incident
+    intensity where it is 1e-14. Without it the functions are of the size of the
+    difference."""
 
     def function(values):
-        argument = 1.0 + 2.0 * values / k
-        _check_propagating(argument)
-        return (2.0 * values / (np.sqrt(argument) + 1.0)).astype(complex)
+        return _excess(values, _root(values, k)).astype(complex)
 
     return function
 
@@ -76,11 +90,9 @@ def step_and_current_wave_number(
     reference = k if reference is None else reference
 
     def function(values):
-        argument = 1.0 + 2.0 * values / k
-        _check_propagating(argument)
-        root = np.sqrt(argument)
-        step = np.exp(1j * thickness * (k * root - reference))
-        return _stack_of(values)([step, 2.0 * values / (root + 1.0) * step])
+        root = _root(values, k)
+        step = _step(root, k, thickness, reference)
+        return _stack_of(values)([step, _excess(values, root) * step])
 
     function.outputs = 2
     return function
@@ -100,7 +112,7 @@ def inverse_wave_number(k: float) -> Callable:
 def lanczos_function(
     a0,
     apply: Callable,
-    function: Callable | Sequence[Callable],
+    function: Callable,
     tolerance: float | Sequence[float],
     max_iterations: int,
     xp,
@@ -108,18 +120,18 @@ def lanczos_function(
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny).
 
-    ``function`` may be a sequence of functions, which are all evaluated in the one
-    Krylov space (a list of results, at the cost of one function more per iteration,
-    not of one application of the operator more), each converged to its own entry of
-    ``tolerance``, a sequence of the same length (or one number for all). Or it is one
-    callable with an attribute ``outputs``, the number of functions, that returns their
-    values stacked, (outputs, B, m): functions that share what they compute, and on a
-    device a smaller number of kernels, which is what an iteration costs there.
+    ``function`` maps the eigenvalues (B, m) of the small tridiagonal matrices to
+    complex values of the same shape. Or it is a callable with an attribute
+    ``outputs``, the number of functions, that returns their values stacked,
+    (outputs, B, m): several functions are evaluated in the one Krylov space (a list of
+    results), at the cost of one function more per iteration, not of one application
+    of the operator more; they share what they compute, and on a device the kernels,
+    which is what an iteration costs there. Each is converged to its own entry of
+    ``tolerance``, a sequence of ``outputs`` numbers (or one number for all).
 
     One application of the Hermitian operator ``apply`` per iteration, with full
     reorthogonalisation (the number of iterations is small). The small tridiagonal
-    matrices are diagonalised on the host, in double precision, and ``function`` maps
-    their eigenvalues (B, m) to complex values of the same shape.
+    matrices are diagonalised on the host, in double precision.
 
     The iteration stops when the coefficients on the Krylov basis change by less than
     ``tolerance``.
@@ -141,19 +153,11 @@ def _functions_and_tolerances(function, tolerance):
     outputs = getattr(function, "outputs", None)
     if outputs is not None:  # one callable that returns all of them, stacked
         single, count, evaluate = False, int(outputs), function
-    elif callable(function):
+    else:
         single, count = True, 1
 
         def evaluate(values):
             return function(values)[None]
-
-    else:
-        functions = list(function)
-        single, count = False, len(functions)
-
-        def evaluate(values):
-            stack = np.stack if isinstance(values, np.ndarray) else _stack_of(values)
-            return stack([f(values) for f in functions])
 
     tolerances = np.asarray(tolerance, dtype=np.float64)
     if tolerances.ndim and tolerances.shape != (count,):
@@ -169,19 +173,19 @@ def _stack_of(array):
 def _lanczos_host(
     a0,
     apply: Callable,
-    function: Callable | Sequence[Callable],
+    function: Callable,
     tolerance: float | Sequence[float],
     max_iterations: int,
     xp,
 ):
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), and
-    every function of ``functions`` (a list of results).
+    every function of a stacked ``function`` (a list of results), as
+    :func:`lanczos_function`.
 
     One application of the Hermitian operator ``apply`` per iteration, with full
     reorthogonalisation (the number of iterations is small). The small tridiagonal
-    matrices are diagonalised on the host, in double precision, and ``function`` maps
-    their eigenvalues (B, m) to complex values of the same shape.
+    matrices are diagonalised on the host, in double precision.
 
     The iteration stops when the coefficients on the Krylov basis change by less than
     ``tolerance``.
@@ -268,7 +272,7 @@ _DEVICE_EIGH_MEMBERS = 32
 def _lanczos_device(
     a0,
     apply: Callable,
-    function: Callable | Sequence[Callable],
+    function: Callable,
     tolerance: float | Sequence[float],
     max_iterations: int,
     xp,
@@ -276,8 +280,8 @@ def _lanczos_device(
 ):
     """
     ``function(O) a0`` for every member of the batch ``a0``, of shape (B, nx, ny), and
-    every function of ``functions`` (a list of results), as :func:`_lanczos_host`, with
-    the cost of a device in mind: the number of kernels and
+    every function of a stacked ``function`` (a list of results), as
+    :func:`_lanczos_host`, with the cost of a device in mind: the number of kernels and
     of transfers, and the host work that the device waits for, not the arithmetic.
 
     The basis is one array, and everything that the next iteration needs stays on the
@@ -291,9 +295,9 @@ def _lanczos_device(
     hundreds of them costs more on the host than an iteration on the device, and then
     the only transfer of an iteration is one pair of numbers, for the convergence.
     Otherwise they are diagonalised on the host in double precision, with a transfer of
-    the diagonal element and the norm of the residual per iteration. ``function`` maps
-    the eigenvalues (B, m) to complex values of the same shape (and of the same array
-    module).
+    the diagonal element and the norm of the residual per iteration. ``function`` is
+    evaluated on the eigenvalues, of the array module of ``xp`` when they are
+    diagonalised on the device.
     """
     from abtem.finite_difference import NotConvergedError
 

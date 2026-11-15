@@ -839,6 +839,12 @@ def _exact_root_step(
     potentials = [potential_slice.array[0] * sigma / thickness]
     if next_slice is not None:
         potentials.append(next_slice.array[0] * sigma / thickness)
+    # two slices of the same potential per length have the same wave number: nothing
+    # is backscattered, exactly (vacuum padding, the inside of a uniform slab, two
+    # identical layers), and the step alone is all there is to do
+    identical = next_slice is not None and bool(
+        xp.array_equal(potentials[0], potentials[1])
+    )
 
     def advance(batch, tilt):
         """The forward and the backscattered wave of a batch of one tilt."""
@@ -859,7 +865,7 @@ def _exact_root_step(
 
         current = operator(potentials[0])
         spectrum = fft2(batch) * band
-        if next_slice is None:
+        if next_slice is None or identical:
             batch = lanczos_function(
                 spectrum,
                 current,
