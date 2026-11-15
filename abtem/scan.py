@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools
-import itertools
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Union
 
@@ -146,15 +145,6 @@ class BaseScan(ReciprocalSpaceMultiplication):
     def limits(self):
         """Lower left and upper right corner of the bounding box containing all
         positions in the scan."""
-
-    @abstractmethod
-    def _sort_into_extents(
-        self,
-        extents: tuple[
-            tuple[tuple[float, float], ...], tuple[tuple[float, float], ...]
-        ],
-    ):
-        pass
 
     def _evaluate_kernel(self, waves: Waves) -> np.ndarray:
         """
@@ -320,27 +310,6 @@ class CustomScan(BaseScan):
                 chunks, lambda s: {"positions": self._positions[s[0]]}, lazy
             ),
         )
-
-    def _sort_into_extents(self, extents):
-        new_positions = np.zeros_like(self.positions)
-        chunks = ()
-        start = 0
-        for x_extents, y_extents in itertools.product(*extents):
-            mask = (
-                (self.positions[:, 0] >= x_extents[0])
-                * (self.positions[:, 0] < x_extents[1])
-                * (self.positions[:, 1] >= y_extents[0])
-                * (self.positions[:, 1] < y_extents[1])
-            )
-
-            n = int(np.sum(mask))
-            chunks += (n,)
-            stop = start + n
-            new_positions[start:stop] = self.positions[mask]
-            start = stop
-
-        assert sum(chunks) == len(self)
-        return CustomScan(new_positions), (chunks,)
 
     @property
     def shape(self):
@@ -744,9 +713,6 @@ class LineScan(BaseScan):
     def _default_ensemble_chunks(self):
         return ("auto",)
 
-    def _sort_into_extents(self, extents):
-        raise NotImplementedError
-
     @staticmethod
     def _from_block_entry(line_scan):
         return line_scan
@@ -1141,40 +1107,6 @@ class GridScan(HasGrid2DMixin, BaseScan):
             return xi[0]
 
         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
-
-    def _sort_into_extents(self, extents):
-        x = np.linspace(
-            self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0]
-        )
-
-        separators = [l for _, l in extents[0]]
-
-        unique, x_chunks = np.unique(np.digitize(x, separators), return_counts=True)
-        unique = list(unique)
-
-        x_chunks_new = []
-        for i in range(len(separators)):
-            if i in unique:
-                x_chunks_new.append(int(x_chunks[unique.index(i)]))
-            else:
-                x_chunks_new.append(0)
-
-        y = np.linspace(
-            self.start[1], self.end[1], self.gpts[1], endpoint=self.endpoint[1]
-        )
-
-        separators = [l for _, l in extents[1]]
-        unique, y_chunks = np.unique(np.digitize(y, separators), return_counts=True)
-        unique = list(unique)
-
-        y_chunks_new = []
-        for i in range(len(separators)):
-            if i in unique:
-                y_chunks_new.append(int(y_chunks[unique.index(i)]))
-            else:
-                y_chunks_new.append(0)
-
-        return self, (tuple(x_chunks_new), tuple(y_chunks_new))
 
     @property
     def ensemble_axes_metadata(self):

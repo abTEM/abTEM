@@ -958,7 +958,6 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
             temp_array *= scattering_factor / sinc_array
 
-            # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
@@ -1332,25 +1331,6 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         inner_limit = min(sampling) / self._inner_cutoff_factor
         radial_gpts = self._radial_gpts(inner_limit, cutoff)
         limits = self._integral_limits(cutoff)
-
-        # def potential_blurred(r, func):
-        #     ri = np.linspace(-4, 4, 101)[(None,) * len(r.shape)]
-        #     r = r[..., None]
-        #     r = np.abs(r + ri)
-        #     f = (
-        #         func(r) * r[None, None] ** 2 * np.exp(-(ri**2) / 0.1)[None, None]
-        #     ).sum(-1)
-        #     return f
-        #
-        # potential_blurred_ = lambda r: potential_blurred(r, potential)
-        #
-        # projection = lambda z: potential_blurred_(
-        #     np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
-        # )
-
-        # projection = lambda z: potential(
-        #    np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
-        # )
 
         def project_along_z(z):
             return potential(np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2))

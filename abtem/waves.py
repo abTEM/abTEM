@@ -257,11 +257,6 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
     Documented in the subclasses.
     """
 
-    # @property
-    # @abstractmethod
-    # def axes_metadata(self) -> AxesMetadataList:
-    #     pass
-
     @property
     @abstractmethod
     def device(self) -> str:
@@ -612,7 +607,6 @@ class _WavesNormalization(WavesToWavesTransform):
             if not waves._reciprocal_space:
                 array = fft2(array, overwrite_x=self._in_place)
 
-            # waves = self.ensure_reciprocal_space(overwrite_x=in_place)
             f = xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
             if self._in_place:
                 array /= f
@@ -2413,7 +2407,6 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
             arg_chunks = chunks[slice(*arg_split)]
             args += ensemble._partition_args(arg_chunks, lazy=lazy)
-            # print(args)
 
         return args
 

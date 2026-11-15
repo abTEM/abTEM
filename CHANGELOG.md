@@ -846,6 +846,10 @@ Internal:
 - `ArrayObject._with_array(array, **changes)` makes a copy that holds a new array, replacing the
   copy-the-keyword-arguments-and-rebuild sequence at about 35 places
   ([PR #679](https://github.com/abTEM/abTEM/pull/679))
+- Dead code removed, about 1,100 lines: the PRISM modules `_partitioned_s_matrix` and `_natural_neighbors`, which nothing
+  imported; unreferenced helpers in `abtem.prism.utils`, `abtem.bloch.utils`, `abtem.bloch.dynamical`, `abtem.scan`
+  (`_sort_into_extents`) and `abtem.measurements`; `OverlayImshowArtist`, whose constructor raised; and commented-out code
+  throughout ([PR #679](https://github.com/abTEM/abTEM/pull/679))
 - The PRISM reductions that rechunked the S-matrix (`_multiple_rechunk_reduce`, `_single_rechunk_reduce`
   and their helpers, about 470 lines) are removed: nothing had called them since the lazy reduction moved
   to `_no_chunks_reduce` ([PR #679](https://github.com/abTEM/abTEM/pull/679))

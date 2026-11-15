@@ -1517,41 +1517,6 @@ class _HasAberrations(HasAcceleratorMixin):
 
             setattr(self, symbol, value)
 
-        #     if not isinstance(value, str):
-        #         value = validate_distribution(value)
-
-        #     if symbol in polar_symbols:
-        #         self._aberration_coefficients[symbol] = value
-
-        #     elif symbol in polar_aliases:
-        #         self._aberration_coefficients[self._aliases()[symbol]] = value
-
-        #     else:
-        #         raise ValueError("{} not a recognized parameter".format(symbol))
-
-        # for symbol, value in aberration_coefficients.items():
-        #     if symbol in ("defocus", "C10"):
-        #         if isinstance(value, str) and value.lower() == "scherzer":
-        #             if self._valid_energy is None:
-        #                 raise RuntimeError(
-        #                     "energy undefined, Scherzer defocus cannot be evaluated"
-        #                 )
-
-        #             value = scherzer_defocus(
-        #                 self._aberration_coefficients["C30"], self._valid_energy
-        #             )
-        #         elif isinstance(value, str):
-        #             raise ValueError(
-        #                 f"String values for defocus must be 'Scherzer', got {value}"
-        #             )
-
-        #         value = validate_distribution(value)
-
-        #         if symbol == "defocus":
-        #             value = -value
-
-        #         self._aberration_coefficients["C10"] = value
-
 
 class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     """

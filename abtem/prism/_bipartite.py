@@ -192,10 +192,9 @@ def natural_neighbor_weights(
         Only ``"linear"`` is supported: vectorised Delaunay-barycentric weights
         (C0, fully vectorised, nearest-fallback outside the convex hull) — this is
         the scatterem reference default and is "adequate for the smooth
-        probe-reconstruction use in partitioned PRISM" (paper). abTEM's Sibson
-        weights (:func:`abtem.prism._natural_neighbors.pairwise_weights`) are C1
-        but raise ``QhullError`` on degenerate circumcenter polygons, so they are
-        not exposed here.
+        probe-reconstruction use in partitioned PRISM" (paper). Sibson
+        (natural-neighbour) weights are C1 but raise ``QhullError`` on degenerate
+        circumcenter polygons, so they are not offered here.
 
     sparse : bool, optional
         If True, return the weights as ``(indices, values)``, both ``(B, 3)``

@@ -627,7 +627,6 @@ def _update_measurements(
     detectors: list[BaseDetector],
     measurements: list[BaseMeasurements | Waves],
     measurement_index: tuple[int, ...] = (0,),
-    additive: bool = False,
 ) -> None:
     assert len(detectors) == len(measurements)
 
@@ -637,10 +636,7 @@ def _update_measurements(
         for i, detector in enumerate(detectors):
             new_measurement = detector.detect(waves)
 
-            if additive:
-                measurements[i].array[measurement_index] += new_measurement.array
-            else:
-                measurements[i].array[measurement_index] = new_measurement.array
+            measurements[i].array[measurement_index] = new_measurement.array
     return
 
 
@@ -843,9 +839,6 @@ def multislice_and_detect(
                 "Backscattering contributions require potential.exit_planes after "
                 "every slice, starting with the entrance plane -1 (exit_planes=1)."
             )
-
-        # moved to MultisliceTransform
-        # detectors = list(detectors) + [WavesDetector()]
 
     if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
@@ -1838,6 +1831,5 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             The wave functions after running the multislice algorithm.
         """
         output = waves.apply_transform(self, max_batch=max_batch)
-        # assert is_waves_base_measurements_or_list(output)
 
         return output

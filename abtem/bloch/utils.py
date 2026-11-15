@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import itertools
-from typing import Iterable, Literal, Optional, Sequence
+from typing import Iterable, Literal, Optional
 
 import numpy as np
 from ase import Atoms
@@ -33,67 +32,6 @@ def reciprocal_cell(cell: np.ndarray | Cell) -> np.ndarray:
 def calculate_g_vec(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
     g_vec: np.ndarray = hkl @ reciprocal_cell(cell)
     return g_vec
-
-
-def calculate_g_vec_length(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
-    return np.linalg.norm(calculate_g_vec(hkl, cell), axis=-1)
-
-
-def hkl_strings_to_array(hkl: list[str]) -> np.ndarray:
-    return np.array([tuple(map(int, hkli.split(" "))) for hkli in hkl])
-
-
-def generate_linear_combinations(
-    vectors: np.ndarray, coefficients: Sequence[int], exclude_zero: bool = False
-) -> np.ndarray:
-    """
-    Generate all possible linear combinations of the given vectors with the given
-    coefficients.
-
-    Parameters
-    ----------
-    vectors : numpy.array
-        Array of vectors.
-    coefficients : sequence of int
-        Coefficients to use in the linear combinations.
-    exclude_zero : bool, optional
-        Whether to exclude the zero vector from the output.
-
-    Returns
-    -------
-    numpy.array
-        Array of linear combinations.
-    """
-    combinations = np.array(
-        [
-            sum(c * v for c, v in zip(coef_comb, vectors))
-            for coef_comb in itertools.product(coefficients, repeat=len(vectors))
-        ]
-    )
-    if exclude_zero:
-        combinations = combinations[(combinations == 0).all(axis=1) == 0]
-    return combinations
-
-
-def get_shortest_g_vec_length(cell: Cell) -> float:
-    """
-    Get the length of the shortest reciprocal space vector in the given unit cell.
-
-    Parameters
-    ----------
-    cell : Cell
-        Unit cell.
-
-    Returns
-    -------
-    float
-        Length of the shortest reciprocal space vector [1/Å].
-    """
-    coefficients = [-1, 0, 1]
-    combinations = generate_linear_combinations(
-        reciprocal_cell(cell), coefficients, exclude_zero=True
-    )
-    return np.min(np.linalg.norm(combinations, axis=1))
 
 
 def cell_bounds(cell: np.ndarray | Cell) -> np.ndarray:
@@ -356,37 +294,6 @@ def _dense_structure_factor(
     dense = xp.zeros(int(np.prod(gpts)), dtype=array.dtype)
     dense[xp.asarray(ravel_hkl(hkl_source, gpts))] = array
     return dense
-
-
-def retrieve_structure_factor_values(
-    array: np.ndarray,
-    hkl_source: np.ndarray,
-    hkl_destination: np.ndarray,
-    gpts: tuple[int, int, int],
-) -> np.ndarray:
-    """
-    Look up the structure factors at a set of reciprocal space vectors.
-
-    Parameters
-    ----------
-    array : numpy.ndarray
-        The structure factors as a 1D array.
-    hkl_source : numpy.ndarray
-        The reciprocal space vectors as Miller indices for the source array.
-    hkl_destination : numpy.ndarray
-        The reciprocal space vectors as Miller indices to look up. Those on the grid
-        but not in `hkl_source` (beyond its g_max) give zero.
-    gpts : tuple of ints
-        The number of grid points in the 3D structure factor.
-
-    Returns
-    -------
-    numpy.ndarray
-        The structure factors at `hkl_destination`, on the device of `array`.
-    """
-    xp = get_array_module(array)
-    dense = _dense_structure_factor(array, hkl_source, gpts)
-    return dense[xp.asarray(ravel_hkl(hkl_destination, gpts))]
 
 
 def structure_factor_coupling_matrix(
