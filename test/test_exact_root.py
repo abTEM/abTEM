@@ -10,13 +10,9 @@ from utils import devices, to_host_array
 import abtem
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.finite_difference import _exact_root_step
-from abtem.multislice import LanczosMultislice, RealSpaceMultislice
+from abtem.multislice import FourierMultislice, LanczosMultislice
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::UserWarning",
-    # the series it is compared with is deprecated
-    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
-)
+pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 # Strong beams of a graphene monolayer, as the flux that the exact two-way solution
 # (Numerov, 0.01 Å steps, propagating beams only) puts in the three families of the
@@ -156,22 +152,22 @@ def test_the_correction_is_subtracted_from_the_forward_wave_as_for_the_series():
     np.testing.assert_allclose(plain - forward, backscattered, atol=1e-6)
 
 
-def test_the_exact_root_agrees_with_the_converged_series_at_high_energy():
-    # Oracle: where 2 sigma V / k is far below 1 the Taylor series converges to the
-    # root: at 100 keV the series of order 3 and the exact root give the same wave
-    # to 0.3 % (the series is truncated and has the finite-difference Laplacian).
+def test_the_exact_root_agrees_with_the_split_step_at_high_energy():
+    # Oracle: where 2 sigma V / k is far below 1 the potential inside the root and
+    # the backscatter are small corrections: at 100 keV the exact root and the split
+    # step give the same wave to 3.7e-3.
     potential = graphene_potential(0.1, vacuum=3.0)
     wave = {}
     for name, algorithm in (
         ("exact", exact_algorithm()),
-        ("series", RealSpaceMultislice(order=3, expansion_scope="full")),
+        ("split step", FourierMultislice()),
     ):
         wave[name] = to_host_array(
             abtem.PlaneWave(energy=100e3).multislice(
                 potential, algorithm=algorithm, lazy=False
             )
         )
-    assert np.abs(wave["exact"] - wave["series"]).max() < 6e-3
+    assert np.abs(wave["exact"] - wave["split step"]).max() < 6e-3
 
 
 @pytest.mark.parametrize(
@@ -207,9 +203,9 @@ TILTED_EXACT_FLUX = {
 
 @pytest.mark.slow
 def test_the_exact_root_follows_the_exact_solution_for_a_tilted_wave():
-    # Oracle: the exact two-way solution (stored above, as intensities). The series of
-    # order 1 with the paraxial translation of the tilt is 1-10 % off on these beams;
-    # the exact root in the frame of the tilted wave is within 1 %.
+    # Oracle: the exact two-way solution (stored above, as intensities). The split
+    # step is up to 6 % off on these beams; the exact root in the frame of the tilted
+    # wave is within 1 %.
     tilt = (80.0, 30.0)
     wave = abtem.PlaneWave(energy=1000.0, tilt=tilt)
     wavelength = energy2wavelength(1000.0)
@@ -235,10 +231,7 @@ def test_the_exact_root_follows_the_exact_solution_for_a_tilted_wave():
         )
 
     assert np.abs(errors(exact_algorithm())).max() < 0.012
-    assert (
-        np.abs(errors(RealSpaceMultislice(order=1, expansion_scope="full"))).max()
-        > 0.05
-    )
+    assert np.abs(errors(FourierMultislice())).max() > 0.04
 
 
 def test_an_ensemble_of_tilts_is_the_tilts_one_by_one_for_the_exact_root():

@@ -70,20 +70,14 @@ def test_translate_untilted_waves_is_the_identity():
     )
 
 
-@pytest.mark.filterwarnings(
-    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning"
-)
-@pytest.mark.parametrize("scope", [None, "full"])
 @pytest.mark.parametrize("tilt", [(5.0, 0.0), (20.0, 10.0)])
-def test_the_tilt_changes_the_exit_wave_as_it_does_for_the_fourier_propagator(
-    scope, tilt
-):
+def test_the_tilt_changes_the_exit_wave_as_it_does_for_the_fourier_propagator(tilt):
     # Oracle: the Fourier propagator of the same order. The two algorithms differ
     # without tilt (stencil, and the order in which the slice is split); the change
     # that the tilt makes to that difference is within 10 % of the effect of the
     # tilt, and the tilt has an effect that is far above that.
     potential = silicon_potential(0.25)
-    real_space = RealSpaceMultislice(order=1, expansion_scope=scope)
+    real_space = RealSpaceMultislice(order=1)
     fourier = FourierMultislice(order=1)
 
     effect = exit_wave(fourier, potential, tilt=tilt) - exit_wave(fourier, potential)

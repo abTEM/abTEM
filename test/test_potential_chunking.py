@@ -862,14 +862,12 @@ class TestCrystalPotentialChunking:
             values, values[0], rtol=0, atol=1e-6 * np.abs(values).max()
         )
 
-    @pytest.mark.filterwarnings(
-        "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning"
-    )
+    @pytest.mark.filterwarnings("ignore:the full operator needs:UserWarning")
     def test_an_unseeded_crystal_backscatters_as_it_builds(self):
-        """The backward pass of full-expansion backscattering, which calls
-        generate_slices again, sees the crystal of the forward pass."""
+        """The wave reflected by an unbuilt, unseeded crystal in a lazy run is that
+        of the crystal its forward pass builds."""
         from abtem.detectors import WavesDetector
-        from abtem.multislice import RealSpaceMultislice
+        from abtem.multislice import LanczosMultislice
 
         def crystal():
             return _frozen_phonon_crystal(6, (2, 3, 2), exit_planes=1)
@@ -878,7 +876,7 @@ class TestCrystalPotentialChunking:
             result = PlaneWave(energy=100e3).multislice(
                 potential,
                 lazy=lazy,
-                algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
+                algorithm=LanczosMultislice(),
                 detectors=[WavesDetector(), WavesDetector(reflected=True)],
             )
             if lazy:

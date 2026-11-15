@@ -3,6 +3,17 @@
 The changes of each release, newest first. The changes of the next release go under a
 heading `## Upcoming: <version>`, which is renamed to the version when it is released.
 
+## Upcoming: 1.2.0
+
+Removed (deprecated in 1.1):
+
+- `return_backscattered`: use a detector with `reflected=True`, e.g. `WavesDetector(reflected=True)`.
+- `RealSpaceMultislice(expansion_scope="full")`, the series of the full operator: use `LanczosMultislice`, which
+  evaluates that operator exactly.
+- The `expansion_scope` argument of `RealSpaceMultislice` and `FourierMultislice`. Passing it raises a `TypeError`;
+  the arguments after `order` move up one place when given by position
+  ([PR #698](https://github.com/abTEM/abTEM/pull/698)).
+
 ## Upcoming: 1.1.0
 
 The `dev` branch is at version `1.1.0`. The entries below are merged into `dev` but not yet released.

@@ -607,7 +607,6 @@ def _multislice_exponential_series(
     tolerance: float = 1e-16,
     max_terms: int = 300,
     order: int = 1,
-    fully_corrected: bool = False,
 ):
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
@@ -617,41 +616,28 @@ def _multislice_exponential_series(
         # returned unchanged; the convergence ratio below would be 0 / 0.
         return waves
 
-    if fully_corrected:
-        temp = full_series(
-            waves, laplace, transmission_function, order, wavelength, thickness
-        )
-    else:
-        temp = propagator_taylor_series(
-            waves,
-            order=order,
-            laplace=laplace,
-            transmission_function=transmission_function,
-            wavelength=wavelength,
-            thickness=thickness,
-        )
+    temp = propagator_taylor_series(
+        waves,
+        order=order,
+        laplace=laplace,
+        transmission_function=transmission_function,
+        wavelength=wavelength,
+        thickness=thickness,
+    )
 
     waves += temp
 
     for i in range(2, max_terms + 1):
-        if fully_corrected:
-            temp = (
-                full_series(
-                    temp, laplace, transmission_function, order, wavelength, thickness
-                )
-                / i
+        temp = (
+            propagator_taylor_series(
+                temp,
+                order=order,
+                laplace=laplace,
+                transmission_function=transmission_function,
+                wavelength=wavelength,
+                thickness=thickness,
             )
-        else:
-            temp = (
-                propagator_taylor_series(
-                    temp,
-                    order=order,
-                    laplace=laplace,
-                    transmission_function=transmission_function,
-                    wavelength=wavelength,
-                    thickness=thickness,
-                )
-            ) / i
+        ) / i
 
         waves += temp
         temp_amplitude = xp.abs(temp).sum()
@@ -735,25 +721,6 @@ def propagator_taylor_series(
         series += temp * prefactor
 
     return (series + waves * transmission_function) * 1.0j * thickness
-
-
-def full_series(
-    waves: np.ndarray | da.core.Array,
-    laplace: Callable,
-    transmission_function: np.ndarray,
-    order: int,
-    wavelength: float,
-    thickness: float,
-):
-    """
-    Full Taylor series expansion of the MS Eq.(14) in Ultramicrscopy 134 (2013) 135-143.
-    """
-    series = conventional_operator(waves, laplace, transmission_function, wavelength)
-    temp = series.copy()
-    for i in range(2, order + 1):
-        temp = conventional_operator(temp, laplace, transmission_function, wavelength)
-        series += temp * _series_prefactor(i, wavelength)
-    return series * 1.0j * thickness
 
 
 def _member_tilts(waves: Waves) -> np.ndarray:
@@ -924,13 +891,11 @@ def _exact_root_step(
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
-    next_slice: PotentialArray | None,
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
     order: int = 1,
-    fully_corrected: bool = False,
-) -> Waves | Sequence[Waves]:
+) -> Waves:
     """
     Performs a single multislice step.
 
@@ -940,8 +905,6 @@ def multislice_step(
         Waves object to apply multislice operator on
     potential_slice: PotentialArray
         PotentialArray of slice to be used in transmission operator
-    next_slice: PotentialArray | None
-        PotentialArray of next slice (used to 'look ahead' for backscattered waves)
     laplace: Callable
         Fast laplace operator stencil function
     tolerance: float
@@ -949,37 +912,23 @@ def multislice_step(
     max_terms: int
         Maximum terms in exponent Taylor series
     order: int
-        Multislice operator expansion order
-    fully_corrected: bool
-        If True, transmission and propagator operators are expanded to specified order.
-        If next_slice is not None, the backscattered wave component is also computed.
-
+        Order of the series of the propagator
     """
-    xp = get_array_module(waves.array)
     if max_terms < 1:
         raise ValueError()
 
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
-        if next_slice is not None:
-            next_slice = next_slice.copy_to_device(device=waves.device)
 
     thickness = potential_slice.thickness
     transmission_function_array = (
         potential_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
     )
-    if fully_corrected and next_slice is not None:
-        transmission_function_array_next_slice = (
-            next_slice.array[0]
-            * energy2sigma(waves._valid_energy)
-            / next_slice.thickness
-        )
 
     laplace_stencil = laplace.get_stencil(waves, device=waves.device)
 
     wavelength = energy2wavelength(waves._valid_energy)
 
-    # Forward scattering term
     waves._array = _multislice_exponential_series(
         waves._array,
         transmission_function_array,
@@ -989,71 +938,8 @@ def multislice_step(
         tolerance,
         max_terms,
         order,
-        fully_corrected,
     )
 
-    # Bandlimit before the correction term to suppress high-k content that
-    # would be amplified by repeated conventional_operator applications at
-    # low energies (large 1/K0) or after many slices (channeling build-up).
-    aperture = AntialiasAperture()
-    waves = aperture.bandlimit(waves)
-
-    # Correction-term contributions
-    backscatter = xp.zeros_like(waves._array)
-
-    if fully_corrected and next_slice is not None:
-        # constants and prefactors
-        K0 = 1 / wavelength
-
-        # Eq. 7 in Micron 190 (2025) 103778.
-        backscatter = (
-            1
-            / (2 * np.pi * 1.0j * thickness)
-            * (
-                full_series(
-                    waves._array,
-                    laplace_stencil,
-                    transmission_function_array_next_slice,
-                    order,
-                    wavelength,
-                    thickness,
-                )
-                - full_series(
-                    waves._array,
-                    laplace_stencil,
-                    transmission_function_array,
-                    order,
-                    wavelength,
-                    thickness,
-                )
-            )
-        )
-
-        # 1 / (2 k_{j+1}) of Eq. 7: the operator series of Eq. 13 applied to the
-        # difference
-        term = backscatter
-        for i in range(1, order + 1):
-            term = conventional_operator(
-                term,
-                laplace_stencil,
-                transmission_function_array_next_slice,
-                wavelength,
-            ) * ((1 - 2 * i) / (2 * i) / (np.pi * K0))
-            backscatter = backscatter + term
-        backscatter = backscatter / (2 * K0)
-
-        if not xp.all(xp.isfinite(backscatter)):
-            raise DivergedError(
-                "overflow in correction-term computation; try using a smaller "
-                "slice_thickness or a lower expansion order"
-            )
-
-        # Eq.10 in Micron 190 (2025) 103778.
-        waves._array = waves._array - backscatter
-
-    if fully_corrected:
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        backscatter_waves = waves.__class__(backscatter, **kwargs)
-        return waves, aperture.bandlimit(backscatter_waves)
-
-    return waves
+    # Bandlimit to suppress the high-k content that repeated applications of the
+    # stencil amplify at low energies (large 1/K0) or after many slices.
+    return AntialiasAperture().bandlimit(waves)
