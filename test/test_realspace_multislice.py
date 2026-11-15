@@ -786,9 +786,7 @@ class TestReflectedChunking:
     @pytest.mark.parametrize("lazy", [False, True])
     def test_backscattering_between_identical_slices_is_zero(self, lazy, device):
         # One slice per unit cell: every slice equals the next, so the correction
-        # term (the difference between consecutive slices) vanishes, up to the
-        # Lanczos tolerance: the wave numbers of the two slices come from different
-        # Krylov spaces. Measured 1.7e-11; three slices per cell reflect 2.7e-4.
+        # term (the difference between consecutive slices) vanishes exactly.
         atoms = ase.build.bulk("Si", cubic=True)
         displaced = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
         with abtem.config.set({"device": device}):
@@ -802,7 +800,7 @@ class TestReflectedChunking:
             (alone,) = _multislice_arrays(potential, lazy, backscattered=False)
 
         np.testing.assert_array_equal(transmitted, alone)
-        assert np.abs(backscattered).max() < 1e-7
+        assert not np.any(backscattered)
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_the_backscattered_wave_of_a_flat_slab_is_the_airy_reflection(self, device):
