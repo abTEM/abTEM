@@ -7,7 +7,7 @@ FMA-based two-product), reaches about 44 bits of mantissa: ~1e-14 relative
 accuracy against float32's ~1e-7, with the exponent range of float32.
 
 Only what the multislice inner loop needs is provided -- a complex array type
-(four float32 planes), an FFT over the last two axes, and an elementwise
+(four float32 numbers per element), an FFT over the last two axes, and an elementwise
 product with a broadcast kernel. Everything around it (the transmission
 function, the Fresnel propagator, detectors) stays on the host in float64 and
 meets this module only at the boundaries, through :func:`from_numpy` and
@@ -27,7 +27,9 @@ from __future__ import annotations
 import functools
 
 import numpy as np
+from numba import njit, prange  # type: ignore
 
+from abtem.core._numba_threads import numba_thread_cap
 from abtem.core.fft import warn_if_slow_emulated_fft
 
 # PyTorch and abtem.core._torch, loaded on first use by _load(): importing them
@@ -59,8 +61,8 @@ def _on_metal(func):
     return wrapper
 
 
-# One threadgroup transforms a line in place in one buffer of four float32
-# planes: 16 bytes per element, against Metal's 32 KiB of threadgroup memory.
+# One threadgroup transforms a line in place in one buffer of four float32 per
+# element: 16 bytes, against Metal's 32 KiB of threadgroup memory.
 MAX_FFT_SIZE = 2048
 
 _HELPERS = """
@@ -101,16 +103,12 @@ inline float2 df_mul(float2 a, float2 b) {
 """
 
 _MULTIPLY = """
-// y = x * k, with k broadcast over the leading axis: x and y hold n elements per
-// plane, k holds nk. An array is its four planes, one after the other.
+// y = x * k, with k, of nk elements, broadcast over the leading axis of x.
 kernel void multiply_df(
-    device const float* x, device const float* k, device float* y,
-    constant uint& n, constant uint& nk, uint i [[thread_position_in_grid]]) {
-  uint j = i % nk;
-  cdf a = cdf{float2(x[i], x[n + i]), float2(x[2*n + i], x[3*n + i])};
-  cdf b = cdf{float2(k[j], k[nk + j]), float2(k[2*nk + j], k[3*nk + j])};
-  cdf r = cmul(a, b);
-  y[i] = r.re.x; y[n + i] = r.re.y; y[2*n + i] = r.im.x; y[3*n + i] = r.im.y;
+    device const float4* x, device const float4* k, device float4* y,
+    constant uint& nk, uint i [[thread_position_in_grid]]) {
+  cdf r = cmul(cload(x[i]), cload(k[i % nk]));
+  y[i] = float4(r.re.x, r.re.y, r.im.x, r.im.y);
 }
 """
 
@@ -123,6 +121,9 @@ inline cdf cmul(cdf a, cdf b) {
   return cdf{df_sub(df_mul(a.re, b.re), df_mul(a.im, b.im)),
              df_add(df_mul(a.re, b.im), df_mul(a.im, b.re))};
 }
+// An element is four floats in a row: the high and low parts of the real part,
+// then those of the imaginary part. One float4 load or store moves it.
+inline cdf cload(float4 q) { return cdf{float2(q.x, q.y), float2(q.z, q.w)}; }
 inline cdf cscale(cdf a, float2 c) { return cdf{df_mul(a.re, c), df_mul(a.im, c)}; }
 inline float2 fsign(float2 v, float s) { return float2(s * v.x, s * v.y); }
 // i * s * a, with s = +-1: exact.
@@ -242,8 +243,7 @@ def _fft_source(n: int, group: int = 1) -> str:
           cdf v = x[u][k];
           if (k > 0) {{
             uint w = p * k * {n // length}u;
-            cdf tw = cdf{{float2(wt[w], wt[WL + w]),
-                         float2(wt[2*WL + w], wt[3*WL + w])}};
+            cdf tw = cload(wt[w]);
             if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
             v = cmul(v, tw);
           }}
@@ -281,17 +281,14 @@ def _fft_source(n: int, group: int = 1) -> str:
 // multiplied by pre at its position in the image; with post_on, the stored one
 // by post; with tw_on, element i of line j by exp(-2 pi i i j / N') from the
 // table v, N' the length of the whole four-step axis. The table w holds
-// exp(-2 pi i k / N) for k < N. An array is its four planes one after the
-// other; PL, WL, VL, PQ and OQ are the lengths of the planes of x and y, w, v,
-// pre and post. The factor post may hold several images, one per entry of the
-// batch of x or shared by several: with pmap_on, image pmap[b] of post, of OI
-// elements each, is the factor of image b of x.
+// exp(-2 pi i k / N) for k < N. The factor post may hold several images, one per
+// entry of the batch of x or shared by several: with pmap_on, image pmap[b] of
+// post, of OI elements each, is the factor of image b of x.
 kernel void fft_df(
-    device const float* x, device float* y,
-    device const float* wt, device const float* vt,
-    device const float* pre, device const float* post, device const int* pmap,
-    constant uint& PL, constant uint& WL, constant uint& VL,
-    constant uint& PQ, constant uint& OQ, constant uint& OI,
+    device const float4* x, device float4* y,
+    device const float4* wt, device const float4* vt,
+    device const float4* pre, device const float4* post, device const int* pmap,
+    constant uint& OI,
     constant uint& tw_on, constant uint& pre_on, constant uint& post_on,
     constant uint& pmap_on,
     constant uint& C, constant uint& J, constant uint& bs, constant uint& cs,
@@ -318,11 +315,10 @@ kernel void fft_df(
   for (uint e = t; e < NL; e += {threads}u) {{
     uint l = e % L, i = e / L;
     uint g = base_in[l] + i * es_in;
-    cdf v = cdf{{float2(x[g], x[PL + g]), float2(x[2*PL + g], x[3*PL + g])}};
+    cdf v = cload(x[g]);
     if (pre_on != 0u) {{
       uint q = local_in[l] + i * es_in;
-      v = cmul(v, cdf{{float2(pre[q], pre[PQ + q]),
-                       float2(pre[2*PQ + q], pre[3*PQ + q])}});
+      v = cmul(v, cload(pre[q]));
     }}
     uint a = l * N + i;
     buf[0*NL+a] = v.re.x; buf[1*NL+a] = v.re.y;
@@ -338,20 +334,19 @@ kernel void fft_df(
                 float2(buf[2*NL+a], buf[3*NL+a])}};
     if (tw_on != 0u) {{
       uint w = i * jl[l];
-      cdf tw = cdf{{float2(vt[w], vt[VL + w]), float2(vt[2*VL + w], vt[3*VL + w])}};
+      cdf tw = cload(vt[w]);
       if (sign > 0.0f) {{ tw.im = fsign(tw.im, -1.0f); }}
       v = cmul(v, tw);
     }}
     if (post_on != 0u) {{
       uint q = local_out[l] + i * es_out;
       if (pmap_on != 0u) {{ q += uint(pmap[bl[l]]) * OI; }}
-      v = cmul(v, cdf{{float2(post[q], post[OQ + q]),
-                       float2(post[2*OQ + q], post[3*OQ + q])}});
+      v = cmul(v, cload(post[q]));
     }}
     float2 sc = float2(scale_hi, scale_lo);
     float2 re = df_mul(v.re, sc);
     float2 im = df_mul(v.im, sc);
-    y[g] = re.x; y[PL + g] = re.y; y[2*PL + g] = im.x; y[3*PL + g] = im.y;
+    y[g] = float4(re.x, re.y, im.x, im.y);
   }}
 }}
 """
@@ -390,29 +385,81 @@ def _twiddles(n: int):
     return _TWIDDLES[n]
 
 
-def _upload(x: np.ndarray) -> "DoubleFloatArray":
-    """Split a float64 or complex128 array into its four float32 planes.
+# From this many elements the conversions between float64 and double-float run on
+# all cores, which costs Numba compiling the kernels the first time (0.7 s on an
+# M2); measured there, below it the NumPy ufuncs are as fast, at a fraction of a
+# millisecond, and above it up to 3.5 times slower.
+_PARALLEL_CONVERSION = 2**16
 
-    One pass per plane, and no temporaries: the ufuncs convert on the fly
-    (``dtype=float64`` computes in float64, ``out`` takes it as float32), where
-    ``astype`` and the arithmetic around it made seven passes and as many
-    arrays, which was half the time of a thickness series.
-    """
-    planes = np.zeros((4, *x.shape), dtype=np.float32)
-    for part, (high, low) in zip(
-        (x.real, x.imag) if np.iscomplexobj(x) else (x,), ((0, 1), (2, 3))
-    ):
-        np.copyto(planes[high], part, casting="same_kind")
-        np.subtract(
-            part, planes[high], out=planes[low], dtype=np.float64, casting="same_kind"
+
+# The conversions hold the Metal lock (see _on_metal), so two of
+# these parallel launches never overlap, which the workqueue threading layer of
+# Numba cannot take (see interpolate_radial_functions in abtem/integrals.py).
+@njit(parallel=True, nogil=True)
+def _split_complex(x, out):
+    for i in prange(x.shape[0]):
+        re, im = x[i].real, x[i].imag
+        re_hi, im_hi = np.float32(re), np.float32(im)
+        out[i, 0] = re_hi
+        out[i, 1] = np.float32(re - np.float64(re_hi))
+        out[i, 2] = im_hi
+        out[i, 3] = np.float32(im - np.float64(im_hi))
+
+
+@njit(parallel=True, nogil=True)
+def _split_real(x, out):
+    for i in prange(x.shape[0]):
+        hi = np.float32(x[i])
+        out[i, 0] = hi
+        out[i, 1] = np.float32(x[i] - np.float64(hi))
+
+
+@njit(parallel=True, nogil=True)
+def _join(planes, out):
+    for i in prange(planes.shape[0]):
+        out[i] = complex(
+            np.float64(planes[i, 0]) + np.float64(planes[i, 1]),
+            np.float64(planes[i, 2]) + np.float64(planes[i, 3]),
         )
+
+
+def _upload(x: np.ndarray) -> "DoubleFloatArray":
+    """Split a float64 or complex128 array into float32 numbers, four per element:
+    the high and low parts of the real part, then of the imaginary part.
+
+    One pass over the data, and no temporaries: large arrays are split on all
+    cores, small ones by ufuncs that convert on the fly (``dtype=float64``
+    computes in float64, ``out`` takes it as float32), where ``astype`` and the
+    arithmetic around it made seven passes and as many arrays, which was half the
+    time of a thickness series.
+    """
+    planes = np.zeros((*x.shape, 4), dtype=np.float32)
+    if x.size >= _PARALLEL_CONVERSION:
+        flat = np.ascontiguousarray(x).reshape(-1)
+        with numba_thread_cap():
+            (_split_complex if np.iscomplexobj(x) else _split_real)(
+                flat, planes.reshape(-1, 4)
+            )
+    else:
+        for part, (high, low) in zip(
+            (x.real, x.imag) if np.iscomplexobj(x) else (x,), ((0, 1), (2, 3))
+        ):
+            np.copyto(planes[..., high], part, casting="same_kind")
+            np.subtract(
+                part,
+                planes[..., high],
+                out=planes[..., low],
+                dtype=np.float64,
+                casting="same_kind",
+            )
     return DoubleFloatArray(torch.from_numpy(planes).to("mps"))
 
 
 class DoubleFloatArray:
-    """A complex array as four float32 planes on the device, in one tensor of
-    shape ``(4, *shape)``: the high and low parts of the real part, then of the
-    imaginary part.
+    """A complex array on the device, in one float32 tensor of shape
+    ``(*shape, 4)``: the high and low parts of the real part, then of the
+    imaginary part, of each element in a row, so that a kernel reads an element
+    with one load.
 
     Not a NumPy-like array: it exists to carry data across the device loop and
     supports only the operations in this module.
@@ -425,7 +472,7 @@ class DoubleFloatArray:
 
     @property
     def shape(self) -> tuple[int, ...]:
-        return tuple(self.data.shape[1:])
+        return tuple(self.data.shape[:-1])
 
     def empty_like(self) -> "DoubleFloatArray":
         return DoubleFloatArray(torch.empty_like(self.data))
@@ -494,9 +541,9 @@ def _check_axis(n: int) -> None:
         )
 
 
-# The kernels address the four planes of an array with 32-bit unsigned
-# integers, the last at 3 * plane + i: an array of 2**30 elements or more would
-# wrap around silently.
+# The kernels index the elements of an array with 32-bit unsigned integers, and
+# the strided ones of the transform add products of such indices: an array of
+# 2**30 elements or more is refused rather than risk wrapping around silently.
 _MAX_ELEMENTS = 2**30 - 1
 
 
@@ -521,10 +568,14 @@ def from_numpy(x: np.ndarray) -> DoubleFloatArray:
 def to_numpy(x: DoubleFloatArray) -> np.ndarray:
     """Download as a complex128 array."""
     planes = x.data.cpu().numpy()
-    out = np.empty(planes.shape[1:], dtype=np.complex128)
+    out = np.empty(planes.shape[:-1], dtype=np.complex128)
+    if out.size >= _PARALLEL_CONVERSION:
+        with numba_thread_cap():
+            _join(planes.reshape(-1, 4), out.reshape(-1))
+        return out
     # Straight into the real and imaginary parts of the result, one pass each.
-    np.add(planes[0], planes[1], out=out.real, dtype=np.float64)
-    np.add(planes[2], planes[3], out=out.imag, dtype=np.float64)
+    np.add(planes[..., 0], planes[..., 1], out=out.real, dtype=np.float64)
+    np.add(planes[..., 2], planes[..., 3], out=out.imag, dtype=np.float64)
     return out
 
 
@@ -540,7 +591,7 @@ def multiply(x: DoubleFloatArray, kernel: DoubleFloatArray) -> DoubleFloatArray:
     _check_size(x)
     y = x.empty_like()
     n = int(np.prod(x.shape))
-    _multiply_library().multiply_df(x.data, kernel.data, y.data, n, nk, threads=n)
+    _multiply_library().multiply_df(x.data, kernel.data, y.data, nk, threads=n)
     return y
 
 
@@ -606,7 +657,7 @@ def _launch(
     length of the whole axis of a four-step pass, and ``pre`` and ``post`` the
     factors multiplied on at the loads and the stores, ``post`` with a ``post_map``
     from the batch of ``src`` to the images of ``post`` if it holds several."""
-    batch = src.data.shape[1]
+    batch = src.data.shape[0]
     scale_hi = float(np.float32(scale))
     scale_lo = float(np.float32(scale - scale_hi))
     tables = _twiddles(n)
@@ -624,11 +675,6 @@ def _launch(
         first.data,
         last.data,
         post_map if post_map is not None else _empty_map(),
-        src.data[0].numel(),
-        tables.data[0].numel(),
-        fused.data[0].numel(),
-        first.data[0].numel(),
-        last.data[0].numel(),
         image_post,
         1 if twiddle_length else 0,
         1 if pre else 0,
@@ -670,7 +716,7 @@ def _transform_axis(
     """
     count, line_stride = lines
     split = _split_axis(length) if length > MAX_FFT_SIZE else None
-    flat = lambda x: DoubleFloatArray(x.data.reshape(4, -1, image))  # noqa: E731
+    flat = lambda x: DoubleFloatArray(x.data.reshape(-1, image, 4))  # noqa: E731
     src, dst = flat(src), flat(dst)
 
     if split is None:

@@ -38,6 +38,31 @@ def _relative_error(x, reference):
     return np.abs(x - reference).max() / np.abs(reference).max()
 
 
+@pytest.mark.parametrize("complex_", [True, False])
+def test_the_parallel_conversions_are_those_of_the_small_ones(
+    double_float, complex_, monkeypatch
+):
+    """Arrays from `_PARALLEL_CONVERSION` elements are split and joined by Numba
+    kernels on all cores: the same numbers as the ufuncs of the small arrays,
+    bit for bit, which are tested against float64 above."""
+    rng = np.random.default_rng(1)
+    shape = (2, 1024, 1032)
+    assert np.prod(shape) >= double_float._PARALLEL_CONVERSION
+    x = rng.standard_normal(shape) * 10.0 ** rng.integers(-3, 4, shape)
+    if complex_:
+        x = x + 1j * rng.standard_normal(shape)
+
+    large = double_float.from_numpy(x).data.cpu().numpy()
+    joined = double_float.to_numpy(double_float.from_numpy(x))
+    monkeypatch.setattr(double_float, "_PARALLEL_CONVERSION", np.inf)
+    small = double_float.from_numpy(x).data.cpu().numpy()
+    joined_small = double_float.to_numpy(double_float.from_numpy(x))
+
+    assert np.array_equal(large, small)
+    assert np.array_equal(joined, joined_small)
+    assert _relative_error(joined, x) < 1e-14
+
+
 def test_round_trip_keeps_float64_precision(double_float):
     rng = np.random.default_rng(0)
     x = _random_complex(rng, (3, 16, 16))
