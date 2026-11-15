@@ -205,6 +205,42 @@ def test_plane_wave_multislice_matches_cpu(atoms):
     assert np.allclose(*arrays, atol=1e-3 * np.abs(arrays[0]).max())
 
 
+def test_array_equal_matches_numpy():
+    xp = get_array_module("mps")
+    a = np.array([[1.0, np.nan], [3.0, 4.0]], dtype=np.float32)
+    b = a.copy()
+    b[1, 1] = 5.0
+    for x, y in ((a, a.copy()), (a, b), (a, a[:1]), (a[:, :1], a[:, :1].copy())):
+        on_device = copy_to_device(x, "mps"), copy_to_device(y, "mps")
+        for equal_nan in (False, True):
+            expected = np.array_equal(x, y, equal_nan=equal_nan)
+            assert xp.array_equal(*on_device, equal_nan=equal_nan) == expected
+            assert np.array_equal(*on_device, equal_nan=equal_nan) == expected
+
+
+def test_lanczos_multislice_matches_cpu():
+    # two identical slices, which backscatter nothing, and a different one
+    from abtem.multislice import LanczosMultislice
+
+    layer = np.random.default_rng(0).random((16, 12)).astype(np.float32)
+    array = np.stack([layer, layer, 2 * layer]) * 0.1
+    detectors = [abtem.WavesDetector(), abtem.WavesDetector(reflected=True)]
+    results = []
+    for device in ("cpu", "mps"):
+        with abtem.config.set({"device": device}):
+            potential = abtem.PotentialArray(
+                array, slice_thickness=0.5, extent=(4.0, 3.0)
+            )
+            waves = abtem.PlaneWave(energy=5e3).multislice(
+                potential, algorithm=LanczosMultislice(), detectors=detectors
+            )
+        results.append([asnumpy(w.array) for w in waves])
+
+    for cpu, mps in zip(*results):
+        assert np.abs(cpu).max() > 0
+        assert np.allclose(cpu, mps, atol=1e-4 * np.abs(cpu).max())
+
+
 def test_stem_scan_matches_cpu(atoms):
     arrays = []
     for device in ("cpu", "mps"):
