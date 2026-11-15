@@ -7,7 +7,6 @@ vector.
 
 from __future__ import annotations
 
-import functools
 import math
 import string
 import subprocess
@@ -97,9 +96,9 @@ class Accepted:
 
     case: str
     since: str
+    commit: str
     reason: str
     pr: int | None = None
-    commit: str = ""
     max_rel: float | None = None
     max_intensity: float | None = None
     max_abs_norm: float | None = None
@@ -112,6 +111,8 @@ class Accepted:
     worst: dict[str, float] = field(default_factory=dict)
     #: why the entry was not applied, for the report; empty when it applies
     scope_note: str = ""
+    #: the full sha ``commit`` resolves to: entries of one change share it
+    change: str = ""
 
     def matches(self, case_id: str) -> bool:
         cid = registry.CaseId.parse(case_id)
@@ -231,11 +232,11 @@ def load_accepted(
         commit = entry.get("commit")
         if not (
             isinstance(commit, str)
-            and len(commit.strip()) >= 7
+            and 7 <= len(commit.strip()) <= 40
             and all(ch in string.hexdigits for ch in commit.strip())
         ):
             raise CompareError(
-                f"{where}: 'commit' must be the sha (7 or more hex digits) of the "
+                f"{where}: 'commit' must be the sha (7 to 40 hex digits) of the "
                 "commit that made the change"
             )
         pr = entry.get("pr")
@@ -254,9 +255,9 @@ def load_accepted(
         acc = Accepted(
             entry["case"].strip(),
             entry["since"].strip(),
+            commit.strip().lower(),
             entry["reason"].strip(),
             pr,
-            commit.strip().lower(),
         )
         for key in BOUND_KEYS:
             if key in entry:
@@ -829,7 +830,7 @@ def _pair_row(
         matching = [a for a in accepted if a.matches(cand_id)]
         changes: dict[str, list[Accepted]] = {}
         for a in matching:
-            changes.setdefault(a.commit, []).append(a)
+            changes.setdefault(a.change, []).append(a)
         held = {
             commit
             for commit, group in changes.items()
@@ -837,9 +838,9 @@ def _pair_row(
         }
         if held:
             row.verdict = ACCEPTED
-            row.accepted_by = [a.reason for a in matching if a.commit in held]
+            row.accepted_by = [a.reason for a in matching if a.change in held]
             for a in matching:
-                if a.commit in held:
+                if a.change in held:
                     a.record(cand_id, row.outputs)
                 else:
                     a.dominated.append(cand_id)
@@ -927,32 +928,46 @@ def _stale(accepted: list[Accepted], rows: list[Row]) -> list[Accepted]:
     return [a for a in accepted if a.covers and not (a.matched or a.dominated)]
 
 
-@functools.lru_cache(maxsize=None)
-def _contains(commit: str, sha: str) -> bool | None:
-    """Whether commit ``sha`` contains ``commit``, asked of git in the harness's
-    repository; None when git cannot tell (no git, no repository, or a commit
-    it does not know).
-    """
+def _git(*args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run git in the harness's repository; None without git or a repository."""
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(prepare.repo_root())]
-            + ["merge-base", "--is-ancestor", commit, sha],
+        return subprocess.run(
+            ["git", "-C", str(prepare.repo_root()), *args],
             capture_output=True,
+            text=True,
         )
     except OSError:  # no git executable, or no repository above the harness
         return None
-    return {0: True, 1: False}.get(proc.returncode)
+
+
+def _resolve(commit: str) -> str | None:
+    """The full sha that the prefix ``commit`` names; None when git cannot tell
+    (no git, no repository, or a prefix it does not know or finds ambiguous).
+    """
+    proc = _git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+    return proc.stdout.strip() if proc is not None and proc.returncode == 0 else None
+
+
+def _contains(commit: str, sha: str) -> bool | None:
+    """Whether commit ``sha`` contains ``commit``; None when git cannot tell."""
+    proc = _git("merge-base", "--is-ancestor", commit, sha)
+    return None if proc is None else {0: True, 1: False}.get(proc.returncode)
 
 
 def _in_scope(a: Accepted, ref: dict[str, Any], cand: dict[str, Any]) -> bool:
-    """Whether ``a`` applies to this pair; records why not in ``a.scope_note``."""
+    """Whether ``a`` applies to this pair; sets ``a.change``, and ``a.scope_note``
+    when it does not apply for want of the change."""
     if not a.applies_to(ref):
         return False
-    contains = _contains(a.commit, str(cand.get("sha") or ""))
-    if contains is None:
+    full = _resolve(a.commit)
+    contains = None if full is None else _contains(full, str(cand.get("sha") or ""))
+    if full is None:
+        a.scope_note = f"git could not resolve {a.commit} in the harness's repository"
+    elif contains is None:
         a.scope_note = f"git could not tell whether the candidate contains {a.commit}"
     elif not contains:
         a.scope_note = f"the candidate does not contain {a.commit}"
+    a.change = full or ""
     return bool(contains)
 
 
@@ -998,7 +1013,8 @@ def compare(
     entries = load_accepted(accepted_path, reg)
     used_path = accepted_path if accepted_path is not None else ACCEPTED_CHANGES_PATH
     ref_info, cand_info = man_r.get("ref", {}), man_c.get("ref", {})
-    accepted, not_applicable = [], []
+    accepted: list[Accepted] = []
+    not_applicable: list[Accepted] = []
     for a in entries:
         (accepted if _in_scope(a, ref_info, cand_info) else not_applicable).append(a)
     noise = noise or {}
@@ -1229,10 +1245,12 @@ def to_markdown(report: Report) -> str:
         lines.append("")
         lines.append(
             "Rows: accepted_changes.toml entries that apply to this reference and "
-            "cover a compared case. "
+            "candidate and cover a compared case. "
             "`bounds` = the largest drift the entry accepts per output; `matched` = "
             "drifting case ids the entry covers (in brackets: how many exceed a "
-            "bound and stay DRIFT); `measured` = the largest drift over those ids."
+            "bound and stay DRIFT, and `dominated`: how many more it covers that "
+            "another change's entries accept instead); `measured` = the largest "
+            "drift over the matched ids."
         )
         lines.append("")
         lines.append(
@@ -1243,6 +1261,8 @@ def to_markdown(report: Report) -> str:
             matched = str(len(a.matched))
             if a.exceeded:
                 matched += f" ({len(a.exceeded)} over bound)"
+            if a.dominated:
+                matched += f" ({len(a.dominated)} dominated)"
             lines.append(
                 f"| `{_cell(a.case)}` | {_cell(a.since)} | {a.commit} "
                 f"| {a.pr or ''} "
@@ -1252,8 +1272,8 @@ def to_markdown(report: Report) -> str:
         lines.append("")
     if report.stale_accepted:
         lines.append(
-            "Stale accepted entries (apply to this reference and to a compared "
-            "case, but match no drift): "
+            "Stale accepted entries (apply to this reference, candidate and a "
+            "compared case, but match no drift): "
             + ", ".join(f"`{a.case}`" for a in report.stale_accepted)
             + "."
         )
@@ -1296,6 +1316,7 @@ def _entry_json(a: Accepted) -> dict[str, Any]:
         "bounds": a.bounds(),
         "matched": a.matched,
         "exceeded": a.exceeded,
+        "dominated": a.dominated,
         "measured": a.worst,
     }
 

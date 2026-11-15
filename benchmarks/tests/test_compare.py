@@ -7,6 +7,7 @@ import pytest
 from abtem_bench import cli, store
 from abtem_bench import compare as cmp
 from abtem_bench.compare import _contains as real_contains  # before patching
+from abtem_bench.compare import _resolve as real_resolve
 from conftest import CID, bundle, one, record
 
 ARR = np.linspace(1.0, 2.0, 16).reshape(4, 4)
@@ -107,7 +108,7 @@ def test_the_changelog_lists_only_entries_for_compared_cases(
 
 
 def test_brackets_in_an_entry_glob_are_literal(registry_with_demo):
-    entry = cmp.Accepted("demo.case[auto]@*", "v0", "r")
+    entry = cmp.Accepted("demo.case[auto]@*", "v0", COMMIT, "r")
     assert entry.matches("demo.case[auto]@quick/cpu")
     assert not entry.matches("demo.case@quick/cpu")
 
@@ -128,14 +129,15 @@ def test_an_entry_applies_only_against_its_since_reference(
 
 
 @pytest.mark.parametrize(
-    "contains, note",
+    "resolves, contains, note",
     [
-        (False, "the candidate does not contain abcdef0"),
-        (None, "git could not tell whether the candidate contains abcdef0"),
+        (True, False, "the candidate does not contain abcdef0"),
+        (True, None, "git could not tell whether the candidate contains abcdef0"),
+        (False, None, "git could not resolve abcdef0 in the harness's repository"),
     ],
 )
 def test_an_entry_applies_only_when_the_candidate_contains_its_commit(
-    tmp_path, registry_with_demo, monkeypatch, contains, note
+    tmp_path, registry_with_demo, monkeypatch, resolves, contains, note
 ):
     seen = []
 
@@ -144,21 +146,24 @@ def test_an_entry_applies_only_when_the_candidate_contains_its_commit(
         return contains
 
     monkeypatch.setattr(cmp, "_contains", fake)
+    if not resolves:
+        monkeypatch.setattr(cmp, "_resolve", lambda commit: None)
     ref, cand = _drift(tmp_path)
     toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
-    assert seen == [(COMMIT, cand.read_manifest()["ref"]["sha"])]
+    sha = cand.read_manifest()["ref"]["sha"]
+    assert seen == ([(COMMIT, sha)] if resolves else [])
     assert report.rows[0].verdict == cmp.DRIFT
     assert [a.scope_note for a in report.not_applicable] == [note]
     assert f"`demo.*` since v0 ({note})" in cmp.to_markdown(report)
     assert cmp.to_json(report)["not_applicable"][0]["scope_note"] == note
 
 
-def test_contains_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
+def test_the_scope_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
     def git(*args):
         return subprocess.run(
             ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
-            + list(args),
+            + ["-c", "commit.gpgsign=false", *args],
             check=True,
             capture_output=True,
             text=True,
@@ -170,16 +175,26 @@ def test_contains_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
     git("commit", "-q", "--allow-empty", "-m", "b")
     second = git("rev-parse", "HEAD")
     monkeypatch.setattr(cmp.prepare, "repo_root", lambda: tmp_path)
-    contains = real_contains.__wrapped__  # uncached
-    assert contains(first[:7], second) is True
-    assert contains(second[:7], first) is False
-    assert contains("1234567", second) is None  # unknown to git
+    monkeypatch.setattr(cmp, "_resolve", real_resolve)
+    monkeypatch.setattr(cmp, "_contains", real_contains)
+    assert cmp._resolve(first[:7]) == first
+    assert cmp._resolve("1234567") is None  # unknown to git
+    assert cmp._contains(first, second) is True
+    assert cmp._contains(second, first) is False
+
+    entry = cmp.Accepted("demo.*", "v0", first[:8], "r")
+    assert cmp._in_scope(entry, {"label": "v0"}, {"sha": second})
+    assert entry.change == first and entry.scope_note == ""
+    later = cmp.Accepted("demo.*", "v0", second[:7], "r")
+    assert not cmp._in_scope(later, {"label": "v0"}, {"sha": first})
+    assert later.scope_note == f"the candidate does not contain {second[:7]}"
 
     def no_repo():
         raise FileNotFoundError("no .git")
 
     monkeypatch.setattr(cmp.prepare, "repo_root", no_repo)
-    assert contains(first, second) is None
+    assert cmp._resolve(first) is None
+    assert cmp._contains(first, second) is None
 
 
 def test_of_two_changes_the_one_whose_entries_hold_accepts_the_drift(
@@ -201,6 +216,27 @@ def test_of_two_changes_the_one_whose_entries_hold_accepts_the_drift(
     assert large.matched == [CID] and small.matched == []
     assert small.dominated == [CID] and small.exceeded == []
     assert report.stale_accepted == []
+    assert "| 0 (1 dominated) |" in cmp.to_markdown(report)
+    assert cmp.to_json(report)["accepted"][1]["dominated"] == [CID]
+
+
+def test_prefixes_of_one_commit_are_one_change(
+    tmp_path, registry_with_demo, monkeypatch
+):
+    # a loose entry naming the commit with a longer prefix is still bound by the
+    # tight entry of the same change
+    monkeypatch.setattr(cmp, "_resolve", lambda commit: "abcdef0" + "1" * 33)
+    ref, cand = _drift(tmp_path, factor=1.5)
+    toml = _toml(
+        tmp_path,
+        'case = "demo.*"\nsince = "v0"\ncommit = "abcdef0"\nreason = "tight"\n'
+        "max_abs_norm = 1e-3",
+        'case = "demo.*"\nsince = "v0"\ncommit = "abcdef01"\nreason = "loose"\n'
+        f"{LOOSE}",
+    )
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert report.rows[0].verdict == cmp.DRIFT
+    assert [a.exceeded for a in report.accepted] == [[CID], [CID]]
 
 
 def test_a_drift_beyond_every_change_stays_drift(tmp_path, registry_with_demo):
@@ -220,11 +256,11 @@ def test_a_drift_beyond_every_change_stays_drift(tmp_path, registry_with_demo):
 def test_since_matches_a_sha_prefix_of_seven_or_more(tmp_path, registry_with_demo):
     sha = "abcdef0123" + "0" * 30
     ref = {"label": "main", "describe": "x", "sha": sha}
-    assert cmp.Accepted("demo.*", "abcdef0", "r").applies_to(ref)
-    assert cmp.Accepted("demo.*", "ABCDEF01", "r").applies_to(ref)
-    assert not cmp.Accepted("demo.*", "abcdef", "r").applies_to(ref)
-    assert not cmp.Accepted("demo.*", "abcdef1", "r").applies_to(ref)
-    assert cmp.Accepted("demo.*", "x", "r").applies_to(ref)  # git describe
+    assert cmp.Accepted("demo.*", "abcdef0", COMMIT, "r").applies_to(ref)
+    assert cmp.Accepted("demo.*", "ABCDEF01", COMMIT, "r").applies_to(ref)
+    assert not cmp.Accepted("demo.*", "abcdef", COMMIT, "r").applies_to(ref)
+    assert not cmp.Accepted("demo.*", "abcdef1", COMMIT, "r").applies_to(ref)
+    assert cmp.Accepted("demo.*", "x", COMMIT, "r").applies_to(ref)  # git describe
 
 
 def test_a_drift_beyond_an_entry_bound_stays_drift(tmp_path, registry_with_demo):
@@ -319,6 +355,11 @@ def test_an_entry_without_a_commit_is_refused(tmp_path, registry_with_demo):
             "'commit'",
         ),
         (
+            f'case = "demo.*"\nsince = "v0"\ncommit = "{"a" * 41}"\nreason = "x"\n'
+            f"{LOOSE}",
+            "'commit'",
+        ),
+        (
             f'case = "demo.*"\nsince = "v0"\ncommit = "v1.0.11"\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
@@ -405,7 +446,9 @@ def test_a_non_finite_mismatch_is_never_accepted(tmp_path, registry_with_demo):
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.DRIFT
     # the entry's bounds as such do not see it: a NaN is masked out of the stats
-    entry = cmp.Accepted("demo.*", "v0", "r", max_abs_norm=1e30, max_intensity=1e30)
+    entry = cmp.Accepted(
+        "demo.*", "v0", COMMIT, "r", max_abs_norm=1e30, max_intensity=1e30
+    )
     stats = {
         "identical": False,
         "nonfinite_mismatch": 1,

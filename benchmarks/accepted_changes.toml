@@ -13,11 +13,12 @@
 #   since         the reference the entry applies against: a bundle's ref
 #                 label, its git describe, or a sha prefix of 7+ hex digits.
 #                 Against any other reference the entry is not applied.
-#   commit        the commit that made the change, as a sha prefix of 7+ hex
-#                 digits; the entry applies only to a candidate that contains
-#                 it (git merge-base --is-ancestor in the harness's repository;
-#                 where git cannot tell, the entry is not applied). Entries of
-#                 one change name it with the same prefix.
+#   commit        the commit that made the change, as a sha prefix of 7 to 40
+#                 hex digits; the entry applies only to a candidate that
+#                 contains it (git rev-parse and merge-base --is-ancestor in the
+#                 harness's repository; where git cannot tell, the entry is not
+#                 applied and compare warns). Entries whose prefixes resolve to
+#                 one commit are one change.
 #   reason        one line, present tense: what changed and why the result is
 #                 right
 #   pr            pull request number that introduced the change
@@ -173,9 +174,10 @@ max_abs_norm = 7e-6
 # (0a2f4965), without the Lobato pi change or #298. Against v1.0.10 every STEM
 # variant moves in the segmented signal only (quick tier: rel 8.8e-7,
 # intensity 1.8e-7, max_abs 5.1e-7; 2026-11-15); hrtem, cbed and the
-# potential stay within 4e-13. The bounds are the [order1] #269 entry's, which
-# bound the same accumulator plus the pi change at the quick and standard
-# tiers; the standard tier of 1.0.11 itself is not measured.
+# potential stay within 4e-13. Unlike the rule above, the bounds are not twice
+# that measurement (they are 9 to 14 times it): they are the [order1] #269
+# entry's, which bound the same accumulator plus the pi change at the quick and
+# standard tiers, because the standard tier of 1.0.11 is not measured.
 
 [[accepted]]
 case = "stem.multidetector*@*"

@@ -102,6 +102,22 @@ def _pair(tmp_path, array=None):
     ]
 
 
+def test_compare_warns_when_git_cannot_check_the_candidate(
+    tmp_path, capsys, monkeypatch
+):
+    argv = _pair(tmp_path)
+    (tmp_path / "accepted.toml").write_text(
+        '[[accepted]]\ncase = "hrtem.exitwave@*"\nsince = "ref"\n'
+        'commit = "abcdef0"\nreason = "r"\nmax_abs_norm = 1'
+    )
+    monkeypatch.setattr(cli.cmp, "_resolve", lambda commit: None)
+    assert cli.main(argv) == 0
+    assert (
+        "warning: 1 accepted entries not applied, git could not check the "
+        "candidate (first: git could not resolve abcdef0"
+    ) in capsys.readouterr().err
+
+
 def test_a_truncated_case_record_exits_2_not_1(tmp_path, capsys):
     argv = _pair(tmp_path)
     case_json = store.Bundle(tmp_path / "cand").case_json(CID)

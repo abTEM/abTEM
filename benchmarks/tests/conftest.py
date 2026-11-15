@@ -64,8 +64,10 @@ def one(tmp_path, name, array, axes=(), cid=CID, **record_kw):
 @pytest.fixture(autouse=True)
 def candidate_contains_every_commit(monkeypatch):
     """Synthetic bundles carry made-up shas that git cannot resolve, so every
-    accepted entry's commit counts as contained in the candidate; tests of the
-    candidate scope patch ``cmp._contains`` themselves."""
+    accepted entry's commit resolves to itself and counts as contained in the
+    candidate; tests of the candidate scope patch ``cmp._resolve`` and
+    ``cmp._contains`` themselves."""
+    monkeypatch.setattr(cmp, "_resolve", lambda commit: commit)
     monkeypatch.setattr(cmp, "_contains", lambda commit, sha: True)
 
 
