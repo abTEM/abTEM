@@ -512,71 +512,9 @@ class Visualization:
                 **kwargs,
             )
 
-            # annotation = ax.annotate(
-            #     titles[i],
-            #     xy=(1, 0.5),
-            #     xytext=(pad, 0),
-            #     xycoords="axes fraction",
-            #     textcoords="offset points",
-            #     ha="right",
-            #     va="center",
-            #     rotation=270,
-            #     fontsize=fontsize,
-            #     **kwargs,
-            # )
             row_titles.append(annotation)
 
         self._row_titles = row_titles
-
-    # def set_panel_labels(
-    #     self,
-    #     labels: str = None,
-    #     frameon: bool = True,
-    #     loc: str = "upper left",
-    #     pad: float = 0.1,
-    #     borderpad: float = 0.1,
-    #     prop: dict = None,
-    #     formatting: str = ".3g",
-    #     units: str = None,
-    #     **kwargs,
-    # ):
-    #     if labels is None:
-    #         titles = _get_axes_titles(
-    #             self.ensemble_axes_metadata, self.axes_types, self.axes.shape
-    #         )
-    #         labels = ["\n".join(title) for title in titles]
-    #
-    #     if not isinstance(labels, (tuple, list)):
-    #         raise ValueError()
-    #
-    #     if len(labels) != np.array(self.axes).size:
-    #         raise ValueError()
-    #
-    #     if prop is None:
-    #         prop = {}
-    #
-    #     for old_label in self._panel_labels:
-    #         old_label.remove()
-    #
-    #     panel_labels = []
-    #     for ax, label in zip(np.array(self.axes).ravel(), labels):
-    #         anchored_text = AnchoredText(
-    #             label,
-    #             pad=pad,
-    #             borderpad=borderpad,
-    #             frameon=frameon,
-    #             loc=loc,
-    #             prop=prop,
-    #             **kwargs,
-    #         )
-    #         anchored_text.formatting = formatting
-    #
-    #         anchored_text.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
-    #         ax.add_artist(anchored_text)
-    #
-    #         panel_labels.append(anchored_text)
-    #
-    #     self._panel_labels = panel_labels
 
     def axis(self, mode: str = "all", ticks: bool = False, spines: bool = True):
         if mode == "all":
@@ -633,13 +571,10 @@ class Visualization:
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
 
-            # if hasattr(self.axes, "_caxes"):
             caxes = self.axes._caxes[i]
 
             if self.axes._cbar_mode == "single" and not i == (0, 0):
                 caxes = None
-            # else:
-            #     caxes = [_make_cax(ax) for _ in range(artist_type.num_cbars)]
 
             measurement = self._reduce_measurement(self._indices, i)
 
@@ -681,12 +616,6 @@ class Visualization:
 
     def set_complex_conversion(self, complex_conversion: str):
         raise NotImplementedError()
-        # self._complex_conversion = complex_conversion
-        # artist_type = _validate_artist_type(
-        #     self._measurement, complex_conversion=self._complex_conversion
-        # )
-        # self.axes.set_cbar_layout(ncbars=artist_type.num_cbars)
-        # self.set_artists()
 
     def set_cmap(self, cmap):
         cmap = validate_cmap(cmap, self.measurement, self._complex_conversion)
