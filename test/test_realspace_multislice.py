@@ -401,6 +401,14 @@ class TestDetectors:
         assert len(results) == 2
 
 
+def _random_slices(exit_planes):
+    # three random slices on a small grid: cheap, and every slice reflects
+    array = np.random.default_rng(0).random((3, 16, 12)).astype(np.float32)
+    return abtem.PotentialArray(
+        array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
+    )
+
+
 @pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
 class TestDeprecatedReturnBackscattered:
     """The deprecated return_backscattered: the backscattered waves at every exit
@@ -480,20 +488,12 @@ class TestDeprecatedReturnBackscattered:
             _deprecated_backscattered_arrays(potential, lazy)
 
     def test_backscattering_accepts_every_exit_plane_as_a_sequence(self):
-        # Three random slices on a small grid: the run is cheap, and a sequence
-        # spelling of every plane must give the result of exit_planes=1.
-        array = np.random.default_rng(0).random((3, 16, 12)).astype(np.float32)
-
-        def potential(exit_planes):
-            return abtem.PotentialArray(
-                array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
-            )
-
-        reference = _deprecated_backscattered_arrays(potential(1), False)[1]
+        # a sequence spelling of every plane must give the result of exit_planes=1
+        reference = _deprecated_backscattered_arrays(_random_slices(1), False)[1]
         assert np.abs(reference[0]).max() > 0
         for exit_planes in (tuple(range(-1, 3)), list(range(-1, 3)), np.arange(-1, 3)):
-            spelled = potential(exit_planes)
-            assert tuple(spelled.exit_planes) == potential(1).exit_planes
+            spelled = _random_slices(exit_planes)
+            assert tuple(spelled.exit_planes) == _random_slices(1).exit_planes
             np.testing.assert_array_equal(
                 _deprecated_backscattered_arrays(spelled, False)[1],
                 reference,
@@ -528,18 +528,11 @@ class TestDeprecatedReturnBackscattered:
             )
         assert not np.any(backscattered[4:])
 
-
-def _random_slices(exit_planes):
-    # three random slices on a small grid: cheap, and every slice reflects
-    array = np.random.default_rng(0).random((3, 16, 12)).astype(np.float32)
-    return abtem.PotentialArray(
-        array, slice_thickness=1.0, extent=(4.0, 3.0), exit_planes=exit_planes
-    )
-
     @pytest.mark.parametrize("lazy", [False, True])
     def test_the_deprecated_output_of_two_configurations_and_detectors(self, lazy):
         # guards the deprecated output until it is removed: each configuration of a
-        # frozen-phonon potential gives the outputs of its run alone
+        # frozen-phonon potential gives the outputs of its run alone, averaged by
+        # the detectors and kept apart in the backscattered waves
         atoms = ase.build.bulk("Si", cubic=True)
         frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
         kwargs = dict(gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1)
@@ -568,6 +561,8 @@ def _random_slices(exit_planes):
         assert len(result) == 3
         for i, output in enumerate(result):
             expected = np.stack([member[i] for member in members])
+            if i < len(detectors):
+                expected = expected.mean(axis=0)
             np.testing.assert_allclose(
                 output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
             )
