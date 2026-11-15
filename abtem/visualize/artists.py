@@ -321,24 +321,6 @@ class LinesArtist(Artist1D):
 
     def set_power(self, power: float = 1.0) -> None:
         raise NotImplementedError
-        #
-        # def forward(x):
-        #     if power == 1:
-        #         return x
-        #
-        #     return x ** (1 / power)
-        #
-        # def inverse(x):
-        #     if power == 1:
-        #         return x
-        #
-        #     return x**power
-        #
-        # if power == 1.0:
-        #     self._ax.set_yscale("linear")
-        # else:
-        #     self._ax.set_yscale("function", functions=(forward, inverse))
-        #     self._ax.set_yscale("function", functions=(forward, inverse))
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
@@ -427,11 +409,6 @@ class Artist2D(Artist):
 
     def add_area_indicator(self, area_indicator, panel="first", **kwargs):
         raise NotImplementedError
-        # for i, ax in enumerate(np.array(self.axes).ravel()):
-        #     if panel == "first" and i == 0:
-        #         area_indicator._add_to_plot(ax, **kwargs)
-        #     elif panel == "all":
-        #         area_indicator._add_to_plot(ax, **kwargs)
 
 
 def default_cbar_scalar_formatter():
@@ -704,7 +681,6 @@ class ScaledCircleCollection(Collection):
         data = self._unmasked_array
         base_radii = norm(data)
         if self._base_scale is None:
-            # self._base_scale = self._auto_scale_radii(base_radii[self._mask])
             self._base_scale = 1.0
 
         radii = np.sqrt(
@@ -1162,68 +1138,3 @@ class DomainColoringArtist(Artist2D):
         self._amplitude_cbar.set_label("abs", rotation=0, ha="center", va="top")
         self._amplitude_cbar.ax.yaxis.set_label_coords(0.5, -0.02)
         self._amplitude_cbar.ax.yaxis.set_offset_position("left")
-
-
-class OverlayImshowArtist(Artist2D):
-    def __init__(
-        self,
-        ax,
-        data,
-        cmap,
-        vmin: float = None,
-        vmax: float = None,
-        power: float = 1.0,
-        logscale: bool = False,
-    ):
-        raise NotImplementedError
-
-        # cmaps = [ListedColormap(c) for c in cmap]
-        #
-        # alphas = [np.clip(norm(alpha), a_min=0.0, a_max=1.0) for alpha in array]
-        # # print(alphas[0], array.shape, array[0].shape)
-        # ims = [
-        #     ax.imshow(
-        #         np.ones_like(alpha.T),
-        #         origin="lower",
-        #         interpolation="none",
-        #         cmap=cmap,
-        #         alpha=alpha.T,
-        #     )
-        #     for alpha, cmap in zip(alphas, cmaps)
-        # ]
-        #
-        # ax.set_facecolor("k")
-        #
-        #
-        # from matplotlib import colors
-        # from matplotlib.cm import ScalarMappable
-        # from matplotlib.colors import LinearSegmentedColormap, ListedColormap
-        #
-        # fig, ax = plt.subplots()
-        # ax.set_facecolor("k")
-        #
-        # cmap = ListedColormap(["lime"])
-        # norm = colors.Normalize()
-        # norm.autoscale_None(stacked.array[0])
-        # alpha = norm(stacked.array[0])
-        #
-        # im = ax.imshow(
-        #     np.ones_like(stacked.array[0]).T, alpha=alpha.T, cmap=cmap, origin="lower"
-        # )
-        #
-        # cmap = LinearSegmentedColormap.from_list("red", ["k", "lime"])
-        # plt.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
-        #
-        # c = "r"
-        # cmap = ListedColormap([c])
-        # norm = colors.Normalize()
-        # norm.autoscale_None(stacked.array[1])
-        # alpha = norm(stacked.array[1])
-        #
-        # im = ax.imshow(
-        #     np.ones_like(stacked.array[1]).T, alpha=alpha.T, cmap=cmap, origin="lower"
-        # )
-        #
-        # cmap = LinearSegmentedColormap.from_list("c", ["k", c])
-        # plt.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
-        #

@@ -276,8 +276,6 @@ class Ensemble:
 
         start_stops = chunk_ranges(chunks)
 
-        # print(start_stops)
-        # print(shape)
         assert tuple(len(cr) for cr in start_stops) == shape
 
         for indices, start_stop in zip(
@@ -294,31 +292,6 @@ class Ensemble:
             slics = tuple(slice(start, stop) for start, stop in start_stop)
 
             yield indices, slics, self._from_partitioned_args()(*args)
-
-        # print(blocks)
-
-        # for block in blocks:
-        # if len(block.shape) > 1:
-        #    print(block)
-        #         raise NotImplementedError
-        # axis_indices = tuple(
-        #     tuple(range(block.shape[0])) if len(block.shape) else () for block in blocks
-        # )
-
-        # if not any(len(indices) for indices in axis_indices):
-        #     yield (), (), self._from_partitioned_args()(*blocks)
-
-        # print(len(tuple(itertools.product(*chunk_ranges(chunks)))))
-        # for block_indices, start_stop in zip(
-        #     itertools.product(*axis_indices),
-        #     itertools.product(*chunk_ranges(chunks)),
-        # ):
-
-        #     block = tuple(block[i] for i, block in zip(block_indices, blocks))
-        #     slics = tuple(slice(start, stop) for start, stop in start_stop)
-        #     print(slics)
-
-        #     yield block_indices, slics, self._from_partitioned_args()(*block)
 
 
 class EmptyEnsemble(Ensemble):

@@ -79,7 +79,6 @@ from abtem.core.utils import (
     safe_floor_int,
 )
 
-# from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import LinesArtist
 from abtem.visualize.visualizations import Visualization
@@ -109,13 +108,6 @@ def _scanned_measurement_type(
 
     else:
         return MeasurementsEnsemble
-
-
-def _bin_extent(n: int) -> tuple[float, float]:
-    if n % 2 == 0:
-        return -n // 2 - 0.5, n // 2 - 0.5
-    else:
-        return -n // 2 + 0.5, n // 2 + 0.5
 
 
 def _reduced_scanned_images_or_line_profiles(
@@ -200,12 +192,6 @@ def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, .
     )
 
 
-def _scan_axes_metadata(
-    measurements: BaseMeasurements | BaseWaves,
-) -> list[AxisMetadata]:
-    return [measurements.axes_metadata[i] for i in _scan_axes(measurements)]
-
-
 def _scan_shape(measurements: BaseMeasurements | BaseWaves) -> tuple[int, ...]:
     return tuple(measurements.shape[i] for i in _scan_axes(measurements))
 
@@ -215,13 +201,6 @@ def _scan_area_per_pixel(measurements):
         return np.prod(_scan_sampling(measurements))
     else:
         raise RuntimeError("Cannot infer pixel area from axes metadata.")
-
-
-def _scan_extent(measurement):
-    extent = ()
-    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
-        extent += (metadata.sampling * n,)
-    return extent
 
 
 def _on_device_of(array, like):
@@ -878,7 +857,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def abs(self) -> Self:
         """Calculates the absolute value of a complex-valued measurement."""
-        # self._check_is_complex()
         return self._apply_element_wise_func(
             "abs", label="amplitude", units="arb. unit"
         )
@@ -1106,7 +1084,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         total_dose = np.array(total_dose, dtype=dtype)
 
-        # print(seed, samples)
         transform = NoiseTransform(dose=total_dose, samples=samples, seeds=seed)
 
         measurement = transform.apply(self)
@@ -1371,26 +1348,6 @@ class MeasurementsEnsemble(BaseMeasurements):
         if not interact:
             self.compute()
 
-        # scale_axis = self._scale_axis_from_metadata()
-
-        # base_axes_metadata = self._plot_base_axes_metadata(units)
-
-        # array = self.array
-
-        # raise RuntimeError("Cannot infer pixel area from metadata.")
-
-        # if display_axes != (-2, -1):
-        #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
-
-        # display_axes = normalize_axes(display_axes, self.shape)
-
-        # base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
-        # ensemble_axes_metadata = [
-        #     self.axes_metadata[i]
-        #     for i in range(len(self.shape))
-        #     if i not in display_axes
-        # ]
-
         artist_type = LinesArtist
 
         visualization = Visualization(
@@ -1503,9 +1460,6 @@ class _BaseMeasurement2D(BaseMeasurements):
             The interpolated line(s).
         """
         from abtem.scan import LineScan
-
-        # if self.is_complex:
-        #    raise NotImplementedError
 
         if (sampling is None) and (gpts is None):
             sampling = min(self.sampling)
@@ -2531,9 +2485,6 @@ class Images(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
-    # def _plot_base_axes_metadata(self, units: str = None):
-    #     return self.base_axes_metadata
-
 
 class _BaseMeasurement1D(BaseMeasurements):
     _base_dims = 1
@@ -2893,20 +2844,6 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
         reps = (1,) * (len(self.array.shape) - 1) + (repetitions,)
         return self._with_array(array_namespace(self.array).tile(self.array, reps))
 
-    # def _plot_extent(self, units=None):
-    #     scale = get_conversion_factor(units, "Å")
-    #     return [0, self.extent * scale]
-    #
-    # # def _plot_extent(self, units=None):
-    # #     scale = {"Å": 1, "nm": 0.1}[_validate_real_space_units(units)]
-    # #     return [0, self.extent * scale]
-    #
-    # def _plot_x_label(self, units=None):
-    #     return f"x [{_validate_units(units, 'Å')}]"
-    #
-    # def _plot_y_label(self, units=None):
-    #     return f"y [{_validate_units(units, 'Å')}]"
-
 
 class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     """
@@ -2952,21 +2889,6 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
         """Extent of line profiles given as scattering angels [mrad]."""
         wavelength = energy2wavelength(self._get_energy())
         return self.extent * wavelength * 1e3
-
-    # def _plot_x_label(self, units=None):
-    #     return f"x [{_validate_units(units, '1/Å')}]"
-    #
-    # def _plot_y_label(self, units=None):
-    #     return f"y [{_validate_units(units, '1/Å')}]"
-    #
-    # def _plot_extent(self, units=None):
-    #     if units is None:
-    #         units = "1/Å"
-    #
-    #     if units == "mrad":
-    #         return [0, self.angular_extent]
-    #     elif units == "1/Å":
-    #         return [0, self.extent]
 
 
 def _integrate_gradient_2d(gradient, sampling):

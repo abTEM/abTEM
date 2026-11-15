@@ -427,7 +427,6 @@ def _atomic_rv(Z, xc="PBE"):
     of the neutral atom then goes to ~0 by the edge of the grid and is held
     constant beyond it.
     """
-    # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc, log=io.StringIO())
@@ -453,10 +452,6 @@ def _atomic_rv(Z, xc="PBE"):
 
 def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
     vr = _atomic_rv(Z, xc=xc)
 
@@ -1401,30 +1396,6 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
                 start = end
 
             mask = copy_to_device(mask, "cpu")
-            # if np.any(mask):
-            #     print(shifted_local_potential.shape, waves.shape)
-            #
-            #     plt.imshow(
-            #         shifted_local_potential[0, 0, 0]
-            #         / shifted_local_potential[0, 0, 0].max()
-            #         + abs2(waves.array).sum((0,1)) / abs2(waves.array[0, 0]).max()
-            #     )
-            #     plt.title("include")
-            #     # plt.show()
-            #     # plt.imshow(abs2(waves.array[0, 0]))
-            #     plt.show()
-            # else:
-            #     plt.imshow(
-            #         shifted_local_potential[0, 0, 0]
-            #         / shifted_local_potential[0, 0, 0].max()
-            #         + abs2(waves.array).sum((0,1)) / abs2(waves.array[0, 0]).max()
-            #     )
-            #     plt.title("skip")
-            #     # plt.show()
-            #     # plt.imshow(abs2(waves.array[0, 0]))
-            #     plt.show()
-
-            # print(type(mask), type(sites))
 
             kept = kept[mask]  # on the host: validated_sites was moved to the device
             if isinstance(original_sites, Atoms):

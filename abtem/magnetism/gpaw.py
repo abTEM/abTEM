@@ -32,11 +32,6 @@ from abtem.potentials.iam import PotentialArray, _default_box, _FieldBuilder
 from abtem.slicing import _integrate_planes, is_number
 
 
-def _calculate_non_periodic_magnetic_vector_potential():
-    # A_np = mu_0 * M x r
-    pass
-
-
 def calculate_constant_magnetic_field():
     # B_avg = mu_0 * M
     pass

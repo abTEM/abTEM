@@ -4,8 +4,7 @@ import numpy as np
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
-from abtem.core.energy import energy2wavelength
-from abtem.core.utils import expand_dims_to_broadcast, get_dtype
+from abtem.core.utils import get_dtype
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
@@ -31,16 +30,12 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
     else:
         old_shape = None
 
-    # if xp is cp:
     i = xp.arange(array.shape[0])[:, None, None]
     ix = xp.arange(new_shape[0]) + xp.asarray(corners[:, 0, None])
     iy = xp.arange(new_shape[1]) + xp.asarray(corners[:, 1, None])
     ix = ix[:, :, None]
     iy = iy[:, None]
     array = array[i, ix, iy]
-    # else:
-    #     array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
-    #     array = array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
 
     if old_shape is not None:
         array = array.reshape(old_shape[:-2] + array.shape[-2:])
@@ -130,35 +125,6 @@ def wrapped_crop_2d(
     return cropped
 
 
-def prism_wave_vectors(
-    cutoff: float,
-    extent: Tuple[float, float],
-    energy: float,
-    interpolation: Tuple[int, int],
-    xp=np,
-) -> np.ndarray:
-    wavelength = energy2wavelength(energy)
-
-    n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
-    m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
-
-    dtype = get_dtype(complex=False)
-    n = np.arange(-n_max, n_max + 1, dtype=dtype)
-    w = np.asarray(extent[0], dtype=dtype)
-    m = np.arange(-m_max, m_max + 1, dtype=dtype)
-    h = np.asarray(extent[1], dtype=dtype)
-
-    kx = n / w * dtype(interpolation[0])
-    ky = m / h * dtype(interpolation[1])
-
-    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
-
-    kx, ky = np.meshgrid(kx, ky, indexing="ij")
-    kx = kx[mask]
-    ky = ky[mask]
-    return xp.asarray([kx, ky]).T
-
-
 def plane_waves(
     wave_vectors: np.ndarray,
     extent: Tuple[float, float],
@@ -183,34 +149,11 @@ def plane_waves(
 
 def _planewave_shift_coefficients(positions, wave_vectors):
     xp = get_array_module(positions)
-    # wave_vectors = xp.asarray(wave_vectors)
-
     coefficients = complex_exponential(
         -2.0 * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None]
     )
-    # print(coefficients.shape, coefficients.dtype)
     coefficients *= complex_exponential(
         -2.0 * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None]
     )
-
-    return coefficients
-
-
-def prism_coefficients(positions, wave_vectors, xp, ctf=None):
-    wave_vectors = xp.asarray(wave_vectors)
-
-    coefficients = _planewave_shift_coefficients(positions, wave_vectors)
-
-    if ctf is not None:
-        alpha = (
-            xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
-        )
-        phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
-
-        basis = ctf._evaluate_from_angular_grid(alpha, phi)
-        basis, coefficients = expand_dims_to_broadcast(
-            basis, coefficients, match_dims=[(-1,), (-1,)]
-        )
-        coefficients = coefficients * basis
 
     return coefficients
