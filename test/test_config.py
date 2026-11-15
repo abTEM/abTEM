@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import warnings
 
 import dask.config
 import pytest
@@ -173,6 +174,33 @@ class TestMalformedYaml:
 
         # Falls back to the shipped default rather than raising.
         assert config.get("device", config=fresh_config) == "cpu"
+
+
+class TestNestedKeyThroughAValue:
+    """A nested key whose parent is set to a value instead of a section."""
+
+    def test_warns_and_returns_the_default(self, tmp_path, fresh_config):
+        write_config(tmp_path, "diagnostics: true")
+        refresh_into(fresh_config, paths=[tmp_path])
+
+        with pytest.warns(UserWarning, match="'diagnostics' is True, not a section"):
+            value = config.get("diagnostics.task_progress", False, config=fresh_config)
+
+        assert value is False
+
+    def test_a_missing_key_returns_the_default_without_warning(self, fresh_config):
+        refresh_into(fresh_config)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert config.get("diagnostics.no_such_key", 7, config=fresh_config) == 7
+
+    def test_raises_without_a_default(self, tmp_path, fresh_config):
+        write_config(tmp_path, "diagnostics: true")
+        refresh_into(fresh_config, paths=[tmp_path])
+
+        with pytest.raises(TypeError):
+            config.get("diagnostics.task_progress", config=fresh_config)
 
 
 class TestLegacyDaskEnvironmentVariables:

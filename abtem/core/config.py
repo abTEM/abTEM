@@ -409,21 +409,27 @@ def get(
     If ``override_with`` is not None this value will be passed straight back.
     Useful for getting kwarg defaults from abtek config.
 
-    Use '.' for nested access
+    Use '.' for nested access. A key that is missing returns ``default``; so
+    does a nested key under a value that is not a section, with a warning.
     """
     if override_with is not None:
         return override_with
     keys = key.split(".")
     result = config
-    for k in keys:
+    for i, k in enumerate(keys):
         k = canonical_name(k, result)
         try:
             result = result[k]
-        except (TypeError, IndexError, KeyError):
-            if default is not no_default:
-                return default
-            else:
+        except (TypeError, IndexError, KeyError) as error:
+            if default is no_default:
                 raise
+            if isinstance(error, TypeError):
+                warnings.warn(
+                    f"abTEM config value {'.'.join(keys[:i])!r} is {result!r}, "
+                    f"not a section, so {key!r} takes its default {default!r}",
+                    stacklevel=2,
+                )
+            return default
     return result
 
 
