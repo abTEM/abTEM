@@ -267,8 +267,6 @@ def index_diffraction_spots(
     if orientation_matrices is None:
         orientation_matrices = np.eye(3)[(None,) * len(array.shape[:-2])]
 
-    # assert is_broadcastable(array.shape[:-2], orientation_matrices.shape[:-2])
-
     orientation_matrices = np.squeeze(orientation_matrices)
 
     assert orientation_matrices.shape == (3, 3)
@@ -283,15 +281,14 @@ def index_diffraction_spots(
 
     nm = _find_projected_pixel_index(g_vec, shape, sampling)
 
-    sg = np.abs(excitation_errors(g_vec, energy, use_wave_eq=False))
+    sg = excitation_errors(g_vec, energy, use_wave_eq=False)
 
     if radius is not None:
-        # a, b = tuple(int(np.round(radius / d)) for d in sampling)
-        intensities = integrate_ellipse_around_pixels(array, nm, radius, sampling, sg)
+        intensities = integrate_ellipse_around_pixels(
+            array, nm, radius, sampling, np.abs(sg)
+        )
     else:
         intensities = array[..., nm[..., 0], nm[..., 1]]
-
-    sg = excitation_errors(g_vec, energy, use_wave_eq=False)
 
     mask = overlapping_spots_mask(nm, sg)
 

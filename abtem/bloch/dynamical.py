@@ -1124,12 +1124,6 @@ def calculate_structure_matrix(
     return A
 
 
-def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
-    array = np.all(hkl == [0, 0, 0], axis=1)
-    array = xp.asarray(array, dtype=get_dtype(complex=True))
-    return array
-
-
 def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """The eigenvalues and eigenvectors of a Hermitian matrix, from its lower triangle.
 
@@ -1498,14 +1492,6 @@ def validate_g_max(
         )
 
     return g_max
-
-
-def exctinction_distances(
-    structure_factor: np.ndarray, cell: Cell, energy: float
-) -> np.ndarray:
-    xp = get_array_module(structure_factor)
-    V = cell.volume
-    return np.pi * V / (xp.abs(structure_factor) * energy2wavelength(energy) + 1e-12)
 
 
 def plane_wave_expansion(
@@ -2378,31 +2364,6 @@ class BlochWaves:
 
         return waves
 
-    #     xp = get_array_module(array)
-
-    #     thicknesses1 = xp.asarray(thicknesses)
-    #     array2 = xp.zeros(array.shape[:-1] + gpts, dtype=array.dtype)
-    #     for i, nmi in enumerate(nm):
-    #         phase = xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses1)
-    #         array2[..., nmi[0], nmi[1]] += array[..., i] * phase
-
-    #     array = ifft2(xp.fft.ifftshift(array2, axes=(-2, -1)))
-
-    #     if normalization == "values":
-    #         array *= np.prod(gpts)
-
-    #     waves = Waves(
-    #         array=array,
-    #         extent=extent,
-    #         energy=self.energy,
-    #         ensemble_axes_metadata=[
-    #             ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
-    #         ],
-    #         metadata={"normalization": "values"},
-    #     )
-
-    #     return waves
-
     def rotate(
         self,
         *args: str | BaseDistribution | np.ndarray | SupportsFloat,
@@ -2879,8 +2840,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         xp = get_array_module(self.device)
         array = xp.zeros(shape, dtype=get_dtype(complex=return_complex))
 
-        # lil_matrix((np.prod(shape[:-1]), shape[-1]))
-
         structure_factor = self._built_structure_factor()
 
         for i in np.ndindex(orientation_matrices.shape[:-2]):
@@ -2894,12 +2853,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 device=self.device,
                 use_wave_eq=self._use_wave_eq,
             )
-
-            # cols = np.where(bw.hkl_mask)[0]
-            # rows = np.ravel_multi_index(
-            #     i + (tuple(range(shape[-2])),),
-            #     dims=shape[:-1],
-            # )
 
             diffraction_patterns = bw.calculate_diffraction_patterns(
                 thicknesses,
