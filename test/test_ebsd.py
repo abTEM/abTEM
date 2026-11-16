@@ -528,9 +528,13 @@ class TestOrientations:
         with pytest.raises(ImportError, match="requires spglib") as info:
             is_centrosymmetric(SILICON)
         assert isinstance(info.value.__cause__, ImportError)
-        with pytest.raises(ValueError, match="spglib is not installed") as info:
+        with pytest.raises(ValueError, match="spglib could not be imported") as info:
             _conventional_cell(SILICON, None)
         assert isinstance(info.value.__cause__, ImportError)
+        with pytest.warns(
+            UserWarning, match=r"spglib could not be imported \(.+\), so"
+        ):
+            _conventional_cell(SILICON, 227)
 
 
 # --------------------------------------------------------------------------

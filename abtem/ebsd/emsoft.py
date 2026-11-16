@@ -105,13 +105,13 @@ def _conventional_cell(
     except ImportError as error:
         if space_group is None:
             raise ValueError(
-                "the space group could not be determined because spglib is not "
-                "installed; pass space_group=... explicitly or install spglib"
+                "the space group could not be determined because spglib could not "
+                "be imported; pass space_group=... explicitly or install spglib"
             ) from error
         warnings.warn(
-            "spglib is not installed, so the cell is written as given rather "
-            "than in the conventional setting of the space group; this may "
-            "disagree with the space group number recorded alongside it"
+            f"spglib could not be imported ({error}), so the cell is written as "
+            "given rather than in the conventional setting of the space group; "
+            "this may disagree with the space group number recorded alongside it"
         )
         lattice = np.asarray(atoms.cell[:], dtype=float)
         return (
