@@ -106,17 +106,59 @@ def test_loss_orders_conserve_intensity(
 
 
 def test_pure_momentum_transfer_is_convolution(si_potential, probe):
+    """Without channeling changes the loss channel is the elastic pattern convolved
+    with the Lorentzian: a linear convolution, which drops the intensity moved past
+    the edge of the grid instead of wrapping it onto the opposite edge."""
+    from abtem.core.fft import fft_crop
+    from abtem.inelastic.plasmons import (
+        _DEFAULT_MIN_ANGLE,
+        _pad_unshifted,
+        _padded_gpts,
+    )
+
     detector = abtem.PixelatedDetector(max_angle="full")
     p = plasmons(max_tilt_events=0, max_loss_order=1, lab_frame=True)
     result = probe.multislice(si_potential, detectors=detector, plasmons=p).compute()
-    nodes = p._angular_nodes(200e3, min_angle=max(result.angular_sampling))
-    kernels = _lorentzian_kernels(
-        tuple(result.shape[-2:]), tuple(result.angular_sampling), nodes
-    )
-    elastic = np.fft.fft2(np.fft.ifftshift(result.array[0]))
+    gpts = tuple(result.shape[-2:])
+    sampling = tuple(result.angular_sampling)
+    nodes = p._angular_nodes(200e3, min_angle=_DEFAULT_MIN_ANGLE)
+    padded = _padded_gpts(gpts, sampling, nodes["theta_c"])
+    kernels = _lorentzian_kernels(padded, sampling, nodes)
+    elastic = np.fft.fft2(_pad_unshifted(np.fft.ifftshift(result.array[0]), padded))
     kernel = nodes["p_small"] * kernels["small"] + nodes["p_large"] * kernels["large"]
-    expected = np.fft.fftshift(np.fft.ifft2(elastic * kernel).real)
+    expected = np.fft.fftshift(fft_crop(np.fft.ifft2(elastic * kernel).real, gpts))
     assert np.allclose(result.array[1], expected, rtol=1e-3, atol=1e-6 * expected.max())
+
+
+def test_padding_inverts_the_crop_and_covers_the_kernels():
+    """Zero-padding an unshifted pattern is the inverse of fft_crop, and the padded
+    grid holds the widest kernel on either side of every pixel of the original."""
+    from abtem.core.fft import fft_crop
+    from abtem.inelastic.plasmons import _kernel_radius, _pad_unshifted, _padded_gpts
+
+    rng = np.random.default_rng(0)
+    for gpts in [(16, 16), (17, 12)]:
+        pattern = rng.random((2,) + gpts)
+        padded = _padded_gpts(gpts, (1.3, 0.7), 10.0)
+        radius = _kernel_radius((1.3, 0.7), 10.0)
+        assert padded == tuple(n + 2 * r for n, r in zip(gpts, radius))
+        assert all(r * d > 10.0 for r, d in zip(radius, (1.3, 0.7)))
+        assert np.array_equal(fft_crop(_pad_unshifted(pattern, padded), gpts), pattern)
+
+
+def test_depth_nodes_follow_the_thickness():
+    """``max_depth_step`` adds depth nodes beyond ``num_depths`` for thick specimens,
+    and the copy count follows them."""
+    p = plasmons(num_depths=4, max_depth_step=250.0, max_tilt_events=2)
+    assert p.depth_nodes() == 4
+    assert p.depth_nodes(500.0) == 4
+    assert p.depth_nodes(1001.0) == 5
+    assert p.depth_nodes(1495.0) == 6
+    assert p.num_copies(1495.0) > p.num_copies(500.0) == p.num_copies()
+    fixed = plasmons(num_depths=4, max_depth_step=None)
+    assert fixed.depth_nodes(5000.0) == 4
+    with pytest.raises(ValueError, match="max_depth_step"):
+        plasmons(max_depth_step=0.0)
 
 
 def test_tilted_frame_without_tilts_equals_elastic(si_potential, probe):
@@ -265,7 +307,10 @@ def test_s_matrix_accepts_phase_scrambling_only(si_potential):
     for model in (plasmons(), monte_carlo()):
         with pytest.raises(NotImplementedError, match="PhaseScramblePlasmons"):
             abtem.SMatrix(
-                potential=si_potential, energy=200e3, semiangle_cutoff=20, plasmons=model
+                potential=si_potential,
+                energy=200e3,
+                semiangle_cutoff=20,
+                plasmons=model,
             )
 
 

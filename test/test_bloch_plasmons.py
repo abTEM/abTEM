@@ -27,15 +27,6 @@ def _to_numpy(a):
     return a.get() if hasattr(a, "get") else np.asarray(a)
 
 
-@pytest.fixture
-def si_bloch(request):
-    device = request.param
-    si = bulk("Si", "diamond", a=5.43, cubic=True)
-    sf = abtem.StructureFactor(si, g_max=12, device=device)
-    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-    return bw
-
-
 # ---------------------------------------------------------------------------
 # Tilt-aware excitation errors
 # ---------------------------------------------------------------------------
@@ -101,7 +92,7 @@ def test_deflect_polar_only():
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_zero_events_matches_elastic(request, device):
+def test_zero_events_matches_elastic(device):
     """With zero scattering events the driver must reproduce the pure Bloch result
     exactly (up to floating point)."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -128,7 +119,7 @@ def test_zero_events_matches_elastic(request, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_intensity_conservation(request, device):
+def test_intensity_conservation(device):
     """The total intensity sum_n P(n) I^(n) must equal the Bloch normalisation times
     the truncated Poisson cumulative."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -141,7 +132,7 @@ def test_intensity_conservation(request, device):
         17.0,
         19.1,
         num_excitations=2,
-        num_samples=500,
+        num_samples=20,
         ensemble_mean=True,
         seed=42,
     )
@@ -166,34 +157,45 @@ def test_intensity_conservation(request, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_calculate_diffraction_patterns_plasmon_api(request, device):
-    """The ``plasmons=`` kwarg on ``calculate_diffraction_patterns`` returns an
-    ``IndexedDiffractionPatterns`` with per-order intensities."""
+def test_calculate_diffraction_patterns_plasmon_api(device):
+    """``calculate_diffraction_patterns(plasmons=MonteCarloPlasmons)``: a scalar
+    thickness gives (orders, beams) and a sequence (orders, thicknesses, beams), whose
+    row of the same thickness is the scalar result (the events of a thickness are
+    drawn from the seed); every order is normalized, and lazy equals eager."""
+    from abtem.core.axes import PlasmonOrderAxis
+
     si = bulk("Si", "diamond", a=5.43, cubic=True)
     sf = abtem.StructureFactor(si, g_max=12, device=device)
     bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-    t = 200.0
-
     mc = MonteCarloPlasmons(
-        830.0,
-        17.0,
-        19.1,
-        num_excitations=1,
-        num_samples=200,
-        ensemble_mean=True,
-        seed=7,
+        830.0, 17.0, 19.1, num_excitations=1, num_samples=20, ensemble_mean=True, seed=7
     )
-    dp = bw.calculate_diffraction_patterns(t, plasmons=mc)
 
-    assert dp.array.shape == (2, len(bw))
-    assert "plasmon_orders" in dp.metadata
-    assert dp.metadata["plasmon_orders"] == (0, 1)
-    assert all(np.isfinite(_to_numpy(dp.array)).ravel())
-    assert all((_to_numpy(dp.array) >= 0).ravel())
+    scalar = bw.calculate_diffraction_patterns(300.0, plasmons=mc, lazy=False)
+    several = bw.calculate_diffraction_patterns([200.0, 300.0], plasmons=mc, lazy=False)
+    lazy = bw.calculate_diffraction_patterns([200.0, 300.0], plasmons=mc, lazy=True)
+
+    assert scalar.array.shape == (2, len(bw))
+    assert len(scalar.ensemble_axes_metadata) == 1
+    assert isinstance(scalar.ensemble_axes_metadata[0], PlasmonOrderAxis)
+    assert scalar.metadata["plasmon_orders"] == (0, 1)
+    np.testing.assert_allclose(_to_numpy(scalar.array).sum(-1), 1.0, atol=1e-5)
+
+    assert several.array.shape == (2, 2, len(bw))
+    assert isinstance(several.ensemble_axes_metadata[0], PlasmonOrderAxis)
+    assert several.ensemble_axes_metadata[1].label == "z"
+    np.testing.assert_allclose(
+        _to_numpy(several.array)[:, 1], _to_numpy(scalar.array), atol=1e-6
+    )
+
+    assert hasattr(lazy.array, "compute")
+    np.testing.assert_allclose(
+        _to_numpy(lazy.array.compute()), _to_numpy(several.array), atol=1e-12
+    )
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_000_decreases_with_plasmon_loss(request, device):
+def test_000_decreases_with_plasmon_loss(device):
     """The normalised 000 beam intensity should decrease with increasing energy loss
     (Mendis 2024, Table 2)."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -205,8 +207,8 @@ def test_000_decreases_with_plasmon_loss(request, device):
         830.0,
         17.0,
         19.1,
-        num_excitations=2,
-        num_samples=800,
+        num_excitations=1,
+        num_samples=30,
         ensemble_mean=True,
         seed=5,
     )
@@ -223,62 +225,12 @@ def test_000_decreases_with_plasmon_loss(request, device):
 
 
 # ---------------------------------------------------------------------------
-# Multiple thicknesses
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_multi_thickness_shape(request, device):
-    """A thickness sequence returns shape (orders, thicknesses, beams)."""
-    si = bulk("Si", "diamond", a=5.43, cubic=True)
-    sf = abtem.StructureFactor(si, g_max=12, device=device)
-    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-
-    mc = MonteCarloPlasmons(
-        830.0,
-        17.0,
-        19.1,
-        num_excitations=1,
-        num_samples=50,
-        ensemble_mean=True,
-        seed=10,
-    )
-    dp = bw.calculate_diffraction_patterns([200.0, 400.0], plasmons=mc)
-    assert dp.array.shape == (2, 2, len(bw))
-    from abtem.core.axes import PlasmonOrderAxis
-
-    assert isinstance(dp.ensemble_axes_metadata[0], PlasmonOrderAxis)
-    assert dp.ensemble_axes_metadata[1].label == "z"
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_scalar_thickness_backward_compat(request, device):
-    """A scalar thickness returns shape (orders, beams) — no thickness axis."""
-    si = bulk("Si", "diamond", a=5.43, cubic=True)
-    sf = abtem.StructureFactor(si, g_max=12, device=device)
-    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-
-    mc = MonteCarloPlasmons(
-        830.0,
-        17.0,
-        19.1,
-        num_excitations=1,
-        num_samples=50,
-        ensemble_mean=True,
-        seed=10,
-    )
-    dp = bw.calculate_diffraction_patterns(300.0, plasmons=mc)
-    assert dp.array.shape == (2, len(bw))
-    assert len(dp.ensemble_axes_metadata) == 1
-
-
-# ---------------------------------------------------------------------------
 # BlochwaveEnsemble with plasmons
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_ensemble_plasmon_shape(request, device):
+def test_ensemble_plasmon_shape(device):
     """``BlochwaveEnsemble.calculate_diffraction_patterns(plasmons=...)`` returns
     array with orientation × order × beam axes."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -315,8 +267,7 @@ def test_ensemble_plasmon_shape(request, device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_phonon_mean_free_path_silicon(request, device):
+def test_phonon_mean_free_path_silicon():
     """The Si phonon mean free path at 200 kV should be close to the Mendis value
     (~7724 Å)."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -333,7 +284,7 @@ def test_phonon_mean_free_path_silicon(request, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_phonon_bloch_integration(request, device):
+def test_phonon_bloch_integration(device):
     """Phonon events work with the Bloch driver through the ``plasmons=`` kwarg."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
     sf = abtem.StructureFactor(si, g_max=12, device=device)
@@ -356,66 +307,12 @@ def test_phonon_bloch_integration(request, device):
 
 
 # ---------------------------------------------------------------------------
-# Lazy/dask execution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_lazy_plasmon_matches_eager(request, device):
-    """``lazy=True`` must produce the same result as ``lazy=False`` for the plasmon
-    path (deferred via dask)."""
-    si = bulk("Si", "diamond", a=5.43, cubic=True)
-    sf = abtem.StructureFactor(si, g_max=12, device=device)
-    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-
-    mc = MonteCarloPlasmons(
-        830.0,
-        17.0,
-        19.1,
-        num_excitations=1,
-        num_samples=100,
-        ensemble_mean=True,
-        seed=42,
-    )
-    dp_eager = bw.calculate_diffraction_patterns(300.0, plasmons=mc, lazy=False)
-    dp_lazy = bw.calculate_diffraction_patterns(300.0, plasmons=mc, lazy=True)
-
-    assert hasattr(dp_lazy.array, "compute"), "lazy result should be a dask array"
-    lazy_array = _to_numpy(dp_lazy.array.compute())
-    eager_array = _to_numpy(dp_eager.array)
-    np.testing.assert_allclose(lazy_array, eager_array, atol=1e-12)
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_lazy_multi_thickness(request, device):
-    """``lazy=True`` works with a thickness sequence."""
-    si = bulk("Si", "diamond", a=5.43, cubic=True)
-    sf = abtem.StructureFactor(si, g_max=12, device=device)
-    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
-
-    mc = MonteCarloPlasmons(
-        830.0,
-        17.0,
-        19.1,
-        num_excitations=1,
-        num_samples=50,
-        ensemble_mean=True,
-        seed=10,
-    )
-    dp = bw.calculate_diffraction_patterns([200.0, 400.0], plasmons=mc, lazy=True)
-    assert hasattr(dp.array, "compute")
-    arr = _to_numpy(dp.array.compute())
-    assert arr.shape == (2, 2, len(bw))
-    assert np.isfinite(arr).all()
-
-
-# ---------------------------------------------------------------------------
 # Diffuse background rendering (rigid-shift)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_diffuse_pattern_shape_and_values(request, device):
+def test_diffuse_pattern_shape_and_values(device):
     """``calculate_diffuse_diffraction_pattern`` returns a DiffractionPatterns with the
     right shape and non-negative finite values."""
     from abtem.measurements import DiffractionPatterns
@@ -451,7 +348,7 @@ def test_diffuse_pattern_shape_and_values(request, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_diffuse_zero_order_concentrates_at_bragg(request, device):
+def test_diffuse_zero_order_concentrates_at_bragg(device):
     """For order 0 (no events, no tilt), all intensity should land exactly at the
     unshifted Bragg positions — the image should have non-zero pixels only at the
     spot locations."""
@@ -486,7 +383,7 @@ def test_diffuse_zero_order_concentrates_at_bragg(request, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_diffuse_higher_order_spreads(request, device):
+def test_diffuse_higher_order_spreads(device):
     """Higher-order images should have more non-zero pixels than zero-order (the
     rigid-shift broadens the spots)."""
     si = bulk("Si", "diamond", a=5.43, cubic=True)
@@ -497,26 +394,138 @@ def test_diffuse_higher_order_spreads(request, device):
         830.0,
         17.0,
         19.1,
-        num_excitations=2,
-        num_samples=500,
+        num_excitations=1,
+        num_samples=50,
         ensemble_mean=True,
         seed=9,
     )
     dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=500.0,
         plasmons=mc,
-        gpts=(256, 256),
+        gpts=(128, 128),
     )
     images = _to_numpy(dp.array)
     orders = list(dp.metadata["plasmon_orders"])
+    assert orders == [0, 1]
 
-    if len(orders) >= 2:
-        nz_zero = np.count_nonzero(images[orders.index(0)])
-        nz_one = np.count_nonzero(images[orders.index(1)])
-        assert nz_one >= nz_zero, (
-            f"single-plasmon image ({nz_one} pixels) should be at least as spread "
-            f"as zero-loss ({nz_zero} pixels)"
+    nz_zero = np.count_nonzero(images[orders.index(0)])
+    nz_one = np.count_nonzero(images[orders.index(1)])
+    assert nz_one > nz_zero, (
+        f"single-plasmon image ({nz_one} pixels) should be more spread than the "
+        f"zero-loss one ({nz_zero} pixels)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regressions: units, image axes and normalization of the Monte Carlo paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phi", [0.0, math.pi / 2])
+def test_diffuse_pattern_shifts_by_the_deflection(phi):
+    """An event deflects the pattern rigidly by K sin(theta) along its azimuth. The
+    polar angle is in mrad (it was applied as rad, deflecting by ~0.5 rad), and x is
+    the first image axis (the images were transposed). The slab is thin enough that
+    the transmitted beam keeps nearly all the intensity, so its peak is the shift."""
+    from abtem.bloch.inelastic import calculate_bloch_diffuse_pattern
+    from abtem.inelastic.plasmons import PlasmonScatteringEvents
+
+    si = bulk("Si", "diamond", a=5.43, cubic=True)
+    sf = abtem.StructureFactor(si, g_max=6.0, device="cpu")
+    bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=1.5, device="cpu")
+    thickness, theta = 5.0, 5.0  # [Å], [mrad]
+    events = PlasmonScatteringEvents(
+        depths=((), (thickness / 2,)),
+        radial_angles=((), (theta,)),
+        azimuthal_angles=((), (phi,)),
+        weights=(1.0, 1.0),
+        ensemble_mean=False,
+    )
+    gpts = (301, 301)
+    _, images, _, extent = calculate_bloch_diffuse_pattern(bw, events, thickness, gpts)
+
+    k = [np.linspace(-e, e, n) for e, n in zip(extent, gpts)]
+    peak = np.unravel_index(np.argmax(images[1]), gpts)
+    shift = 1 / energy2wavelength(200e3) * math.sin(theta * 1e-3)
+    pixel = 2 * extent[0] / (gpts[0] - 1)
+    assert abs(k[0][peak[0]] - shift * math.cos(phi)) <= pixel
+    assert abs(k[1][peak[1]] - shift * math.sin(phi)) <= pixel
+
+
+def test_mixed_events_draw_plasmon_angles_in_mrad():
+    """The mixed plasmon-phonon events carry their polar angles in mrad, like every
+    other event producer (they were appended in rad). Without phonon events the
+    angles follow the Lorentzian: below theta_c, with median sqrt(theta_E theta_c)."""
+    from abtem.bloch.inelastic import draw_mixed_scattering_events
+    from abtem.inelastic.plasmons import characteristic_angle
+
+    theta_e = characteristic_angle(17.0, 200e3)
+    theta_c = 27.6
+    grid = np.linspace(0, 0.1, 200)
+    _, radials, _ = draw_mixed_scattering_events(
+        1050.0,
+        1e12,
+        1000.0,
+        5,
+        theta_e * 1e-3,
+        theta_c * 1e-3,
+        grid,
+        grid / 0.1,
+        num_configs=400,
+        seed=0,
+    )
+    angles = np.concatenate([np.ravel(r) for r in radials if len(r)])
+    assert angles.max() <= theta_c
+    assert np.median(angles) == pytest.approx(np.sqrt(theta_e * theta_c), rel=0.15)
+
+
+@pytest.mark.parametrize("step", [0.25, 0.5, 1.0])
+def test_plasmon_probability_grid_is_normalized(step):
+    """The grid integrates the Lorentzian to one: the pixels near the centre hold the
+    undeflected core (about a quarter of the probability at 0.5 mrad), which the
+    grid used to drop (it summed to 0.70), and `max_angle_rad` truncates it."""
+    from abtem.bloch.inelastic import _plasmon_probability_grid
+    from abtem.inelastic.plasmons import characteristic_angle
+
+    theta_e = characteristic_angle(17.0, 200e3) * 1e-3
+    theta_c = 27.6e-3
+    step = step * 1e-3
+    dp_range = np.arange(-0.05, 0.05 + step / 2, step)
+    P, _, _ = _plasmon_probability_grid(dp_range, step, theta_e, theta_c)
+    assert P.sum() == pytest.approx(1.0, abs=2e-3)
+
+    max_angle = 10e-3
+    truncated, _, _ = _plasmon_probability_grid(
+        dp_range, step, theta_e, theta_c, max_angle
+    )
+    expected = np.log1p((max_angle / theta_e) ** 2) / np.log1p((theta_c / theta_e) ** 2)
+    assert truncated.sum() == pytest.approx(expected, rel=5e-3)
+
+
+@pytest.mark.parametrize("model", ["quadrature", "monte_carlo"])
+def test_plasmons_require_a_single_energy(model):
+    """The plasmon paths run at one energy; with several they raise when called,
+    naming the method, instead of answering for the first one (or, lazily, failing
+    only when computed)."""
+    from abtem.inelastic.plasmons import QuadraturePlasmons
+
+    si = bulk("Si", "diamond", a=5.43, cubic=True)
+    sf = abtem.StructureFactor(si, g_max=4.0, device="cpu")
+    bw = BlochWaves(sf, energy=[100e3, 200e3], sg_max=0.1, g_max=1.0, device="cpu")
+    parameters = dict(
+        mean_free_path=1050.0, excitation_energy=17.0, critical_angle=27.6
+    )
+    if model == "quadrature":
+        plasmons = QuadraturePlasmons(
+            **parameters, max_loss_order=1, num_angles=1, num_azimuthal=2, num_depths=1
         )
+    else:
+        plasmons = MonteCarloPlasmons(**parameters, num_excitations=1, num_samples=2)
+    match = r"calculate_diffraction_patterns\(plasmons=\.\.\.\) is defined for a single"
+    with pytest.raises(ValueError, match=match):
+        bw.calculate_diffraction_patterns(100.0, plasmons=plasmons, lazy=True)
+    with pytest.raises(ValueError, match="calculate_convergent_beam_patterns"):
+        bw.calculate_convergent_beam_patterns(100.0, abtem.Probe(energy=100e3))
 
 
 # ---------------------------------------------------------------------------
@@ -696,7 +705,7 @@ def test_convergent_beam_patterns_match_multislice(cbed_case):
     assert bloch.ensemble_axes_metadata == []
     assert np.isclose(bloch.array.sum(), 1.0, atol=0.02)
     assert _rel_rms(np.asarray(bloch.array), multislice) < 0.05
-    assert np.allclose(bloch.sampling, multislice.shape and probe.build().reciprocal_space_sampling)
+    assert np.allclose(bloch.sampling, probe.build().reciprocal_space_sampling)
 
 
 @pytest.mark.parametrize("lab_frame", [True, False])

@@ -765,9 +765,7 @@ def _stack_order_detections(
 
     kwargs = detected[0]._copy_kwargs(exclude=("array",))
     kwargs["array"] = arrays
-    kwargs["ensemble_axes_metadata"] = (
-        [order_axis] + kwargs["ensemble_axes_metadata"]
-    )
+    kwargs["ensemble_axes_metadata"] = [order_axis] + kwargs["ensemble_axes_metadata"]
     return detected[0].__class__(**kwargs)
 
 
@@ -1081,16 +1079,12 @@ def multislice_and_detect(
     ) = _potential_ensemble_shape_and_metadata(potential)
 
     # Order-resolved plasmon scattering: prepend a loss-order axis.
-    max_loss_order = (
-        plasmons.max_loss_order if plasmons is not None else None
-    )
+    max_loss_order = plasmons.max_loss_order if plasmons is not None else None
     order_resolved = max_loss_order is not None
     # Per-loss-order backscattering: each forward loss-order channel produces its
     # own backscattered component, reverse-propagated independently at the end.
     order_resolved_backscatter = (
-        order_resolved
-        and algorithm.expansion_scope == "full"
-        and return_backscattered
+        order_resolved and algorithm.expansion_scope == "full" and return_backscattered
     )
     if order_resolved:
         n_orders = max_loss_order + 1
@@ -2021,7 +2015,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             potential_axes_metadata = self.potential.ensemble_axes_metadata
 
         ensemble_axes_metadata = tuple(
-            order_meta + potential_axes_metadata
+            order_meta
+            + potential_axes_metadata
             + detector._out_ensemble_axes_metadata(waves)[0]
             for detector in self.detectors
         )

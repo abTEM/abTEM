@@ -103,9 +103,7 @@ def format_title(
     else:
         units = ""
 
-    if isinstance(value, str):
-        return f"{value}"
-    elif use_tex:
+    if use_tex:
         value = format_value(value, formatting)
         return f"{label}{value}{units}"
     else:
@@ -669,6 +667,7 @@ class PlasmonAxis(OrdinalAxis):
         self.values = values
 
 
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
 

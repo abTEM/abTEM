@@ -361,7 +361,7 @@ def calculate_bloch_diffuse_pattern(
     weights : np.ndarray
         The Poisson weight ``P(n)`` of each order, shape ``(len(orders),)``.
     extent : tuple of float
-        The actual reciprocal-space half-extent ``(ky_max, kx_max)`` [1/Å].
+        The actual reciprocal-space half-extent ``(kx_max, ky_max)`` [1/Å].
     """
     xp = get_array_module(bloch_waves.device)
 
@@ -446,44 +446,76 @@ def calculate_bloch_diffuse_pattern(
 # ---------------------------------------------------------------------------
 
 
-def _plasmon_probability_grid(dp_range_rad, dp_step_rad, theta_E_rad, theta_c_rad):
+def _plasmon_probability_grid(
+    dp_range_rad,
+    dp_step_rad,
+    theta_E_rad,
+    theta_c_rad,
+    max_angle_rad=None,
+    supersampling: int = 32,
+    inner_pixels: int = 4,
+):
     """Build 2D plasmon Lorentzian scattering probability grid.
 
-    Follows the angular discretisation in ``Bloch_plasmon_DP.m``.
+    The probability of a pixel is the integral over it of the two-dimensional density
+    ``p(theta) = 1 / (pi L (theta^2 + theta_E^2))`` for ``theta < theta_c``, with
+    ``L = ln(1 + theta_c^2 / theta_E^2)``, so that the whole distribution integrates to
+    one. Away from the centre the integral is the density at the pixel centre times the
+    pixel area. Within ``inner_pixels`` of the centre the density varies within a pixel
+    (``theta_E`` is typically a tenth of a pixel, and the centre pixel holds about a
+    quarter of the probability), so those pixels are integrated on a
+    ``supersampling x supersampling`` grid of sub-pixels.
 
     Parameters
     ----------
     dp_range_rad : np.ndarray
-        1D array of angular pixel positions [rad], e.g. ``np.arange(-0.15, 0.1505, 0.0005)``.
+        1D array of angular pixel positions [rad], such as
+        ``np.arange(-0.15, 0.1505, 0.0005)``.
     dp_step_rad : float
         Angular pixel size [rad].
     theta_E_rad : float
         Characteristic plasmon scattering angle [rad].
     theta_c_rad : float
         Critical (cutoff) plasmon scattering angle [rad].
+    max_angle_rad : float, optional
+        Scattering angles beyond this [rad] are dropped (their probability is lost,
+        not redistributed). Default is ``theta_c_rad``.
+    supersampling : int, optional
+        Sub-pixels per side of the pixels near the centre.
+    inner_pixels : int, optional
+        Radius [pixels] within which pixels are supersampled.
 
     Returns
     -------
     P : np.ndarray, shape (nDP, nDP)
-        Scattering probability per pixel (sums to ~1 over the active region).
+        Scattering probability per pixel; sums to one when the grid covers
+        ``theta_c`` and ``max_angle_rad`` is not smaller.
     theta : np.ndarray, shape (nDP, nDP)
         Polar scattering angle [rad] for each pixel.
     phi : np.ndarray, shape (nDP, nDP)
         Azimuthal scattering angle [rad] for each pixel.
     """
-    dtheta = dp_step_rad  # polar cell of area dtheta * (kt * dphi) = one pixel
-    theta_ratio_sq = (theta_c_rad / theta_E_rad) ** 2
-    log_norm = np.log(1 + theta_ratio_sq)
+    cutoff = theta_c_rad if max_angle_rad is None else min(theta_c_rad, max_angle_rad)
+    log_norm = np.log(1 + (theta_c_rad / theta_E_rad) ** 2)
+
+    def density(theta_squared):
+        return np.where(
+            theta_squared < cutoff**2,
+            1.0 / (np.pi * log_norm * (theta_squared + theta_E_rad**2)),
+            0.0,
+        )
 
     angle_x = dp_range_rad[:, None]
     angle_y = dp_range_rad[None, :]
     kt = np.sqrt(angle_x**2 + angle_y**2)
 
-    mask = (kt > 0) & (kt < theta_c_rad)
-    dphi = np.where(kt > 0, np.minimum(dtheta / kt, 2 * np.pi), 0.0)
-    P_theta = 2 * kt * dtheta / (kt**2 + theta_E_rad**2) / log_norm
-    P_phi = dphi / (2 * np.pi)
-    P = np.where(mask, P_theta * P_phi, 0.0)
+    P = density(kt**2) * dp_step_rad**2
+
+    inner = np.nonzero(kt < inner_pixels * dp_step_rad)
+    offsets = ((np.arange(supersampling) + 0.5) / supersampling - 0.5) * dp_step_rad
+    sub_x = dp_range_rad[inner[0]][:, None, None] + offsets[None, :, None]
+    sub_y = dp_range_rad[inner[1]][:, None, None] + offsets[None, None, :]
+    P[inner] = density(sub_x**2 + sub_y**2).mean(axis=(1, 2)) * dp_step_rad**2
 
     phi = np.arctan2(angle_y, angle_x)
     phi = np.where(phi < 0, phi + 2 * np.pi, phi)
@@ -772,7 +804,8 @@ def draw_mixed_scattering_events(
     config_depths : list of tuple
         Scattering depths within the specimen for each accepted configuration.
     config_radials : list of tuple
-        Polar scattering angles [rad] for each event.
+        Polar scattering angles [mrad] for each event, the unit of every event
+        producer.
     config_azimuths : list of tuple
         Azimuthal scattering angles [rad] for each event.
     """
@@ -1251,7 +1284,7 @@ def calculate_quadrature_plasmon_intensities(
         emit,
         nodes=nodes,
         max_events=max_events,
-        num_depths=plasmons.num_depths,
+        num_depths=plasmons.depth_nodes(thickness),
         _precomputed=_precomputed,
     )
     return asnumpy(intensities)
@@ -1294,8 +1327,8 @@ def calculate_quadrature_plasmon_diffraction_patterns(
         Defines the aperture, the grid (``extent`` and ``gpts``, matched to the
         multislice potential to compare with) and the energy.
     plasmons : QuadraturePlasmons, optional
-        The quadrature model. ``min_angle`` defaults to one reciprocal pixel as in the
-        multislice, ``lab_frame=False`` keeps every chain in its tilted frame.
+        The quadrature model. ``min_angle`` defaults to 0.5 mrad as in the multislice,
+        ``lab_frame=False`` keeps every chain in its tilted frame.
     max_angle : float or {'cutoff', 'valid', 'full'}
         Cropping of the patterns, as for :class:`~abtem.detectors.PixelatedDetector`.
     _precomputed : tuple, optional
@@ -1309,7 +1342,12 @@ def calculate_quadrature_plasmon_diffraction_patterns(
         weights are in the metadata under ``"plasmon_weights"``).
     """
     from abtem.core.fft import fft2, fft_crop, ifft2
-    from abtem.inelastic.plasmons import _lorentzian_kernels, _loss_order_factors
+    from abtem.inelastic.plasmons import (
+        _DEFAULT_MIN_ANGLE,
+        _lorentzian_kernels,
+        _loss_order_factors,
+        _padded_gpts,
+    )
     from abtem.measurements import DiffractionPatterns
 
     xp = get_array_module(bloch_waves.device)
@@ -1349,6 +1387,28 @@ def calculate_quadrature_plasmon_diffraction_patterns(
             "and make the probe extent a multiple of the projected cell",
             stacklevel=2,
         )
+
+    if plasmons is None:
+        nodes, max_events, num_depths, num_orders = None, 0, 1, 1
+        kernels = None
+    else:
+        min_angle = plasmons.min_angle
+        if min_angle is None:
+            min_angle = _DEFAULT_MIN_ANGLE
+        nodes = _quadrature_nodes(bloch_waves, plasmons, min_angle)
+        max_events = plasmons.max_tilt_events
+        num_depths = plasmons.depth_nodes(float(thickness))
+        num_orders = plasmons.num_orders
+        if plasmons.lab_frame:
+            # the patterns are convolved with the kernels on a grid padded by their
+            # radius, so intensity moved past the edge is dropped, not wrapped
+            conv_gpts = _padded_gpts(gpts, angular_sampling, nodes["theta_c"])
+            kernels = _lorentzian_kernels(conv_gpts, angular_sampling, nodes, xp=xp)
+        else:
+            kernels = None
+    if kernels is None:
+        conv_gpts = gpts
+
     g_pixels = np.round(g_pixels).astype(int)
     signed = [np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts]
     beam_x = signed[0][pixels[:, 0]][:, None] + g_pixels[None, :, 0]
@@ -1357,31 +1417,18 @@ def calculate_quadrature_plasmon_diffraction_patterns(
         np.abs(beam_y) <= (gpts[1] - 1) // 2
     )
     flat = xp.asarray(
-        (np.mod(beam_x, gpts[0]) * gpts[1] + np.mod(beam_y, gpts[1]))[inside]
+        (np.mod(beam_x, conv_gpts[0]) * conv_gpts[1] + np.mod(beam_y, conv_gpts[1]))[
+            inside
+        ]
     )
     inside = xp.asarray(inside)
 
     def rasterize(pattern):
-        """Unshifted diffraction pattern of the beams of every incident direction."""
+        """Unshifted diffraction pattern of the beams of every incident direction, on
+        the (padded) convolution grid."""
         values = (weights[:, None] * pattern)[inside]
-        image = xp.bincount(flat, weights=values, minlength=gpts[0] * gpts[1])
-        return image.reshape(gpts).astype(real_dtype)
-
-    if plasmons is None:
-        nodes, max_events, num_depths, num_orders = None, 0, 1, 1
-        kernels = None
-    else:
-        min_angle = plasmons.min_angle
-        if min_angle is None:
-            min_angle = max(angular_sampling)
-        nodes = _quadrature_nodes(bloch_waves, plasmons, min_angle)
-        max_events = plasmons.max_tilt_events
-        num_depths = plasmons.num_depths
-        num_orders = plasmons.num_orders
-        if plasmons.lab_frame:
-            kernels = _lorentzian_kernels(gpts, angular_sampling, nodes, xp=xp)
-        else:
-            kernels = None
+        image = xp.bincount(flat, weights=values, minlength=conv_gpts[0] * conv_gpts[1])
+        return image.reshape(conv_gpts).astype(real_dtype)
 
     if kernels is None:
         one = xp.ones((), dtype=complex_dtype)
@@ -1428,7 +1475,7 @@ def calculate_quadrature_plasmon_diffraction_patterns(
     patterns = []
     for accumulator in accumulators:
         if accumulator is None:
-            patterns.append(xp.zeros(gpts, dtype=real_dtype))
+            patterns.append(xp.zeros(conv_gpts, dtype=real_dtype))
         else:
             patterns.append(xp.clip(ifft2(accumulator).real, 0, None))
     array = xp.stack(patterns)

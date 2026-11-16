@@ -795,8 +795,8 @@ class QuadraturePlasmons:
     incoherent integral over scattering angle and depth is evaluated by quadrature:
 
     * The angular distribution is split at ``min_angle``. Tilts below ``min_angle``
-      (by default one reciprocal-space pixel) are too small to change the channeling
-      of the electron and are treated exactly as a momentum transfer, i.e. as a
+      (0.5 mrad by default) are taken to be too small to change the channeling of the
+      electron and are treated exactly as a momentum transfer, i.e. as a
       convolution of the diffraction pattern with the Lorentzian core. Larger tilts
       are represented by ``num_angles`` rings of ``num_azimuthal`` tilt nodes, spaced
       uniformly in the cumulative probability of the Lorentzian. Each node carries
@@ -841,12 +841,19 @@ class QuadraturePlasmons:
     num_azimuthal : int, optional
         Number of azimuthal tilt nodes per ring for the first event (default is 8).
     num_depths : int, optional
-        Number of depth nodes for each channeling-changing scattering event
-        (default is 4).
+        Smallest number of depth nodes for each channeling-changing scattering event
+        (default is 4); see ``max_depth_step``.
     min_angle : float, optional
-        Scattering angle [mrad] below which the tilt does not change the channeling
-        of the electron. If not given, one reciprocal-space pixel of the wave function
-        grid is used.
+        Scattering angle [mrad] below which the tilt is taken not to change the
+        channeling of the electron. It should be well below the widths of the rocking
+        curves of the specimen, but the rings are spaced by probability, so a smaller
+        value spends them on angles that change little. If not given, 0.5 mrad is used
+        for the multislice and for the laboratory-frame Bloch-wave patterns, and zero
+        for the Bloch-wave beam intensities, which carry no momentum transfer. For
+        Si [001] at 100 nm and 200 kV (64 px multislice against a 20000-sample Monte
+        Carlo) the single- and double-loss errors were 1.7 and 2.5 percent at 1 mrad,
+        1.0 and 2.3 at 0.5, 1.3 and 3.0 at 0.25 and 1.4 and 4.8 at 0, and 3.1 and 4.2
+        at one pixel of that grid (2.3 mrad), the earlier default.
     max_tilt_events : int, optional
         Maximum number of channeling-changing scattering events per path (default is
         1). Paths with more events treat the additional events as pure momentum
@@ -859,7 +866,10 @@ class QuadraturePlasmons:
         ``max_copies`` for values above 1.
     event_num_angles : int, optional
         Number of radial tilt nodes for the second and later events of a path
-        (default is 2).
+        (default is 3). One ring channels every later deflection at a single
+        representative angle; for the direct beam of Si [001] at 100 nm (Bloch waves,
+        49 beams) this biases double loss by 17 percent, two rings by 8 percent, three
+        by 1.4 percent. The number of azimuthal nodes matters far less.
     event_num_azimuthal : int, optional
         Number of azimuthal tilt nodes for the second and later events of a path
         (default is 4).
@@ -872,6 +882,16 @@ class QuadraturePlasmons:
     event_max_angular_step : float, optional
         As ``max_angular_step``, for the second and later events of a path. Defaults to
         ``max_angular_step``.
+    max_depth_step : float, optional
+        Largest spacing of the depth nodes [Å] (default is 250). A specimen thicker than
+        ``num_depths * max_depth_step`` gets ``ceil(thickness / max_depth_step)`` depth
+        nodes, see :meth:`depth_nodes`. The depth integrand varies on the scale of the
+        extinction distances, not of the specimen, so a fixed number of nodes fails as
+        the specimen thickens: for Si [001] at 200 kV (Bloch waves, 49 beams) a spacing
+        of 250 Å keeps single and double loss within about 1 percent from 50 to 200 nm,
+        while 4 nodes in 200 nm (500 Å) are 6 and 12 percent off. The copies of a path
+        with ``m`` channeling-changing events grow as the ``m``-th power of the number
+        of depth nodes. None uses ``num_depths`` at every thickness.
     max_copies : int, optional
         Maximum number of tilted copies of the wave function held in memory at once.
         If exceeded, the first-event nodes are split into subsets that are propagated
@@ -895,10 +915,11 @@ class QuadraturePlasmons:
         num_depths: int = 4,
         min_angle: float = None,
         max_tilt_events: int = 1,
-        event_num_angles: int = 2,
+        event_num_angles: int = 3,
         event_num_azimuthal: int = 4,
         max_angular_step: float = None,
         event_max_angular_step: float = None,
+        max_depth_step: float = 250.0,
         max_copies: int = None,
         lab_frame: bool = True,
     ):
@@ -924,6 +945,9 @@ class QuadraturePlasmons:
         self._event_max_angular_step = (
             None if event_max_angular_step is None else float(event_max_angular_step)
         )
+        if max_depth_step is not None and max_depth_step <= 0:
+            raise ValueError("`max_depth_step` must be positive")
+        self._max_depth_step = None if max_depth_step is None else float(max_depth_step)
         self._max_copies = None if max_copies is None else int(max_copies)
         self._lab_frame = bool(lab_frame)
 
@@ -984,6 +1008,17 @@ class QuadraturePlasmons:
         return self._event_max_angular_step
 
     @property
+    def max_depth_step(self) -> Union[float, None]:
+        return self._max_depth_step
+
+    def depth_nodes(self, thickness: float = None) -> int:
+        """Number of depth nodes for a specimen of the given thickness [Å]:
+        ``num_depths``, or more if ``max_depth_step`` requires it."""
+        if thickness is None or self._max_depth_step is None:
+            return self._num_depths
+        return max(self._num_depths, int(np.ceil(thickness / self._max_depth_step)))
+
+    @property
     def max_copies(self) -> Union[int, None]:
         return self._max_copies
 
@@ -1013,6 +1048,7 @@ class QuadraturePlasmons:
             "event_num_azimuthal": self._event_num_azimuthal,
             "max_angular_step": self._max_angular_step,
             "event_max_angular_step": self._event_max_angular_step,
+            "max_depth_step": self._max_depth_step,
             "max_copies": self._max_copies,
             "lab_frame": self._lab_frame,
         }
@@ -1042,17 +1078,20 @@ class QuadraturePlasmons:
     def order_labels(self) -> Tuple[str, ...]:
         return tuple(ntuples[n] for n in range(self.num_orders))
 
-    def num_copies(self) -> int:
-        """Number of tilted copies of the wave function for a single pass."""
+    def num_copies(self, thickness: float = None) -> int:
+        """Number of tilted copies of the wave function for a single pass through a
+        specimen of the given thickness [Å] (``num_depths`` depth nodes if not
+        given)."""
         n_single = self._num_angles * self._num_azimuthal
         n_extra = self._event_num_angles * self._event_num_azimuthal
-        return n_single * self._copies_per_first_node(n_extra)
+        return n_single * self._copies_per_first_node(n_extra, thickness)
 
-    def _copies_per_first_node(self, n_extra: int) -> int:
+    def _copies_per_first_node(self, n_extra: int, thickness: float = None) -> int:
         from math import comb
 
+        num_depths = self.depth_nodes(thickness)
         return sum(
-            comb(self._num_depths + m - 1, m) * n_extra ** (m - 1)
+            comb(num_depths + m - 1, m) * n_extra ** (m - 1)
             for m in range(1, self._max_tilt_events + 1)
         )
 
@@ -1163,6 +1202,43 @@ class QuadraturePlasmons:
         )
 
 
+# Default tilt [mrad] below which a plasmon excitation is treated as a pure momentum
+# transfer in the laboratory frame; see QuadraturePlasmons.min_angle.
+_DEFAULT_MIN_ANGLE = 0.5
+
+
+def _kernel_radius(angular_sampling, theta_c: float) -> Tuple[int, int]:
+    """Half width [pixels] of the momentum-transfer kernels on a grid of the given
+    angular sampling [mrad]: every node of the quadrature lies within ``theta_c``."""
+    return tuple(int(np.ceil(theta_c / d)) + 1 for d in angular_sampling)
+
+
+def _padded_gpts(gpts, angular_sampling, theta_c: float) -> Tuple[int, int]:
+    """Grid on which the convolution with the momentum-transfer kernels is linear.
+
+    The grid is padded by the kernel radius on every side, so intensity that a kernel
+    moves past the edge of the original grid lands in the padding, where cropping back
+    to the original grid drops it, instead of wrapping around onto the opposite edge.
+    """
+    radius = _kernel_radius(angular_sampling, theta_c)
+    return tuple(n + 2 * r for n, r in zip(gpts, radius))
+
+
+def _pad_unshifted(array, new_gpts):
+    """Zero-pad the last two axes of an unshifted (zero frequency first)
+    diffraction-space array to `new_gpts`; the inverse of
+    :func:`abtem.core.fft.fft_crop`."""
+    xp = get_array_module(array)
+    if tuple(array.shape[-2:]) == tuple(new_gpts):
+        return array
+    pad = [(0, 0)] * (array.ndim - 2) + [
+        ((m - n) // 2, (m - n) - (m - n) // 2)
+        for n, m in zip(array.shape[-2:], new_gpts)
+    ]
+    shifted = xp.fft.fftshift(array, axes=(-2, -1))
+    return xp.fft.ifftshift(xp.pad(shifted, pad), axes=(-2, -1))
+
+
 def _lorentzian_kernels(
     gpts: Tuple[int, int],
     angular_sampling: Tuple[float, float],
@@ -1172,9 +1248,13 @@ def _lorentzian_kernels(
 ):
     """Fourier transforms of the momentum-transfer kernels on the diffraction grid.
 
-    Every kernel is the (normalized) shape of the Lorentzian scattering distribution
-    restricted to one cell of the angular quadrature, sampled on the unshifted
-    reciprocal-space grid of the wave functions. Returns the Fourier transforms of the
+    Every kernel is the (normalized) distribution of the momentum transfer within one
+    cell of the angular quadrature, binned onto the unshifted reciprocal-space grid of
+    the wave functions: the probability of the Lorentzian is uniform in
+    ``u = ln(1 + theta^2 / theta_E^2)`` and the azimuth, so each cell is sampled on a
+    uniform grid in those variables, ``supersampling`` samples per pixel or more. This
+    is exact for cells smaller than a pixel and resolves the core of width ``theta_E``,
+    which is usually a fraction of a pixel. Returns the Fourier transforms of the
     small-angle kernel, the whole large-angle kernel, the kernels of the first-event
     tilt nodes and the kernels of the later-event nodes.
     """
@@ -1190,45 +1270,43 @@ def _lorentzian_kernels(
             "diffraction grid; the momentum-transfer kernels wrap around it",
             stacklevel=3,
         )
-    ix = np.arange(-radius_x, radius_x + 1)
-    iy = np.arange(-radius_y, radius_y + 1)
-    sub = (np.arange(supersampling) + 0.5) / supersampling - 0.5
-    tx = (ix[:, None] + sub[None]) * dx  # (nx, s)
-    ty = (iy[:, None] + sub[None]) * dy
-    theta_x = tx[:, None, :, None]
-    theta_y = ty[None, :, None, :]
-    theta2 = theta_x**2 + theta_y**2
-    theta = np.sqrt(theta2)
-    phi = np.arctan2(theta_y, theta_x)
-    weight = 1 / (theta2 + theta_e**2)
-    weight[theta >= theta_c] = 0.0
-    u = np.log(1 + theta2 / theta_e**2)
+    theta_of_u = lambda value: theta_e * np.sqrt(np.expm1(value))  # noqa: E731
+    # sample spacing [mrad] in the tilt plane, a fraction of a pixel
+    spacing = min(dx, dy) / supersampling
 
-    def to_kernel(w):
-        kernel = w.sum((-2, -1))
-        total = kernel.sum()
-        if total <= 0:
-            raise RuntimeError("empty momentum-transfer kernel")
-        kernel = kernel / total
+    def to_kernel(u_lo, u_hi, phi_lo, phi_hi):
+        """The distribution of the momentum transfer within one cell of the
+        Lorentzian, ``u`` in ``[u_lo, u_hi)`` and the azimuth in ``[phi_lo, phi_hi)``,
+        binned onto the unshifted grid. With ``u = ln(1 + theta^2 / theta_E^2)`` the
+        probability is uniform in ``(u, phi)``, so a uniform midpoint grid in the
+        cell, mapped to the tilt plane, samples it exactly however small the cell is;
+        the samples are no further apart than ``spacing``."""
         full = np.zeros(gpts, dtype=get_dtype(complex=False))
-        # wrap into the unshifted grid
-        gx = np.mod(ix, gpts[0])
-        gy = np.mod(iy, gpts[1])
-        np.add.at(full, (gx[:, None], gy[None, :]), kernel.astype(full.dtype))
-        return full
+        if u_hi <= u_lo:
+            full[0, 0] = 1.0  # a cell without probability; its weight is zero
+            return full
+        theta_hi = theta_of_u(u_hi)
+        # d theta / d u = (theta^2 + theta_E^2) / (2 theta), largest at theta_hi
+        step_u = (theta_hi**2 + theta_e**2) / (2 * max(theta_hi, theta_e))
+        num_u = max(8, int(np.ceil((u_hi - u_lo) * step_u / spacing)))
+        num_phi = max(8, int(np.ceil((phi_hi - phi_lo) * theta_hi / spacing)))
+        u_values = u_lo + (u_hi - u_lo) * (np.arange(num_u) + 0.5) / num_u
+        phi_values = phi_lo + (phi_hi - phi_lo) * (np.arange(num_phi) + 0.5) / num_phi
+        theta = theta_of_u(u_values)[:, None]
+        gx = np.mod(np.rint(theta * np.cos(phi_values) / dx).astype(int), gpts[0])
+        gy = np.mod(np.rint(theta * np.sin(phi_values) / dy).astype(int), gpts[1])
+        np.add.at(full, (gx.ravel(), gy.ravel()), 1.0)
+        return full / full.sum()
 
-    small = to_kernel(np.where(u < u_min, weight, 0.0))
-    large = to_kernel(np.where(u >= u_min, weight, 0.0))
+    small = to_kernel(0.0, u_min, 0.0, 2 * np.pi)
+    large = to_kernel(u_min, nodes["u_max"], 0.0, 2 * np.pi)
 
     def partition_kernels(part):
+        # the cells of `_angular_nodes`, in the same order as its tilt nodes
         edges = part["u_edges"]
         max_step = part["max_step"]
-        theta_of_u = lambda value: theta_e * np.sqrt(np.expm1(value))  # noqa: E731
         kernels = []
         for a in range(part["num_angles"]):
-            in_ring = (u >= edges[a]) & (u < edges[a + 1])
-            if a == part["num_angles"] - 1:
-                in_ring = (u >= edges[a]) & (theta < theta_c)
             n_az = part["num_azimuthal"]
             if max_step is not None:
                 theta_ring = theta_of_u(0.5 * (edges[a] + edges[a + 1]))
@@ -1236,9 +1314,10 @@ def _lorentzian_kernels(
             offset = 0.5 * (a % 2)
             for b in range(n_az):
                 phi_b = 2 * np.pi * (b + offset) / n_az
-                dphi = np.angle(np.exp(1j * (phi - phi_b)))
-                in_sector = np.abs(dphi) <= np.pi / n_az
-                kernels.append(to_kernel(np.where(in_ring & in_sector, weight, 0.0)))
+                half = np.pi / n_az
+                kernels.append(
+                    to_kernel(edges[a], edges[a + 1], phi_b - half, phi_b + half)
+                )
         return np.stack(kernels)
 
     single = partition_kernels(nodes["single"])
@@ -1282,7 +1361,7 @@ def quadrature_plasmon_multislice_and_detect(
     from abtem.core.complex import complex_exponential
     from abtem.core.diagnostics import TqdmWrapper
     from abtem.core.energy import energy2wavelength
-    from abtem.core.fft import fft2, ifft2
+    from abtem.core.fft import fft2, fft_crop, ifft2
     from abtem.core.grid import spatial_frequencies
     from abtem.detectors import WavesDetector, validate_detectors
     from abtem.multislice import (
@@ -1333,7 +1412,7 @@ def quadrature_plasmon_multislice_and_detect(
 
     min_angle = plasmons.min_angle
     if min_angle is None:
-        min_angle = max(angular_sampling)
+        min_angle = _DEFAULT_MIN_ANGLE
     nodes = plasmons._angular_nodes(
         energy,
         min_angle,
@@ -1342,7 +1421,7 @@ def quadrature_plasmon_multislice_and_detect(
     )
     p_small, p_large = nodes["p_small"], nodes["p_large"]
     max_tilt_events = plasmons.max_tilt_events
-    num_depths = plasmons.num_depths
+    num_depths = plasmons.depth_nodes(potential.thickness)
     single_tilts = nodes["single"]["tilts"]
     extra_tilts = nodes["extra"]["tilts"]
     single_weights = nodes["single"]["weights"]
@@ -1351,15 +1430,19 @@ def quadrature_plasmon_multislice_and_detect(
     n_extra = len(extra_tilts)
 
     if plasmons.lab_frame:
-        kernels = _lorentzian_kernels(gpts, angular_sampling, nodes, xp=xp)
+        # the convolutions with the kernels run on a grid padded by their radius, so
+        # intensity moved past the edge is dropped rather than wrapped
+        conv_gpts = _padded_gpts(gpts, angular_sampling, nodes["theta_c"])
+        kernels = _lorentzian_kernels(conv_gpts, angular_sampling, nodes, xp=xp)
     else:
+        conv_gpts = gpts
         kernels = None
 
     # first-event nodes per pass, from the memory budget
     if max_tilt_events == 0:
         first_node_chunks = [np.arange(0)]
     else:
-        per_first = plasmons._copies_per_first_node(n_extra)
+        per_first = plasmons._copies_per_first_node(n_extra, potential.thickness)
         if plasmons.max_copies is None:
             per_pass = n_single
         else:
@@ -1506,15 +1589,18 @@ def quadrature_plasmon_multislice_and_detect(
                 term = term * kl_pow[m - m_group]
             add(exit_index, n, term)
 
+    def transform_intensity(intensity):
+        return fft2(_pad_unshifted(intensity, conv_gpts).astype(complex_dtype))
+
     def accumulate_elastic(exit_index, elastic):
         i0 = abs2(fft2(elastic.array, overwrite_x=False))
-        contribute(exit_index, fft2(i0.astype(complex_dtype)), 0, 1.0)
+        contribute(exit_index, transform_intensity(i0), 0, 1.0)
 
     def accumulate_groups(exit_index, groups):
         for group in groups:
             arr = group["waves"].array
             intensity = abs2(fft2(arr, overwrite_x=False))
-            f = fft2(intensity.astype(complex_dtype))
+            f = transform_intensity(intensity)
             if kernels is not None:
                 f = f * member_kernels(group["index"])[member_slice]
             m = group["m"]
@@ -1534,7 +1620,8 @@ def quadrature_plasmon_multislice_and_detect(
             if acc[n] is None:
                 patterns.append(xp.zeros(ens + gpts, dtype=get_dtype(complex=False)))
             else:
-                patterns.append(xp.clip(ifft2(acc[n]).real, 0, None))
+                pattern = fft_crop(ifft2(acc[n]).real, gpts)
+                patterns.append(xp.clip(pattern, 0, None))
         intensity = xp.stack(patterns)
         # A wave function whose diffraction pattern is the accumulated intensity.
         carrier = ifft2(xp.sqrt(intensity).astype(complex_dtype))

@@ -3800,9 +3800,7 @@ class CrystalPotential(_PotentialBuilder):
                     "integration which provides it automatically."
                 )
             _fp = getattr(self.potential_unit, "frozen_phonons", None)
-            if isinstance(_fp, FrozenPhonons) and "z" in getattr(
-                _fp, "directions", ""
-            ):
+            if isinstance(_fp, FrozenPhonons) and "z" in getattr(_fp, "directions", ""):
                 warnings.warn(
                     "mixing='phase_scramble' coherently combines the pool "
                     "configurations within every slice. z-displacements "
@@ -3828,9 +3826,7 @@ class CrystalPotential(_PotentialBuilder):
             for ci in range(n_configs):
                 for j in range(_pool_array.shape[1]):
                     pot_slice = _tiled_slice(ci, j)
-                    tf_cache[(ci, j)] = complex_exponential(
-                        _sigma * pot_slice.array[0]
-                    )
+                    tf_cache[(ci, j)] = complex_exponential(_sigma * pot_slice.array[0])
 
             def _phase_scrambled_slice(global_idx: int, j: int) -> TransmissionFunction:
                 # Phase scrambling algorithm (Mendis 2023, eq. 7c):

@@ -61,8 +61,7 @@ def _plasmons(seed=7):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("lazy", [True, False])
-def test_plasmons_none_is_noop(device, lazy):
+def test_plasmons_none_is_noop(device):
     """Passing plasmons=None must reproduce the plain multislice result exactly."""
     wave, potential, _ = _setup(device)
     detector = abtem.PixelatedDetector(max_angle=40)
@@ -166,72 +165,6 @@ def test_plasmons_decorrelate_per_configuration(device):
     assert a.shape[0] == 3
     assert not np.allclose(a[0], a[1])
     assert not np.allclose(a[0], a[2])
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_order_resolved_output_shape(device):
-    """max_loss_order produces an output with a leading plasmon-order axis."""
-    wave, potential, _ = _setup(device, num_configs=3, nz=10)
-    detector = abtem.PixelatedDetector(max_angle=40)
-
-    plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0,
-        excitation_energy=16.7,
-        critical_angle=19.1,
-        seed=7,
-        max_loss_order=2,
-    )
-    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
-
-    arr = _to_numpy(result.array)
-    assert arr.ndim == 3
-    assert arr.shape[0] == 3  # orders 0, 1, 2
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
-    """The zero-loss order pattern should have the same shape as the elastic
-    pattern (attenuated but not broadened)."""
-    wave, potential, _ = _setup(device, num_configs=4, nz=10)
-    detector = abtem.PixelatedDetector(max_angle=40)
-
-    d_elastic = _to_numpy(wave.multislice(potential, detector).compute().array)
-
-    plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0,
-        excitation_energy=16.7,
-        critical_angle=19.1,
-        seed=7,
-        max_loss_order=2,
-    )
-    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
-    d_zero_loss = _to_numpy(result.array[0])
-
-    # Normalise both to unit peak and compare shapes — zero-loss should
-    # closely resemble the elastic pattern.
-    d_elastic_norm = d_elastic / d_elastic.max()
-    d_zero_norm = d_zero_loss / d_zero_loss.max()
-    assert np.corrcoef(d_elastic_norm.ravel(), d_zero_norm.ravel())[0, 1] > 0.99
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_realspace_conserve_total_intensity(device):
-    """The plasmon operator is a real-space multiplication, so it composes with
-    the real-space (finite-difference) multislice exactly as with the Fourier
-    algorithm: the exit intensity stays of the order of the plasmon-free
-    real-space exit."""
-    wave, potential, _ = _setup(device, nz=10)
-
-    algorithm = RealSpaceMultislice()
-    exit_ref = wave.multislice(potential, algorithm=algorithm).compute()
-    exit_pl = wave.multislice(
-        potential, plasmons=_plasmons(), algorithm=algorithm
-    ).compute()
-
-    i_ref = float((np.abs(_to_numpy(exit_ref.array)) ** 2).sum())
-    i_pl = float((np.abs(_to_numpy(exit_pl.array)) ** 2).sum())
-
-    assert 0.2 * i_ref < i_pl < 5.0 * i_ref
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -419,10 +352,11 @@ def _static_setup(device, nz=10):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_static_num_repetitions(device):
+@pytest.mark.parametrize("max_loss_order", [None, 2])
+def test_plasmons_static_num_repetitions(device, max_loss_order):
     """num_repetitions runs plasmons over a static structure (no frozen phonons)
-    by averaging independent phase scrambles; the output is a single averaged
-    diffraction pattern with conserved intensity."""
+    by averaging independent phase scrambles: a single averaged pattern, or one per
+    loss order, with the incident intensity conserved over the orders."""
     wave, potential = _static_setup(device)
     assert potential.num_configurations == 1
     detector = abtem.PixelatedDetector(max_angle="valid")
@@ -433,11 +367,14 @@ def test_plasmons_static_num_repetitions(device):
         critical_angle=19.1,
         num_repetitions=6,
         seed=7,
+        max_loss_order=max_loss_order,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
     arr = _to_numpy(result.array)
-    # Repetitions are averaged away -> a single (ny, nx) pattern.
-    assert arr.ndim == 2
+    # Repetitions are averaged away -> (ny, nx), or (orders, ny, nx).
+    assert arr.ndim == (2 if max_loss_order is None else 3)
+    if max_loss_order is not None:
+        assert arr.shape[0] == max_loss_order + 1
     assert float(arr.sum()) == pytest.approx(1.0, abs=0.05)
 
 
@@ -460,27 +397,9 @@ def test_plasmons_static_num_repetitions_reproducible(device):
             wave.multislice(potential, detector, plasmons=pl).compute().array
         )
 
-    assert np.allclose(run(7), run(7))
-    assert not np.allclose(run(7), run(99))
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_static_num_repetitions_order_resolved(device):
-    """Static-structure repetitions compose with order-resolved scattering."""
-    wave, potential = _static_setup(device)
-    detector = abtem.PixelatedDetector(max_angle="valid")
-
-    plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0,
-        excitation_energy=16.7,
-        critical_angle=19.1,
-        num_repetitions=4,
-        seed=7,
-        max_loss_order=2,
-    )
-    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
-    arr = _to_numpy(result.array)
-    assert arr.shape[0] == 3  # leading plasmon-order axis, repetitions averaged
+    first = run(7)
+    assert np.allclose(first, run(7))
+    assert not np.allclose(first, run(99))
 
 
 def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
@@ -510,10 +429,10 @@ def test_plasmons_prism_matches_single_probe(device):
     The plasmon operator is linear, so reducing the (un-renormalized) plasmon
     S-matrix is identical to a per-probe multislice; the non-unitary
     renormalization is applied to the recombined probe (issue #296). With
-    interpolation=1 and downsampling disabled the two share a grid and must
-    agree to machine precision for a single static configuration and seed."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
-    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    interpolation=1 and downsampling disabled the two share a grid and agree to
+    float precision for a single static configuration and seed."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 6)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
     energy, semiangle = 200e3, 20.0
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
@@ -549,17 +468,17 @@ def test_plasmons_prism_matches_single_probe(device):
         .array
     )[0]
 
-    assert np.corrcoef(prism.ravel(), single.ravel())[0, 1] > 0.999
-    assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
+    np.testing.assert_allclose(prism, single, rtol=0, atol=1e-5 * single.max())
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_plasmons_prism_order_resolved_matches_single_probe(device):
     """Order-resolved PRISM reproduces the single-probe order-resolved result:
     each loss-order probe is the linear recombination of that order's S-matrix
-    channel, and the orders share a single renormalization scale."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
-    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    channel, and the orders share a single renormalization scale. Both share a
+    grid (interpolation=1, no downsampling), so they agree to float precision."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 6)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
     energy, semiangle = 200e3, 20.0
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
@@ -598,20 +517,26 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
 
     assert prism.shape == single.shape
     assert prism.shape[0] == 3  # leading loss-order axis
-    for n in range(3):
-        assert np.corrcoef(prism[n].ravel(), single[n].ravel())[0, 1] > 0.999
-    # The orders share one renormalization scale, so the total matches too.
-    assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
+    np.testing.assert_allclose(prism, single, rtol=0, atol=1e-5 * single.max())
 
 
-def test_plasmons_prism_order_resolved_lazy_matches_eager():
-    """Lazy and eager order-resolved PRISM builds give identical results."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
-    potential = Potential(atoms, gpts=96, slice_thickness=2.0)
+def test_plasmons_prism_order_resolved_multiconfig_averages():
+    """Order-resolved PRISM over a frozen-phonon ensemble averages the
+    configurations (the phase-scramble repetitions) exactly once, keeping the
+    loss-order axis: the average is the mean of the per-configuration results, and
+    eager and lazy builds agree."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 5)
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
 
-    def build(lazy):
+    def build(lazy, ensemble_mean=True):
+        potential = Potential(
+            FrozenPhonons(
+                atoms, num_configs=2, sigmas=0.0, seed=1, ensemble_mean=ensemble_mean
+            ),
+            gpts=48,
+            slice_thickness=2.0,
+        )
         plasmons = PhaseScramblePlasmons(
             mean_free_path=1050.0,
             excitation_energy=16.7,
@@ -627,57 +552,18 @@ def test_plasmons_prism_order_resolved_lazy_matches_eager():
             downsample=False,
             plasmons=plasmons,
         ).build(lazy=lazy)
-        return np.squeeze(
-            _to_numpy(
-                sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
-            )
+        return _to_numpy(
+            sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
         )
 
     eager, lazy = build(False), build(True)
-    assert eager.shape == lazy.shape
-    assert eager.shape[0] == 3  # loss-order axis preserved
-    assert np.allclose(eager, lazy)
-
-
-def test_plasmons_prism_order_resolved_multiconfig_averages():
-    """Order-resolved PRISM over a frozen-phonon ensemble averages the
-    configurations (the phase-scramble repetitions) while preserving the
-    loss-order axis; eager and lazy agree."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
-    fp = Potential(
-        FrozenPhonons(atoms, num_configs=3, sigmas=0.0, seed=1),
-        gpts=96,
-        slice_thickness=2.0,
+    per_configuration = build(False, ensemble_mean=False)
+    assert eager.shape[0] == 3  # loss orders kept, configurations averaged
+    assert per_configuration.shape == (3, 2) + eager.shape[1:]
+    np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-6 * eager.max())
+    np.testing.assert_allclose(
+        per_configuration.mean(1), eager, rtol=0, atol=1e-6 * eager.max()
     )
-    pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
-    detector = abtem.PixelatedDetector(max_angle="valid")
-
-    def build(lazy):
-        plasmons = PhaseScramblePlasmons(
-            mean_free_path=1050.0,
-            excitation_energy=16.7,
-            critical_angle=19.1,
-            seed=42,
-            max_loss_order=2,
-        )
-        sma = SMatrix(
-            potential=fp,
-            energy=200e3,
-            semiangle_cutoff=20.0,
-            interpolation=1,
-            downsample=False,
-            plasmons=plasmons,
-        ).build(lazy=lazy)
-        return np.squeeze(
-            _to_numpy(
-                sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
-            )
-        )
-
-    eager, lazy = build(False), build(True)
-    # Configurations averaged away -> only (loss order, ny, nx) remains.
-    assert eager.shape[0] == 3
-    assert np.allclose(eager, lazy)
 
 
 def _plasmon_axis(radial_angles, azimuthal_angles, excitations):

@@ -91,7 +91,6 @@ from abtem.waves import Probe, Waves
 
 if TYPE_CHECKING:
     from abtem.inelastic.plasmons import MonteCarloPlasmons, QuadraturePlasmons
-    from abtem.waves import Probe
     from abtem.scan import BaseScan
 
 
@@ -2259,7 +2258,10 @@ class BlochWaves:
         for t in thickness_array:
             events = plasmons._draw_events(thickness=float(t), energy=self.energy)
             orders, intensities, weights = calculate_bloch_plasmon_intensities(
-                self, events, float(t), _precomputed=precomputed,
+                self,
+                events,
+                float(t),
+                _precomputed=precomputed,
             )
             per_thickness.append((orders, intensities, weights))
             all_orders_set.update(orders)
@@ -2270,8 +2272,9 @@ class BlochWaves:
         xp = get_array_module(self.device)
         shape = (len(all_orders), len(thickness_array), num_beams)
         combined = xp.zeros(shape, dtype=get_dtype())
-        combined_weights = np.zeros((len(all_orders), len(thickness_array)),
-                                    dtype=get_dtype())
+        combined_weights = np.zeros(
+            (len(all_orders), len(thickness_array)), dtype=get_dtype()
+        )
 
         order_index = {n: i for i, n in enumerate(all_orders)}
         for t_idx, (orders, intensities, weights) in enumerate(per_thickness):
@@ -2293,7 +2296,8 @@ class BlochWaves:
         else:
             ensemble_axes_metadata.append(
                 ThicknessAxis(
-                    label="z", units="Å",
+                    label="z",
+                    units="Å",
                     values=tuple(float(t) for t in thickness_array),
                 )
             )
@@ -2336,7 +2340,8 @@ class BlochWaves:
 
         thickness_array = np.atleast_1d(np.array(thicknesses, dtype=get_dtype()))
         scalar_thickness = np.array(thicknesses).ndim == 0
-        all_orders = list(plasmons._num_excitations)
+        # sorted and unique, as the eager path orders the channels it computes
+        all_orders = sorted(set(plasmons._num_excitations))
         num_beams = len(self.hkl)
 
         if scalar_thickness:
@@ -2364,7 +2369,8 @@ class BlochWaves:
         else:
             ensemble_axes_metadata.append(
                 ThicknessAxis(
-                    label="z", units="Å",
+                    label="z",
+                    units="Å",
                     values=tuple(float(t) for t in thickness_array),
                 )
             )
@@ -2495,6 +2501,7 @@ class BlochWaves:
         -------
         DiffractionPatterns
         """
+        self._require_single_energy("calculate_convergent_beam_patterns")
         from abtem.bloch.inelastic import (
             calculate_quadrature_plasmon_diffraction_patterns,
         )
@@ -2540,6 +2547,7 @@ class BlochWaves:
             metadata (keys ``"plasmon_weights"`` and ``"plasmon_orders"``).
             Call ``.show()`` to visualize.
         """
+        self._require_single_energy("calculate_diffuse_diffraction_pattern")
         from abtem.bloch.inelastic import (
             _prepare_bloch_matrices,
             calculate_bloch_diffuse_pattern,
@@ -2550,7 +2558,11 @@ class BlochWaves:
         events = plasmons._draw_events(thickness=float(thickness), energy=self.energy)
 
         orders, images, weights, actual_extent = calculate_bloch_diffuse_pattern(
-            self, events, float(thickness), gpts=gpts, extent=extent,
+            self,
+            events,
+            float(thickness),
+            gpts=gpts,
+            extent=extent,
             _precomputed=precomputed,
         )
 
@@ -2614,6 +2626,7 @@ class BlochWaves:
         -------
         DiffractionPatterns
         """
+        self._require_single_energy("calculate_diffuse_dp_deterministic")
         from abtem.bloch.inelastic import (
             _phonon_probability_grid,
             _plasmon_probability_grid,
@@ -2634,8 +2647,12 @@ class BlochWaves:
 
             f_func = plasmons._get_scattering_factor_func()
             P, theta, phi, sigma_total = _phonon_probability_grid(
-                dp_range, dp_step_rad, dp_max_rad,
-                f_func, plasmons.debye_waller_factor, self.energy,
+                dp_range,
+                dp_step_rad,
+                dp_max_rad,
+                f_func,
+                plasmons.debye_waller_factor,
+                self.energy,
             )
             mfp = plasmons.mean_free_path(self.energy)
         else:
@@ -2646,13 +2663,20 @@ class BlochWaves:
             dp_max_rad = dp_max / 1000
 
             P, theta, phi = _plasmon_probability_grid(
-                dp_range, dp_step_rad, theta_E_rad, theta_c_rad,
+                dp_range, dp_step_rad, theta_E_rad, theta_c_rad, dp_max_rad
             )
             mfp = plasmons.mean_free_path
 
         dp_total = calculate_deterministic_diffuse_dp(
-            self, thickness, mfp, P, theta, phi,
-            dp_range, dp_step_rad, num_slices=num_slices,
+            self,
+            thickness,
+            mfp,
+            P,
+            theta,
+            phi,
+            dp_range,
+            dp_step_rad,
+            num_slices=num_slices,
             _precomputed=precomputed,
         )
 
@@ -2713,6 +2737,9 @@ class BlochWaves:
             The dynamical diffraction patterns.
         """
         if plasmons is not None:
+            # the plasmon paths run at a single energy; they used to answer silently
+            # for the first one
+            self._require_single_energy("calculate_diffraction_patterns(plasmons=...)")
             from abtem.inelastic.plasmons import QuadraturePlasmons
 
             if isinstance(plasmons, QuadraturePlasmons):
@@ -3591,12 +3618,12 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         plasmons: "MonteCarloPlasmons",
         pbar: Optional[bool] = None,
     ) -> IndexedDiffractionPatterns:
-        """Calculate inelastic diffraction patterns for all orientations in the ensemble.
+        """Calculate inelastic diffraction patterns for every orientation.
 
         For each orientation a ``BlochWaves`` is constructed and
-        ``calculate_diffraction_patterns(plasmons=...)`` is called. The results are mapped
-        into the unified beam set (``get_ensemble_hkl_mask``) and stacked along the
-        orientation axes. The returned array has shape
+        ``calculate_diffraction_patterns(plasmons=...)`` is called. The results are
+        mapped into the unified beam set (``get_ensemble_hkl_mask``) and stacked along
+        the orientation axes. The returned array has shape
         ``(*ensemble_shape, num_orders, [num_thicknesses,] num_beams)``.
         """
         from abtem.inelastic.plasmons import ntuples
@@ -3643,11 +3670,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         xp = get_array_module(self.device)
         if scalar_thickness:
             result_shape = orientation_matrices.shape[:-2] + (
-                len(all_orders), int(hkl_mask.sum()),
+                len(all_orders),
+                int(hkl_mask.sum()),
             )
         else:
             result_shape = orientation_matrices.shape[:-2] + (
-                len(all_orders), len(thickness_array), int(hkl_mask.sum()),
+                len(all_orders),
+                len(thickness_array),
+                int(hkl_mask.sum()),
             )
         array = xp.zeros(result_shape, dtype=get_dtype())
 
@@ -3679,7 +3709,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         if not scalar_thickness:
             ensemble_axes_metadata.append(
                 ThicknessAxis(
-                    label="z", units="Å",
+                    label="z",
+                    units="Å",
                     values=tuple(float(t) for t in thickness_array),
                 )
             )
@@ -3736,7 +3767,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         if plasmons is not None:
             return self._calculate_plasmon_diffraction_ensemble(
-                thicknesses, plasmons, pbar=pbar,
+                thicknesses,
+                plasmons,
+                pbar=pbar,
             )
 
         if pbar is None:

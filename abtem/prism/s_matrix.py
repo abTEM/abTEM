@@ -1319,9 +1319,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             incident_intensity = (
                 xp.abs(xp.asarray(incident.array)).astype(xp.float64) ** 2
             )
-            plasmon_target_norm = float(
-                incident_intensity.sum(axis=(-2, -1)).max()
-            )
+            plasmon_target_norm = float(incident_intensity.sum(axis=(-2, -1)).max())
 
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
 
@@ -1370,9 +1368,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     # the incident-probe intensity with a single scale shared
                     # across loss orders.
                     sum_axes = (0, -2, -1) if plasmon_order_resolved else (-2, -1)
-                    current = (
-                        xp.abs(waves_array).astype(xp.float64) ** 2
-                    ).sum(axis=sum_axes, keepdims=True)
+                    current = (xp.abs(waves_array).astype(xp.float64) ** 2).sum(
+                        axis=sum_axes, keepdims=True
+                    )
                     scale = xp.sqrt(plasmon_target_norm / current).astype(
                         waves_array.dtype
                     )
