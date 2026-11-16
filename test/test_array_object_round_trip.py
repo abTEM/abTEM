@@ -333,6 +333,48 @@ def test_s_matrix_wave_vectors_keep_the_dtype_they_were_written_in(dtype, tmp_pa
     np.testing.assert_array_equal(read.wave_vectors, s_matrix.wave_vectors)
 
 
+def _images_file(tmp_path):
+    images = abtem.Images(
+        np.zeros((2, 4, 3)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="a", values=(1, 2))],
+    )
+    url = str(tmp_path / "images.zarr")
+    images.to_zarr(url)
+    return url
+
+
+def test_a_file_whose_stored_axes_do_not_fit_its_array_is_refused(tmp_path):
+    """An object is rebuilt from the axes the file stores, so a file whose axes do
+    not fit its array raises instead of loading the axes of its constructor
+    kwargs. CPU only: zarr is written and read on the host."""
+    import zarr
+
+    url = _images_file(tmp_path)
+    root = zarr.open(url, mode="r+")
+    metadata = root.attrs["metadata0"]
+    metadata["axes"]["axis_0"]["values"] = {"_type": "tuple", "_value": [7, 8, 9]}
+    root.attrs["metadata0"] = metadata
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        abtem.from_zarr(url)
+
+
+def test_an_error_in_from_array_and_metadata_escapes_from_zarr(tmp_path, monkeypatch):
+    """Only the `NotImplementedError` of a class that cannot rebuild from axes
+    and metadata sends `from_zarr` to its constructor kwargs; any other error
+    escapes. CPU only: zarr is written and read on the host."""
+    url = _images_file(tmp_path)
+
+    def broken(cls, array, axes_metadata, metadata):
+        raise TypeError("broken from_array_and_metadata")
+
+    monkeypatch.setattr(abtem.Images, "from_array_and_metadata", classmethod(broken))
+
+    with pytest.raises(TypeError, match="broken from_array_and_metadata"):
+        abtem.from_zarr(url)
+
+
 @pytest.mark.parametrize("layout", ["canonical", "legacy"])
 def test_s_matrix_file_without_a_wave_vector_dtype_reads_float64(layout, tmp_path):
     """A file with no `wave_vectors_dtype` holds float64 values, which read
