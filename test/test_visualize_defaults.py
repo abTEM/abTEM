@@ -22,7 +22,7 @@ from abtem.core.axes import (
     TiltAxis,
 )
 from abtem.measurements import Images
-from abtem.visualize.widgets import default_ensemble_index
+from abtem.visualize.visualizations import default_ensemble_index
 
 
 def _drawn(measurement):
@@ -120,7 +120,7 @@ def test_slider_lets_an_unrelated_error_through(monkeypatch):
 
 
 def test_a_missing_ipywidgets_is_reported_by_the_import_of_the_widgets(monkeypatch):
-    monkeypatch.delitem(sys.modules, "abtem.visualize.widgets")
+    monkeypatch.delitem(sys.modules, "abtem.visualize.widgets", raising=False)
     monkeypatch.setitem(sys.modules, "ipywidgets", None)
     with pytest.raises(ImportError, match="ipywidgets"):
         importlib.import_module("abtem.visualize.widgets")
