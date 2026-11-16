@@ -289,6 +289,15 @@ Dependencies:
 
 Bugfixes:
 
+- `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
+  more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
+  returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
+  2²⁴ down below the minimum, so LAPACK refused the call with "Illegal value in argument 10 of internal zheevd"
+  (SciPy) or "Eigenvalues did not converge" (NumPy). The complex Hermitian solver on macOS is now `ZHEEVR`, which
+  needs a far smaller workspace and was also faster on an Apple M2: 0.60 against 0.87 s at 1300 beams, 12.5 against
+  22.7 s at 3233, and a rotation series of 11 frames at 1299 beams 7.7 instead of 10.4 s. The diffraction patterns
+  are unchanged to rounding. Real matrices and other platforms are not affected. The eigenvectors of a complex
+  matrix are written to an array of their own, not over the matrix when it may be overwritten
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))

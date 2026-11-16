@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import sys
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
@@ -1148,6 +1149,34 @@ def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
     return array
 
 
+# Apple's Accelerate returns the size of the real workspace of ZHEEVD, 1 + 5n + 2n^2,
+# as a single-precision number: above 2**24 (n = 2896) an odd size is rounded down,
+# below the minimum, and LAPACK refuses the call ("Illegal value in argument 10 of
+# internal zheevd" from SciPy, "Eigenvalues did not converge" from NumPy). That is
+# every even n from there on, and the real solver, with its double-precision
+# workspace, is not affected. The divide-and-conquer solver of the complex
+# Hermitian matrices of a Bloch-wave calculation of about 3000 beams is replaced
+# there by the one of ZHEEVR, whose workspace is 24n, and which was also 1.5-2
+# times faster than ZHEEVD on an Apple M2 (n = 1300: 0.60 against 0.87 s; n = 3233:
+# 12.5 against 22.7 s).
+_COMPLEX_EIGH_NEEDS_EVR = sys.platform == "darwin"
+
+
+def _eigh_evr(a: np.ndarray, overwrite_a: bool) -> tuple[np.ndarray, np.ndarray]:
+    """`_eigh` of a complex host matrix by ZHEEVR, in double precision whatever the
+    precision of `a`, as `numpy.linalg.eigh` solves it, with the results in the
+    precision of `a`."""
+    double = a.dtype == np.complex128
+    w, v = scipy.linalg.eigh(
+        a if double else a.astype(np.complex128),
+        lower=True,
+        overwrite_a=overwrite_a and double and a.flags.f_contiguous,
+        check_finite=False,
+        driver="evr",
+    )
+    return (w, v) if double else (w.astype(a.real.dtype), v.astype(a.dtype))
+
+
 def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """The eigenvalues and eigenvectors of a Hermitian matrix, from its lower triangle.
 
@@ -1162,6 +1191,8 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
     single-precision solver, and the results do not change with this function.
     """
     xp = get_array_module(a)
+    if xp is np and _COMPLEX_EIGH_NEEDS_EVR and np.iscomplexobj(a):
+        return _eigh_evr(a, overwrite_a)
     double = xp is np and a.dtype in (np.float64, np.complex128)
     if overwrite_a and double and a.flags.f_contiguous:
         return scipy.linalg.eigh(
