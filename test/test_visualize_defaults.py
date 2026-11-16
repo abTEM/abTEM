@@ -99,6 +99,11 @@ def test_slider_starts_at_the_coordinate_nearest_a_given_default_value():
     tilts = TiltAxis(values=((0.0, 0.0), (5.0, 5.0)))
     assert slider_from_axes_metadata(names, 3, "index", default_value="c").index == 0
     assert slider_from_axes_metadata(tilts, 2, "index", default_value=5.0).index == 0
+    # a pair is not a value of an index slider, also where it has the axis length
+    pair = NonLinearAxis(label="E", values=(10.0, 20.0), units="eV")
+    assert (
+        slider_from_axes_metadata(pair, 2, "index", default_value=(19, 21)).index == 0
+    )
 
 
 def test_slider_lets_an_unrelated_error_through(monkeypatch):

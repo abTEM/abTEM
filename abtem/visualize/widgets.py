@@ -36,11 +36,13 @@ def _nearest_index(values, value) -> int:
     """The index of the coordinate in `values` nearest to `value`.
 
     Raises a TypeError or ValueError for coordinates that are not numbers, such as
-    names or tilt angle pairs.
+    names or tilt angle pairs, and for a value that is not a single number.
     """
     coordinates = np.asarray(values, dtype=float)
     if coordinates.ndim != 1:
         raise TypeError("the coordinates of the axis are not numbers")
+    if np.ndim(value) != 0:
+        raise TypeError("the value is not a single number")
     return int(np.argmin(np.abs(coordinates - value)))
 
 
