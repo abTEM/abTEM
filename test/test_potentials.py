@@ -36,6 +36,7 @@ from abtem.integrals import (
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.magnetism.gpaw import GPAWMagneticField, GPAWVectorPotential
 from abtem.magnetism.iam import MagneticField
+from abtem.multislice import RealSpaceMultislice
 from abtem.potentials.charge_density import ChargeDensityPotential
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.slicing import _validate_slice_thickness
@@ -419,6 +420,59 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     # magnitude above the single-config (identical-tiles) rounding floor
     assert single_config_floor < 1e-2
     assert inter_tile_std > 100 * single_config_floor
+
+
+def _phase_scramble_crystal(sigmas, repetitions, mixing="phase_scramble"):
+    si = bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    fp = FrozenPhonons(si, num_configs=4, sigmas=sigmas, directions="xy", seed=1)
+    unit = Potential(fp, gpts=(48, 48), slice_thickness=5.43 / 4).build(lazy=False)
+    return CrystalPotential(
+        unit, repetitions=repetitions, mixing=mixing, num_frozen_phonons=1, seeds=(0,)
+    )
+
+
+def test_crystal_potential_phase_scramble_mixing_with_lateral_tiling():
+    """A laterally tiled crystal gives finite phase-scrambled slices: a mixed
+    slice with a zero stride once failed pyfftw's planning on the tiled grid."""
+    crystal = _phase_scramble_crystal(0.078, (2, 2, 4))
+    slices = list(crystal.generate_slices(energy=200e3))
+    assert len(slices) == 16
+    for slic in slices:
+        assert np.all(np.isfinite(slic.array))
+
+
+def test_phase_scramble_mixing_of_identical_configurations_is_elastic():
+    """Mixing identical configurations multiplies every slice by a random
+    constant, which the rescaling removes: the pattern is the elastic one, held
+    at the incident intensity."""
+    wave = abtem.PlaneWave(energy=200e3)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+    mixed = wave.multislice(_phase_scramble_crystal(0.0, (1, 1, 10)), detector)
+    static = wave.multislice(
+        _phase_scramble_crystal(0.0, (1, 1, 10), mixing="random"), detector
+    )
+    mixed, static = mixed.compute().array, static.compute().array
+    mixed, static = mixed / mixed.sum(), static / static.sum()
+    assert np.allclose(mixed, static, atol=1e-5 * static.max())
+
+
+def test_phase_scramble_mixing_keeps_the_incident_intensity():
+    crystal = _phase_scramble_crystal(0.078, (1, 1, 60))
+    wave = abtem.PlaneWave(energy=200e3, extent=crystal.extent, gpts=crystal.gpts)
+    incident = wave.build(lazy=False).array
+    exit_wave = wave.multislice(crystal, lazy=False).array
+    assert np.all(np.isfinite(exit_wave))
+    assert np.isclose(np.sum(np.abs(exit_wave) ** 2), np.sum(np.abs(incident) ** 2))
+
+
+def test_phase_scramble_mixing_is_rejected_where_unsupported():
+    crystal = _phase_scramble_crystal(0.078, (1, 1, 2))
+    with pytest.raises(NotImplementedError, match="scattering matrix"):
+        abtem.SMatrix(potential=crystal, energy=200e3, semiangle_cutoff=10)
+    with pytest.raises(NotImplementedError, match="RealSpaceMultislice"):
+        abtem.PlaneWave(energy=200e3).multislice(
+            crystal, algorithm=RealSpaceMultislice(), lazy=False
+        )
 
 
 @devices

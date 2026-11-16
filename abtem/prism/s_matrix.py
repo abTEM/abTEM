@@ -82,6 +82,7 @@ from abtem.measurements import (
 from abtem.multislice import (
     allocate_measurement,
     allocate_multislice_measurements,
+    _require_no_phase_scramble_mixing,
     multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, validate_potential
@@ -4305,6 +4306,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 raise ValueError("Provide a potential or provide 'extent' and 'gpts'.")
         else:
             potential = validate_potential(potential)
+            # the per-wave rescaling of the mixed slices would break the
+            # coherence between the plane waves of the scattering matrix
+            _require_no_phase_scramble_mixing(potential, "the scattering matrix")
             self.grid.match(potential)
             self._grid = _grid_of_potential(potential)
 
