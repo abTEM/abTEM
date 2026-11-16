@@ -360,6 +360,27 @@ def collect(
     return merge(*configs)
 
 
+def _warn_about_values_in_place_of_sections(
+    config: dict, defaults: list[Mapping] = defaults
+) -> None:
+    """Warn about the sections of the defaults that ``config`` sets to a value.
+
+    Every key under such a section reads its default, without notice from
+    :func:`get`, so the configuration is checked once, where it is loaded.
+    """
+    found = [
+        f"{key!r} to {config[key]!r}"
+        for key, section in merge(*defaults).items()
+        if isinstance(section, dict) and not isinstance(config.get(key, section), dict)
+    ]
+    if found:
+        warnings.warn(
+            f"abTEM config sets {', '.join(found)} where a section of keys is "
+            "expected, so the keys in each take their defaults",
+            stacklevel=3,
+        )
+
+
 def refresh(
     config: dict = config, defaults: list[Mapping] = defaults, **kwargs
 ) -> None:
@@ -395,6 +416,7 @@ def refresh(
     kwargs.setdefault("defaults", defaults)
 
     update(config, collect(**kwargs))
+    _warn_about_values_in_place_of_sections(config, defaults)
 
 
 def get(
@@ -409,27 +431,21 @@ def get(
     If ``override_with`` is not None this value will be passed straight back.
     Useful for getting kwarg defaults from abtek config.
 
-    Use '.' for nested access. A key that is missing returns ``default``; so
-    does a nested key under a value that is not a section, with a warning.
+    Use '.' for nested access
     """
     if override_with is not None:
         return override_with
     keys = key.split(".")
     result = config
-    for i, k in enumerate(keys):
+    for k in keys:
         k = canonical_name(k, result)
         try:
             result = result[k]
-        except (TypeError, IndexError, KeyError) as error:
-            if default is no_default:
+        except (TypeError, IndexError, KeyError):
+            if default is not no_default:
+                return default
+            else:
                 raise
-            if isinstance(error, TypeError):
-                warnings.warn(
-                    f"abTEM config value {'.'.join(keys[:i])!r} is {result!r}, "
-                    f"not a section, so {key!r} takes its default {default!r}",
-                    stacklevel=2,
-                )
-            return default
     return result
 
 

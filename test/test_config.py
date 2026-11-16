@@ -176,28 +176,35 @@ class TestMalformedYaml:
         assert config.get("device", config=fresh_config) == "cpu"
 
 
-class TestNestedKeyThroughAValue:
-    """A nested key whose parent is set to a value instead of a section."""
+class TestValueInPlaceOfASection:
+    """A section of the defaults set to a value, so its keys read their defaults."""
 
-    def test_warns_and_returns_the_default(self, tmp_path, fresh_config):
+    def test_warns_once_where_the_configuration_is_loaded(self, tmp_path, fresh_config):
         write_config(tmp_path, "diagnostics: true")
-        refresh_into(fresh_config, paths=[tmp_path])
-
-        with pytest.warns(UserWarning, match="'diagnostics' is True, not a section"):
-            value = config.get("diagnostics.task_progress", False, config=fresh_config)
-
-        assert value is False
-
-    def test_a_missing_key_returns_the_default_without_warning(self, fresh_config):
-        refresh_into(fresh_config)
+        with pytest.warns(UserWarning, match="'diagnostics' to True where a section"):
+            refresh_into(fresh_config, paths=[tmp_path])
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
+            value = config.get("diagnostics.task_progress", False, config=fresh_config)
+        assert value is False
+
+    def test_an_environment_variable_warns_once(self, fresh_config):
+        with pytest.warns(UserWarning, match="'diagnostics' to 1 where") as record:
+            refresh_into(fresh_config, env={"ABTEM_DIAGNOSTICS": "1"})
+        assert len(record) == 1
+
+    def test_nested_keys_and_missing_keys_do_not_warn(self, fresh_config):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            refresh_into(fresh_config, env={"ABTEM_DIAGNOSTICS__TASK_PROGRESS": "1"})
+            assert config.get("diagnostics.task_progress", config=fresh_config) == 1
             assert config.get("diagnostics.no_such_key", 7, config=fresh_config) == 7
 
-    def test_raises_without_a_default(self, tmp_path, fresh_config):
+    def test_a_read_without_a_default_raises(self, tmp_path, fresh_config):
         write_config(tmp_path, "diagnostics: true")
-        refresh_into(fresh_config, paths=[tmp_path])
+        with pytest.warns(UserWarning, match="'diagnostics'"):
+            refresh_into(fresh_config, paths=[tmp_path])
 
         with pytest.raises(TypeError):
             config.get("diagnostics.task_progress", config=fresh_config)
