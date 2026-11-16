@@ -189,6 +189,15 @@ class ArrayObjectTransform(
         """
         return (array_object.base_shape,)
 
+    def _out_dropped_ensemble_axes(
+        self, array_object: ArrayObjectType
+    ) -> tuple[tuple[int, ...], ...]:
+        """
+        For each output, the positions among this transform's own ensemble axes that
+        it does not have (each one chunk, so a lazy output can drop it).
+        """
+        return tuple(() for _ in self._out_ensemble_shape(array_object))
+
     def _out_ensemble_source(
         self, array_object: ArrayObjectType
     ) -> tuple[tuple[int, ...], ...]:

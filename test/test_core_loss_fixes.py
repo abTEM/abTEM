@@ -2414,6 +2414,9 @@ def _core_loss_scan(lazy, double_channel=False, **kwargs):
     )
 
 
+@pytest.mark.filterwarnings(
+    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning"
+)
 @pytest.mark.parametrize(
     "option, match",
     [
@@ -2487,14 +2490,14 @@ def test_no_elastic_detectors_are_not_refused():
 
 @pytest.mark.parametrize("double_channel", [False, True])
 def test_propagator_expansion_scope_runs_in_the_core_loss_multislice(double_channel):
-    """``RealSpaceMultislice(expansion_scope="propagator")`` is the supported
-    real-space choice."""
+    """``RealSpaceMultislice()``, the split step, is the supported real-space
+    choice."""
     from abtem.multislice import RealSpaceMultislice
 
     default = _core_loss_scan(False, double_channel)
     realspace = _core_loss_scan(
         False, double_channel,
-        algorithm=RealSpaceMultislice(expansion_scope="propagator"),
+        algorithm=RealSpaceMultislice(),
     )
     reference = np.asarray(abtem.core.backend.asnumpy(default.array))
     result = np.asarray(abtem.core.backend.asnumpy(realspace.array))

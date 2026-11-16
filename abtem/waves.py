@@ -151,7 +151,8 @@ def _max_batch_with_exit_planes(
     the chunk size.
 
     A block returns one output per exit plane and detector for each of its waves, all
-    in one chunk. The automatic batch of waves is divided by the output of the
+    in one chunk; with a detector of the reflected wave it also keeps one wave per
+    slice. The automatic batch of waves is divided by the output of the
     block, in units of one wave, when that exceeds one wave; an integer
     ``max_batch`` is returned as it is.
     """
@@ -171,12 +172,24 @@ def _max_batch_with_exit_planes(
         sized = waves_builder.copy()
         sized.energy = float(max(waves_builder.energy.values))
 
+    def output(detector):
+        return (
+            int(np.prod(detector._out_base_shape(sized)[0]))
+            * np.dtype(detector._out_dtype(sized)[0]).itemsize
+        )
+
+    detectors = validate_detectors(detectors, sized, allow_reflected=True)
     output_bytes = sum(
-        int(np.prod(detector._out_base_shape(sized)[0]))
-        * np.dtype(detector._out_dtype(sized)[0]).itemsize
-        for detector in validate_detectors(detectors, sized)
+        potential.num_exit_planes * output(detector)
+        for detector in detectors
+        if not detector.reflected
     )
-    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+    if any(detector.reflected for detector in detectors):
+        # one reflected output, and the wave backscattered at every slice, which the
+        # block keeps until the end of the pass
+        output_bytes += sum(output(d) for d in detectors if d.reflected)
+        output_bytes += potential.num_slices * wave_bytes
+    ratio = -(-output_bytes // wave_bytes)
 
     if ratio <= 1:
         return max_batch
@@ -3265,7 +3278,7 @@ class Probe(WavesBuilder):
             Additional keyword arguments forwarded to the inelastic multislice function
             (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
             a :class:`.FourierMultislice` (default) or a
-            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
+            :class:`.RealSpaceMultislice` taking the split step (its default).
 
         Returns
         -------
