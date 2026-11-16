@@ -5,7 +5,15 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import devices, float64_devices, gpu, lazy_params, to_host_array
+from utils import (
+    devices,
+    float64_devices,
+    gpu,
+    lazy_params,
+    skip_float64_on_single_precision_arrays,
+    skip_float64_without_metal_kernels,
+    to_host_array,
+)
 
 import abtem
 from abtem.core.backend import asnumpy
@@ -1084,13 +1092,13 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_wa
         assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
 
 
-@pytest.mark.float64  # sets double precision in its body; Metal cannot hold it
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
     """Without resampling the detected waves are the waves themselves, so a
     lazy detection must declare their dtype, not the configured precision.
     `gpts=()` declared complex128 for complex64 waves under float64 precision
     (it tested `gpts is not None`) and then computed complex64."""
+    skip_float64_without_metal_kernels(device)
     rng = np.random.default_rng(0)
     array = (rng.standard_normal((2, 8, 8)) + 1j * rng.standard_normal((2, 8, 8)))
     waves = abtem.Waves(
@@ -1346,6 +1354,8 @@ def test_margin_window_keep_the_precision_of_the_waves(device, lazy, precision):
     complex64 waves, whatever the configured precision, and a lazy detection must
     declare the dtype that it computes. Only the resampling to `gpts` works in the
     configured precision, as without a margin."""
+    if precision == "float64":
+        skip_float64_on_single_precision_arrays(device, "widened to complex128")
     waves, _ = _unit_modulus_waves(device, dtype=np.complex64)
     kwargs = dict(margin=0.5, window_func="hann")
     resampled = np.complex64 if precision == "float32" else np.complex128

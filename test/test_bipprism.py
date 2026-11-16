@@ -459,8 +459,13 @@ def test_prism_eels_s1_preserves_configured_precision(
     incoming_dtypes = []
     carrier_dtypes = []
 
+    # float64 on 'mps' is the emulation: host arrays, with the loops on the GPU
+    expected_device = (
+        "cpu" if precision == "float64" and device == gpu.values[0] == "mps" else device
+    )
+
     def record_step(waves, *args, **kwargs):
-        assert waves.device == device
+        assert waves.device == expected_device
         incoming_dtypes.append(waves.array.dtype)
         return step(waves, *args, **kwargs)
 

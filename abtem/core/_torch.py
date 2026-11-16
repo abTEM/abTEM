@@ -274,7 +274,13 @@ def _forward(name: str):
             # single-chunk array keeps the result lazy and on the device.
             return getattr(da.from_array(self, chunks=-1), name)(*args, **kwargs)
 
-        args = tuple(_unwrap(arg) for arg in args)
+        # A host array is moved onto the device, as in `host_array op device_array`
+        # (see __array_ufunc__): torch would otherwise make it a CPU tensor, which
+        # a Metal tensor refuses to meet.
+        args = tuple(
+            _unwrap(asarray(arg) if isinstance(arg, np.ndarray) else arg)
+            for arg in args
+        )
         kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
         return _wrap(getattr(self._tensor, name)(*args, **kwargs))
 
