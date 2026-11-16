@@ -41,34 +41,35 @@ def si_bloch(request):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_excitation_errors_zero_tilt_matches_legacy(device):
-    """beam_direction=None and beam_direction=[0,0,1] must both reproduce the exact
-    legacy formula (no tilt)."""
+@pytest.mark.parametrize("use_wave_eq", ["exact", True, False])
+def test_excitation_errors_beam_frame(use_wave_eq):
+    """Without a tilt every form is the textbook expression, bit for bit; with one,
+    it is the same expression in the frame of the beam: rotating the beam by R
+    gives the excitation errors of the reciprocal lattice rotated by R^T."""
     rng = np.random.default_rng(0)
     g = rng.standard_normal((30, 3))
     energy = 200e3
     wavelength = energy2wavelength(energy)
+    g_perp2 = g[:, 0] ** 2 + g[:, 1] ** 2
 
-    sg_default = excitation_errors(g, energy)
-    sg_z = excitation_errors(g, energy, beam_direction=np.array([0.0, 0.0, 1.0]))
-    legacy = (-2 * g[:, 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
+    if use_wave_eq == "exact":
+        x = wavelength**2 * g_perp2
+        expected = -g[:, 2] - x / (wavelength * (np.sqrt(1.0 - x) + 1.0))
+    elif use_wave_eq:
+        expected = (-2 * g[:, 2] - wavelength * g_perp2) / 2.0
+    else:
+        expected = (-2 * g[:, 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
 
-    np.testing.assert_allclose(sg_default, legacy, atol=0, rtol=0)
-    np.testing.assert_allclose(sg_z, legacy, atol=1e-12)
+    untilted = excitation_errors(g, energy, use_wave_eq)
+    along_z = excitation_errors(g, energy, use_wave_eq, beam_direction=[0, 0, 1])
+    np.testing.assert_array_equal(untilted, expected)
+    np.testing.assert_allclose(along_z, expected, atol=1e-12)
 
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_excitation_errors_tilt_changes_sg(device):
-    """A finite tilt must shift the excitation errors."""
-    rng = np.random.default_rng(1)
-    g = rng.standard_normal((20, 3))
-    energy = 200e3
-    theta = 0.01  # 10 mrad
-    n = np.array([0.0, np.sin(theta), np.cos(theta)])
-    sg_default = excitation_errors(g, energy)
-    sg_tilted = excitation_errors(g, energy, beam_direction=n)
-    assert not np.allclose(sg_default, sg_tilted)
+    R = _deflect(np.eye(3), 0.02, 0.7)  # 20 mrad
+    tilted = excitation_errors(g, energy, use_wave_eq, beam_direction=R[:, 2])
+    rotated = excitation_errors(g @ R, energy, use_wave_eq)
+    np.testing.assert_allclose(tilted, rotated, atol=1e-12)
+    assert np.abs(tilted - untilted).max() > 1e-3
 
 
 # ---------------------------------------------------------------------------

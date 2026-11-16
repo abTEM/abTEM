@@ -17,7 +17,13 @@ import dataclasses
 import numpy as np
 import pytest
 
-from abtem.core.axes import LinearAxis, OrdinalAxis, RealSpaceAxis, ScanAxis
+from abtem.core.axes import (
+    LinearAxis,
+    OrdinalAxis,
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+    ScanAxis,
+)
 from abtem.core.chunks import iterate_chunk_ranges, validate_chunks
 
 
@@ -131,3 +137,23 @@ def test_linear_axis_copy_still_works():
 
     assert copied is not axis
     assert dataclasses.asdict(copied) == dataclasses.asdict(axis)
+
+
+@pytest.mark.parametrize("n", [1, 2, 7, 32, 33])
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_reciprocal_space_axis_coordinates_match_fftfreq(n, fftshift):
+    # An n-point DFT with real-space spacing d has frequencies np.fft.fftfreq(n, d)
+    # in unshifted (zero-first) order, and np.fft.fftshift of that in centred order.
+    # A reciprocal sampling dk means d = 1 / (n * dk). `offset` is the lowest
+    # frequency of the centred grid, fftshift(fftfreq)[0] = -(n // 2) * dk, for
+    # either storage order.
+    sampling = 0.1
+    axis = ReciprocalSpaceAxis(
+        sampling=sampling, offset=-(n // 2) * sampling, fftshift=fftshift
+    )
+
+    expected = np.fft.fftfreq(n, d=1 / (n * sampling))
+    if fftshift:
+        expected = np.fft.fftshift(expected)
+
+    np.testing.assert_allclose(axis.coordinates(n), expected, rtol=0, atol=1e-12)

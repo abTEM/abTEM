@@ -54,7 +54,7 @@ from abtem.core.utils import (
 from abtem.detectors import BaseDetector, FlexibleAnnularDetector
 from abtem.inelastic.core_loss import (
     BaseTransitionPotential,
-    _extract_scattering_sites,
+    _resolve_scattering_sites,
 )
 from abtem.measurements import (
     BaseMeasurements,
@@ -63,7 +63,10 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
 )
 from abtem.multislice import (
+    _DETECTORS_ELASTIC_MESSAGE,
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
@@ -116,12 +119,75 @@ def _ensure_parity_of_gpts(
 
 
 def _antialias_cutoff_gpts(
-    gpts: tuple[int, int], sampling: tuple[float, float]
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    extent: Optional[tuple[float, float]] = None,
 ) -> tuple[int, int]:
+    """The number of points within the antialias cutoff of a grid of the given
+    ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
+    grid of ``gpts`` points at ``sampling``).
+
+    The count takes the parity of the number of points of the grid at ``sampling``
+    that spans ``extent`` when that number is an integer, as it is for downsampled or
+    tiled waves, and the parity of ``gpts`` otherwise."""
     kcut = 2.0 / 3.0 / max(sampling)
-    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    if extent is None:
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+    ratio = extent[0] / sampling[0], extent[1] / sampling[1]
+    parity_gpts = tuple(
+        round(r) if abs(r - round(r)) < 1e-6 else n for r, n in zip(ratio, gpts)
+    )
+    return _ensure_parity_of_gpts(new_gpts, parity_gpts, parity="same")
+
+
+def _max_batch_with_exit_planes(
+    waves_builder: WavesBuilder,
+    potential: BasePotential,
+    detectors: Optional[BaseDetector | list[BaseDetector]],
+    max_batch: int | str,
+) -> int | str:
+    """An automatic ``max_batch`` divided so that a block of detector output fits
+    the chunk size.
+
+    A block returns one output per exit plane and detector for each of its waves, all
+    in one chunk. The automatic batch of waves is divided by the output of the
+    block, in units of one wave, when that exceeds one wave; an integer
+    ``max_batch`` is returned as it is.
+    """
+    if max_batch != "auto":
+        return max_batch
+
+    from abtem.core.chunks import estimate_scan_batch_size
+    from abtem.detectors import validate_detectors
+
+    wave_bytes = (
+        int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
+    )
+
+    # The detectors of a multi-energy ensemble are sized by its highest energy.
+    sized = waves_builder
+    if isinstance(waves_builder.energy, BaseDistribution):
+        sized = waves_builder.copy()
+        sized.energy = float(max(waves_builder.energy.values))
+
+    output_bytes = sum(
+        int(np.prod(detector._out_base_shape(sized)[0]))
+        * np.dtype(detector._out_dtype(sized)[0]).itemsize
+        for detector in validate_detectors(detectors, sized)
+    )
+    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+
+    if ratio <= 1:
+        return max_batch
+
+    return max(
+        1,
+        estimate_scan_batch_size(
+            waves_builder.gpts, waves_builder.dtype, waves_builder.device
+        )
+        // ratio,
+    )
 
 
 def _prebuild_reused_potential(
@@ -151,6 +217,17 @@ def _prebuild_reused_potential(
         potential = potential.build()
 
     return potential
+
+
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if multislice_func_kwargs.get("detectors_elastic"):
+        raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -183,7 +260,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
-        """List of AxisMetadata for the base axes in real space."""
+        """AxisMetadata of the real-space grid the waves are defined on, also when
+        `reciprocal_space` is True."""
         self.grid.check_is_defined()
         assert self.sampling is not None
         return [
@@ -214,18 +292,49 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         ]
 
     @property
+    def _antialias_sampling(self) -> tuple[float, float]:
+        """The sampling of the grid whose antialias aperture band-limits the waves:
+        their own, or that of the grid they were resampled from."""
+        return self.metadata.get("antialias_sampling", self._valid_sampling)
+
+    @property
+    def _coarsest_sampling(self) -> tuple[float, float]:
+        """The sampling of the coarsest grid the waves were resampled onto, at which
+        their content ends: their own, if they were not resampled."""
+        return self.metadata.get("coarsest_sampling", self._valid_sampling)
+
+    def _resampling_metadata(self, gpts: tuple[int, int]) -> dict:
+        """The metadata of these waves resampled to ``gpts`` points over their
+        extent that keeps the band limit of the content."""
+        sampling = (self._valid_extent[0] / gpts[0], self._valid_extent[1] / gpts[1])
+        return {
+            "antialias_sampling": self._antialias_sampling,
+            "coarsest_sampling": tuple(
+                max(coarsest, new)
+                for coarsest, new in zip(self._coarsest_sampling, sampling)
+            ),
+        }
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            n = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
+            # waves stored with the pixel count itself
+            cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
+        else:
+            cutoff_gpts = _antialias_cutoff_gpts(
+                self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
-            m = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][1], self._valid_gpts[1]
-            )
-            return n, m
-        return _antialias_cutoff_gpts(self._valid_gpts, self._valid_sampling)
+        # the content ends at the edge of the coarsest grid it was resampled onto
+        content_gpts = [
+            round(length / sampling)
+            for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
+        ]
+        return (
+            min(cutoff_gpts[0], content_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1], self._valid_gpts[1]),
+        )
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
@@ -323,6 +432,69 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         return alpha, phi
 
 
+def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble without its axes flagged ``_squeeze`` (the position axis of a
+    bare scan position)."""
+    return ensemble.squeeze(
+        tuple(
+            i
+            for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
+            if axes_metadata._squeeze
+        )
+    )
+
+
+def _average_frozen_phonon_waves(waves: Waves) -> Waves:
+    """The configuration-averaged wave function <ψ> of waves from a ``WavesDetector``
+    with ``average_frozen_phonons``: the last ``FrozenPhononsAxis`` is averaged,
+    coherently and over that axis alone, and every other ensemble axis is kept."""
+    axes = waves.ensemble_axes_metadata
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(axes)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs a FrozenPhononsAxis in "
+            "the ensemble axes, e.g. from FrozenPhonons as the potential of the "
+            "multislice simulation."
+        )
+    if not axes[fp_axis_idx]._ensemble_mean:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs the frozen phonons "
+            "averaged: build them with ensemble_mean=True."
+        )
+
+    num_configurations = waves.shape[fp_axis_idx]
+    # The mean of the array (a dask tree reduction when lazy).
+    averaged = waves._weighted_ensemble_mean(fp_axis_idx)
+
+    metadata = {
+        key: value
+        for key, value in averaged.metadata.items()
+        if key != "frozen_phonon_average"
+    }
+    metadata["num_configurations"] = num_configurations
+    kwargs = averaged._copy_kwargs(exclude=("metadata",))
+    return averaged.__class__(**kwargs, metadata=metadata)
+
+
+def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble with its axes flagged for averaging averaged, without squeezing
+    any axis. Wave functions keep every member of an ensemble, except the frozen
+    phonons of those from a ``WavesDetector`` with ``average_frozen_phonons``."""
+    if isinstance(ensemble, BaseMeasurements):
+        return ensemble.reduce_ensemble()
+    if ensemble.metadata.get("frozen_phonon_average"):
+        return _average_frozen_phonon_waves(ensemble)
+    return ensemble
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -343,7 +515,11 @@ def reduce_ensemble(
     """
     Reduce an ensemble of wave functions or measurements by squeezing or averaging
     ensemble axes tagged for reduction with the "_squeeze" or "_ensemble_mean"
-    attribute of the axis metadata.
+    attribute of the axis metadata. Wave functions are passed through unchanged, except
+    those of a ``WavesDetector`` with ``average_frozen_phonons``, whose frozen-phonon
+    axis is averaged, and the measurements of a ``PixelatedDetector`` with
+    ``components``, which are split into elastic and diffuse intensity after the
+    frozen-phonon average.
 
     Parameters
     ----------
@@ -364,35 +540,39 @@ def reduce_ensemble(
 
         return outputs
 
-    squeeze = tuple(
-        i
-        for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
-        if axes_metadata._squeeze
-    )
-    output = ensemble.squeeze(squeeze)
+    output = _squeeze_flagged_axes(ensemble)
 
-    reduced_output: Waves | BaseMeasurements
-    if isinstance(output, BaseMeasurements):
-        reduced_output = output.reduce_ensemble()
-    else:
-        if any(
-            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
-            for ax in output.ensemble_axes_metadata
-        ):
-            warnings.warn(
-                "ensemble_mean=False returns the full frozen-phonon ensemble as "
-                "individual wave functions. Use detectors to obtain averaged "
-                "measurements."
-            )
-        reduced_output = output
+    if not isinstance(output, BaseMeasurements) and output.metadata.get(
+        "frozen_phonon_average"
+    ):
+        return _average_frozen_phonon_waves(output)
 
-    return reduced_output
+    if not isinstance(output, BaseMeasurements) and any(
+        isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+        for ax in output.ensemble_axes_metadata
+    ):
+        warnings.warn(
+            "ensemble_mean=False returns the full frozen-phonon ensemble as "
+            "individual wave functions. Use detectors to obtain averaged "
+            "measurements."
+        )
+
+    return _average_ensemble_axes(output)
 
 
 class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
         self._in_place = in_place
+        super().__init__()
+
+    @property
+    def space(self) -> str:
+        return self._space
+
+    @property
+    def in_place(self) -> bool:
+        return self._in_place
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -421,6 +601,46 @@ class _WavesNormalization(WavesToWavesTransform):
         return array
 
 
+# The tapers of `Waves.window`, which a thickness series applies at every exit plane.
+# Two at most: a taper of an 8000 x 8000 grid is 256 MB at single precision.
+_window_tapers = None
+
+
+def _window_taper(window, shape, array):
+    """The separable window taper of the grid `shape`, as an array of the type, device
+    and precision of `array`; kept for the next call of the same window, grid, device
+    and precision."""
+    from scipy.signal import windows as scipy_windows
+
+    xp = get_array_module(array)
+    dtype = array.real.dtype
+
+    def build():
+        window_x = scipy_windows.get_window(window, shape[0])
+        window_y = scipy_windows.get_window(window, shape[1])
+        return xp.asarray(window_x[:, None] * window_y[None, :], dtype=dtype)
+
+    try:
+        hash(window)
+    except TypeError:  # nothing to key it by
+        return build()
+
+    if isinstance(array, da.Array):  # no device to key a lazy array by
+        return build()
+
+    from abtem.integrals import _DeviceArrayCache, _device_cache_key
+
+    global _window_tapers
+    if _window_tapers is None:
+        _window_tapers = _DeviceArrayCache(maxsize=2)
+
+    key = (window, tuple(shape), np.dtype(dtype).str, _device_cache_key(array, array))
+    taper = _window_tapers.get(key)
+    if taper is None:
+        taper = _window_tapers.put(key, build())
+    return taper
+
+
 class Waves(BaseWaves, ArrayObject):
     """Waves define a batch of arbitrary 2D wave functions defined by a complex array.
 
@@ -437,7 +657,10 @@ class Waves(BaseWaves, ArrayObject):
         Sampling of wave functions in `x` and `y` [Å].
     reciprocal_space : bool, optional
         If True, the wave functions are assumed to be represented in reciprocal space
-        instead of real space (default is False).
+        instead of real space (default is False). Their exports (`to_data_array`,
+        `to_hyperspy`, `to_quantem`) are those of the corresponding
+        `DiffractionPatterns` [1/Å]: the fftshifted Fourier coefficients on
+        spatial-frequency axes `kx` and `ky`, with the zero frequency at the centre.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -447,6 +670,10 @@ class Waves(BaseWaves, ArrayObject):
     """
 
     _base_dims = 2
+
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
 
     def __init__(
         self,
@@ -467,9 +694,8 @@ class Waves(BaseWaves, ArrayObject):
         if isinstance(energy, (list, tuple, np.ndarray)):
             energy = validate_distribution(energy)
         if isinstance(energy, BaseDistribution):
-            energy_axis = EnergyAxis(
-                values=tuple(float(v) for v in energy.values),
-                _ensemble_mean=energy.ensemble_mean,
+            energy_axis = EnergyAxis.from_distribution(
+                energy, values=tuple(float(v) for v in energy.values)
             )
             ensemble_axes_metadata = [energy_axis] + list(ensemble_axes_metadata)
             energy = None  # energy stored in ensemble axis, not accelerator
@@ -599,8 +825,9 @@ class Waves(BaseWaves, ArrayObject):
             shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
             A dictionary defining wave function metadata. All items will be added to the
-            metadata of measurements derived from the waves. The metadata must contain
-            the electron energy [eV].
+            metadata of measurements derived from the waves. The electron energy [eV]
+            is read from the metadata; without it, or with None, the waves have no
+            scalar energy, as for a probe built with several energies.
 
         Returns
         -------
@@ -610,7 +837,7 @@ class Waves(BaseWaves, ArrayObject):
         if metadata is None:
             raise ValueError("metadata must be provided to create Waves")
 
-        energy = metadata["energy"]
+        energy = metadata.get("energy")
         reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
@@ -628,6 +855,49 @@ class Waves(BaseWaves, ArrayObject):
             ensemble_axes_metadata=axes_metadata[:-2],
             metadata=metadata,
         )
+
+    def _as_diffraction_patterns(self) -> DiffractionPatterns:
+        """The Fourier coefficients of reciprocal-space waves, as unshifted
+        diffraction patterns on spatial-frequency axes [1/Å]. The exports shift
+        them directly: they are unshifted by construction, so the warning of
+        `DiffractionPatterns` about unshifted exports does not apply."""
+        return DiffractionPatterns(
+            self.array,
+            sampling=self.reciprocal_space_sampling,
+            fftshift=False,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=copy(self.metadata),
+        )
+
+    def to_hyperspy(self, transpose: bool = True):
+        """Convert to a Hyperspy signal, see `ArrayObject.to_hyperspy`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns()._fftshifted().to_hyperspy(transpose)
+        return super().to_hyperspy(transpose)
+
+    def to_data_array(self):
+        """Convert to a xarray DataArray, see `ArrayObject.to_data_array`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns()._fftshifted().to_data_array()
+        return super().to_data_array()
+
+    def to_quantem(self):
+        """Convert to a quantem Dataset, see `ArrayObject.to_quantem`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns()._fftshifted().to_quantem()
+        return super().to_quantem()
 
     def convolve(
         self,
@@ -757,9 +1027,141 @@ class Waves(BaseWaves, ArrayObject):
         kwargs["array"] = array
 
         if renormalize:
-            kwargs["array"] /= xp.asarray(np.prod(repetitions))
+            # A Python scalar, not a NumPy one and not a 0-d array: under NEP 50
+            # both of those take part in promotion, so dividing a complex64 wave
+            # by them returns complex128 -- silently doubling the precision and
+            # the memory of the result, against the configured precision. A
+            # Python int leaves the dtype alone. It also keeps the divisor off
+            # the device, which is what let a dask array and a Metal array meet
+            # here as operands neither of them could accept.
+            kwargs["array"] /= int(np.prod(repetitions))
 
         return self.__class__(**kwargs)
+
+    def crop(
+        self,
+        extent: tuple[float, float],
+        offset: tuple[float, float] = (0.0, 0.0),
+        centered: bool = False,
+    ) -> Waves:
+        """Crop the wave functions to a smaller extent in real space.
+
+        Parameters
+        ----------
+        extent : tuple of float
+            Extent of the rectangular cropping region in `x` and `y` [Å].
+        offset : tuple of float, optional
+            Lower corner of the cropping region in `x` and `y` [Å] (default is
+            (0, 0)). Ignored if `centered` is True.
+        centered : bool, optional
+            If True, the cropping region is centered on the wave functions instead
+            of using `offset` (default is False).
+
+        Returns
+        -------
+        cropped_waves : Waves
+            The cropped wave functions.
+        """
+        if self.reciprocal_space:
+            raise NotImplementedError("crop can only be applied in real space")
+
+        if centered and offset != (0.0, 0.0):
+            raise ValueError("offset is not used when centered is True")
+        elif centered:
+            offset = (
+                self.extent[0] / 2 - extent[0] / 2,
+                self.extent[1] / 2 - extent[1] / 2,
+            )
+
+        if extent[0] > self.extent[0] or extent[1] > self.extent[1]:
+            raise ValueError("extent must not be larger than the current extent")
+
+        offset_gpts = (
+            int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * offset[1] / self.extent[1])),
+        )
+        new_shape = (
+            int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * extent[1] / self.extent[1])),
+        )
+
+        if min(new_shape) < 1:
+            raise ValueError(
+                f"extent {tuple(extent)} Å is smaller than one grid point of the waves"
+            )
+        if min(offset_gpts) < 0 or any(
+            o + n > b for o, n, b in zip(offset_gpts, new_shape, self.base_shape)
+        ):
+            raise ValueError(
+                f"the cropping region (offset {tuple(offset)} Å, extent "
+                f"{tuple(extent)} Å) is not within the waves"
+            )
+
+        array = self.array[
+            ...,
+            offset_gpts[0] : offset_gpts[0] + new_shape[0],
+            offset_gpts[1] : offset_gpts[1] + new_shape[1],
+        ]
+
+        kwargs = self._copy_kwargs(exclude=("array", "extent"))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
+
+    def window(
+        self,
+        window: str | tuple = "hann",
+        margin: float | tuple[float, float] = 0.0,
+    ) -> Waves:
+        """Apply a separable real-space window function to the wave functions,
+        optionally after first cropping a margin from each side.
+
+        Windowing tapers the wave functions to (near-)zero at the edges before a
+        Fourier transform, suppressing the truncation-rod streaks a hard-edged,
+        finite (non-periodic) structure would otherwise produce in its diffraction
+        pattern. See :func:`scipy.signal.windows.get_window` for the available
+        window functions.
+
+        Parameters
+        ----------
+        window : str or tuple, optional
+            The window function to apply, as accepted by
+            :func:`scipy.signal.windows.get_window` (default is `'hann'`). Use
+            `None` to disable windowing (only the `margin` crop is applied, if
+            given).
+        margin : float or tuple of float, optional
+            Margin cropped from each side in `x` and `y` [Å] before windowing
+            (default is 0.0, i.e. no cropping). A single float applies the same
+            margin to both axes.
+
+        Returns
+        -------
+        windowed_waves : Waves
+            The windowed (and optionally cropped) wave functions.
+        """
+        if isinstance(margin, (int, float)):
+            margin = (float(margin), float(margin))
+
+        waves = self
+        if margin[0] != 0.0 or margin[1] != 0.0:
+            waves = waves.crop(
+                extent=(
+                    waves.extent[0] - 2 * margin[0],
+                    waves.extent[1] - 2 * margin[1],
+                ),
+                centered=True,
+            )
+
+        if window is None:
+            return waves
+
+        if waves.reciprocal_space:
+            raise NotImplementedError("window can only be applied in real space")
+
+        taper = _window_taper(window, waves.base_shape, waves.array)
+
+        kwargs = waves._copy_kwargs(exclude=("array",))
+        kwargs["array"] = waves.array * taper
+        return waves.__class__(**kwargs)
 
     def ensure_reciprocal_space(self, overwrite_x: bool = False) -> Waves:
         """Transform to reciprocal space if the wave functions are represented in real
@@ -810,6 +1212,16 @@ class Waves(BaseWaves, ArrayObject):
         waves = self.__class__(**d)
         return waves
 
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
+
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
 
@@ -825,12 +1237,16 @@ class Waves(BaseWaves, ArrayObject):
         """
 
         def _phase_shift(array):
-            xp = get_array_module(self.array)
-            return xp.exp(1.0j * amount) * array
+            # np.exp of a Python complex is a NumPy complex128 scalar, which
+            # under NEP 50 promotes complex64 waves to complex128 (and that
+            # dtype is refused outright by the Metal backend). The factor is a
+            # host scalar in the waves' own dtype, which every backend and dask
+            # multiply into the array without changing its dtype.
+            factor = np.exp(1.0j * amount).astype(array.dtype)
+            return factor * array
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = _phase_shift(self.array)
-        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:
@@ -841,15 +1257,17 @@ class Waves(BaseWaves, ArrayObject):
         images : Images
             The wave functions as an image.
         """
-        array = self.array.copy()
-        metadata = copy(self.metadata)
+        waves = self.ensure_real_space()
+        # The inverse FFT of reciprocal-space waves is already a new array.
+        array = waves.array.copy() if waves is self else waves.array
+        metadata = copy(waves.metadata)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
         images = Images(
             array,
-            sampling=self._valid_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            sampling=waves._valid_sampling,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
             metadata=metadata,
         )
 
@@ -931,9 +1349,12 @@ class Waves(BaseWaves, ArrayObject):
         Returns
         -------
         depth_profile : Images
-            2D image(s) with the depth (z) as the first base axis and the
-            remaining spatial axis as the second. Any additional ensemble axes
-            (e.g. scan positions) are preserved.
+            2D image(s) with the remaining spatial axis as the first base axis
+            and the depth (z) as the second, with one z row per exit plane.
+            The z sampling is the exit-plane spacing. Since images have no
+            coordinate offset, z is measured from the first exit plane (the
+            entrance surface, z = 0, for integer ``exit_planes``). Any
+            additional ensemble axes (e.g. scan positions) are preserved.
         """
         thickness_idx = None
         for i, ax in enumerate(self.ensemble_axes_metadata):
@@ -984,10 +1405,26 @@ class Waves(BaseWaves, ArrayObject):
         else:
             array = xp.moveaxis(array, thickness_idx, -1)
 
-        thickness_values = self.ensemble_axes_metadata[thickness_idx].values
-        z_extent = max(thickness_values)
+        thickness_values = np.array(
+            self.ensemble_axes_metadata[thickness_idx].values, dtype=float
+        )
         n_z = len(thickness_values)
-        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+        if n_z > 1:
+            # One row per exit plane: n_z points spanning [t_0, t_{n_z-1}] are
+            # separated by n_z - 1 intervals. For uniformly spaced exit planes
+            # this is exactly their spacing.
+            z_sampling = (thickness_values[-1] - thickness_values[0]) / (n_z - 1)
+            if not np.allclose(np.diff(thickness_values), z_sampling):
+                warnings.warn(
+                    "The exit planes are not uniformly spaced (thicknesses "
+                    f"{np.round(thickness_values, 3).tolist()} Å), but the depth "
+                    "profile has a uniform z-axis with their mean spacing "
+                    f"({z_sampling:.3f} Å); intermediate rows are not drawn at "
+                    "their exact thickness. Use exit_planes that evenly divide "
+                    "the number of slices for an exact z-axis."
+                )
+        else:
+            z_sampling = thickness_values[0] if thickness_values[0] > 0 else 1.0
 
         remaining_metadata = [
             ax for i, ax in enumerate(self.ensemble_axes_metadata) if i != thickness_idx
@@ -1137,13 +1574,22 @@ class Waves(BaseWaves, ArrayObject):
         visualization.set_xlabel(f"{spatial_label} [Å]")
         visualization.set_ylabel("z [Å]")
 
-        z_sampling = profile.sampling[1]
+        # The profile's z-axis starts at 0 with row i centred on
+        # i * sampling; shift it so that row i is centred on the thickness of
+        # exit plane i, which need not start at 0 for explicit exit_planes.
+        z_offset = float(
+            next(
+                ax_meta.values[0]
+                for ax_meta in self.ensemble_axes_metadata
+                if isinstance(ax_meta, ThicknessAxis)
+            )
+        )
         for idx in np.ndindex(visualization.axes.shape):
             artist = visualization.artists[idx]
             xlim = artist.get_xlim()
             ylim = artist.get_ylim()
             artist.set_extent(
-                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+                (xlim[0], xlim[1], ylim[0] + z_offset, ylim[1] + z_offset)
             )
 
         visualization.adjust_coordinate_limits_to_artists()
@@ -1211,48 +1657,55 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        xp = get_array_module(self.array)
+        waves = self.ensure_real_space().no_base_chunks()
+        xp = get_array_module(waves.array)
 
         if gpts is None:
-            gpts = self._gpts_within_angle(max_angle)
+            gpts = waves._gpts_within_angle(max_angle)
 
-        if self.is_lazy:
+        if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
-                self.array,
+                waves.array,
                 new_shape=gpts,
                 normalization=normalization,
-                chunks=self._lazy_array.chunks[:-2] + gpts,
+                chunks=waves._lazy_array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = fft_interpolate(
-                self._eager_array, new_shape=gpts, normalization=normalization
+                waves._eager_array, new_shape=gpts, normalization=normalization
             )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["sampling"] = (
-            self._valid_extent[0] / gpts[0],
-            self._valid_extent[1] / gpts[1],
+            waves._valid_extent[0] / gpts[0],
+            waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            self.antialias_cutoff_gpts
-        )
-        return self.__class__(**kwargs)
+        kwargs["metadata"].update(waves._resampling_metadata(gpts))
+        downsampled = self.__class__(**kwargs)
+        if self.reciprocal_space:
+            return downsampled.ensure_reciprocal_space()
+        return downsampled
 
     @staticmethod
-    def _diffraction_pattern_fft(array, normalize):
+    def _diffraction_pattern_fft(array, normalize, reciprocal_space):
         """Compute the (un-cropped) FFT that all diffraction-pattern flavours
         (full/cutoff/valid crop, real or complex, block-direct or not) are
         derived from. Factored out of ``_diffraction_pattern`` so it can be
         shared (and cached) across several downstream cropping calls that
         differ only in ``new_gpts``/``return_complex``/``fftshift``.
+
+        A reciprocal-space ``array`` already holds these Fourier coefficients:
+        it is only normalized, into a new array as the FFT would return.
         """
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
+        elif reciprocal_space:
+            array = array.copy()
 
-        return fft2(array, overwrite_x=False)
+        return array if reciprocal_space else fft2(array, overwrite_x=False)
 
     @staticmethod
     def _diffraction_pattern_from_fft(fft_array, new_gpts, return_complex, fftshift):
@@ -1277,8 +1730,10 @@ class Waves(BaseWaves, ArrayObject):
         return array
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
-        fft_array = Waves._diffraction_pattern_fft(array, normalize)
+    def _diffraction_pattern(
+        array, new_gpts, return_complex, fftshift, normalize, reciprocal_space
+    ):
+        fft_array = Waves._diffraction_pattern_fft(array, normalize, reciprocal_space)
         return Waves._diffraction_pattern_from_fft(
             fft_array,
             new_gpts=new_gpts,
@@ -1322,7 +1777,9 @@ class Waves(BaseWaves, ArrayObject):
         with share_diffraction_pattern_fft(
             self,
             normalize,
-            lambda: self._diffraction_pattern_fft(self.array, normalize),
+            lambda: self._diffraction_pattern_fft(
+                self.array, normalize, self.reciprocal_space
+            ),
         ):
             yield
 
@@ -1359,8 +1816,10 @@ class Waves(BaseWaves, ArrayObject):
                     [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float,
-            masks up to that scattering angle [mrad].
+            If True, block the direct beam: the bright-field disk and a margin for a
+            probe with a semiangle cutoff, otherwise the zero-frequency pixel (the rule
+            is in ``DiffractionPatterns._apply_block_direct``). If given as a float,
+            masks up to that scattering angle [mrad]. Default is False.
         fftshift : bool, optional
             If False, do not shift the direct beam to the center of the diffraction
             patterns (default is True).
@@ -1381,12 +1840,30 @@ class Waves(BaseWaves, ArrayObject):
         diffraction_patterns : DiffractionPatterns
             The diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-
         if max_angle is None:
             max_angle = "full"
 
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        diffraction_patterns = self._diffraction_patterns(
+            new_gpts,
+            fftshift=fftshift,
+            return_complex=return_complex,
+            renormalize=renormalize,
+        )
+
+        return diffraction_patterns._apply_block_direct(block_direct)
+
+    def _diffraction_patterns(
+        self,
+        new_gpts: tuple[int, int],
+        fftshift: bool = True,
+        return_complex: bool = False,
+        renormalize: bool = True,
+    ) -> DiffractionPatterns:
+        """The diffraction patterns cropped to `new_gpts` pixels around the zero
+        frequency, without blocking the direct beam (see `diffraction_patterns`).
+        """
+        xp = get_array_module(self.array)
 
         metadata = copy(self.metadata)
         metadata["label"] = "intensity"
@@ -1395,16 +1872,26 @@ class Waves(BaseWaves, ArrayObject):
         normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
-            dtype = get_dtype(complex=return_complex)
+            # Declare the precision the blocks return, which follows the waves
+            # as in the eager branch: complex128 waves give float64 patterns
+            # under a float32 configuration. A declared dtype below the blocks'
+            # would make later dask reductions (e.g. sum) accumulate in it.
+            dtype = (
+                self.array.dtype
+                if return_complex
+                else np.finfo(self.array.dtype).dtype
+            )
 
+            array = self.no_base_chunks()._lazy_array
             pattern = da.map_blocks(
                 self._diffraction_pattern,
-                self.array,
+                array,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
-                chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                reciprocal_space=self.reciprocal_space,
+                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
         else:
@@ -1418,7 +1905,9 @@ class Waves(BaseWaves, ArrayObject):
             fft_array = get_shared_diffraction_pattern_fft(
                 self,
                 normalize,
-                lambda: self._diffraction_pattern_fft(self.array, normalize),
+                lambda: self._diffraction_pattern_fft(
+                    self.array, normalize, self.reciprocal_space
+                ),
             )
             pattern = self._diffraction_pattern_from_fft(
                 fft_array,
@@ -1438,16 +1927,20 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
         return diffraction_patterns
 
+    def elastic_diffuse_diffraction_patterns(self, **kwargs):
+        """Elastic, diffuse and total diffraction intensity from frozen-phonon
+        exit waves. See
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns` for full
+        documentation."""
+        from abtem.measurements import elastic_diffuse_diffraction_patterns
+
+        return elastic_diffuse_diffraction_patterns(self, **kwargs)
+
     def phonon_loss_diffraction_patterns(self, **kwargs):
-        """Compute inelastic (TDS) diffraction patterns from energy-resolved
-        frozen-phonon exit waves.  See
+        """Energy-resolved phonon-loss diffraction patterns from frozen-phonon
+        exit waves. See
         :func:`abtem.measurements.phonon_loss_diffraction_patterns` for full
         documentation."""
         from abtem.measurements import phonon_loss_diffraction_patterns
@@ -1463,7 +1956,12 @@ class Waves(BaseWaves, ArrayObject):
         Parameters
         ----------
         ctf : CTF, optional
-            Contrast transfer function to be applied.
+            Contrast transfer function to be applied. For a multi-energy ensemble
+            of wave functions it is evaluated for each energy member at its own
+            wavelength; its energy must then be unset, or a distribution of
+            exactly the ensemble's energies. Only the energy values are matched:
+            the ensemble's own weights decide its ensemble mean, and those of the
+            CTF's distribution are not used.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto'
             (default), the batch size is automatically chosen based on the abtem user
@@ -1478,59 +1976,12 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
-        from abtem.array import stack
-        from abtem.core.axes import EnergyAxis
-
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        # Multi-energy ensemble: a single CTF cannot represent several
-        # wavelengths at once.  Apply the CTF to each energy member at its own
-        # wavelength and restack along the EnergyAxis.
-        energy_axes = [
-            (i, ax)
-            for i, ax in enumerate(self.ensemble_axes_metadata)
-            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-        ]
-        if energy_axes:
-            if ctf.accelerator.energy is not None:
-                raise ValueError(
-                    "Cannot apply a CTF with a fixed energy to a multi-energy "
-                    "ensemble: each energy member requires its own wavelength. "
-                    "Pass a CTF without an energy so the per-member energies are "
-                    "used."
-                )
-            axis_idx, energy_axis = energy_axes[0]
-            members = []
-            for i, energy in enumerate(energy_axis.values):
-                index = tuple(
-                    i if j == axis_idx else slice(None)
-                    for j in range(len(self.ensemble_shape))
-                )
-                member_ctf = ctf.copy()
-                member_ctf.accelerator.energy = float(energy)
-                members.append(self[index].apply_ctf(member_ctf, max_batch=max_batch))
-            waves = stack(members, energy_axis, axis=axis_idx)
-            # The stacked object must remain a genuine multi-energy ensemble:
-            # its scalar accelerator/metadata energy come from member[0] and
-            # would misrepresent the other members.
-            waves.accelerator.energy = None
-            waves._metadata.pop("energy", None)
-            assert isinstance(waves, Waves)
-            return waves
-
-        if not ctf.accelerator.energy:
-            # Single energy: resolve the wavelength from the wave functions
-            # (ordinary waves, or an indexed ensemble member whose per-member
-            # energy lives in metadata) without mutating ``self``.
-            ctf.accelerator.energy = self._valid_energy
-        else:
-            # CTF fixes the energy: verify it does not disagree with a concrete
-            # wave energy, but do not overwrite ``self``.
-            self.accelerator.check_match(ctf.accelerator)
-
-        ctf.accelerator.check_is_defined()
-
+        # The energies are matched and checked in
+        # `BaseTransferFunction._match_ensemble`; a multi-energy ensemble is then
+        # evaluated one energy at a time, each at its own wavelength.
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
@@ -1565,15 +2016,23 @@ class Waves(BaseWaves, ArrayObject):
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
         **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
+        """Run the inelastic multislice algorithm from these wave functions; see
+        :meth:`Probe.transition_potential_scan` for the parameters."""
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
+
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         potential = validate_potential(potential, self)
 
         # Resolve sites from the potential's atoms before it is potentially
         # pre-built into a bare PotentialArray below, which carries no atoms
         # and would otherwise make site extraction fail (abTEM issue #340).
-        sites = _extract_scattering_sites(potential, sites)
+        # With sites=None, a frozen-phonon ensemble gets the sites of each of
+        # its configurations, which the multislice pairs with that
+        # configuration's slices (abTEM issue #581). Resolved once for the
+        # ensemble, every configuration ionised the first one's atoms.
+        sites = _resolve_scattering_sites(potential, sites)
 
         potential = _prebuild_reused_potential(potential, self)
 
@@ -1719,14 +2178,16 @@ class Waves(BaseWaves, ArrayObject):
 
         Parameters
         ----------
-        potential : BasePotential or Atoms
-            The scattering potential.
-        scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire
-            potential at Nyquist sampling.
+        scan : BaseScan or np.ndarray
+            Positions of the probe wave functions.
+        potential : BasePotential or Atoms, optional
+            The scattering potential. If not given, the shifted wave functions are
+            returned without running the multislice algorithm.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`).
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -1784,11 +2245,18 @@ class EnergyEnsemble(EnsembleFromDistributions):
     """
 
     def __init__(self, energy=None):
-        if energy is not None:
-            self._energy = validate_distribution(energy)
-        else:
-            self._energy = None
+        self._energy = self._validate(energy)
         super().__init__(distributions=("energy",))
+
+    @staticmethod
+    def _validate(energy):
+        """A one-value distribution is stored as its float."""
+        if energy is None:
+            return None
+        energy = validate_distribution(energy)
+        if isinstance(energy, BaseDistribution) and len(energy) == 1:
+            return float(energy.values[0])
+        return energy
 
     @property
     def energy(self):
@@ -1803,15 +2271,11 @@ class EnergyEnsemble(EnsembleFromDistributions):
         None
             If no energy has been set.
         """
-        if self._energy is None:
-            return None
-        if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
-            return float(self._energy.values[0])
         return self._energy
 
     @energy.setter
     def energy(self, value):
-        self._energy = validate_distribution(value) if value is not None else None
+        self._energy = self._validate(value)
 
     @property
     def ensemble_axes_metadata(self) -> list:
@@ -1820,9 +2284,8 @@ class EnergyEnsemble(EnsembleFromDistributions):
         e = self.energy
         if isinstance(e, BaseDistribution):
             return [
-                EnergyAxis(
-                    values=tuple(float(v) for v in e.values),
-                    _ensemble_mean=e.ensemble_mean,
+                EnergyAxis.from_distribution(
+                    e, values=tuple(float(v) for v in e.values)
                 )
             ]
         return []
@@ -1975,6 +2438,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         *args,
         partials: dict[str, Callable],
         arg_splits,
+        ndims: int,
         **kwargs,
     ) -> np.ndarray:
         args = unpack_blockwise_args(args)
@@ -1987,7 +2451,14 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         new_probe = cls(
             **kwargs,
         )
-        wrapped_new_probe = _wrap_with_array(new_probe)
+        # Not _wrap_with_array(new_probe) (ndims=None default -> len(new_probe.
+        # ensemble_shape)): a reconstructed sub-ensemble can keep non-trivial
+        # structure even for a single block -- a GridScan position stays a
+        # (1, 1) grid, not a squeezed (), unlike a scalar energy value -- so
+        # new_probe.ensemble_shape does not reliably reflect "one block along
+        # each of the combined ensemble axes this call fills". Use the fixed,
+        # combined axis count instead, matching ensemble_blocks's own out_ind.
+        wrapped_new_probe = _wrap_with_array(new_probe, ndims)
         return wrapped_new_probe
 
     def _from_partitioned_args(self, *args, **kwargs):
@@ -1996,11 +2467,13 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
             for name, ensemble in self._ensembles.items()
         }
 
+        ndims = len(self.ensemble_shape)
         kwargs = self._copy_kwargs(exclude=tuple(self._ensembles.keys()))
         return partial(
             self._from_partitioned_args_func,
             partials=partials,
             arg_splits=self._arg_splits(),
+            ndims=ndims,
             **kwargs,
         )
 
@@ -2074,12 +2547,58 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
             xp = get_array_module(self.device)
 
+            calculate_array = self._calculate_array
+            gpts = self.gpts
+            assert gpts is not None
+
+            def _calculate_array_block(
+                block: np.ndarray, block_info=None
+            ) -> np.ndarray:
+                # _calculate_array's per-block result can omit a size-1
+                # placeholder axis for an ensemble member that is already
+                # fully resolved to a scalar within this block (e.g. one
+                # energy value out of several, each its own chunk) -- it
+                # only has to be aware of the axes it itself iterates over.
+                # da.map_blocks still declares that axis as part of this
+                # block's own *logical* chunk shape (from `blocks.chunks`),
+                # so reshape here rather than require every _calculate_array
+                # override to track it. Read the declared chunk shape from
+                # block_info rather than block.shape: `blocks` is an
+                # object-dtype array whose per-task wrapping (_wrap_with_
+                # array) always produces a raw (1,)*ndims array regardless
+                # of how many logical ensemble values that one task's chunk
+                # actually covers (adjust_chunks in ensemble_blocks can make
+                # those differ, e.g. one unsplit block covering every value
+                # of an axis) -- block.shape would be wrong whenever they do.
+                # reshape on its own only guarantees equal total size, not
+                # equal non-1 dimensions in the same order -- e.g. (2, 3, 2)
+                # reshapes into (3, 2, 2) without error, silently remapping
+                # real data across axes. Only inserting or resizing size-1
+                # axes is actually safe here, so assert that explicitly:
+                # every non-1 dimension of the two shapes must already
+                # match, in order, before reshape is allowed to run.
+                result = calculate_array(block)
+                chunk_shape = tuple(
+                    end - start for start, end in block_info[0]["array-location"]
+                )
+                expected_shape = chunk_shape + gpts
+                if result.shape != expected_shape:
+                    non1_result = tuple(d for d in result.shape if d != 1)
+                    non1_expected = tuple(d for d in expected_shape if d != 1)
+                    assert non1_result == non1_expected, (
+                        f"cannot safely reshape {result.shape} to "
+                        f"{expected_shape}: non-size-1 dimensions differ"
+                    )
+                    result = result.reshape(expected_shape)
+                return result
+
             array = da.map_blocks(
-                self._calculate_array,
+                _calculate_array_block,
                 blocks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
                 new_axis=tuple_range(length=2, offset=len(self.ensemble_shape)),
                 chunks=blocks.chunks + self.gpts,
+                block_info=True,
             )
 
         else:
@@ -2296,7 +2815,8 @@ class PlaneWave(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2321,6 +2841,8 @@ class PlaneWave(WavesBuilder):
 
         self.grid.match(potential)
 
+        max_batch = _max_batch_with_exit_planes(self, potential, detectors, max_batch)
+
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
         from abtem.inelastic.plasmons import MonteCarloPlasmons
@@ -2328,8 +2850,9 @@ class PlaneWave(WavesBuilder):
         if isinstance(multislice_func_kwargs.get("plasmons"), MonteCarloPlasmons):
             return waves.multislice(potential, detectors, **multislice_func_kwargs)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy).
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
 
@@ -2354,8 +2877,9 @@ class Probe(WavesBuilder):
     Parameters
     ----------
     semiangle_cutoff : float, optional
-        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is
-        given.
+        The cutoff semiangle of the aperture [mrad]. A cutoff of 0 gives a parallel
+        beam (a plane wave); scanning it needs an explicit scan `sampling` or `gpts`.
+        Ignored if a custom aperture is given.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -2678,12 +3202,15 @@ class Probe(WavesBuilder):
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
             converted to measurements after running the multislice algorithm. If not
-            given, defaults to the flexible annular detector.
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`). Use :meth:`Probe.scan` for a STEM simulation
+            that defaults to the :class:`FlexibleAnnularDetector`.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2693,12 +3220,16 @@ class Probe(WavesBuilder):
         Returns
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements
+            The detected measurement(s), or the exit wave functions if no detector is
+            given.
         """
         probe = self.copy()
 
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2707,11 +3238,12 @@ class Probe(WavesBuilder):
         if isinstance(multislice_func_kwargs.get("plasmons"), MonteCarloPlasmons):
             return waves.multislice(potential, detectors, **multislice_func_kwargs)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
-        # Do this before _prebuild_reused_potential below, so it sees the true
-        # final chunk count (and therefore how many times the potential will
-        # actually be reused) rather than the pre-rechunk chunking.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy). Do this before
+        # _prebuild_reused_potential below, so it sees the true final chunk
+        # count (and therefore how many times the potential will actually be
+        # reused) rather than the pre-rechunk chunking.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
 
@@ -2764,13 +3296,17 @@ class Probe(WavesBuilder):
         max_batch : int or str, optional
             The number of probe wave functions in each chunk of the Dask array. If
             'auto' (default), the batch size is chosen from the abtem configuration
-            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``), and divided so that the
+            output of a block, one for every exit plane of the potential, fits the
+            chunk size.
         lazy : bool, optional
             If True, build measurements lazily; otherwise compute eagerly. Defaults to
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------
@@ -2784,10 +3320,14 @@ class Probe(WavesBuilder):
         if detectors is None:
             detectors = FlexibleAnnularDetector()
 
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
+
         probe = self.copy()
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2820,13 +3360,17 @@ class Probe(WavesBuilder):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector` or use
+            :meth:`Probe.multislice`.
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -2835,11 +3379,9 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurements
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:

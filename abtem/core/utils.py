@@ -11,6 +11,8 @@ from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.base import is_dask_collection
+from dask.delayed import Delayed
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
@@ -111,44 +113,148 @@ class CopyMixin:
         return copy.deepcopy(self)
 
 
+def _is_same_dask_collection(a, b) -> bool:
+    """Whether two dask collections are the same object, the same dask array by
+    name or the same delayed value by key (a copy keeps both)."""
+    if isinstance(a, Delayed) and isinstance(b, Delayed):
+        return a.key == b.key
+    return a is b or (
+        isinstance(a, da.Array) and isinstance(b, da.Array) and a.name == b.name
+    )
+
+
+class _TooManyIndicesError(RuntimeError):
+    """More indices than the indexable axes of an `ArrayObject`, as NumPy gives
+    when it converts a list of them."""
+
+
+class LazyComparisonError(TypeError):
+    """`==` met lazy (dask) content that only computing it could decide."""
+
+
+def _is_integral(value) -> bool:
+    """Whether `value` is an integer, or a tuple, list or array of integers."""
+    if isinstance(value, (int, np.integer)):
+        return True
+    if isinstance(value, (tuple, list)):
+        return all(_is_integral(item) for item in value)
+    return getattr(getattr(value, "dtype", None), "kind", None) in ("b", "i", "u")
+
+
+def _shape(value) -> tuple[int, ...]:
+    """The `.shape` of `value`, else `np.shape`, which raises on Metal torch arrays."""
+    shape = getattr(value, "shape", None)
+    return np.shape(value) if shape is None else tuple(shape)
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
+    """Whether two objects have the same attributes, except those in `exclude`.
+
+    Numbers, and tuples, lists and arrays of numbers, are equal when their
+    shapes and their values are: integers exactly, any other number to the
+    default tolerance of `np.allclose`. A list equals a tuple of the same values.
+    A list or tuple holding abTEM objects (`EqualityMixin`), at any depth, is
+    decided by `==` on the container alone: it does not equal a tuple of the
+    same objects, and the numbers in it compare exactly.
+
+    A lazy (dask) attribute decides nothing: comparing its values would run its
+    graph, discard the result and let an error from inside the graph escape
+    `==`. It is equal when both sides hold the same dask object or the same dask
+    array by name, and different when the shapes differ. Any attribute that
+    differs makes the objects unequal; otherwise an undecided lazy attribute,
+    here or in a nested object, raises `LazyComparisonError` (a `TypeError`),
+    which asks for `.compute()`.
+    """
     if not isinstance(b, a.__class__):
         return False
 
+    undecided = None
     for key, value in a.__dict__.items():
         # print(key)
         if key in exclude:
             continue
 
+        if key not in b.__dict__:
+            return False
+        other = b.__dict__[key]
+
+        if is_dask_collection(value) or is_dask_collection(other):
+            if _is_same_dask_collection(value, other):
+                continue
+            # A delayed value has no shape: its attributes are delayed too.
+            if not isinstance(value, Delayed) and not isinstance(other, Delayed):
+                if getattr(value, "shape", None) != getattr(other, "shape", None):
+                    return False
+            undecided = undecided or key
+            continue
+
+        if not isinstance(value, EqualityMixin):
+            # Arrays of different shapes differ, decided before the values are
+            # compared: a backend can raise its own error for operands that do not
+            # broadcast, and one that does broadcast would compare equal.
+            shapes = getattr(value, "shape", None), getattr(other, "shape", None)
+            if all(isinstance(s, tuple) for s in shapes) and shapes[0] != shapes[1]:
+                return False
+
         try:
-            equal = value == b.__dict__[key]
-        except (KeyError, TypeError, ValueError):
+            # A held EqualityMixin is compared with its own __eq__, which applies
+            # its `_eq_exclude` and any check a subclass adds (SliceIndexedAtoms'
+            # slice index). Lazy content below, in a held object, list or dict,
+            # is deferred like a lazy attribute; any other error is a difference.
+            # `_TooManyIndicesError`: an ndarray against a list of array
+            # objects, whose `ArrayObject.__getitem__` NumPy calls to convert it.
+            equal = value == other
+        except LazyComparisonError:
+            undecided = undecided or key
+            continue
+        except (KeyError, TypeError, ValueError, _TooManyIndicesError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
 
-        if isinstance(value, EmptyEnsemble) and isinstance(
-            b.__dict__[key], EmptyEnsemble
-        ):
-            return True
+        if isinstance(value, EmptyEnsemble) and isinstance(other, EmptyEnsemble):
+            # `continue`, not `return True`: two EmptyEnsembles make THIS
+            # attribute equal, not the whole object. Returning here skipped
+            # every remaining attribute, so two objects differing in anything
+            # declared after an EmptyEnsemble compared equal. Latent today --
+            # nothing in abtem/ instantiates EmptyEnsemble or its subclass
+            # EmptyTransform -- but demonstrable on any class that holds one.
+            continue
 
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if isinstance(value, EqualityMixin):
-            equal = safe_equality(value, b.__dict__[key])
-
-        else:  # if isinstance(value, (tuple, list, np.ndarray)):
+        if not isinstance(value, EqualityMixin):
+            # A tolerance is for floating-point round-off; integers (seeds,
+            # counts, indices) compare without one. Both comparisons broadcast,
+            # so the shapes must match as well: (5,) is not (5, 5).
+            compare = (
+                np.equal if _is_integral(value) and _is_integral(other) else np.allclose
+            )
             try:
-                equal = np.allclose(value, b.__dict__[key])
-            except (ValueError, TypeError):
-                if isinstance(value, EqualityMixin):
-                    equal = safe_equality(value, b.__dict__[key])
+                equal = np.all(compare(value, other)) and _shape(value) == _shape(other)
+            except (ValueError, TypeError, _TooManyIndicesError):
+                # NumPy cannot convert the values (`_TooManyIndicesError`: a list
+                # holding array objects, which it indexes); `==` gave the verdict.
+                pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
-        if equal is False:
+        # `np.all`, not `equal is False`. The identity test only catches the
+        # `False` singleton, and several producers here return something else:
+        # ase.Atoms.__eq__ returns numpy.bool_, and `np.False_ is False` is
+        # False, so a genuine difference was silently dropped -- two Potentials
+        # whose atoms differ by 1.234 A compared EQUAL. A `==` on arrays that
+        # np.allclose then failed to reduce leaves an array here too.
+        # np.all handles bool, numpy.bool_ and array alike.
+        if not np.all(equal):
             return False
 
+    if undecided is not None:
+        raise LazyComparisonError(
+            f"cannot compare the lazy attribute `{undecided}` of "
+            f"{a.__class__.__name__} without computing it: compare computed "
+            "objects (.compute() for a lazy array object) instead of lazy ones"
+        )
     return True
 
 
@@ -191,8 +297,15 @@ def _get_dims_to_broadcast(
 
 
 class EqualityMixin:
+    #: Attribute names excluded from equality, for lazily-populated derived
+    #: state. Such an attribute is a function of things already compared, so
+    #: it carries no identity of its own -- but it makes an object stop
+    #: comparing equal to an identical one the moment it is populated. Same
+    #: reasoning as _DeviceArrayCache.__eq__ in integrals.py, one level up.
+    _eq_exclude: tuple[str, ...] = ()
+
     def __eq__(self, other):
-        return safe_equality(self, other)
+        return safe_equality(self, other, exclude=self._eq_exclude)
 
     def __ne__(self, other):
         return not self.__eq__(other)

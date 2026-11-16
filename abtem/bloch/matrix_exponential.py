@@ -57,9 +57,14 @@ def expm(a: np.ndarray) -> np.ndarray:
 
     n = a.shape[0]
 
+    # The identity and the Pade coefficients take the input's precision: a
+    # float64 cp.eye or coefficient array would widen a complex64 matrix to
+    # complex128, and the result would no longer follow the 'precision' setting.
+    real_dtype = a.real.dtype
+
     # try reducing the norm
     mu = cp.diag(a).sum() / n
-    A = a - cp.eye(n) * mu
+    A = a - cp.eye(n, dtype=real_dtype) * mu
 
     # scale factor
     nrmA = cp.linalg.norm(A, ord=1).item()
@@ -77,9 +82,9 @@ def expm(a: np.ndarray) -> np.ndarray:
     A4 = A2 @ A2
     A6 = A2 @ A4
 
-    E = cp.eye(A.shape[0])
+    E = cp.eye(A.shape[0], dtype=real_dtype)
 
-    u1, u2, v1, v2 = _expm_inner(E, A, A2, A4, A6, cp.asarray(b))
+    u1, u2, v1, v2 = _expm_inner(E, A, A2, A4, A6, cp.asarray(b, dtype=real_dtype))
     u = A @ (A6 @ u1 + u2)
     v = A6 @ v1 + v2
 
@@ -108,6 +113,6 @@ def _expm_inner(
     u1 = b[13] * A6 + b[11] * A4 + b[9] * A2
     u2 = b[7] * A6 + b[5] * A4 + b[3] * A2 + b[1] * E
 
-    v1 = b[12] * A6 + b[10] * A4 + b[8] * A
+    v1 = b[12] * A6 + b[10] * A4 + b[8] * A2
     v2 = b[6] * A6 + b[4] * A4 + b[2] * A2 + b[0] * E
     return u1, u2, v1, v2

@@ -576,10 +576,12 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
 
     def _calculate_new_array(self, waves: "Waves") -> np.ndarray:
         xp = get_array_module(waves.device)
-        array = waves.array[(None,) * len(self.ensemble_shape)]
+        array = waves._eager_array[(None,) * len(self.ensemble_shape)]
         return xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
 
     def apply(self, waves: "Waves", max_batch: int | str = "auto") -> "Waves":
+        # Through apply_transform, so the tiled events respect the chunk budget
+        # instead of all being held at once.
         return waves.apply_transform(self, max_batch=max_batch)
 
 

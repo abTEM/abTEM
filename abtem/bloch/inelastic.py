@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import warnings
 from collections import Counter
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import numpy as np
 
@@ -26,7 +26,7 @@ from abtem.bloch.dynamical import (
     plane_wave_coefficients,
     set_structure_matrix_diagonal,
 )
-from abtem.bloch.utils import calculate_g_vec
+from abtem.bloch.utils import calculate_g_vec, validate_use_wave_eq
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
@@ -70,7 +70,7 @@ def _chain_one_configuration(
     Mii: np.ndarray,
     hkl: np.ndarray,
     energy: float,
-    use_wave_eq: bool,
+    use_wave_eq: bool | Literal["exact"],
     thickness: float,
     depths: tuple[float, ...],
     radial_angles: tuple[float, ...],
@@ -156,8 +156,14 @@ def _chain_one_configuration(
 
 def _prepare_bloch_matrices(bloch_waves: "BlochWaves"):
     """Build the beam-independent matrices once and return them for reuse across
-    thicknesses."""
-    from abtem.bloch.dynamical import calculate_M_matrix
+    thicknesses.
+
+    ``Mii`` is the symmetrizing metric of the same Bloch-wave equation as the
+    structure matrix (one for the wave-equation forms), in the working precision of
+    the matrix, so that dividing and multiplying by it does not widen a
+    single-precision calculation.
+    """
+    from abtem.bloch.dynamical import _metric
 
     xp = get_array_module(bloch_waves.device)
 
@@ -167,7 +173,9 @@ def _prepare_bloch_matrices(bloch_waves: "BlochWaves"):
 
     A_base = xp.asarray(bloch_waves.calculate_structure_matrix(lazy=False))
     g = xp.asarray(calculate_g_vec(hkl, cell))
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(
+        _metric(hkl, cell, energy, bloch_waves.use_wave_eq), dtype=A_base.real.dtype
+    )
 
     return A_base, g, Mii
 
@@ -183,28 +191,37 @@ def _precompute_untilted_eig(A_base, g, Mii, energy, use_wave_eq, xp):
 
 
 def _batched_excitation_errors(g, beam_dirs, wavelength, use_wave_eq, xp):
-    """Vectorized excitation errors for B beam directions at once.
+    """Vectorized excitation errors for B beam directions at once, the batched form
+    of :func:`abtem.bloch.utils.excitation_errors` with a ``beam_direction``.
 
     Parameters
     ----------
     g : array, shape (N, 3)
     beam_dirs : array, shape (B, 3) — need not be normalized.
     wavelength : float
-    use_wave_eq : bool
+    use_wave_eq : bool or 'exact'
 
     Returns
     -------
     sg : array, shape (B, N)
     """
+    use_wave_eq = validate_use_wave_eq(use_wave_eq)
     norms = xp.linalg.norm(beam_dirs, axis=-1, keepdims=True)
     d = beam_dirs / norms
     gn = xp.einsum("ni,bi->bn", g, d)
-    g2 = xp.sum(g * g, axis=-1)
+    g2 = xp.sum(g * g, axis=-1)[None, :]
+    if use_wave_eq == "exact":
+        x = wavelength**2 * (g2 - gn**2)
+        if x.size and float(x.max()) >= 1.0:
+            raise ValueError(
+                "use_wave_eq='exact' requires wavelength * |g_perp| < 1 for every "
+                "beam and direction; reduce g_max or sg_max"
+            )
+        # k (sqrt(1 - x) - 1) in the cancellation-free form of excitation_errors
+        return -gn - x / (wavelength * (xp.sqrt(1.0 - x) + 1.0))
     if use_wave_eq:
-        sg = -gn - wavelength * (g2[None, :] - gn**2) / 2.0
-    else:
-        sg = -gn - wavelength * g2[None, :] / 2.0
-    return sg
+        return -gn - wavelength * (g2 - gn**2) / 2.0
+    return -gn - wavelength * g2 / 2.0
 
 
 def calculate_bloch_plasmon_intensities(
@@ -915,7 +932,9 @@ def _batched_eig(A_base, g, Mii, beam_dirs, wavelength, use_wave_eq, xp):
     vecs : array, shape (B, N, N)
     """
     sg = _batched_excitation_errors(g, beam_dirs, wavelength, use_wave_eq, xp)
-    diags = (2.0 / wavelength) * sg * Mii[None, :]
+    # M (2 K diag(s_g) + U) M: the diagonal carries M**2, as in
+    # calculate_structure_matrix
+    diags = (2.0 / wavelength) * sg * xp.asarray(Mii, dtype=sg.dtype)[None, :] ** 2
     B, N = diags.shape
     A = xp.broadcast_to(A_base[None], (B, N, N)).copy()
     idx = xp.arange(N)
