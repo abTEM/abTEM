@@ -18,7 +18,6 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
-from abtem.antialias import AntialiasAperture
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
@@ -2765,34 +2764,6 @@ class CrystalPotential(_PotentialBuilder):
         unit that is not a `Potential` (a precomputed `PotentialArray`,
         `GPAWPotential`) cannot be recalculated, and its surface slices are left as
         they are.
-    mixing : str, optional
-        How pool configurations (frozen-phonon pools with more than one
-        member) are combined per slice. ``"random"`` (default) draws one
-        configuration per lateral tile with balanced-budget reuse across the
-        crystal (see below) -- the standard tiled-disorder mechanism for
-        thermal diffuse scattering, correct whenever the pool is large enough
-        that every unit cell in the crystal gets a distinct configuration
-        (``num_configs >= repetitions[0] * repetitions[1] * repetitions[2]``,
-        the recommended sizing for a genuine frozen-phonon average). Do not
-        use ``"random"`` with a *small*, heavily-reused pool as an
-        approximation technique -- the forced reuse pattern creates spurious
-        coherent satellite features near HOLZ rings that have no counterpart
-        in the physical (or Mendis 2023 MSP) result.
-
-        ``"phase_scramble"`` instead combines every pool configuration's
-        transmission function as a coherent sum with independent random
-        phases at each sub-slice (the phase scrambling algorithm, Mendis
-        2023). This is the correct mechanism for approximating TDS from a
-        deliberately small pool (Mendis' MSP / PSA method): it samples all
-        frozen-phonon scattering pathways simultaneously in a single pass
-        instead of drawing one at a time, at the cost of requiring ``energy``
-        to be supplied to :meth:`generate_slices`. Because the combination
-        mixes configurations within every slice, the pool's frozen phonons
-        should use ``directions="xy"`` (or atoms positioned away from slice
-        boundaries): z-displacements that move an atom across a slice
-        boundary in some configurations but not others contaminate the
-        combination with atom-count-violating pathways that strongly
-        suppress Bragg-disk contrast.
     """
 
     # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
@@ -2833,7 +2804,6 @@ class CrystalPotential(_PotentialBuilder):
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
         correct_surfaces: bool | None = None,
-        mixing: str = "random",
         _root_seed: int | tuple[int, ...] | None = None,
     ):
         # _root_seed is given when a crystal is rebuilt, e.g. for a lazy block
@@ -2895,11 +2865,6 @@ class CrystalPotential(_PotentialBuilder):
             periodic=True,
         )
 
-        if mixing not in ("random", "phase_scramble"):
-            raise ValueError(
-                f"mixing must be 'random' or 'phase_scramble', got '{mixing}'"
-            )
-
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
@@ -2925,7 +2890,6 @@ class CrystalPotential(_PotentialBuilder):
                         "correct_surfaces=False to the crystal that corrects them."
                     )
                 unit = unit.potential_unit
-        self._mixing = mixing
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._root_seed = root_seed
         self._shared_pool: Optional[PotentialArray] = None
@@ -2962,10 +2926,6 @@ class CrystalPotential(_PotentialBuilder):
             return 1
         else:
             return len(self._seeds)
-
-    @property
-    def mixing(self) -> str:
-        return self._mixing
 
     @property
     def seeds(self):
@@ -3640,20 +3600,6 @@ class CrystalPotential(_PotentialBuilder):
         # and CuPy kernels from running concurrently.
         return potentials.ensure_computed(scheduler="synchronous", progress_bar=False)
 
-    def _mixing_rng(self) -> np.random.Generator:
-        # The seed of the first member, as the pool uses (see `_built_pool`), or,
-        # without seeds, the crystal's root seed, so every call draws the same.
-        if self.seeds is None:
-            return np.random.default_rng(np.random.SeedSequence(self._root_seed))
-        return np.random.default_rng(int(self.seeds[0]))
-
-    def _draw_scramble_phases(self, n_configs: int) -> np.ndarray:
-        """The random phases [cycles] with which ``mixing="phase_scramble"``
-        combines the pool configurations: ``n_configs - 1`` for every slice of
-        the crystal (the first configuration keeps phase zero). Drawn for the
-        whole crystal at once, so every chunk of it sees the same phases."""
-        return self._mixing_rng().random((len(self._pool_indices()), n_configs - 1))
-
     def _draw_mosaic(self, n_configs: int) -> Optional[np.ndarray]:
         """The pool configuration of every repeated unit of the crystal, drawn
         from a pool of `n_configs` configurations: an index into the pool for
@@ -3671,7 +3617,10 @@ class CrystalPotential(_PotentialBuilder):
         if n_configs <= 1:
             return None
 
-        rng = self._mixing_rng()
+        if self.seeds is None:
+            rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
+        else:
+            rng = np.random.default_rng(int(self.seeds[0]))
 
         tile_xy = self.repetitions[:2]
         n_tiles = tile_xy[0] * tile_xy[1]
@@ -3724,7 +3673,6 @@ class CrystalPotential(_PotentialBuilder):
         first_slice: int = 0,
         last_slice: Optional[int] = None,
         return_depth: bool = False,
-        energy: Optional[float] = None,
     ):
         """
         Generate the slices for the potential.
@@ -3737,16 +3685,11 @@ class CrystalPotential(_PotentialBuilder):
             Index of the last slice of the generated potential.
         return_depth : bool
             If True, return the depth of each generated slice.
-        energy : float, optional
-            Electron energy [eV]. Required when ``mixing="phase_scramble"``
-            because the mixed static potential combines transmission
-            functions (which depend on energy) rather than raw potentials.
 
         Yields
         ------
-        slices : generator of PotentialArray or TransmissionFunction
-            Generator for the array of slices. When ``mixing="phase_scramble"``
-            the yielded objects are :class:`TransmissionFunction` instances.
+        slices : generator of numpy.ndarray
+            Generator for the array of slices.
         """
         potentials = self._built_pool()
 
@@ -3790,79 +3733,6 @@ class CrystalPotential(_PotentialBuilder):
             tiled_cache[key] = slic
             return slic
 
-        use_phase_scramble = self._mixing == "phase_scramble" and n_configs > 1
-
-        if use_phase_scramble:
-            if energy is None:
-                raise ValueError(
-                    "energy is required for mixing='phase_scramble'; pass it "
-                    "via generate_slices(energy=...) or use the multislice "
-                    "integration which provides it automatically."
-                )
-            _fp = getattr(self.potential_unit, "frozen_phonons", None)
-            if isinstance(_fp, FrozenPhonons) and "z" in getattr(_fp, "directions", ""):
-                warnings.warn(
-                    "mixing='phase_scramble' coherently combines the pool "
-                    "configurations within every slice. z-displacements "
-                    "(frozen-phonon directions containing 'z') can move atoms "
-                    "across slice boundaries between configurations -- for "
-                    "atoms located on or near a boundary this contaminates "
-                    "the combination with atom-count-violating scattering "
-                    "pathways (the atom present in neither or both of two "
-                    "adjacent slices), which strongly suppresses Bragg-disk "
-                    "contrast. Use directions='xy' (a z-displacement has no "
-                    "effect on a slice's projected potential anyway), or "
-                    "position all atoms away from slice boundaries."
-                )
-            _sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
-            _antialias = AntialiasAperture()
-
-            # Pre-compute and cache the tiled transmission function of every
-            # configuration of every pool slice (with `correct_surfaces` the pool
-            # also holds the surface slices) once; each slice then combines them
-            # as a coherent sum with random phases (mixed static potential,
-            # Mendis 2023) instead of drawing a single configuration per tile.
-            tf_cache: dict[tuple[int, int], np.ndarray] = {}
-            for ci in range(n_configs):
-                for j in range(_pool_array.shape[1]):
-                    pot_slice = _tiled_slice(ci, j)
-                    tf_cache[(ci, j)] = complex_exponential(_sigma * pot_slice.array[0])
-
-            def _phase_scrambled_slice(global_idx: int, j: int) -> TransmissionFunction:
-                # Phase scrambling algorithm (Mendis 2023, eq. 7c):
-                # Q'_n(R) = sum_j P(j) * exp(i*theta_j) * Q_{n,j}(R), with
-                # P(j) = 1/n_configs for uncorrelated phonon configurations.
-                # The phases are drawn per slice (rather than per z-repetition),
-                # so the combination is not correlated across the slices of a
-                # single z-layer. The 1/n_configs weighting is essential: without
-                # it the combined transmission function is an unweighted sum of
-                # n_configs random-phase unit vectors, whose magnitude averages
-                # sqrt(n_configs) instead of the paper's properly-weighted ~1 -- a
-                # much rougher, stronger random amplitude mask per slice that
-                # washes out Bragg-disk contrast far more than genuine TDS.
-                phases = scramble_phases[global_idx]
-                combined = tf_cache[(0, j)].copy()
-                for ci in range(1, n_configs):
-                    combined += np.exp(2j * np.pi * phases[ci - 1]) * tf_cache[(ci, j)]
-                combined = combined / n_configs
-                # ``reshape`` gives the new leading axis a genuine stride; a
-                # ``combined[None]`` broadcast view (stride 0) once crashed
-                # pyfftw's planning when this grid size was first bandlimited.
-                combined = combined.reshape((1,) + combined.shape)
-                slic = TransmissionFunction(
-                    combined,
-                    slice_thickness=(potentials.slice_thickness[j],),
-                    extent=self.extent,
-                    energy=energy,
-                )
-                # multislice_step() skips antialiasing bandlimiting for inputs
-                # that are already a TransmissionFunction (it assumes that was
-                # done upstream), but this freshly combined array has never been
-                # bandlimited; without it, frequencies above the antialiasing
-                # cutoff alias back on every slice and wash out the low-angle
-                # Bragg-disk contrast.
-                return _antialias.bandlimit(slic, in_place=True)
-
         def _mosaic_slice(config_tiles: np.ndarray, j: int) -> PotentialArray:
             # Assemble pool slice ``j`` of the lateral supercell by placing an
             # *independently drawn* pool configuration at every lateral
@@ -3890,14 +3760,8 @@ class CrystalPotential(_PotentialBuilder):
 
         # The whole mosaic is drawn up front, whatever the requested window, so
         # that different chunks of the same crystal see the same per-layer
-        # configuration draws (see _draw_mosaic). Phase scrambling combines every
-        # pool configuration in every slice instead of drawing a mosaic; its
-        # phases are drawn up front for the same reason.
-        if use_phase_scramble:
-            drawn_tiles = None
-            scramble_phases = self._draw_scramble_phases(n_configs)
-        else:
-            drawn_tiles = self._draw_mosaic(n_configs)
+        # configuration draws (see _draw_mosaic).
+        drawn_tiles = self._draw_mosaic(n_configs)
 
         for i in range(self.repetitions[2]):
             # An independent displaced realisation per unit cell in the x, y
@@ -3920,9 +3784,7 @@ class CrystalPotential(_PotentialBuilder):
                     # The slice of the pool this slice of the crystal is drawn
                     # from: its unit's, or one calculated with a surface.
                     pool_idx = int(pool_indices[global_idx])
-                    if use_phase_scramble:
-                        slic = _phase_scrambled_slice(global_idx, pool_idx)
-                    elif config_tiles is None:
+                    if config_tiles is None:
                         slic = _tiled_slice(0, pool_idx)
                     else:
                         slic = _mosaic_slice(config_tiles, pool_idx)

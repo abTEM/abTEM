@@ -647,23 +647,6 @@ def _plasmon_total_intensity(waves: Waves):
     return xp.sum(arr**2, axis=(-2, -1), keepdims=True)
 
 
-def _renormalize_wave_inplace(waves: Waves) -> None:
-    """Rescale ``waves`` in place to unit total intensity per member.
-
-    Used with phase-scramble mixing where the combined transmission function
-    is unnormalized (|T| > 1), causing per-slice wavefunction growth.
-    Renormalizing per slice prevents overflow in any floating-point precision
-    while preserving the spatial modulation that generates TDS.  The final DP
-    is always normalized, so this is physics-preserving.
-    """
-    xp = get_array_module(waves.device)
-    arr = xp.abs(waves._array).astype(xp.float64)
-    norm_sq = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
-    norm_sq = xp.maximum(norm_sq, xp.finfo(xp.float64).tiny)
-    scale = (1.0 / xp.sqrt(norm_sq)).astype(waves._array.dtype)
-    waves._array = waves._array * scale
-
-
 def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     """Return a copy of ``waves`` rescaled to the given per-member total intensity.
 
@@ -682,32 +665,6 @@ def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     kwargs = waves._copy_kwargs(exclude=("array",))
     kwargs["array"] = waves._array * scale
     return waves.__class__(**kwargs)
-
-
-def _renormalize_order_waves_inplace(order_waves: list) -> None:
-    """Rescale all order-resolved waves in place by a common factor so their
-    combined total intensity is 1 per ensemble member.
-
-    Per-slice counterpart of ``_renormalize_wave_inplace`` for order-resolved
-    plasmon scattering: applies the *same* scale to every loss-order channel,
-    preserving the order-to-order intensity split built up by
-    ``scatter_by_order`` while still preventing the unnormalized
-    phase-scramble transmission function from over/underflowing across many
-    slices.
-    """
-    xp = get_array_module(order_waves[0].device)
-    total = sum(
-        xp.sum(
-            xp.abs(w._array).astype(xp.float64) ** 2,
-            axis=(-2, -1),
-            keepdims=True,
-        )
-        for w in order_waves
-    )
-    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
-    scale = (1.0 / xp.sqrt(total)).astype(order_waves[0]._array.dtype)
-    for w in order_waves:
-        w._array = w._array * scale
 
 
 def _renormalize_order_waves(order_waves: list, target_norm) -> None:
@@ -1166,42 +1123,16 @@ def multislice_and_detect(
         # back-propagation of its backscattered waves.
         forward_slices = []
 
-        _gs_kwargs = {}
-        _phase_scramble = (
-            hasattr(potential_configuration, "mixing")
-            and potential_configuration.mixing == "phase_scramble"
-        )
-        if _phase_scramble:
-            _gs_kwargs["energy"] = waves._valid_energy
-            _psa_incident_norm = _plasmon_total_intensity(waves)
-        else:
-            _psa_incident_norm = None
-
-        # Order-resolved channels are rescaled at detection only when a target norm
-        # is requested: by ``renormalize_plasmons`` or, for the phase-scramble
-        # potential mixing, to undo its per-slice unit normalization.
-        order_target_norm = (
-            plasmon_target_norm
-            if plasmon_target_norm is not None
-            else (_psa_incident_norm if _phase_scramble else None)
-        )
-
-        if _phase_scramble:
-            # The chunked slice generator does not know the coherent
-            # multi-configuration combination of phase-scramble mixing, which
-            # needs the energy, so this mixing streams the slices unchunked.
-            potential_slices = potential_configuration.generate_slices(**_gs_kwargs)
-        else:
-            # One stream of slices across the chunks: the last slice of a chunk
-            # looks ahead to the first slice of the next one, so only the exit
-            # face is stepped without a next slice.
-            potential_slices = (
-                potential_slice
-                for potential_chunk in potential_configuration.generate_chunked_slices(
-                    chunk_size=potential_chunk_size
-                )
-                for potential_slice in potential_chunk.generate_slices()
+        # One stream of slices across the chunks: the last slice of a chunk
+        # looks ahead to the first slice of the next one, so only the exit
+        # face is stepped without a next slice.
+        potential_slices = (
+            potential_slice
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
             )
+            for potential_slice in potential_chunk.generate_slices()
+        )
 
         for potential_slice, next_slice in lookahead(potential_slices):
             if order_resolved:
@@ -1238,19 +1169,12 @@ def multislice_and_detect(
                     else:
                         order_waves[n] = stepped
 
-                if _phase_scramble:
-                    _renormalize_order_waves_inplace(order_waves)
-
             elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
-                if _phase_scramble:
-                    _renormalize_wave_inplace(waves)
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
-                if _phase_scramble:
-                    _renormalize_wave_inplace(waves)
 
             tqdm_pbar.update_if_exists(int(n_waves))
 
@@ -1282,7 +1206,7 @@ def multislice_and_detect(
                         # detector, indexed by loss order and exit plane.
                         _detect_order_resolved(
                             order_waves,
-                            order_target_norm,
+                            plasmon_target_norm,
                             detectors[:-1],
                             measurements[:-1],
                             config_meas_index,
@@ -1297,7 +1221,7 @@ def multislice_and_detect(
                     elif order_resolved:
                         _detect_order_resolved(
                             order_waves,
-                            order_target_norm,
+                            plasmon_target_norm,
                             detectors,
                             measurements,
                             config_meas_index,
@@ -1314,10 +1238,6 @@ def multislice_and_detect(
                         )
                     else:
                         detect_waves = waves
-                        if _phase_scramble and _psa_incident_norm is not None:
-                            detect_waves = _renormalize_total_intensity(
-                                waves, _psa_incident_norm
-                            )
                         if plasmon_operator is not None and renormalize_plasmons:
                             detect_waves = _renormalize_total_intensity(
                                 waves, plasmon_target_norm
@@ -1351,7 +1271,7 @@ def multislice_and_detect(
     # Handle final output if not using intermediate measurements
     if measurements is None:
         if order_resolved:
-            _renormalize_order_waves(order_waves, order_target_norm)
+            _renormalize_order_waves(order_waves, plasmon_target_norm)
             measurements = [
                 _stack_order_detections(
                     order_waves, detector, potential.ensemble_shape, order_axis
@@ -1359,8 +1279,6 @@ def multislice_and_detect(
                 for detector in detectors
             ]
         else:
-            if _phase_scramble and _psa_incident_norm is not None:
-                waves = _renormalize_total_intensity(waves, _psa_incident_norm)
             if plasmon_operator is not None and renormalize_plasmons:
                 waves = _renormalize_total_intensity(waves, plasmon_target_norm)
             with waves._share_diffraction_pattern_fft():
@@ -1604,11 +1522,6 @@ def transition_potential_multislice_and_detect(
 
     waves_input = waves.copy()
 
-    def _gs_kwargs_for(config):
-        if hasattr(config, "mixing") and config.mixing == "phase_scramble":
-            return {"energy": waves_input._valid_energy}
-        return {}
-
     for (
         potential_index,
         potential_configuration,
@@ -1626,8 +1539,6 @@ def transition_potential_multislice_and_detect(
         # full unscattered intensity into the t = 0 bin of a core-loss
         # measurement. Measurements are allocated zeroed, so there is nothing
         # to do.
-
-        _eels_gs = _gs_kwargs_for(potential_configuration)
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
@@ -1664,7 +1575,7 @@ def transition_potential_multislice_and_detect(
                     int, tuple[weakref.ref[PotentialArray], TransmissionFunction]
                 ] = {}
                 slice_cache = []
-                for slice_obj in potential_configuration.generate_slices(**_eels_gs):
+                for slice_obj in potential_configuration.generate_slices():
                     key = id(slice_obj)
                     entry = tx_dedup.get(key)
                     if entry is not None and entry[0]() is slice_obj:
@@ -1677,13 +1588,13 @@ def transition_potential_multislice_and_detect(
                         tx_dedup[key] = (weakref.ref(slice_obj), cached)
                     slice_cache.append(cached)
             else:
-                slice_cache = list(potential_configuration.generate_slices(**_eels_gs))
+                slice_cache = list(potential_configuration.generate_slices())
             n_outer = len(slice_cache)
             outer_iter = enumerate(slice_cache)
         else:
             slice_cache = None
             n_outer = None
-            outer_iter = enumerate(potential_configuration.generate_slices(**_eels_gs))
+            outer_iter = enumerate(potential_configuration.generate_slices())
 
         depth = 0.0
         for scatter_index, potential_slice in outer_iter:
