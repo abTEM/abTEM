@@ -1,19 +1,13 @@
-"""Harness tests import abtem from the checkout they live in, as the CLI does.
-
-Also holds the synthetic-bundle helpers the compare tests share.
-"""
+"""Synthetic-bundle helpers the compare tests share."""
 
 from pathlib import Path
 
 import pytest
 from abtem_bench import compare as cmp
 from abtem_bench import registry, store
-from abtem_bench.cli import use_invoking_checkout
 from abtem_bench.registry import Tier, Tolerance, Variant
 
 CHECKOUT = Path(__file__).resolve().parents[2]
-
-use_invoking_checkout()
 
 CID = "demo.case@quick/cpu"
 #: the sha of a reference bundle built by ``bundle(tmp_path, "ref", ...)``; every

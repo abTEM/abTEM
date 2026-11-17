@@ -1,4 +1,4 @@
-"""The CLI imports abtem from the checkout the harness lives in."""
+"""The command line: compare from the README's command line, exit codes, warnings."""
 
 import json
 import os
@@ -11,7 +11,6 @@ import pytest
 from abtem_bench import cli, runner, store
 
 HARNESS = Path(__file__).resolve().parents[1]
-CHECKOUT = HARNESS.parent
 
 
 def _bundle(path: Path, label: str, array: np.ndarray) -> None:
@@ -35,48 +34,24 @@ def _bundle(path: Path, label: str, array: np.ndarray) -> None:
     )
 
 
-def test_compare_uses_the_harness_checkout_not_the_installed_abtem(tmp_path):
-    # Only the harness directory on PYTHONPATH, and a cwd outside any checkout:
-    # what the README's command line gives. The environment's own abtem (an
-    # editable install of another checkout, or a wheel) must not be the one
-    # whose abtem.core.testing compare uses.
+def test_compare_runs_from_the_readme_command_line_without_importing_abtem(tmp_path):
+    # Only the harness directory on PYTHONPATH and a cwd outside any checkout,
+    # as the README's command line gives.
     a = np.linspace(1.0, 2.0, 16).reshape(4, 4)
     _bundle(tmp_path / "ref", "ref", a)
     _bundle(tmp_path / "cand", "cand", a.copy())
-    env = {**os.environ, "PYTHONPATH": str(HARNESS)}
-    probe = (
-        "import sys; from abtem_bench import cli; root = cli.use_invoking_checkout();"
-        "import abtem, json; print(json.dumps([str(root), abtem.__file__]))"
-    )
-    out = subprocess.run(
-        [sys.executable, "-P", "-c", probe],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    root, abtem_file = json.loads(out.stdout.strip().splitlines()[-1])
-    assert Path(root) == CHECKOUT
-    assert Path(abtem_file).resolve().is_relative_to(CHECKOUT)
-
     # an explicit, empty accepted-changes file: the shipped one is not under test
     accepted = tmp_path / "accepted.toml"
     accepted.write_text("")
+    argv = ["compare", "ref", "cand", "--accepted", str(accepted)]
+    probe = (
+        "import sys; from abtem_bench import cli; rc = cli.main(sys.argv[1:]);"
+        "assert 'abtem' not in sys.modules; sys.exit(rc)"
+    )
     run = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "abtem_bench",
-            "compare",
-            str(tmp_path / "ref"),
-            str(tmp_path / "cand"),
-            "--accepted",
-            str(accepted),
-        ],
+        [sys.executable, "-P", "-c", probe, *argv],
         cwd=tmp_path,
-        env=env,
+        env={**os.environ, "PYTHONPATH": str(HARNESS)},
         capture_output=True,
         text=True,
     )

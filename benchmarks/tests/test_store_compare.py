@@ -296,7 +296,7 @@ def test_case_hash_mismatch_is_refused_unless_allowed(tmp_path, registry_with_de
 
 
 def test_close_stats_vector():
-    from abtem.core.testing import close_stats
+    from abtem_bench.metrics import close_stats
 
     r = np.array([1.0, 1e-9, 2.0])
     c = np.array([1.0 + 1e-12, 5e-9, 2.0])
@@ -309,7 +309,7 @@ def test_close_stats_vector():
 
 
 def test_close_stats_leaves_out_shared_non_finite_values():
-    from abtem.core.testing import close_stats
+    from abtem_bench.metrics import close_stats
 
     r = np.array([1.0, np.nan, 2.0, np.inf])
     shared = close_stats(np.array([1.0 + 1e-12, np.nan, 2.0, np.inf]), r)

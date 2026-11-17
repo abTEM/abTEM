@@ -1,8 +1,7 @@
 """Compare two bundles: results, speed, memory.
 
-Never imports the refs' abtem. It reads the store format and uses
-``abtem.core.testing.close_stats`` from the invoking checkout for the metric
-vector.
+Never imports abtem. It reads the store format and takes the metric vector
+from ``abtem_bench.metrics.close_stats``.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 
 from abtem_bench import prepare, registry, store
+from abtem_bench.metrics import close_stats
 
 IDENTICAL = "IDENTICAL"
 OK = "OK"
@@ -427,8 +427,6 @@ def output_stats(
     ref_meta: dict | None = None,
     cand_meta: dict | None = None,
 ) -> dict[str, Any]:
-    from abtem.core.testing import close_stats
-
     s = close_stats(cand_arr, ref_arr, above_rel=above_rel)
     s["dtype_ok"] = str(cand_arr.dtype) == str(ref_arr.dtype)
     s["shape_ok"] = tuple(cand_arr.shape) == tuple(ref_arr.shape)
