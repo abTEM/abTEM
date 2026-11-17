@@ -789,6 +789,72 @@ Bugfixes:
   per chunk along an axis on which the matrices vary. Each member is now indexed with its own matrix,
   also together with the energies of an energy ensemble. Matrices with more members than the patterns
   along an axis, which also failed before, raise a `ValueError` ([PR #660](https://github.com/abTEM/abTEM/pull/660))
+- `Visualization.set_value_limits` with a new `vmin` and an unchanged `vmax` left the colorbar, and for
+  indexed diffraction patterns the spot radii, on the old limits
+- `==` and `!=` no longer guess that lazy objects are equal ([issue #413](https://github.com/abTEM/abTEM/issues/413)).
+  A dask array never counted as a difference, so lazy `ArrayObject`s compared equal to each other regardless of
+  their array content, lazy zeros equal to lazy ones
+    - **Behaviour change:** comparing objects whose content is lazy on either side raises
+      `abtem.core.utils.LazyComparisonError`, a `TypeError` subclass that asks for computed objects, so user
+      code that did `lazy_a == lazy_b` now raises. It is raised only when no attribute differs: objects that
+      differ in an eager attribute, or whose lazy arrays differ in shape, compare unequal whatever their order of
+      attributes. Eager objects compare as before, and objects that hold the very same dask array (the same
+      object, or an array with the same name, as in a `copy()`) still compare equal. A `GPAWPotential` holds a
+      `.gpw` path as a lazy read keyed by the resolved path, so two potentials read from the same file compare
+      equal without reading it, and two read from different files raise. A relative `.gpw` path is now resolved
+      when the potential is created, so a lazy read uses the working directory of that moment, not of the later
+      computation
+- `compute()` on a `TransitionPotentialArray` read from zarr or built lazily no longer leaves the local
+  potential that site filtering reads (`absolute_threshold`, `filter_sites`, and through them
+  `scatter(threshold=)`, `generate_scattered_waves` and multislice site filtering) lazy. The computed object kept
+  reading its source: `absolute_threshold` ran the graph again on every call, followed a store that was
+  overwritten, and returned `0.0` (site filtering off) once the store was deleted, and `to_cpu()` could return a
+  lazy object
+    - **Behaviour change:** after `tp.array = new`, `absolute_threshold` and the site filtering built on it use the
+      local potential of `new`, where they kept using that of the old array. `local_potential()` itself
+      recomputes from the array and is unchanged
+    - `IndexedDiffractionPatterns` no longer keeps a second reference to its array, which `compute()` left lazy
+- `==` and `!=` on an object that holds another abTEM object use that object's own comparison, where the holder
+  judged it by the generic rule and skipped any check the object's class adds (the slice index of
+  `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
+  `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
+  unequal the other, and is unequal both ways, as the two objects are on their own. An error that the held
+  object's comparison raises (`TypeError`, `ValueError`, `KeyError`) escapes `==` and `!=` when the object is an
+  attribute itself; held in a list, tuple or dict it still makes the holder unequal, and a lazy comparison is
+  still deferred
+- `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
+  in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
+  `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
+    - **Behaviour change:** objects holding a host array and a Metal array of equal content compare equal in both orders. With the
+      host array on the left they compared unequal, because the Metal array layer had no `np.equal`, which it now
+      maps to `torch.eq`; with the Metal array on the left they compared equal
+- `==` and `!=` compare integers exactly, where `np.allclose`'s relative tolerance took seeds a few parts per
+  million apart as equal, so `FrozenPhonons`, `Potential`, `CrystalPotential` and noise transforms that draw
+  different random numbers, and the `SMatrix` or `MultisliceTransform` that holds them, no longer compare equal
+    - **Behaviour change:** integer attributes (seeds, but also counts, sizes and an `energy` given as an integer)
+      that differ by a small relative amount compare unequal. An integer against a float, and floats, keep the
+      tolerance, so `energy=100_000` still equals `energy=100e3`
+- `==` and `!=` compare the shapes of numbers, tuples, lists and arrays as well as their values, where broadcasting
+  made `(5,)` equal to `(5, 5)` and an empty sequence equal to anything, so a `FrozenPhonons` of one configuration
+  and one of two with the same seed, and `NoiseTransform`s with seeds `(5,)` and `(5, 5)`, no longer compare equal
+    - **Behaviour change:** a number and a one-element sequence of it compare unequal, so
+      `Probe(semiangle_cutoff=20) != Probe(semiangle_cutoff=[20])`, whose `[20]` adds a length-1 ensemble axis. It
+      was equal one way round. The energy of a `PlaneWave` or `Probe` is the exception: a one-value list is stored
+      as its value, so `energy=100e3` and `energy=[100e3]` compare equal both ways
+- `==` and `!=` on an object that holds a list or tuple of abTEM array objects (`Images`, `Waves`, ...) no longer
+  raise `RuntimeError: too many indices for array`: not for equal lists, lists of different lengths or shapes, nested
+  lists, or such a list against a NumPy array. `==` on the list decides, so a list does not equal a tuple of the
+  same objects and the numbers in it compare exactly. No abTEM class compares such a list with `==`; a subclass
+  that does can now be compared
+- A `StructureFactorArray` accepts its Miller indices and cell as any array-like, lists included, so one built from
+  lists or read from zarr works with `BlochWaves`, `g_vec` and `get_projected_potential`. The Miller indices are stored
+  as an integer array and the cell as a `Cell`, and a `StructureFactor` stores its Miller indices the same way
+- An `SMatrixArray` read from zarr keeps the dtype of the wave vectors it was written with and reduces to the same
+  waves as the S-matrix that was written, where they were read as float32. The dtype is stored in the
+  zarr attributes as `wave_vectors_dtype`; a file without it holds float64 values and reads as float64, unchanged
+    - **Behaviour change:** an `SMatrixArray` file written by this version cannot be read by an earlier version, which
+      raises `TypeError` for the unexpected `wave_vectors_dtype` argument. Files written by earlier versions read
+      with float64 wave vectors, the values they hold
 - `RealSpaceMultislice(order=n)` for `n` of 4 or more uses the binomial coefficients of the Taylor series of the
   forward wavenumber, $K(\sqrt{1 + 2C/K} - 1)$ with $K = 2\pi/\lambda$ and $C$ the slice operator, in both
   expansion scopes. The coefficients of the operator powers were geometric, $-1/(2K), 1/(2K^2), -1/(2K^3), \dots$,
@@ -812,6 +878,56 @@ Bugfixes:
   with `upsample=True` now batch the plane waves when a caller passes `max_batch_multislice`, which they ignored
   before; (ii) `max_batch_multislice=None` or a NumPy integer, which these paths and the eager reduction ignored,
   now raise `ValueError: limit must be an integer or a string`, as the lazy reduction in chunks already did
+- Spline interpolation on CuPy 14.1 and later of float32 or complex64 data returned the wrong value for a
+  coordinate within half a float32 spacing below a grid node, as the positions of `interpolate_line` often are:
+  cupyx took the starting index from the float32-rounded coordinate and the weights from the float64 one. For
+  `order >= 2` the result was the value at the next grid node; for `order=1` it was extrapolated linearly from
+  the next segment, off by at most the distance to the node times a second difference. This affected
+  `Images.interpolate(method="spline")`, `interpolate_line` and `interpolate_line_at_position` of `Images` and
+  `DiffractionPatterns` (so also `Probe.profiles` and `momentum_resolved_spectrum` with a
+  `SpectralSlitDetector`), and `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate`.
+  On CuPy, the prefilter, the index and the weights are now computed in double precision and the sum in the
+  precision of the data, so the results agree with the NumPy results to float32 rounding. On earlier CuPy
+  versions the results change by float32 rounding only. **Behaviour change:** at the default float32 precision,
+  the pixel positions of the line in `interpolate_line` and `interpolate_line_at_position` were Å values
+  rounded to float32 (by up to 3.8e-5 pixels at 0.1 Å sampling near 100 Å). On NumPy and CuPy they are now built
+  in float64 (`LineScan.get_positions` takes an optional `dtype`, by default the configured precision as before),
+  which changes the values of these functions and of what builds on them (`Probe.profiles`,
+  `momentum_resolved_spectrum`) slightly, by 5e-6 to 4e-5 of the maximum for random data in the cases checked;
+  at float64 precision they are unchanged. Metal keeps float32 pixel positions, so its line values shift by
+  float32 noise (up to 7e-5 of the maximum in the cases checked) without becoming more accurate. The results of
+  `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
+  NumPy, Metal and float64 CuPy are unchanged
+  ([PR #680](https://github.com/abTEM/abTEM/pull/680))
+- `set_ensemble_axes_metadata` raises when the new axis does not fit the array (a `RuntimeError` for an ordinal axis
+  of the wrong length) or contradicts its energy (a `ValueError`), and leaves the object's axes unchanged. It no
+  longer writes into an axes list the object shares with its caller or with other objects, so a list read from
+  `ensemble_axes_metadata` before the call keeps the old axes
+    - **Behaviour change:** the call returned without an error and without changing anything for an axis of the
+      wrong length, and installed a contradicting `EnergyAxis`
+- `from_zarr` builds an object from the axes and metadata the file stores, and falls back to the stored constructor
+  arguments only for the classes that cannot be built that way. A file whose axes do not fit its array raises
+  instead of loading with other axes, and an error inside `from_array_and_metadata` is no longer hidden. Files
+  written by abTEM 1.0.10 and 1.0.11 load to the same objects as before
+- `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
+  per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
+  limit; every other error, an insufficient driver included, raises on every call
+- A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
+  where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
+  returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
+  `TypeError`
+- The GPU chunk and batch size estimates raise a CUDA error from their memory probe, where they fell back to
+  `dask.chunk-size-gpu`. They still use that setting when CuPy is not installed or sees no device
+- `natural_neighbor_weights` falls back to nearest-parent weights only for degenerate (collinear or coincident)
+  parent beams; any other error from the triangulation is raised
+- `shrink_cell` works under `python -O`
+    - **Behaviour change:** an `Atoms` object without atoms raises `ValueError`, where it returned an empty
+      `Atoms` with a zero cell (and did not return under `python -O`)
+- The Miller-index labels of an indexed diffraction-pattern plot delegate only the methods of matplotlib's
+  `Annotation`: `hasattr`, `getattr` with a default and `copy.deepcopy` work on them, and any other name raises
+  `AttributeError`
+- The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
+  location), where it reported a convergence failure for any assertion
 
 Deprecations:
 

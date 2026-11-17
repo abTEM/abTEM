@@ -60,6 +60,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    _TooManyIndicesError,
     get_dtype,
     interleave,
     itemset,
@@ -1126,7 +1127,7 @@ def _compute(
         arrays = dask.compute(arrays, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
-        wrapper._array = array
+        wrapper._replace_array(array)
 
     profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
@@ -1181,7 +1182,7 @@ def _validate_array_items(
         raise NotImplementedError
 
     if len(tuple(item for item in items if item is not None)) > len(shape):
-        raise RuntimeError("too many indices for array")
+        raise _TooManyIndicesError("too many indices for array")
 
     return items
 
@@ -1382,6 +1383,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     ) -> Self:
         """Creates array object from a given array and metadata.
 
+        A class that cannot rebuild itself from the array, the axes metadata and
+        the metadata raises `NotImplementedError`; `from_zarr` then rebuilds it
+        from its stored constructor kwargs.
+
         Parameters
         ----------
         array : ndarray
@@ -1457,6 +1462,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy != isinstance(array, da.core.Array):
             raise ValueError("Type of array must match type of object.")
 
+        self._replace_array(array)
+
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `compute` and the `array` setter go through
+        here. A subclass that derives state from the array in `__init__` overrides
+        this to derive it again from the new array."""
         self._array = array
 
     @property
@@ -2604,7 +2615,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def set_ensemble_axes_metadata(
         self, axes_metadata: AxisMetadata, axis: int
     ) -> Self:
-        """Sets the axes metadata of an ensemble axis.
+        """Sets the axes metadata of an ensemble axis. The axes metadata are left
+        unchanged when the new axis is refused.
 
         Parameters
         ----------
@@ -2612,16 +2624,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The new axis metadata.
         axis : int
             The axis to set.
+
+        Raises
+        ------
+        RuntimeError
+            If the axis metadata does not fit the dimension, for example an ordinal
+            axis with a different number of values.
+        ValueError
+            If an `EnergyAxis` contradicts the energy of the object.
         """
 
-        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-
-        self.ensemble_axes_metadata[axis] = axes_metadata
+        old_axes_metadata = self._ensemble_axes_metadata
+        self._ensemble_axes_metadata = list(old_axes_metadata)
+        self._ensemble_axes_metadata[axis] = axes_metadata
 
         try:
             self._check_axes_metadata()
-        except RuntimeError:
+            self._check_energy_matches_energy_axes()
+        except (RuntimeError, ValueError):
             self._ensemble_axes_metadata = old_axes_metadata
+            raise
 
         return self
 
@@ -3121,7 +3143,9 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        except Exception:
+        except NotImplementedError:
+            # The class rebuilds only from its constructor kwargs, which every
+            # canonical file since abTEM 1.0.10 stores.
             if kwargs is None:
                 raise
 

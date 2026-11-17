@@ -661,25 +661,27 @@ def shrink_cell(
     atoms : ase.Atoms
         Smallest non-repeating cell for the given atoms.
     """
+
+    if len(atoms) == 0:
+        raise ValueError("shrink_cell needs at least one atom")
+
     atoms = wrap_with_tolerance(atoms, tol=tol)
 
     for repetition in repetitions:
         for i in range(3):
             while True:
-                try:
-                    atoms_copy = atoms.copy()
-                    atoms_copy.cell[i] = atoms_copy.cell[i] / repetition
+                atoms_copy = atoms.copy()
+                atoms_copy.cell[i] = atoms_copy.cell[i] / repetition
 
-                    atoms_copy = wrap_with_tolerance(atoms_copy)
+                atoms_copy = wrap_with_tolerance(atoms_copy)
 
-                    old_len = len(atoms_copy)
-                    atoms_copy = merge_close_atoms(atoms_copy, tol=1e-5)
+                old_len = len(atoms_copy)
+                atoms_copy = merge_close_atoms(atoms_copy, tol=1e-5)
 
-                    assert len(atoms_copy) == old_len // repetition
-
-                    atoms = atoms_copy
-                except AssertionError:
+                if len(atoms_copy) != old_len // repetition:
                     break
+
+                atoms = atoms_copy
 
     return atoms
 

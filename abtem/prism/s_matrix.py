@@ -666,15 +666,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     @classmethod
     def _pack_kwargs(cls, kwargs):
+        # The dtype is stored next to the values, which are Python floats.
+        kwargs["wave_vectors_dtype"] = np.dtype(kwargs["wave_vectors"].dtype).name
         kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
         return super()._pack_kwargs(kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
-        kwargs["wave_vectors"] = np.array(
-            kwargs["wave_vectors"], dtype=get_dtype(complex=False)
-        )
+        # Files written without the dtype hold float64 values.
+        dtype = kwargs.pop("wave_vectors_dtype", "float64")
+        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=dtype)
         return kwargs
 
     def copy_to_device(self, device: str) -> "SMatrixArray":
@@ -683,7 +685,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         s_matrix._wave_vectors = copy_to_device(self._wave_vectors, device)
         return s_matrix
 
-    def from_array_and_metadata(array, axes_metadata, metadata):
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     @property

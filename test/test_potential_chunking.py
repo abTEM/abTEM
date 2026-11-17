@@ -8,8 +8,17 @@ import weakref
 import ase
 import numpy as np
 import pytest
+from dask.utils import parse_bytes
 
-from utils import devices, requires_gpu, si_cubic_atoms
+from utils import (
+    INSUFFICIENT_DRIVER_ERROR,
+    NO_DEVICE_ERROR,
+    CUDARuntimeErrorStandIn,
+    cupy_cuda_stand_in,
+    devices,
+    requires_gpu,
+    si_cubic_atoms,
+)
 from ase.build import bulk
 
 import abtem
@@ -74,7 +83,8 @@ def _install_fake_cupy(monkeypatch, free, total, pool_used=0, pool_free=0):
         free_bytes=lambda: pool_free,
     )
     fake.cuda = types.SimpleNamespace(
-        Device=lambda: types.SimpleNamespace(mem_info=(free, total))
+        Device=lambda: types.SimpleNamespace(mem_info=(free, total)),
+        runtime=cupy_cuda_stand_in(lambda: 1).runtime,
     )
     monkeypatch.setitem(sys.modules, "cupy", fake)
 
@@ -213,6 +223,79 @@ class TestEstimateScanBatchSize:
 
     def test_cpu_falls_back_to_chunk_size(self):
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "cpu") >= 1
+
+
+def _install_cupy_with_device_count(monkeypatch, get_device_count, mem_info=None):
+    """Install a cupy stand-in whose device count comes from ``get_device_count``
+    and whose ``Device().mem_info`` is ``mem_info`` (a callable) or raises."""
+
+    class Device:
+        @property
+        def mem_info(self):
+            if mem_info is None:
+                raise AssertionError("memory probed on a machine without a device")
+            return mem_info()
+
+    fake = types.ModuleType("cupy")
+    fake.get_default_memory_pool = lambda: types.SimpleNamespace(
+        used_bytes=lambda: 0, free_bytes=lambda: 0
+    )
+    fake.cuda = cupy_cuda_stand_in(get_device_count)
+    fake.cuda.Device = Device
+    monkeypatch.setitem(sys.modules, "cupy", fake)
+
+
+_ESTIMATORS = [
+    lambda: estimate_scan_batch_size((480, 512), np.complex64, "gpu"),
+    lambda: estimate_potential_chunk_size((480, 512), "gpu", np.dtype(np.float32)),
+]
+
+
+class TestMemoryProbeErrors:
+    """The device estimators raise what CuPy raises, except when there is no device
+    to ask."""
+
+    @pytest.mark.parametrize("estimate", _ESTIMATORS, ids=["scan batch", "potential"])
+    def test_a_failing_device_count_raises_every_time(self, monkeypatch, estimate):
+        """CuPy's ``is_available()`` would answer False from the second call on."""
+
+        def failing_count():
+            raise CUDARuntimeErrorStandIn(*INSUFFICIENT_DRIVER_ERROR)
+
+        _install_cupy_with_device_count(monkeypatch, failing_count)
+        for _ in range(2):
+            with pytest.raises(CUDARuntimeErrorStandIn, match="InsufficientDriver"):
+                estimate()
+
+    @pytest.mark.parametrize("estimate", _ESTIMATORS, ids=["scan batch", "potential"])
+    def test_a_failing_memory_probe_raises(self, monkeypatch, estimate):
+        def failing_mem_info():
+            raise CUDARuntimeErrorStandIn(
+                700, "cudaErrorIllegalAddress: an illegal memory access"
+            )
+
+        _install_cupy_with_device_count(monkeypatch, lambda: 1, failing_mem_info)
+        with pytest.raises(CUDARuntimeErrorStandIn, match="IllegalAddress"):
+            estimate()
+
+    @pytest.mark.parametrize("no_device", ["missing", "no device"])
+    def test_without_a_device_the_configured_chunk_size_is_used(
+        self, monkeypatch, no_device
+    ):
+        if no_device == "missing":
+            monkeypatch.setitem(sys.modules, "cupy", None)
+        else:
+
+            def no_device_count():
+                raise CUDARuntimeErrorStandIn(*NO_DEVICE_ERROR)
+
+            _install_cupy_with_device_count(monkeypatch, no_device_count)
+        configured = parse_bytes(abtem.config.get("dask.chunk-size-gpu"))
+
+        scan_batch, potential_chunk = (estimate() for estimate in _ESTIMATORS)
+
+        assert scan_batch == configured // (480 * 512 * 8)
+        assert potential_chunk == min(4096, configured // (480 * 512 * 4 * 2))
 
 
 class TestChunkedSlicesCorrectness:
