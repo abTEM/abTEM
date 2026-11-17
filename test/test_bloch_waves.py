@@ -2610,7 +2610,7 @@ def test_exit_waves_are_normalized_as_the_builders_of_waves_are(
 
 
 @pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
-@pytest.mark.parametrize("label", ["values", "amplitude"])
+@pytest.mark.parametrize("label", ["values", "amplitude", "intensity"])
 @pytest.mark.parametrize("positional", [False, True], ids=["keyword", "positional"])
 def test_exit_waves_normalization_label_is_deprecated(calculator, label, positional):
     # the label only wrote metadata and left the exit waves as they are: it warns,
@@ -2619,13 +2619,16 @@ def test_exit_waves_normalization_label_is_deprecated(calculator, label, positio
     kwargs = dict(gpts=(16, 16), extent=(5.43, 5.43), lazy=False)
     reference = source.calculate_exit_waves([50.0], **kwargs)
 
-    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+    with pytest.warns(FutureWarning, match="normalization.*deprecated") as record:
         if positional:
             waves = source.calculate_exit_waves(
                 [50.0], (16, 16), (5.43, 5.43), label, lazy=False
             )
         else:
             waves = source.calculate_exit_waves([50.0], normalization=label, **kwargs)
+
+    # the warning points at the call above, not into abtem
+    assert [w.filename for w in record] == [__file__]
 
     np.testing.assert_array_equal(np.asarray(waves.array), np.asarray(reference.array))
     assert waves.metadata["normalization"] == "values"
@@ -2634,7 +2637,7 @@ def test_exit_waves_normalization_label_is_deprecated(calculator, label, positio
 def test_exit_waves_unknown_normalization_label_raises():
     with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not recognized"):
         _silicon_bloch_waves("cpu").calculate_exit_waves(
-            [50.0], gpts=(16, 16), normalization="intensity"
+            [50.0], gpts=(16, 16), normalization="nonsense"
         )
 
 
