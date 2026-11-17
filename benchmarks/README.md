@@ -78,7 +78,7 @@ Decorate a function `(params, device) -> run` with `@case` in a module under `ab
 ## Checks
 
 ```
-uvx ruff check benchmarks/abtem_bench benchmarks/tests abtem/core/testing.py
+uvx ruff check benchmarks/abtem_bench benchmarks/tests
 uvx mypy --follow-imports=silent --ignore-missing-imports benchmarks/abtem_bench
 PYTHONPATH=benchmarks python -P -m pytest benchmarks/tests
 ```
