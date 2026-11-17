@@ -285,7 +285,8 @@ def _forward(name: str):
         # NumPy's reflected ufunc does the move), but `==` does not and fails
         # with a device mismatch. This holds for every method forwarded to the
         # tensor, not only the operators: `take`, `clip`, `masked_fill`, ...
-        # take a host array argument too, narrowed to the array's dtype.
+        # take a host array argument too, narrowed to single precision, as
+        # `asarray` does.
         args = tuple(_unwrap(_to_device_operand(arg)) for arg in args)
         kwargs = {
             key: _unwrap(_to_device_operand(value)) for key, value in kwargs.items()
