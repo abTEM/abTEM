@@ -131,19 +131,27 @@ def _averaged_axes(measurement, num_axes):
     )
 
 
-def _stack_energies(results, energy_axis, axis: int = 0):
+def _stack_energies(results, energy_axis, axis: int = 0, average: bool = True):
     """Stack the results of reducing each energy of a multi-energy ensemble
     separately along its `energy_axis`, which carries the weights and the ensemble
     mean of a distribution of energies. Each result is a measurement, or a list of
-    measurements with one per detector."""
+    measurements with one per detector.
+
+    With `average`, the measurements are averaged over the axes flagged
+    ensemble_mean, as the reduction of a single energy does and as ``Probe`` does
+    for a distribution of energies: the probability-weighted mean over the energies.
+    A caller that defers the averaging of its ensemble axes passes False. Wave
+    functions keep every energy."""
     if isinstance(results[0], (list, ComputableList)):
-        return _wrap_measurements(
-            [
-                stack([r[i] for r in results], energy_axis, axis=axis)
-                for i in range(len(results[0]))
-            ]
-        )
-    return stack(results, energy_axis, axis=axis)
+        stacked = [
+            stack([r[i] for r in results], energy_axis, axis=axis)
+            for i in range(len(results[0]))
+        ]
+    else:
+        stacked = [stack(results, energy_axis, axis=axis)]
+    if average:
+        stacked = [_average_ensemble_axes(m) for m in stacked]
+    return _wrap_measurements(stacked)
 
 
 def _finalize_lazy_measurements(
@@ -1600,7 +1608,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             for i, energy in enumerate(energies)
         ]
         return _stack_energies(
-            results, self.ensemble_axes_metadata[axis].copy(), axis=axis
+            results,
+            self.ensemble_axes_metadata[axis].copy(),
+            axis=axis,
+            average=not _defer_frozen_phonon_reduction,
         )
 
     def reduce(

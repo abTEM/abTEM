@@ -291,8 +291,12 @@ Bugfixes:
 - Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
   selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
   ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error ([PR #695](https://github.com/abTEM/abTEM/pull/695))
-- PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis and
-  on the measurements it reduces, as `Probe` and `PlaneWave` do; the batches of the lattice and streamed reductions
+- PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis,
+  as `Probe` and `PlaneWave` do, and the measurements of `scan`, `reduce`, `build().scan`, `build().reduce` and
+  `transition_potential_scan` are averaged over a distribution flagged `ensemble_mean=True` with those weights, as
+  `Probe.scan` averages them (they kept the energy axis, with the weights unused: **Behaviour change:** the result has
+  no energy axis, as for `Probe`; with `ensemble_mean=False` it is kept); wave functions keep every energy; the batches
+  of the lattice and streamed reductions
   count the real size of an element, so at double precision they hold half the rows instead of exceeding their memory
   budget; the window view of a compressed S-matrix keeps `max_batch_expansion` ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - Potentials and fields: `ChargeDensityPotential` with `repetitions` displaces the repeated atoms of each frozen-phonon
