@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
+import traceback
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from numbers import Number
+from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import dask
@@ -140,7 +143,9 @@ class _DummyGPAW:
     @classmethod
     def from_file(cls, path: str, lazy: bool = True):
         if lazy:
-            return dask.delayed(_read_gpw)(path)
+            # pure, on the resolved path: the key follows the file, so reads of
+            # one file compare equal however its path is spelled.
+            return dask.delayed(_read_gpw, pure=True)(os.fspath(Path(path).resolve()))
 
         return _read_gpw(path)
 
@@ -843,16 +848,21 @@ class GPAWParametrization:
 
         try:
             return self._run_all_electron_atom(symbol, added_electrons, spinpol=True)
-        except AssertionError:
+        except AssertionError as error:
             # GPAW's radial solver fails to find a bound state for some open-shell
             # atoms (e.g. Pm, Sm, Eu, Pu) in the spin-polarized calculation,
             # independent of the SCF mixing. The spin-polarized and unpolarized
             # total densities differ by only ~0.1 electrons, which is negligible
             # for the independent-atom potential.
+            failed = traceback.extract_tb(error.__traceback__)[-1]
+            where = f"{failed.filename}:{failed.lineno}"
+            detail = ": ".join(
+                filter(None, (f"`{failed.line}`" if failed.line else "", str(error)))
+            )
             warnings.warn(
                 f"The spin-polarized all-electron calculation for {symbol} failed "
-                "to converge in GPAW; falling back to a non-spin-polarized "
-                "calculation."
+                f"with an AssertionError ({detail + ' at ' if detail else ''}{where}); "
+                "falling back to a non-spin-polarized calculation."
             )
             return self._run_all_electron_atom(symbol, added_electrons, spinpol=False)
 
