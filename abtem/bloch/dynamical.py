@@ -80,7 +80,7 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Probe, Waves
+from abtem.waves import Probe, Waves, _normalize_with_deprecated_normalization
 
 if TYPE_CHECKING:
     from abtem.scan import BaseScan
@@ -2326,6 +2326,7 @@ class BlochWaves:
         normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for a given set of thicknesses.
 
@@ -2345,12 +2346,19 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochWaves.calculate_exit_waves"
+        )
 
         # --- Multi-energy ensemble path ---
         if len(self._energies) > 1:
@@ -3303,6 +3311,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: Optional[float] = None,
         lazy: bool = True,
         pbar: Optional[bool] = None,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for the ensemble for a given set of
         thicknesses.
@@ -3329,12 +3338,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         pbar : bool, optional
             If True, a progress bar is shown. Default is None, which means
             the value is taken from the configuration.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochwaveEnsemble.calculate_exit_waves"
+        )
 
         if pbar is None:
             pbar = config.get("diagnostics.task_progress", False)

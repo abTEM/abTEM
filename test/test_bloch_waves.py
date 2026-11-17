@@ -2606,8 +2606,38 @@ def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy
     )
 
 
-def test_exit_waves_no_longer_take_a_normalization_label():
-    with pytest.raises(TypeError, match="normalization"):
+@pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
+@pytest.mark.parametrize("label", ["values", "amplitude"])
+@pytest.mark.parametrize("positional", [False, True], ids=["keyword", "positional"])
+def test_exit_waves_normalization_label_is_deprecated(calculator, label, positional):
+    # the label only wrote metadata and left the exit waves as they are: it warns,
+    # still works as a keyword and in the old fourth position, and changes nothing
+    source = _exit_wave_calculators()[calculator]
+    kwargs = dict(gpts=(16, 16), extent=(5.43, 5.43), lazy=False)
+    reference = source.calculate_exit_waves([50.0], **kwargs)
+
+    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+        if positional:
+            waves = source.calculate_exit_waves(
+                [50.0], (16, 16), (5.43, 5.43), label, lazy=False
+            )
+        else:
+            waves = source.calculate_exit_waves([50.0], normalization=label, **kwargs)
+
+    np.testing.assert_array_equal(np.asarray(waves.array), np.asarray(reference.array))
+    assert waves.metadata["normalization"] == "values"
+
+
+def test_exit_waves_unknown_normalization_label_raises():
+    with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not recognized"):
         _silicon_bloch_waves("cpu").calculate_exit_waves(
-            [50.0], gpts=(16, 16), normalization="values"
+            [50.0], gpts=(16, 16), normalization="intensity"
+        )
+
+
+def test_exit_waves_without_the_label_do_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        _silicon_bloch_waves("cpu").calculate_exit_waves(
+            [50.0], gpts=(16, 16), normalize=True, lazy=False
         )

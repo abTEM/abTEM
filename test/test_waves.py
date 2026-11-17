@@ -1475,6 +1475,41 @@ def test_downsample_keeps_the_normalization_of_the_waves(normalize, lazy):
         np.testing.assert_allclose(np.abs(result.array), expected, rtol=1e-4)
 
 
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_downsample_normalization_is_deprecated_but_honoured(lazy):
+    # downsample(normalization=...) is in v1.0.11: it warns and still decides what
+    # is preserved, so 'values' keeps the pixel values of a normalized probe-like wave
+    # and 'amplitude' its total amplitude
+    waves = abtem.PlaneWave(
+        energy=100e3, gpts=(64, 64), extent=10.0, normalize=True
+    ).build(lazy=lazy)
+
+    def downsampled(**kwargs):
+        result = waves.downsample(gpts=(32, 32), **kwargs)
+        return np.abs(np.asarray(result.compute().array if lazy else result.array))
+
+    default = downsampled()
+    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+        values = downsampled(normalization="values")
+    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+        amplitude = downsampled(normalization="amplitude")
+
+    np.testing.assert_allclose(amplitude, default, rtol=1e-5)
+    # 'values' keeps the pixel values of the 64 x 64 wave, 'amplitude' scales them
+    np.testing.assert_allclose(values, 1 / 64**2, rtol=1e-4)
+    np.testing.assert_allclose(amplitude, 1 / 32**2, rtol=1e-4)
+
+    with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not recognized"):
+        waves.downsample(gpts=(32, 32), normalization="intensity")
+
+
+def test_downsample_without_the_normalization_argument_does_not_warn():
+    waves = abtem.PlaneWave(energy=100e3, gpts=(64, 64), extent=10.0).build(lazy=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        waves.downsample(gpts=(32, 32))
+
+
 def test_normalize_labels_the_waves_as_a_normalized_builder_does():
     # normalize() left the label 'values', so diffraction_patterns() divided by the
     # number of pixels once more and its intensity summed to 1 / N^2

@@ -309,8 +309,11 @@ Bugfixes:
   and `BlochwaveEnsemble.calculate_exit_waves` take the bool `normalize` (default false), as `PlaneWave` does: false
   gives an incident wave of one in every pixel, true normalizes the reciprocal-space intensity of the incident wave to one.
   The `normalization` argument they had, `'values'` or `'amplitude'`, only wrote a label to the metadata (and
-  `'amplitude'` made `diffraction_patterns()` raise); it is removed. `Waves.downsample` and `WavesDetector(gpts)` keep
-  the normalization of the waves, and `Waves.downsample` has no `normalization` argument any more. **Behaviour change:**
+  `'amplitude'` made `diffraction_patterns()` raise); it is deprecated: it still works, as a keyword or in its old
+  position, without effect on the exit waves, and raises a `FutureWarning`. `Waves.downsample` and `WavesDetector(gpts)`
+  keep the normalization of the waves; `Waves.downsample(normalization=...)` is deprecated too, and for one release
+  still decides what is preserved (`'values'` the pixel values, `'amplitude'` the total amplitude) and raises a
+  `FutureWarning`; the default `'values'` it used to have is gone. **Behaviour change:**
   they preserved the pixel values of every wave, so the diffraction patterns of a downsampled `Probe` or normalized plane
   wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
   (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
