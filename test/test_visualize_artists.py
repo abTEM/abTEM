@@ -8,6 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from matplotlib.colors import LogNorm
 
 from abtem.core.axes import RealSpaceAxis
 from abtem.measurements import Images, RealSpaceLineProfiles
@@ -43,14 +44,29 @@ def test_log_scale_of_a_line_profile_is_reported():
     assert artist.get_logscale() is True
 
 
-def test_log_scale_of_a_complex_image_does_not_raise():
-    # a domain-colouring artist inherited a set_logscale that took no argument
+def test_log_scale_of_a_complex_image_can_be_switched_on_and_off():
+    # a domain-colouring artist inherited a set_logscale that took no argument, and
+    # then one that did nothing
     rng = np.random.default_rng(0)
-    images = Images(rng.random((8, 8)) + 1j * rng.random((8, 8)), sampling=0.1)
+    # amplitudes over several decades, so that the log scale changes the opacity
+    array = (10 ** rng.uniform(-3, 0, (8, 8))) * np.exp(2j * np.pi * rng.random((8, 8)))
+    images = Images(array, sampling=0.1)
     visualization = images.show()
+    artist = visualization.artists.ravel()[0]
+    linear_alpha = np.array(artist.phase_axes_image.get_alpha())
+
+    reference = images.show(logscale=True).artists.ravel()[0]
+
+    visualization.set_logscale(True)
+    assert isinstance(artist.amplitude_norm, LogNorm)
+    np.testing.assert_allclose(
+        artist.phase_axes_image.get_alpha(), reference.phase_axes_image.get_alpha()
+    )
+    assert not np.allclose(artist.phase_axes_image.get_alpha(), linear_alpha)
 
     visualization.set_logscale(False)
-    visualization.set_logscale(True)
+    assert not isinstance(artist.amplitude_norm, LogNorm)
+    np.testing.assert_allclose(artist.phase_axes_image.get_alpha(), linear_alpha)
 
 
 def test_extent_of_an_image_converts_each_axis_with_its_own_units():

@@ -2641,3 +2641,54 @@ def test_exit_waves_without_the_label_do_not_warn():
         _silicon_bloch_waves("cpu").calculate_exit_waves(
             [50.0], gpts=(16, 16), normalize=True, lazy=False
         )
+
+
+def test_ensemble_beams_contain_those_of_every_rotated_member_on_the_boundary():
+    # The ensemble took the excitation errors from the unrotated cell and each member
+    # from its rotated cell; they differ in the last bits, so with an sg_max equal to
+    # an excitation error of a member that member had a beam the ensemble did not,
+    # and writing the member's beams into the ensemble's raised a ValueError.
+    from ase.cell import Cell
+
+    from abtem.bloch.utils import excitation_errors, reciprocal_cell
+
+    structure_factor = StructureFactor(
+        bulk("Si", "diamond", a=5.43, cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        thermal_sigma=0.0,
+    )
+    rotations = abtem.distributions.from_values(np.array([0.37, 0.1]))
+    cell = structure_factor.cell
+
+    def ensemble(sg_max):
+        return BlochWaves(
+            structure_factor=structure_factor, energy=200e3, sg_max=sg_max
+        ).rotate("x", rotations, degrees=True)
+
+    reference = ensemble(0.1)
+    errors = []
+    for R in reference.get_orientation_matrices().reshape(-1, 3, 3):
+        g = structure_factor.hkl @ reciprocal_cell(Cell(np.dot(cell, R.T)))
+        errors.append(np.abs(excitation_errors(g, 200e3, use_wave_eq=False)))
+    # excitation errors of beams of either member, in the range of the beams selected
+    boundary = np.unique(np.concatenate(errors))
+    boundary = boundary[(boundary > 0.02) & (boundary < 0.2)]
+    boundary = boundary[:: max(1, len(boundary) // 60)]
+    assert len(boundary) > 30
+
+    for sg_max in boundary:
+        ensemble_mask = ensemble(sg_max).get_ensemble_hkl_mask()
+        for R in reference.get_orientation_matrices().reshape(-1, 3, 3):
+            member = BlochWaves(
+                structure_factor=structure_factor,
+                energy=200e3,
+                sg_max=sg_max,
+                orientation_matrix=R,
+            )
+            assert not (member.hkl_mask & ~ensemble_mask).any(), sg_max
+
+    # and the ensemble then writes the beams of every member
+    for sg_max in boundary[:3]:
+        patterns = ensemble(sg_max).calculate_diffraction_patterns([50.0], lazy=False)
+        assert np.isfinite(patterns.array).all()

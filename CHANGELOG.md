@@ -275,12 +275,16 @@ Bugfixes:
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
   configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
   configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
-  are now in the configured precision, and floating point counts keep their dtype ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+  are now in the configured precision, and floating point counts keep their dtype. The step bins of `azimuthal_average`
+  summed small integer counts (`uint8`, `int16`, `uint16`) in their own type, which wraps around, so a uniform pattern
+  averaged to a different value in every bin; they are summed in the configured precision, which the GPU kernel needs too
+  (it only reads floating point values) ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - `ChargeDensityPotential` built in chunks of several configurations (`chunks` greater than 1) gives each chunk the
   charge densities of its own configurations. It paired density *k* with chunk *k* and dropped the rest, so
   per-configuration charge densities were wrong unless every chunk held one configuration, the default ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - Plots: the log scale can be switched on and off for line profiles and complex (domain-coloured) images, which
-  raised a `TypeError` because their `set_logscale` took no argument; the extent of an image converts its y axis with
+  raised a `TypeError` because their `set_logscale` took no argument (and, for complex images, then did nothing: it
+  now gives the logarithmic amplitude scale and the opacity of `show(logscale=True)` and switches back); the extent of an image converts its y axis with
   the units of the y axis, not the x axis; `PlasmonScatteringEvents.show_cumulative_scattering_events` plots the
   requested integer `num_excitations` instead of the first and no longer prints the axes ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - Measurements: `poisson_noise()` with neither `dose_per_area` nor `total_dose` raises the intended
@@ -290,7 +294,10 @@ Bugfixes:
   the images, which it relabelled as counts ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
   selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
-  ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+  ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error; an ensemble of
+  rotations selects the beams of every member whatever the rounding of the excitation errors of its rotated cells, as
+  they differ in the last bits from those of the ensemble (it could have fewer beams than a member, and raised a
+  `ValueError` writing them) ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis,
   as `Probe` and `PlaneWave` do, and the measurements of `scan`, `reduce`, `build().scan`, `build().reduce` and
   `transition_potential_scan` are averaged over a distribution flagged `ensemble_mean=True` with those weights, as
@@ -322,14 +329,19 @@ Bugfixes:
   wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
   (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
   `Waves.normalize()` labels its result `'reciprocal_space'`, so that `diffraction_patterns()` of a normalized wave sums to
-  one (it divided by the number of pixels once more, to 1 / N²) ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+  one (it divided by the number of pixels once more, to 1 / N²). Waves with no `normalization` label (those of
+  `Probe.build()` and of an S-matrix have none) are taken as normalized in reciprocal space, so downsampling waves built
+  by hand without a label no longer keeps their pixel values; a stored label that is neither `'values'` nor
+  `'reciprocal_space'`, such as the `'amplitude'` that v1.0.11 wrote on Bloch exit waves given `normalization="amplitude"`, makes `downsample` and
+  `WavesDetector(gpts)` raise a `RuntimeError` ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - The default scan sampling is the probe's Nyquist sampling, as documented, and is the same for multislice and PRISM.
   `GridScan()` with no `sampling` (and so `Probe.scan`, `SMatrixArray.scan` and `SMatrix.build().scan` without a scan) used
   0.99 of it, a factor from before the number of scan points was counted within rounding of a whole number, while
   `SMatrix.scan` and `SMatrix.transition_potential_scan` used the Nyquist sampling itself: for an extent of a whole number
   of Nyquist pitches the same S-matrix gave 12 × 12 points through one and 13 × 13 through the other. **Behaviour change:**
   the default scan of `Probe.scan` and the other routes has about 1% fewer points per axis (one fewer when the extent
-  is within 1% below a whole number of Nyquist pitches); the pitch is still never coarser than Nyquist, as the number of
+  is within 1% below a whole number of Nyquist pitches, two fewer above about 99 points per axis); `LineScan()` with no
+  `sampling` shares the change; the pitch is still never coarser than Nyquist, as the number of
   points is rounded up ([PR #695](https://github.com/abTEM/abTEM/pull/695))
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several

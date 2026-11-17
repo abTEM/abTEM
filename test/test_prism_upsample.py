@@ -2325,4 +2325,3 @@ def test_a_window_view_keeps_the_expansion_batch(device):
     view = built._with_window(tuple(built.gpts))
 
     assert view.max_batch_expansion == 7
-

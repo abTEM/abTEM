@@ -1122,6 +1122,17 @@ class DomainColoringArtist(Artist2D):
         self._update_norm(self.amplitude_norm, power, self.amplitude_axes_image)
         self._update_alpha()
 
+    def set_logscale(self, logscale: bool = False):
+        # the amplitude norm decides the logarithmic scale and the opacity of the
+        # phase image, as at construction
+        self._update_norm(
+            self.amplitude_norm,
+            self.get_power(),
+            self.amplitude_axes_image,
+            logscale=logscale,
+        )
+        self._update_alpha()
+
     def set_extent(self, extent):
         self.phase_axes_image.set_extent(extent)
         self.amplitude_axes_image.set_extent(extent)

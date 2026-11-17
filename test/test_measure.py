@@ -4163,3 +4163,34 @@ def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function
 
     assert not np.array_equal(averaged, np.round(averaged))  # fractional averages
     np.testing.assert_allclose(averaged, expected, rtol=1e-5)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "dtype, value",
+    [(np.uint8, 127), (np.int16, 16383), (np.uint16, 32767)],
+)
+def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
+    dtype, value, lazy, device
+):
+    # The step bins were summed in the type of the counts, which wraps around: a
+    # uniform pattern averaged to a different value in every bin.
+    patterns = DiffractionPatterns(
+        np.full((1, 64, 64), value, dtype=dtype),
+        sampling=(0.05, 0.05),
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+    ).copy_to_device(device)
+    if lazy:
+        patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
+
+    averaged = patterns.azimuthal_average().compute()
+
+    assert_array_matches_device(averaged.array, device)
+    assert averaged.array.dtype == np.dtype(get_dtype())
+    values = asnumpy(averaged.array)
+    occupied = values != 0  # a bin with no pixel is zero
+    assert occupied.sum() > 5
+    np.testing.assert_allclose(values[occupied], value, rtol=1e-6)

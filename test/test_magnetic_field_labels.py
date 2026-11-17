@@ -72,7 +72,6 @@ def test_gpaw_fields_keep_the_labelled_component_axis_of_their_base_class(cls):
     builder = getattr(gpaw, cls)
     base = next(b for b in builder.__mro__ if b.__name__.startswith("Base"))
 
-    assert (
-        inspect.getattr_static(builder, "base_axes_metadata")
-        is (base.__dict__["base_axes_metadata"])
+    assert inspect.getattr_static(builder, "base_axes_metadata") is (
+        base.__dict__["base_axes_metadata"]
     )

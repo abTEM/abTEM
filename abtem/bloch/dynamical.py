@@ -2472,9 +2472,7 @@ class BlochWaves:
             extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata={
-                "normalization": "reciprocal_space" if normalize else "values"
-            },
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
@@ -2739,14 +2737,22 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         # per-energy union mask -- each energy admits a different set of
         # beams, and every energy in the ensemble must share the same
         # reciprocal-space basis for the results to stack.
+        #
+        # The ensemble takes the excitation errors from the unrotated cell and each
+        # member from its rotated cell, which differ in the last bits. A beam on
+        # the boundary of a member could then fall outside the ensemble's, which
+        # every member must be a subset of, so the ensemble selects the beams within
+        # a band far wider than that rounding (~1e-15 1/A) and far narrower than any
+        # spacing of beams: it can only add a beam to the union that no member has.
+        boundary_tolerance = 1e-9
         mask = np.zeros(len(hkl), dtype=bool)
         for energy in self._energies:
             mask |= filter_reciprocal_space_vectors(
                 hkl=hkl,
                 cell=self._structure_factor.cell,
                 energy=float(energy),
-                sg_max=self.sg_max,
-                g_max=self.g_max,
+                sg_max=self.sg_max + boundary_tolerance,
+                g_max=self.g_max + boundary_tolerance,
                 centering=self.centering,
                 orientation_matrices=orientation_matrices,
             )
@@ -3424,9 +3430,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
-            metadata={
-                "normalization": "reciprocal_space" if normalize else "values"
-            },
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
