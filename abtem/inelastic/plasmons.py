@@ -1841,7 +1841,7 @@ class _PlasmonSliceOperator:
         return (ramp_x, ramp_y), phase
 
     def _kicked(self, psi, kick, phase):
-        out = psi * psi.dtype.type(phase)
+        out = psi * complex(phase)
         if kick is not None:
             ramp_x, ramp_y = kick
             out = out * ramp_x[(None,) * (psi.ndim - 2) + (slice(None), None)]
@@ -1858,9 +1858,8 @@ class _PlasmonSliceOperator:
         xp = self._xp
         scatter_prob, kick, phase = self._scatter_params(slice_thickness)
         psi = waves._array
-        real_dtype = psi.real.dtype.type
-        out = real_dtype(np.sqrt(1.0 - scatter_prob)) * psi
-        out += real_dtype(np.sqrt(scatter_prob)) * self._kicked(psi, kick, phase)
+        out = math.sqrt(1.0 - scatter_prob) * psi
+        out += math.sqrt(scatter_prob) * self._kicked(psi, kick, phase)
         waves._array = xp.asarray(out, dtype=psi.dtype)
 
     def scatter_by_order(
@@ -1885,9 +1884,8 @@ class _PlasmonSliceOperator:
         xp = self._xp
         scatter_prob, kick, phase = self._scatter_params(slice_thickness)
         max_order = len(order_waves) - 1
-        real_dtype = order_waves[0]._array.real.dtype.type
-        sqrt_one_minus_p = real_dtype(np.sqrt(1.0 - scatter_prob))
-        sqrt_p = real_dtype(np.sqrt(scatter_prob))
+        sqrt_one_minus_p = math.sqrt(1.0 - scatter_prob)
+        sqrt_p = math.sqrt(scatter_prob)
         for n in range(max_order, -1, -1):
             arr = order_waves[n]._array
             if n > 0:

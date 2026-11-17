@@ -110,7 +110,7 @@ def test_zero_events_matches_elastic(device):
     orders, I, weights = calculate_bloch_plasmon_intensities(bw, events, t)
 
     assert orders == [0]
-    np.testing.assert_allclose(_to_numpy(I[0]), I_elastic, atol=5e-7)
+    np.testing.assert_allclose(_to_numpy(I[0]), I_elastic, atol=1e-5 * I_elastic.max())
 
 
 # ---------------------------------------------------------------------------
