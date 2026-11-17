@@ -296,7 +296,7 @@ def test_case_hash_mismatch_is_refused_unless_allowed(tmp_path, registry_with_de
 
 
 def test_close_stats_vector():
-    from abtem.core.testing import array_is_close, close_stats
+    from abtem.core.testing import close_stats
 
     r = np.array([1.0, 1e-9, 2.0])
     c = np.array([1.0 + 1e-12, 5e-9, 2.0])
@@ -304,10 +304,6 @@ def test_close_stats_vector():
     assert not s["identical"] and s["shape_ok"]
     assert s["n_checked"] == 2  # the 1e-9 element is below 1e-6 of max and excluded
     assert s["rel_above"] == pytest.approx(1e-12, rel=0.5)
-    assert array_is_close(c, r, rel_tol=1e-9, check_above_rel=1e-6)
-    assert not array_is_close(
-        c, r, rel_tol=1e-9
-    )  # the tiny element fails without the mask
     z = np.zeros(3)
     assert close_stats(z, z)["identical"] and close_stats(z, z)["max_abs_norm"] == 0.0
 

@@ -1,13 +1,9 @@
-"""Array comparison helpers shared by the test suite and the benchmark harness.
+"""Array comparison for the benchmark harness.
 
-``array_is_close`` is the boolean check the test suite uses; it compares
-relative error only on elements that carry real intensity (above
-``check_above_abs`` and above ``check_above_rel`` times the reference maximum),
-so a pattern spanning many decades is not judged on its noise floor. At least
-one of ``rel_tol`` and ``abs_tol`` is required.
-
-``close_stats`` is the vector form of the same comparison for reports: it
-returns the individual quantities instead of a single verdict.
+``close_stats`` compares a candidate array with a reference and returns the
+quantities a report shows (bit-identical flag, largest absolute difference
+over the reference maximum, relative error above a floor, change of the
+integrated intensity, shape and dtype).
 """
 
 from __future__ import annotations
@@ -15,50 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-
-
-def array_is_close(
-    a1,
-    a2,
-    rel_tol=None,
-    abs_tol=None,
-    check_above_abs=0.0,
-    check_above_rel=0.0,
-    mask=None,
-):
-    """Whether ``a1`` is within ``rel_tol`` (relative to ``a2``) and/or
-    ``abs_tol`` of ``a2``. The caller must assert the result.
-
-    At least one tolerance is required. Both used to default to ``inf``,
-    which disables the check it controls, so a call with neither returned
-    True whatever the arrays held.
-    """
-    if rel_tol is None and abs_tol is None:
-        raise TypeError("array_is_close requires rel_tol and/or abs_tol")
-    if rel_tol is None:
-        rel_tol = np.inf
-    if abs_tol is None:
-        abs_tol = np.inf
-
-    if mask is not None:
-        a1 = a1[mask]
-        a2 = a2[mask]
-
-    if rel_tol < np.inf:
-        element_is_checked = (a2 > check_above_abs) * (
-            a2 > (a2.max() * check_above_rel)
-        )
-        rel_error = (a1[element_is_checked] - a2[element_is_checked]) / a2[
-            element_is_checked
-        ]
-        if np.any(np.abs(rel_error) > rel_tol):
-            return False
-
-    if abs_tol < np.inf:
-        if np.any(np.abs(a1 - a2) > abs_tol):
-            return False
-
-    return True
 
 
 def close_stats(
@@ -74,8 +26,7 @@ def close_stats(
         integrated intensity is ``sum |x|^2`` instead of ``sum x``.
     above_rel : float
         Elements with ``|reference| <= above_rel * max|reference|`` are excluded
-        from the relative error, following ``array_is_close``'s
-        ``check_above_rel`` semantics.
+        from the relative error.
 
     Returns
     -------
