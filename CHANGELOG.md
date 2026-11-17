@@ -302,7 +302,7 @@ Bugfixes:
   `'amplitude'` made `diffraction_patterns()` raise); it is deprecated: it still works, as a keyword or in its old
   position, without effect on the exit waves, and raises a `FutureWarning`. `Waves.downsample` and `WavesDetector(gpts)`
   keep the normalization of the waves; `Waves.downsample(normalization=...)` is deprecated too, and for one release
-  still decides what is preserved (`'values'` the pixel values, `'amplitude'` the total amplitude) and raises a
+  still decides what is preserved (`'values'` the pixel values, `'amplitude'` or `'intensity'` the total amplitude) and raises a
   `FutureWarning`; the default `'values'` it used to have is gone. **Behaviour change:**
   they preserved the pixel values of every wave, so the diffraction patterns of a downsampled `Probe` or normalized plane
   wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
@@ -319,7 +319,7 @@ Bugfixes:
   `SMatrix.scan` and `SMatrix.transition_potential_scan` used the Nyquist sampling itself: for an extent of a whole number
   of Nyquist pitches the same S-matrix gave 12 × 12 points through one and 13 × 13 through the other. **Behaviour change:**
   the default scan of `Probe.scan` and the other routes has about 1% fewer points per axis (one fewer when the extent
-  is within 1% below a whole number of Nyquist pitches, two fewer above about 99 points per axis); `LineScan()` with no
+  is within 1% below a whole number of Nyquist pitches, one or two fewer above about 99 points per axis); `LineScan()` with no
   `sampling` shares the change; the pitch is still never coarser than Nyquist, as the number of
   points is rounded up
 - `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`

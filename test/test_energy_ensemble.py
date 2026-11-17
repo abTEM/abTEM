@@ -1423,7 +1423,11 @@ def test_smatrix_energy_distribution_averages_several_detectors(device):
 
 
 @float64_devices
-def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(device):
+@lazy_params
+@pytest.mark.parametrize("frozen_phonons", [False, True], ids=["static", "phonons"])
+def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(
+    device, lazy, frozen_phonons
+):
     # transition_potential_scan splits a multi-energy S-matrix into its energies,
     # and stacked their measurements along the unreduced energy axis
     pytest.importorskip("gpaw")
@@ -1431,7 +1435,10 @@ def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(de
     from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
 
     atoms = ase.Atoms("B2", positions=[(2, 2, 1), (4, 5, 3)], cell=(8, 6, 8), pbc=True)
-    potential = abtem.Potential(atoms, gpts=(48, 56), slice_thickness=2)
+    structure = atoms
+    if frozen_phonons:
+        structure = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1)
+    potential = abtem.Potential(structure, gpts=(48, 56), slice_thickness=2)
     energy = gaussian(1e3, 3, center=100e3, sampling_limit=2, ensemble_mean=True)
     assert len(set(energy.weights)) > 1, "the weights must tell the mean from a sum"
     transition_potential = TransitionPotential(
@@ -1446,7 +1453,7 @@ def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(de
         detectors=abtem.PixelatedDetector(max_angle=30),
         sites=atoms,
         double_channel=False,
-        lazy=False,
+        lazy=lazy,
     )
 
     def scan(energy):
@@ -1467,3 +1474,29 @@ def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(de
     np.testing.assert_allclose(
         result, expected, rtol=1e-8, atol=1e-12 * np.abs(expected).max()
     )
+
+
+def test_stack_energies_without_averaging_keeps_every_energy_of_each_detector():
+    # a caller that defers the averaging of its ensemble axes (the single-energy
+    # path of a reduction) gets every energy back, detector by detector
+    from abtem.prism.s_matrix import _stack_energies
+
+    energy, smatrix, scan, _ = _energy_distribution_smatrix_setup(True)
+    detectors = [abtem.AnnularDetector(10, 25), abtem.AnnularDetector(25, 45)]
+    results = [
+        smatrix(float(e)).scan(scan=scan, detectors=detectors, lazy=False)
+        for e in energy.values
+    ]
+    energy_axis = smatrix(energy)._energy_axis()
+
+    kept = _stack_energies(results, energy_axis, average=False)
+    averaged = _stack_energies(results, energy_axis)
+
+    assert len(kept) == len(averaged) == 2
+    for i in range(2):
+        assert kept[i].shape == (len(energy.values), 2, 3)
+        assert averaged[i].shape == (2, 3)
+        for j, single in enumerate(results):
+            np.testing.assert_allclose(
+                _compute(kept[i])[j], _compute(single[i]), rtol=1e-12
+            )

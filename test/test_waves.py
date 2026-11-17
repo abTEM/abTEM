@@ -1489,8 +1489,10 @@ def test_downsample_normalization_is_deprecated_but_honoured(lazy):
         return np.abs(np.asarray(result.compute().array if lazy else result.array))
 
     default = downsampled()
-    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+    with pytest.warns(FutureWarning, match="normalization.*deprecated") as record:
         values = downsampled(normalization="values")
+    # the warning points at the caller of downsample
+    assert [w.filename for w in record] == [__file__]
     with pytest.warns(FutureWarning, match="normalization.*deprecated"):
         amplitude = downsampled(normalization="amplitude")
 
@@ -1499,8 +1501,13 @@ def test_downsample_normalization_is_deprecated_but_honoured(lazy):
     np.testing.assert_allclose(values, 1 / 64**2, rtol=1e-4)
     np.testing.assert_allclose(amplitude, 1 / 32**2, rtol=1e-4)
 
+    # v1.0.11 also took 'intensity', which fft_interpolate treats as 'amplitude'
+    with pytest.warns(FutureWarning, match="normalization.*deprecated"):
+        intensity = downsampled(normalization="intensity")
+    np.testing.assert_allclose(intensity, amplitude, rtol=1e-12)
+
     with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not recognized"):
-        waves.downsample(gpts=(32, 32), normalization="intensity")
+        waves.downsample(gpts=(32, 32), normalization="nonsense")
 
 
 def test_downsample_without_the_normalization_argument_does_not_warn():

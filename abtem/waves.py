@@ -511,18 +511,21 @@ def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     return ensemble
 
 
-def _deprecated_normalization(normalization, function: str, hint: str):
+def _deprecated_normalization(
+    normalization, function: str, hint: str, stacklevel: int = 3
+):
     """Warn that the ``normalization`` keyword of ``function`` is deprecated, and
-    return it validated; None when it was not given."""
+    return it validated; None when it was not given. The warning points ``stacklevel``
+    frames up from here, the default being the caller of ``function``."""
     if normalization is None:
         return None
     warnings.warn(
         f"The `normalization` argument of `{function}` is deprecated and will be "
         f"removed in a future release. {hint}",
         FutureWarning,
-        stacklevel=3,
+        stacklevel=stacklevel,
     )
-    if normalization not in ("values", "amplitude"):
+    if normalization not in ("values", "amplitude", "intensity"):
         raise ValueError(
             f"normalization {normalization!r} not recognized; use 'values' or "
             "'amplitude'"
@@ -543,6 +546,7 @@ def _normalize_with_deprecated_normalization(normalize, normalization, function:
         "It only set a metadata label and did not change the exit waves, which have "
         "a value of one in the incident wave: use `normalize=True` for waves with "
         "a reciprocal space intensity that sums to one.",
+        stacklevel=4,
     )
     return bool(normalize)
 
