@@ -129,3 +129,25 @@ def test_shipped_cases_load_and_pass_validation():
     ids = registry.select_ids(reg, "quick", ["cpu"], only=["stem.*"])
     assert all(i.name == "stem.multidetector" for i in ids)
     assert len(registry.select_ids(reg, "quick", ["cpu"], tags=["v1.1"])) >= 4
+
+
+def test_every_variant_fixing_the_propagator_order_declares_requires():
+    """``algorithm_order`` makes ``multislice_kwargs`` import
+    ``FourierMultislice``, which older refs lack."""
+    ordered = [
+        f"{c.name}[{v}]"
+        for c in registry.load_cases().values()
+        for v, var in c.variants.items()
+        if "algorithm_order" in var.params and var.requires is None
+    ]
+    assert ordered == []
+
+
+def test_has_fourier_multislice_reads_the_refs_multislice_module():
+    from types import SimpleNamespace
+
+    from abtem_bench.fixtures import has_fourier_multislice
+
+    new = SimpleNamespace(multislice=SimpleNamespace(FourierMultislice=object))
+    old = SimpleNamespace(multislice=SimpleNamespace())
+    assert has_fourier_multislice(new) and not has_fourier_multislice(old)

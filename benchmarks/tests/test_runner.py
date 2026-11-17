@@ -192,3 +192,103 @@ def test_overwrite_refuses_a_manifest_that_is_not_a_bundles(tmp_path, this_check
     with pytest.raises(runner.BundleExistsError, match="not a bundle"):
         runner.new_bundle(out, this_checkout, "accuracy", "quick", ["cpu"], "t", True)
     assert (out / "src" / "data.txt").read_text() == "keep"
+
+
+def _worker_args(tmp_path, cid):
+    import argparse
+
+    return argparse.Namespace(
+        out=str(tmp_path / "b"),
+        case_id=str(cid),
+        ref_label="x",
+        ref_sha="0" * 40,
+        preset="accuracy",
+        expected_root=None,
+        repeats=0,
+    )
+
+
+@pytest.fixture
+def restored_config():
+    """``worker.run`` applies a preset to abtem's and dask's process-wide
+    configuration; put both back so later tests see what they started with."""
+    import copy
+
+    import dask
+
+    from abtem.core import config as abtem_config
+
+    saved = [(d, copy.deepcopy(d)) for d in (abtem_config.config, dask.config.config)]
+    yield
+    for d, snapshot in saved:
+        d.clear()
+        d.update(snapshot)
+
+
+def _run_demo_worker(tmp_path, monkeypatch, cid, case_requires=None, **variants):
+    from abtem_bench import worker
+    from abtem_bench.registry import Tier
+
+    calls = []
+
+    def func(p, device):
+        calls.append(p.variant)
+        return lambda: np.ones(3)
+
+    reg = {}
+    monkeypatch.setattr(registry, "REGISTRY", reg)
+    monkeypatch.setattr(registry, "load_cases", lambda: reg)
+    registry.case(
+        "demo.case",
+        tiers={t: Tier(gpts=(4, 4)) for t in registry.TIER_NAMES},
+        variants=variants,
+        requires=case_requires,
+    )(func)
+    args = _worker_args(tmp_path, cid)
+    assert worker.run(args) == 0
+    return store.Bundle(args.out).read_case(str(cid)), calls
+
+
+@pytest.mark.parametrize(
+    "cid, requires, status, error",
+    [
+        ("demo.case@quick/cpu", False, store.STATUS_OK, None),
+        (
+            "demo.case[alt]@quick/cpu",
+            False,
+            store.STATUS_UNSUPPORTED,
+            "requires() of variant 'alt' is false on this ref",
+        ),
+        ("demo.case[alt]@quick/cpu", True, store.STATUS_OK, None),
+    ],
+)
+def test_a_variant_requires_decides_only_that_variant(
+    tmp_path, monkeypatch, restored_config, cid, requires, status, error
+):
+    from abtem_bench.registry import Variant
+
+    cid = CaseId.parse(cid)
+    rec, calls = _run_demo_worker(
+        tmp_path, monkeypatch, cid, alt=Variant(requires=lambda abtem: requires)
+    )
+    assert rec["status"] == status, rec.get("error")
+    assert rec.get("error") == error
+    assert calls == ([cid.variant] if status == store.STATUS_OK else [])
+
+
+def test_a_case_requires_makes_every_variant_unsupported(
+    tmp_path, monkeypatch, restored_config
+):
+    from abtem_bench.registry import Variant
+
+    cid = CaseId.parse("demo.case[alt]@quick/cpu")
+    rec, calls = _run_demo_worker(
+        tmp_path,
+        monkeypatch,
+        cid,
+        case_requires=lambda abtem: False,
+        alt=Variant(requires=lambda abtem: True),
+    )
+    assert rec["status"] == store.STATUS_UNSUPPORTED
+    assert rec["error"] == "requires() is false on this ref"
+    assert calls == []

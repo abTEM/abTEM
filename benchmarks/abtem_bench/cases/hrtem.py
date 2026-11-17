@@ -1,6 +1,11 @@
 """Plane-wave multislice: exit wave and selected-area diffraction."""
 
-from abtem_bench.fixtures import multislice_kwargs, silicon, srtio3
+from abtem_bench.fixtures import (
+    has_fourier_multislice,
+    multislice_kwargs,
+    silicon,
+    srtio3,
+)
 from abtem_bench.registry import Tier, Tolerance, Variant, case
 
 
@@ -37,7 +42,11 @@ from abtem_bench.registry import Tier, Tolerance, Variant, case
         ),
     },
     variants={
-        "order1": Variant(algorithm_order=1, compare_as="default"),
+        "order1": Variant(
+            algorithm_order=1,
+            compare_as="default",
+            requires=has_fourier_multislice,
+        ),
     },
     outputs=("exitwave", "saed"),
     tolerance=Tolerance(),

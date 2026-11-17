@@ -62,13 +62,21 @@ class Variant:
     with (typically ``"default"``), so ``x[order1]`` on a candidate can be
     compared to ``x`` on a reference. ``flag=False`` keeps speed and memory
     ratios in the report but never flags them (used for ``auto`` sizing).
+    ``requires`` has the meaning of ``Case.requires``, for this variant alone:
+    a ref where it is false records the variant ``UNSUPPORTED``.
     """
 
     def __init__(
-        self, *, compare_as: str | None = None, flag: bool = True, **params: Any
+        self,
+        *,
+        compare_as: str | None = None,
+        flag: bool = True,
+        requires: Callable[[Any], bool] | None = None,
+        **params: Any,
     ):
         self.compare_as = compare_as
         self.flag = flag
+        self.requires = requires
         self.params: dict[str, Any] = dict(params)
 
 

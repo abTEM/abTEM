@@ -37,6 +37,12 @@ def supports_kwarg(func, name: str) -> bool:
         return False
 
 
+def has_fourier_multislice(abtem: Any) -> bool:
+    """Whether the ref has ``FourierMultislice``, which a variant that fixes
+    the propagator order needs (see ``multislice_kwargs``)."""
+    return hasattr(abtem.multislice, "FourierMultislice")
+
+
 def multislice_kwargs(params: Any) -> dict[str, Any]:
     """Keyword arguments forwarded through ``**multislice_func_kwargs``.
 

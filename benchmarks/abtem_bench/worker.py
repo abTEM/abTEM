@@ -131,9 +131,17 @@ def run(args: argparse.Namespace) -> int:
             record["error"] = f"tier {cid.tier} does not run on {cid.device}"
             bundle.write_case(args.case_id, record)
             return 0
-        if case.requires is not None and not case.requires(abtem):
+        checks = [("", case.requires)]
+        if cid.variant != registry.DEFAULT_VARIANT:
+            checks.append(
+                (f" of variant {cid.variant!r}", case.variants[cid.variant].requires)
+            )
+        failed = next(
+            (what for what, r in checks if r is not None and not r(abtem)), None
+        )
+        if failed is not None:
             record["status"] = store.STATUS_UNSUPPORTED
-            record["error"] = "requires() is false on this ref"
+            record["error"] = f"requires(){failed} is false on this ref"
             bundle.write_case(args.case_id, record)
             return 0
 

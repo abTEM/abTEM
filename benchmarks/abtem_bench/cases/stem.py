@@ -1,6 +1,11 @@
 """STEM scans."""
 
-from abtem_bench.fixtures import detector_angles, multislice_kwargs, silicon
+from abtem_bench.fixtures import (
+    detector_angles,
+    has_fourier_multislice,
+    multislice_kwargs,
+    silicon,
+)
 from abtem_bench.registry import Tier, Tolerance, Variant, case
 
 
@@ -41,7 +46,11 @@ def _nominal_bytes(p) -> int:
         ),
     },
     variants={
-        "order1": Variant(algorithm_order=1, compare_as="default"),
+        "order1": Variant(
+            algorithm_order=1,
+            compare_as="default",
+            requires=has_fourier_multislice,
+        ),
         "eager": Variant(lazy=False),
         "auto": Variant(max_batch="auto", chunk=None, flag=False),
     },
