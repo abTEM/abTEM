@@ -406,7 +406,7 @@ def test_repeated_cell_displaces_each_frozen_phonon_configuration(
             frozen_phonons, charge_density_3d, sampling=0.4, repetitions=(2, 1, 1)
         )
         built = potential.build(lazy=lazy)
-        return (built.compute() if lazy else built).array
+        return asnumpy((built.compute() if lazy else built).array)
 
     displaced = build(0.1)
     undisplaced = build(0.0)
@@ -447,7 +447,7 @@ def test_chunks_of_several_configurations_get_their_own_charge_densities(
         blocks = [block.item() for *_, block in potential.generate_blocks(chunks)]
     built = np.concatenate(
         [
-            block.build(lazy=False).array.reshape((-1,) + block.base_shape)
+            asnumpy(block.build(lazy=False).array).reshape((-1,) + block.base_shape)
             for block in blocks
         ]
     )
@@ -458,7 +458,7 @@ def test_chunks_of_several_configurations_get_their_own_charge_densities(
     for i, atoms in enumerate(frozen_phonons):
         density = densities[i if charge_densities > 1 else 0]
         expected = ChargeDensityPotential(atoms, density, sampling=0.2)
-        expected = expected.build(lazy=False).array
+        expected = asnumpy(expected.build(lazy=False).array)
         np.testing.assert_allclose(
             built[i], expected, rtol=0, atol=1e-6 * expected.max()
         )

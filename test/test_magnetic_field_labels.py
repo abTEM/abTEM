@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from utils import devices, lazy_params, to_host_array
+from utils import float64_devices, lazy_params, to_host_array
 
 from abtem.magnetism.iam import MagneticField, VectorPotential
 
@@ -46,7 +46,7 @@ def _iron_atoms():
     "cls, labels",
     [(MagneticField, ("Bx", "By", "Bz")), (VectorPotential, ("Ax", "Ay", "Az"))],
 )
-@devices
+@float64_devices
 @lazy_params
 @pytest.mark.parametrize("projection_axis", ["y", "x"])
 def test_depth_profile_of_a_vector_field_keeps_its_components(
@@ -67,7 +67,7 @@ def test_depth_profile_of_a_vector_field_keeps_its_components(
 
     summed = array.sum(axis=-1 if projection_axis == "y" else -2)  # (z, c, space)
     np.testing.assert_allclose(
-        to_host_array(profile.array), np.moveaxis(summed, 0, -1), rtol=1e-5
+        to_host_array(profile.array), np.moveaxis(summed, 0, -1), rtol=1e-10
     )
     assert profile.ensemble_axes_metadata[-1].values == labels
     assert profile.base_shape == (summed.shape[-1], array.shape[0])
