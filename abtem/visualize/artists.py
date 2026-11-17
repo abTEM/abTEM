@@ -11,6 +11,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import Collection, mpath, transforms
 from matplotlib.colors import Colormap
 from matplotlib.patches import Rectangle
+from matplotlib.text import Annotation
 from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
@@ -20,8 +21,6 @@ from abtem.core.colors import hsluv_cmap
 from abtem.core.units import get_conversion_factor
 
 if TYPE_CHECKING:
-    from matplotlib.text import Annotation
-
     from abtem.measurements import (
         DiffractionPatterns,
         Images,
@@ -745,6 +744,7 @@ class CircleAnnotations:
         self._circle_collection = circle_collection
         self._placement = placement
         self._threshold = threshold
+        self._visible = True
 
         ax = circle_collection.axes
         positions = self._get_positions()
@@ -773,10 +773,10 @@ class CircleAnnotations:
         )
 
     def __getattr__(self, name):
-        try:
-            super(self.__class__).__getattr__(name)
-        except AttributeError:
-            pass
+        if name.startswith("_") or not callable(getattr(Annotation, name, None)):
+            raise AttributeError(
+                f"{self.__class__.__name__} object has no attribute {name}"
+            )
 
         def method(*args, **kwargs):
             return tuple(

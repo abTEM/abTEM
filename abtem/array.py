@@ -1383,6 +1383,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     ) -> Self:
         """Creates array object from a given array and metadata.
 
+        A class that cannot rebuild itself from the array, the axes metadata and
+        the metadata raises `NotImplementedError`; `from_zarr` then rebuilds it
+        from its stored constructor kwargs.
+
         Parameters
         ----------
         array : ndarray
@@ -2620,7 +2624,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def set_ensemble_axes_metadata(
         self, axes_metadata: AxisMetadata, axis: int
     ) -> Self:
-        """Sets the axes metadata of an ensemble axis.
+        """Sets the axes metadata of an ensemble axis. The axes metadata are left
+        unchanged when the new axis is refused.
 
         Parameters
         ----------
@@ -2628,16 +2633,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The new axis metadata.
         axis : int
             The axis to set.
+
+        Raises
+        ------
+        RuntimeError
+            If the axis metadata does not fit the dimension, for example an ordinal
+            axis with a different number of values.
+        ValueError
+            If an `EnergyAxis` contradicts the energy of the object.
         """
 
-        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-
-        self.ensemble_axes_metadata[axis] = axes_metadata
+        old_axes_metadata = self._ensemble_axes_metadata
+        self._ensemble_axes_metadata = list(old_axes_metadata)
+        self._ensemble_axes_metadata[axis] = axes_metadata
 
         try:
             self._check_axes_metadata()
-        except RuntimeError:
+            self._check_energy_matches_energy_axes()
+        except (RuntimeError, ValueError):
             self._ensemble_axes_metadata = old_axes_metadata
+            raise
 
         return self
 
@@ -3137,7 +3152,9 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        except Exception:
+        except NotImplementedError:
+            # The class rebuilds only from its constructor kwargs, which every
+            # canonical file since abTEM 1.0.10 stores.
             if kwargs is None:
                 raise
 
