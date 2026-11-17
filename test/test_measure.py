@@ -4175,7 +4175,12 @@ def test_azimuthal_average_of_integer_counts_is_not_truncated(
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
 @pytest.mark.parametrize(
     "dtype, value",
-    [(np.uint8, 127), (np.int16, 16383), (np.uint16, 32767)],
+    [
+        (np.uint8, 127),
+        (np.int16, 16383),
+        (np.uint16, 32767),
+        (np.int32, 2**30),  # the integer type of the torch backend
+    ],
 )
 def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
     dtype, value, lazy, device
@@ -4188,7 +4193,14 @@ def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
         fftshift=True,
         metadata={"energy": 200e3},
         ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
-    ).copy_to_device(device)
+    )
+    try:
+        patterns = patterns.copy_to_device(device)
+    except RuntimeError as error:
+        # the torch backend holds no 8 or 16 bit integers
+        if "is not supported on Metal" not in str(error):
+            raise
+        pytest.skip(str(error))
     if lazy:
         patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
 
