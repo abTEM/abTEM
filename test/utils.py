@@ -9,7 +9,6 @@ import pytest
 from hypothesis import assume
 
 from abtem.core.backend import asnumpy, cp, get_array_module
-from abtem.core.testing import array_is_close  # noqa: F401
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.potentials.iam import Potential
 from abtem.waves import Waves

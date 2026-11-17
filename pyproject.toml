@@ -113,10 +113,8 @@ test = [
 zip-safe = false
 include-package-data = true
 
-[tool.setuptools.packages.find]
-namespaces = false
-# Nothing under benchmarks/ (the regression benchmark harness) or test/ ships in the wheel.
-exclude = ["benchmarks*", "test*"]
+[tool.setuptools.packages]
+find = {namespaces = false}
 
 [tool.setuptools.package-data]
 abtem = ["py.typed"]
