@@ -2325,3 +2325,125 @@ def test_a_window_view_keeps_the_expansion_batch(device):
     view = built._with_window(tuple(built.gpts))
 
     assert view.max_batch_expansion == 7
+
+
+# The batches of the lattice and streamed reductions hold as many rows as fit a byte
+# budget, counting the real size of an element: 8 bytes of complex64 at single
+# precision and 16 of complex128 at double. They counted 8 whatever the precision, so
+# at double precision a batch held twice its budget.
+_ITEMSIZE = {"float32": 8, "float64": 16}
+
+
+@devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_mode_contraction_batches_count_the_size_of_an_element(
+    precision, device, monkeypatch
+):
+    # the windows are contracted with the kernel in batches of positions: K = 3
+    # modes, 16 pixels, so a position takes 3 * 16 * itemsize bytes and a budget of
+    # four positions at single precision holds only two at double precision
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    num_modes, num_pixels, num_positions = 3, 16, 10
+    with abtem.config.set({"precision": precision}):
+        built = _window_s_matrix(_window_potential(_WINDOW_ATOMS, device), device)
+        built = built.build(lazy=False)
+        xp = built._xp
+        dtype = built._complex_dtype
+        assert np.dtype(dtype).itemsize == _ITEMSIZE[precision]
+
+        rng = np.random.default_rng(0)
+        fields = xp.asarray(
+            (rng.random((num_modes, 6, 6)) + 1j * rng.random((num_modes, 6, 6))).astype(
+                dtype
+            )
+        )
+        kernel = xp.asarray(
+            (rng.random((num_modes, 4, 4)) + 1j * rng.random((num_modes, 4, 4))).astype(
+                dtype
+            )
+        )
+        flat_indices = xp.asarray(rng.integers(0, 36, (num_positions, 4, 4)))
+
+        monkeypatch.setattr(
+            CompressedSMatrixArray,
+            "_REDUCE_BATCH_BYTES",
+            4 * num_modes * num_pixels * 8,
+        )
+        batches = []
+        row_batch_size = CompressedSMatrixArray._row_batch_size
+
+        def record(self, elements_per_row, dtype, budget_bytes):
+            batches.append(row_batch_size(self, elements_per_row, dtype, budget_bytes))
+            return batches[-1]
+
+        monkeypatch.setattr(CompressedSMatrixArray, "_row_batch_size", record)
+        waves = built._contract_modes_batched(
+            fields, flat_indices, kernel, gather_kernel=False
+        )
+
+    assert batches == [4 * 8 // _ITEMSIZE[precision]]
+    gathered = np.asarray(
+        to_host_array(fields).reshape(num_modes, -1)[:, to_host_array(flat_indices)]
+    )
+    expected = np.einsum(
+        "kpw,kw->pw",
+        gathered.reshape(num_modes, num_positions, -1),
+        to_host_array(kernel).reshape(num_modes, -1),
+    )
+    np.testing.assert_allclose(
+        to_host_array(waves).reshape(num_positions, -1),
+        expected,
+        rtol=1e-5 if precision == "float32" else 1e-12,
+    )
+
+
+@devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_lattice_reduction_batches_count_the_size_of_an_element(
+    precision, device, monkeypatch
+):
+    # a window block of the lattice reduction and the scan rows of a block and of a
+    # detection pass are all counted in bytes of the element of the reduced waves
+    import sys
+
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    budget = 50000
+    calls = []
+    row_batch_size = CompressedSMatrixArray._row_batch_size
+
+    def record(self, elements_per_row, dtype, budget_bytes):
+        rows = row_batch_size(self, elements_per_row, dtype, budget_bytes)
+        calls.append(
+            (
+                sys._getframe(1).f_code.co_name,
+                elements_per_row,
+                dtype,
+                budget_bytes,
+                rows,
+            )
+        )
+        return rows
+
+    monkeypatch.setattr(CompressedSMatrixArray, "_row_batch_size", record)
+    monkeypatch.setattr(CompressedSMatrixArray, "_REDUCE_BATCH_BYTES", budget)
+    with abtem.config.set({"precision": precision}):
+        potential = _window_potential(_WINDOW_ATOMS, device)
+        built = _window_s_matrix(potential, device).build(lazy=False)
+        built.reduce(
+            scan=_window_scan(potential),
+            detectors=abtem.PixelatedDetector(max_angle="cutoff"),
+            blend_angle=0,
+        )
+
+    callers = {caller for caller, *_ in calls}
+    assert callers == {
+        "_lattice_waves_block",
+        "_lattice_batch_reduce_to_measurements",
+    }
+    # the row blocks and the detection passes of the batch reduction
+    assert sum(c[0] == "_lattice_batch_reduce_to_measurements" for c in calls) >= 2
+    for _, elements_per_row, dtype, budget_bytes, rows in calls:
+        assert np.dtype(dtype).itemsize == _ITEMSIZE[precision]
+        assert rows == max(1, budget_bytes // (elements_per_row * _ITEMSIZE[precision]))

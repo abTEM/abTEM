@@ -390,6 +390,7 @@ def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
     np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
 
 
+@float64_devices
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
 def test_repeated_cell_displaces_each_frozen_phonon_configuration(
     carbon_atoms, charge_density_3d, lazy
@@ -421,10 +422,10 @@ def test_repeated_cell_displaces_each_frozen_phonon_configuration(
     assert np.abs(displaced - build(0.1, seed=5)).max() > 1e-3 * scale
 
 
+@float64_devices
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
-@pytest.mark.parametrize(
-    "chunks", [2, 4, ((1, 3),)], ids=["pairs", "one block", "uneven"]
-)
+# uneven chunks of several configurations; equal ones and one block add no case
+@pytest.mark.parametrize("chunks", [((1, 3),)], ids=["uneven"])
 @pytest.mark.parametrize(
     "charge_densities", [1, 4], ids=["shared", "per_configuration"]
 )

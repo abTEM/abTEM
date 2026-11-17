@@ -4100,8 +4100,9 @@ def test_indexed_patterns_cannot_infer_a_pixel_area():
 _COUNT_DTYPES = [np.int32, np.uint16, np.float32, np.float64]
 
 
-def _count_patterns(dtype, lazy):
+def _count_patterns(dtype, lazy, device="cpu"):
     counts = (np.random.default_rng(3).random((3, 4, 16, 16)) * 200).astype(dtype)
+    counts = copy_to_device(counts, device)
     return DiffractionPatterns(
         da.from_array(counts, chunks=(2, 2, 16, 16)) if lazy else counts,
         sampling=0.1,
@@ -4122,19 +4123,20 @@ _RADIAL_OPERATIONS = {
 }
 
 
+@devices
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("dtype", _COUNT_DTYPES)
 @pytest.mark.parametrize("operation", _RADIAL_OPERATIONS)
 def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
-    operation, dtype, precision
+    operation, dtype, precision, device
 ):
     """Integer counts used to be declared as their own dtype by a lazy
     `integrate_radial` (it computes int64) and `azimuthal_average` (float64, whatever
     the precision, and truncated to integers by the Gaussian weighting)."""
     with abtem.config.set({"precision": precision}):
         run = _RADIAL_OPERATIONS[operation]
-        eager = run(_count_patterns(dtype, lazy=False))
-        lazy = run(_count_patterns(dtype, lazy=True))
+        eager = run(_count_patterns(dtype, lazy=False, device=device))
+        lazy = run(_count_patterns(dtype, lazy=True, device=device))
         computed = lazy.compute().array
 
     assert lazy.array.dtype == computed.dtype == eager.array.dtype
@@ -4145,12 +4147,15 @@ def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
             assert computed.dtype == np.int64  # integer counts sum exactly
     else:
         assert computed.dtype == np.dtype(dtype)  # floating point counts keep theirs
-    np.testing.assert_allclose(computed, eager.array, rtol=1e-5)
+    np.testing.assert_allclose(asnumpy(computed), asnumpy(eager.array), rtol=1e-5)
 
 
+@devices
 @pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
-def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function):
-    counts = _count_patterns(np.int32, lazy=False)
+def test_azimuthal_average_of_integer_counts_is_not_truncated(
+    weighting_function, device
+):
+    counts = _count_patterns(np.int32, lazy=False, device=device)
     exact = DiffractionPatterns(
         counts.array.astype(np.float64),
         sampling=counts.sampling,
@@ -4161,6 +4166,7 @@ def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function
     averaged = counts.azimuthal_average(weighting_function=weighting_function).array
     expected = exact.azimuthal_average(weighting_function=weighting_function).array
 
+    averaged, expected = asnumpy(averaged), asnumpy(expected)
     assert not np.array_equal(averaged, np.round(averaged))  # fractional averages
     np.testing.assert_allclose(averaged, expected, rtol=1e-5)
 

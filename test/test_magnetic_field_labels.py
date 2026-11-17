@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from utils import devices, lazy_params, to_host_array
+
 from abtem.magnetism.iam import MagneticField, VectorPotential
 
 
@@ -44,19 +46,29 @@ def _iron_atoms():
     "cls, labels",
     [(MagneticField, ("Bx", "By", "Bz")), (VectorPotential, ("Ax", "Ay", "Az"))],
 )
+@devices
+@lazy_params
 @pytest.mark.parametrize("projection_axis", ["y", "x"])
 def test_depth_profile_of_a_vector_field_keeps_its_components(
-    cls, labels, projection_axis
+    cls, labels, projection_axis, lazy, device
 ):
     # the component axis between depth and space was swapped with the spatial axis,
     # and the profile then had too few axes metadata
-    built = cls(_iron_atoms(), gpts=(10, 12), slice_thickness=1.0).build()
-    array = built.array  # (z, component, x, y)
+    built = cls(
+        _iron_atoms(), gpts=(10, 12), slice_thickness=1.0, device=device
+    ).build(lazy=lazy)
+    # (z, component, x, y); the profile of a lazy field is lazy and equals the eager
+    # one, summed here from the array
+    array = to_host_array(built.array.compute() if lazy else built.array)
 
     profile = built.depth_profile(projection_axis=projection_axis)
+    assert profile.is_lazy == lazy
+    profile = profile.compute() if lazy else profile
 
     summed = array.sum(axis=-1 if projection_axis == "y" else -2)  # (z, c, space)
-    np.testing.assert_allclose(profile.array, np.moveaxis(summed, 0, -1))
+    np.testing.assert_allclose(
+        to_host_array(profile.array), np.moveaxis(summed, 0, -1), rtol=1e-5
+    )
     assert profile.ensemble_axes_metadata[-1].values == labels
     assert profile.base_shape == (summed.shape[-1], array.shape[0])
 

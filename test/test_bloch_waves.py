@@ -9,7 +9,7 @@ from ase.build import bulk, graphene
 from ase.spacegroup import crystal
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from utils import assert_array_objects_equal, gpu, requires_gpu
+from utils import assert_array_objects_equal, devices, gpu, requires_gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
@@ -2559,21 +2559,24 @@ def test_orientation_matrix_must_be_three_by_three():
         )
 
 
-def _exit_wave_calculators():
-    bloch_waves = _silicon_bloch_waves("cpu")
+def _exit_wave_calculators(device="cpu"):
+    bloch_waves = _silicon_bloch_waves(device)
     ensemble = bloch_waves.rotate(
         "x", abtem.distributions.from_values(np.array([0.0, 0.2])), degrees=True
     )
     return {"BlochWaves": bloch_waves, "BlochwaveEnsemble": ensemble}
 
 
+@devices
 @pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
-def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy):
+def test_exit_waves_are_normalized_as_the_builders_of_waves_are(
+    calculator, lazy, device
+):
     # the argument only wrote a label to the metadata, and the exit waves did not
     # change: normalize=False is the incident wave of PlaneWave() (one in every pixel),
     # normalize=True that of PlaneWave(normalize=True)
-    source = _exit_wave_calculators()[calculator]
+    source = _exit_wave_calculators(device)[calculator]
     gpts = (16, 20)
 
     def exit_waves(normalize, thickness=(50.0, 200.0)):
@@ -2587,21 +2590,21 @@ def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy
     assert plain.metadata["normalization"] == "values"
     assert normalized.metadata["normalization"] == "reciprocal_space"
     np.testing.assert_allclose(
-        np.asarray(normalized.array), np.asarray(plain.array) / np.prod(gpts)
+        asnumpy(normalized.array), asnumpy(plain.array) / np.prod(gpts)
     )
     # a thin crystal leaves the incident wave: one in every pixel, or one over N
     np.testing.assert_allclose(
-        np.abs(np.asarray(exit_waves(False, thickness=0.001).array)), 1.0, atol=1e-3
+        np.abs(asnumpy(exit_waves(False, thickness=0.001).array)), 1.0, atol=1e-3
     )
     np.testing.assert_allclose(
-        np.abs(np.asarray(exit_waves(True, thickness=0.001).array)),
+        np.abs(asnumpy(exit_waves(True, thickness=0.001).array)),
         1.0 / np.prod(gpts),
         atol=1e-3 / np.prod(gpts),
     )
     # either way the diffraction patterns are those of the same wave
     np.testing.assert_allclose(
-        plain.diffraction_patterns(max_angle=None).array,
-        normalized.diffraction_patterns(max_angle=None).array,
+        asnumpy(plain.diffraction_patterns(max_angle=None).array),
+        asnumpy(normalized.diffraction_patterns(max_angle=None).array),
         atol=1e-6,
     )
 
