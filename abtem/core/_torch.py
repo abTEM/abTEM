@@ -283,7 +283,9 @@ def _forward(name: str):
         # do, so the device side wins. Torch would otherwise turn it into a CPU
         # tensor itself: most operators then decline it (NotImplemented, and
         # NumPy's reflected ufunc does the move), but `==` does not and fails
-        # with a device mismatch.
+        # with a device mismatch. This holds for every method forwarded to the
+        # tensor, not only the operators: `take`, `clip`, `masked_fill`, ...
+        # take a host array argument too, narrowed to the array's dtype.
         args = tuple(_unwrap(_to_device_operand(arg)) for arg in args)
         kwargs = {
             key: _unwrap(_to_device_operand(value)) for key, value in kwargs.items()
@@ -495,11 +497,8 @@ class TorchNDArray:
 
     @_serialized
     def __setitem__(self, key, value):
-        if isinstance(value, np.ndarray):
-            # torch will not take a host array as the right-hand side
-            value = _unwrap(asarray(value))
-        else:
-            value = _unwrap(value)
+        # torch will not take a host array as the right-hand side
+        value = _unwrap(_to_device_operand(value))
         # NumPy casts on assignment (e.g. a real result into a complex array);
         # torch instead refuses a dtype mismatch, so cast to match NumPy.
         if isinstance(value, torch.Tensor) and value.dtype != self._tensor.dtype:
@@ -577,22 +576,22 @@ class TorchNDArray:
     # for the matching binary operators, which it cannot see are compatible.
     @_serialized
     def __iadd__(self, other):  # type: ignore[misc]
-        self._tensor += _unwrap(other)
+        self._tensor += _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __isub__(self, other):  # type: ignore[misc]
-        self._tensor -= _unwrap(other)
+        self._tensor -= _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __imul__(self, other):  # type: ignore[misc]
-        self._tensor *= _unwrap(other)
+        self._tensor *= _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __itruediv__(self, other):  # type: ignore[misc]
-        self._tensor /= _unwrap(other)
+        self._tensor /= _unwrap(_to_device_operand(other))
         return self
 
 

@@ -422,10 +422,10 @@ def test_minimum_and_maximum_take_a_scalar():
     ids=lambda op: op.__name__,
 )
 def test_a_device_array_operator_takes_a_host_array(op):
-    # `device == host` once failed with a device mismatch: torch turns a NumPy
-    # operand into a CPU tensor itself, and only `==` did not decline it, so the
-    # device side has to move the host operand first. With the host array on the
-    # left, NumPy dispatches to the ufunc, which has to be registered.
+    # Torch turns a NumPy operand into a CPU tensor itself, so the device side
+    # moves the host operand first. With the host array on the left, NumPy
+    # dispatches to the ufunc, which has to be registered. Values only: where
+    # the operand ends up is checked on a device other than the host below.
     xp = get_array_module("mps")
     host = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
     other = np.array([[1, 5, 3], [2, 5, 7]], dtype=np.int32)
@@ -436,6 +436,81 @@ def test_a_device_array_operator_takes_a_host_array(op):
         assert get_array_module(result) is xp
     assert np.array_equal(asnumpy(op(on_device, other)), op(host, other))
     assert np.array_equal(asnumpy(op(other, on_device)), op(other, host))
+
+
+@pytest.fixture
+def device_other_than_the_host(monkeypatch):
+    """Make the backend's device differ from the host, on any machine.
+
+    Torch's CPU device, which CI runs the backend on, *is* the host, so a host
+    operand that torch turns into a CPU tensor goes unnoticed there. On the
+    'meta' device that CPU tensor is a device mismatch, as it is on Metal.
+    """
+    from abtem.core import _torch
+
+    monkeypatch.setattr(_torch, "DEVICE", "meta")
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        operator.add,
+        operator.sub,
+        operator.mul,
+        operator.truediv,
+        operator.pow,
+        operator.mod,
+        operator.eq,
+        operator.ne,
+        operator.lt,
+        operator.and_,
+    ],
+    ids=lambda op: op.__name__,
+)
+def test_a_host_operand_joins_the_device_when_it_is_not_the_host(
+    op, device_other_than_the_host
+):
+    xp = get_array_module("mps")
+    host = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    on_device = xp.asarray(host)
+
+    for result in (op(on_device, host), op(host, on_device)):
+        assert result._tensor.device.type == "meta"
+
+
+@pytest.mark.parametrize(
+    "op", [operator.iadd, operator.isub, operator.imul, operator.itruediv]
+)
+def test_an_in_place_operator_takes_a_host_array(op, device_other_than_the_host):
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.ones((2, 3), dtype=np.float32))
+    tensor = on_device._tensor
+
+    op(on_device, np.full((2, 3), 2.0, dtype=np.float32))
+
+    assert on_device._tensor is tensor  # updated in place, not rebound
+    assert on_device._tensor.device.type == "meta"
+
+
+def test_assigning_a_host_array_into_a_device_array(device_other_than_the_host):
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.zeros((2, 3), dtype=np.float32))
+
+    on_device[0] = np.ones(3, dtype=np.float32)
+
+    assert on_device._tensor.device.type == "meta"
+
+
+def test_a_forwarded_method_takes_a_host_array(device_other_than_the_host):
+    # Methods the wrapper does not define are forwarded to the tensor, with the
+    # same rule for their array arguments.
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.arange(6, dtype=np.float32).reshape(2, 3))
+
+    result = on_device.index_select(1, np.array([0, 2]))
+
+    assert result._tensor.device.type == "meta"
+    assert tuple(result.shape) == (2, 2)
 
 
 def test_dask_constant_boundary_overlap_stays_on_device():

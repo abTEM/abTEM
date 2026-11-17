@@ -270,13 +270,14 @@ Dependencies:
 
 Bugfixes:
 
-- On the Metal (MPS) device, comparing a device array with a NumPy array (`device_array == host_array`) no longer
-  raises "Expected all tensors to be on the same device". Torch turned the NumPy operand into a CPU tensor itself, so
-  `==` failed, and `!=`, `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` failed the same way or with a `TypeError`. A
-  host operand is now moved onto the device first, as the arithmetic operators already did, and with the host array on
-  the left the comparison, `%` and bitwise operators work too (NumPy's `not_equal`, `less`, `less_equal`, `greater`,
-  `greater_equal`, `remainder`, `bitwise_and`, `bitwise_or` and `bitwise_xor` are now implemented for device arrays).
+- A NumPy array works as an operand of a device array on the Metal (MPS) device, on either side of every operator.
+  The host array is moved onto the device first, so the device side wins: a float64 host operand is narrowed to the
+  device's float32, and a dtype Metal lacks (`uint8`, `int16`, `float16`) raises a `RuntimeError`, also with the
+  `cpu` torch device. `device_array == host_array` raised "Expected all tensors to be on the same device", and with
+  a host array, `!=`, `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` raised a `TypeError`. The in-place operators (`+=`,
+  `-=`, `*=`, `/=`) take a host array now, and so do the tensor methods a device array forwards (`take`, `clip`, ...).
   This surfaced as `Images == Images` between a host and a device object failing in one operand order
+  ([PR #691](https://github.com/abTEM/abTEM/pull/691))
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
