@@ -275,7 +275,10 @@ Bugfixes:
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
   configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
   configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
-  are now in the configured precision, and floating point counts keep their dtype
+  are now in the configured precision, and floating point counts keep their dtype. The step bins of `azimuthal_average`
+  summed small integer counts (`uint8`, `int16`, `uint16`) in their own type, which wraps around, so a uniform pattern
+  averaged to a different value in every bin; they are summed in the configured precision, which the GPU kernel needs too
+  (it only reads floating point values)
 - Plots: the log scale can be switched on and off for line profiles and complex (domain-coloured) images, which
   raised a `TypeError` because their `set_logscale` took no argument; the extent of an image converts its y axis with
   the units of the y axis, not the x axis; `PlasmonScatteringEvents.show_cumulative_scattering_events` plots the

@@ -4091,8 +4091,18 @@ def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
 _COUNT_DTYPES = [np.int32, np.uint16, np.float32, np.float64]
 
 
-def _count_patterns(dtype, lazy):
+def _count_patterns(dtype, lazy, device="cpu"):
     counts = (np.random.default_rng(3).random((3, 4, 16, 16)) * 200).astype(dtype)
+    try:
+        on_device = copy_to_device(counts, device)
+    except RuntimeError as error:
+        # the torch backend holds no 8 or 16 bit integers
+        if "is not supported on Metal" not in str(error):
+            raise
+        pytest.skip(str(error))
+    if on_device.dtype != counts.dtype:
+        pytest.skip(f"{device} holds {counts.dtype} counts as {on_device.dtype}")
+    counts = on_device
     return DiffractionPatterns(
         da.from_array(counts, chunks=(2, 2, 16, 16)) if lazy else counts,
         sampling=0.1,
@@ -4113,19 +4123,20 @@ _RADIAL_OPERATIONS = {
 }
 
 
+@devices
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("dtype", _COUNT_DTYPES)
 @pytest.mark.parametrize("operation", _RADIAL_OPERATIONS)
 def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
-    operation, dtype, precision
+    operation, dtype, precision, device
 ):
     """Integer counts used to be declared as their own dtype by a lazy
     `integrate_radial` (it computes int64) and `azimuthal_average` (float64, whatever
     the precision, and truncated to integers by the Gaussian weighting)."""
     with abtem.config.set({"precision": precision}):
         run = _RADIAL_OPERATIONS[operation]
-        eager = run(_count_patterns(dtype, lazy=False))
-        lazy = run(_count_patterns(dtype, lazy=True))
+        eager = run(_count_patterns(dtype, lazy=False, device=device))
+        lazy = run(_count_patterns(dtype, lazy=True, device=device))
         computed = lazy.compute().array
 
     assert lazy.array.dtype == computed.dtype == eager.array.dtype
@@ -4136,22 +4147,29 @@ def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
             assert computed.dtype == np.int64  # integer counts sum exactly
     else:
         assert computed.dtype == np.dtype(dtype)  # floating point counts keep theirs
-    np.testing.assert_allclose(computed, eager.array, rtol=1e-5)
+    np.testing.assert_allclose(asnumpy(computed), asnumpy(eager.array), rtol=1e-5)
 
 
+@devices
 @pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
-def test_azimuthal_average_of_integer_counts_is_not_truncated(weighting_function):
-    counts = _count_patterns(np.int32, lazy=False)
+def test_azimuthal_average_of_integer_counts_is_not_truncated(
+    weighting_function, device
+):
+    # the double precision reference stays on the host: a single precision backend
+    # has no float64
+    host = _count_patterns(np.int32, lazy=False)
+    counts = _count_patterns(np.int32, lazy=False, device=device)
     exact = DiffractionPatterns(
-        counts.array.astype(np.float64),
-        sampling=counts.sampling,
-        ensemble_axes_metadata=counts.ensemble_axes_metadata,
-        metadata=counts.metadata,
+        host.array.astype(np.float64),
+        sampling=host.sampling,
+        ensemble_axes_metadata=host.ensemble_axes_metadata,
+        metadata=host.metadata,
     )
 
     averaged = counts.azimuthal_average(weighting_function=weighting_function).array
     expected = exact.azimuthal_average(weighting_function=weighting_function).array
 
+    averaged, expected = asnumpy(averaged), asnumpy(expected)
     assert not np.array_equal(averaged, np.round(averaged))  # fractional averages
     np.testing.assert_allclose(averaged, expected, rtol=1e-5)
 
@@ -4197,3 +4215,46 @@ def test_indexed_patterns_cannot_infer_a_pixel_area():
     # a missing @property made this a TypeError (method * float)
     with pytest.raises(RuntimeError, match="Cannot infer pixel area"):
         _indexed_patterns().poisson_noise(dose_per_area=1.0)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "dtype, value",
+    [
+        (np.uint8, 127),
+        (np.int16, 16383),
+        (np.uint16, 32767),
+        (np.int32, 2**30),  # the integer type of the torch backend
+    ],
+)
+def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
+    dtype, value, lazy, device
+):
+    # The step bins were summed in the type of the counts, which wraps around: a
+    # uniform pattern averaged to a different value in every bin.
+    patterns = DiffractionPatterns(
+        np.full((1, 64, 64), value, dtype=dtype),
+        sampling=(0.05, 0.05),
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+    )
+    try:
+        patterns = patterns.copy_to_device(device)
+    except RuntimeError as error:
+        # the torch backend holds no 8 or 16 bit integers
+        if "is not supported on Metal" not in str(error):
+            raise
+        pytest.skip(str(error))
+    if lazy:
+        patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
+
+    averaged = patterns.azimuthal_average().compute()
+
+    assert_array_matches_device(averaged.array, device)
+    assert averaged.array.dtype == np.dtype(get_dtype())
+    values = asnumpy(averaged.array)
+    occupied = values != 0  # a bin with no pixel is zero
+    assert occupied.sum() > 5
+    np.testing.assert_allclose(values[occupied], value, rtol=1e-6)
