@@ -418,7 +418,8 @@ def test_repeated_cell_displaces_each_frozen_phonon_configuration(
     np.testing.assert_allclose(undisplaced[0], undisplaced[1], atol=1e-6 * scale)
     assert np.abs(displaced[0] - undisplaced[0]).max() > 1e-3 * scale
     # a seed gives the same configurations again, another seed other ones
-    np.testing.assert_array_equal(displaced, build(0.1))
+    # (not bitwise: the sums of a GPU build are not ordered)
+    np.testing.assert_allclose(displaced, build(0.1), rtol=0, atol=1e-10 * scale)
     assert np.abs(displaced - build(0.1, seed=5)).max() > 1e-3 * scale
 
 

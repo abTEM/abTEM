@@ -66,8 +66,12 @@ def test_depth_profile_of_a_vector_field_keeps_its_components(
     profile = profile.compute() if lazy else profile
 
     summed = array.sum(axis=-1 if projection_axis == "y" else -2)  # (z, c, space)
+    expected = np.moveaxis(summed, 0, -1)
     np.testing.assert_allclose(
-        to_host_array(profile.array), np.moveaxis(summed, 0, -1), rtol=1e-10
+        to_host_array(profile.array),
+        expected,
+        rtol=0,
+        atol=1e-10 * np.abs(expected).max(),
     )
     assert profile.ensemble_axes_metadata[-1].values == labels
     assert profile.base_shape == (summed.shape[-1], array.shape[0])
