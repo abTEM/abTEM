@@ -81,7 +81,7 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Probe, Waves
+from abtem.waves import Probe, Waves, _normalize_with_deprecated_normalization
 
 if TYPE_CHECKING:
     from abtem.scan import BaseScan
@@ -2246,6 +2246,7 @@ class BlochWaves:
         normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for a given set of thicknesses.
 
@@ -2265,12 +2266,19 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochWaves.calculate_exit_waves"
+        )
 
         # --- Multi-energy ensemble path ---
         if len(self._energies) > 1:
@@ -2380,9 +2388,7 @@ class BlochWaves:
             extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata={
-                "normalization": "reciprocal_space" if normalize else "values"
-            },
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
@@ -2622,14 +2628,22 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         # per-energy union mask -- each energy admits a different set of
         # beams, and every energy in the ensemble must share the same
         # reciprocal-space basis for the results to stack.
+        #
+        # The ensemble takes the excitation errors from the unrotated cell and each
+        # member from its rotated cell, which differ in the last bits. A beam on
+        # the boundary of a member could then fall outside the ensemble's, which
+        # every member must be a subset of, so the ensemble selects the beams within
+        # a band far wider than that rounding (~1e-15 1/A) and far narrower than any
+        # spacing of beams: it can only add a beam to the union that no member has.
+        boundary_tolerance = 1e-9
         mask = np.zeros(len(hkl), dtype=bool)
         for energy in self._energies:
             mask |= filter_reciprocal_space_vectors(
                 hkl=hkl,
                 cell=self._structure_factor.cell,
                 energy=float(energy),
-                sg_max=self.sg_max,
-                g_max=self.g_max,
+                sg_max=self.sg_max + boundary_tolerance,
+                g_max=self.g_max + boundary_tolerance,
                 centering=self.centering,
                 orientation_matrices=orientation_matrices,
             )
@@ -3186,6 +3200,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: Optional[float] = None,
         lazy: bool = True,
         pbar: Optional[bool] = None,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for the ensemble for a given set of
         thicknesses.
@@ -3212,12 +3227,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         pbar : bool, optional
             If True, a progress bar is shown. Default is None, which means
             the value is taken from the configuration.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochwaveEnsemble.calculate_exit_waves"
+        )
 
         if pbar is None:
             pbar = config.get("diagnostics.task_progress", False)
@@ -3291,9 +3313,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
-            metadata={
-                "normalization": "reciprocal_space" if normalize else "values"
-            },
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves

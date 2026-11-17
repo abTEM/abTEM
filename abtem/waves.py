@@ -511,6 +511,42 @@ def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     return ensemble
 
 
+def _deprecated_normalization(normalization, function: str, hint: str):
+    """Warn that the ``normalization`` keyword of ``function`` is deprecated, and
+    return it validated; None when it was not given."""
+    if normalization is None:
+        return None
+    warnings.warn(
+        f"The `normalization` argument of `{function}` is deprecated and will be "
+        f"removed in a future release. {hint}",
+        FutureWarning,
+        stacklevel=3,
+    )
+    if normalization not in ("values", "amplitude"):
+        raise ValueError(
+            f"normalization {normalization!r} not recognized; use 'values' or "
+            "'amplitude'"
+        )
+    return normalization
+
+
+def _normalize_with_deprecated_normalization(normalize, normalization, function: str):
+    """The ``normalize`` flag of an exit-wave calculation. The ``normalization``
+    argument it replaced ('values' or 'amplitude', also still accepted in the
+    position of ``normalize``) only wrote a label to the metadata and never changed
+    the array, so it is validated and otherwise ignored."""
+    if isinstance(normalize, str):
+        normalize, normalization = False, normalize
+    _deprecated_normalization(
+        normalization,
+        function,
+        "It only set a metadata label and did not change the exit waves, which have "
+        "a value of one in the incident wave: use `normalize=True` for waves with "
+        "a reciprocal space intensity that sums to one.",
+    )
+    return bool(normalize)
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -1629,6 +1665,7 @@ class Waves(BaseWaves, ArrayObject):
         self,
         max_angle: str | float = "cutoff",
         gpts: Optional[tuple[int, int]] = None,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Downsample the wave functions to a lower maximum scattering angle.
 
@@ -1657,6 +1694,11 @@ class Waves(BaseWaves, ArrayObject):
             Number of grid points of the wave functions after downsampling.
             If given, `max_angle` is not used.
 
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated. Overrides what is preserved: ``values`` the pixel values,
+            ``amplitude`` the total amplitude. By default the normalization of the
+            waves is kept, as described above.
+
         Returns
         -------
         downsampled_waves : Waves
@@ -1668,13 +1710,19 @@ class Waves(BaseWaves, ArrayObject):
         if gpts is None:
             gpts = waves._gpts_within_angle(max_angle)
 
+        normalization = _deprecated_normalization(
+            normalization,
+            "Waves.downsample",
+            "The normalization of the waves is kept by default.",
+        ) or Waves._fft_resampling_normalization(waves.metadata)
+
         array = map_kernel(
             waves,
             fft_interpolate,
             base_shape_out=gpts,
             dtype=get_dtype(complex=True),
             new_shape=gpts,
-            normalization=Waves._fft_resampling_normalization(waves.metadata),
+            normalization=normalization,
         )
 
         downsampled = waves._with_array(

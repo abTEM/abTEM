@@ -509,8 +509,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             entries[()] = entry(charge_densities[0], None)
         else:
             # Ensemble case (FrozenPhonons or AtomsEnsemble)
-            n_ensemble = self.ensemble_shape[0]
-
             if lazy:
                 if not isinstance(charge_densities, da.core.Array):
                     charge_densities = da.from_array(

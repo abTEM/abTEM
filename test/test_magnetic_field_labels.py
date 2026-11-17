@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from utils import float64_devices, lazy_params, to_host_array
+
 from abtem.magnetism.iam import MagneticField, VectorPotential
 
 
@@ -44,19 +46,33 @@ def _iron_atoms():
     "cls, labels",
     [(MagneticField, ("Bx", "By", "Bz")), (VectorPotential, ("Ax", "Ay", "Az"))],
 )
+@float64_devices
+@lazy_params
 @pytest.mark.parametrize("projection_axis", ["y", "x"])
 def test_depth_profile_of_a_vector_field_keeps_its_components(
-    cls, labels, projection_axis
+    cls, labels, projection_axis, lazy, device
 ):
     # the component axis between depth and space was swapped with the spatial axis,
     # and the profile then had too few axes metadata
-    built = cls(_iron_atoms(), gpts=(10, 12), slice_thickness=1.0).build()
-    array = built.array  # (z, component, x, y)
+    built = cls(
+        _iron_atoms(), gpts=(10, 12), slice_thickness=1.0, device=device
+    ).build(lazy=lazy)
+    # (z, component, x, y); the profile of a lazy field is lazy and equals the eager
+    # one, summed here from the array
+    array = to_host_array(built.array.compute() if lazy else built.array)
 
     profile = built.depth_profile(projection_axis=projection_axis)
+    assert profile.is_lazy == lazy
+    profile = profile.compute() if lazy else profile
 
     summed = array.sum(axis=-1 if projection_axis == "y" else -2)  # (z, c, space)
-    np.testing.assert_allclose(profile.array, np.moveaxis(summed, 0, -1))
+    expected = np.moveaxis(summed, 0, -1)
+    np.testing.assert_allclose(
+        to_host_array(profile.array),
+        expected,
+        rtol=0,
+        atol=1e-10 * np.abs(expected).max(),
+    )
     assert profile.ensemble_axes_metadata[-1].values == labels
     assert profile.base_shape == (summed.shape[-1], array.shape[0])
 
@@ -72,7 +88,6 @@ def test_gpaw_fields_keep_the_labelled_component_axis_of_their_base_class(cls):
     builder = getattr(gpaw, cls)
     base = next(b for b in builder.__mro__ if b.__name__.startswith("Base"))
 
-    assert (
-        inspect.getattr_static(builder, "base_axes_metadata")
-        is (base.__dict__["base_axes_metadata"])
+    assert inspect.getattr_static(builder, "base_axes_metadata") is (
+        base.__dict__["base_axes_metadata"]
     )

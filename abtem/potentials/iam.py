@@ -304,7 +304,8 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         -------
         depth_profile : Images
             2D image(s) with the remaining spatial axis horizontal and depth
-            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved.
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved; for a
+            magnetic field or a vector potential the components are an ensemble axis.
         """
         return self.build().depth_profile(
             projection_axis=projection_axis,
@@ -2249,7 +2250,8 @@ class FieldArray(BaseField, ArrayObject):
         -------
         depth_profile : Images
             2D image(s) with the remaining spatial axis horizontal and depth
-            (z) vertical.
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved; for a
+            magnetic field or a vector potential the components are an ensemble axis.
         """
         from copy import copy
 

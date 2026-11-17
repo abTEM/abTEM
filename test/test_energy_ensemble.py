@@ -19,7 +19,8 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
-from utils import devices, gpu, lazy_params, si_cubic_atoms
+from abtem.core.backend import asnumpy
+from utils import devices, float64_devices, gpu, lazy_params, si_cubic_atoms
 
 ENERGIES = [80e3, 200e3, 300e3]
 
@@ -1316,7 +1317,153 @@ def test_smatrix_energy_distribution_keeps_its_weights_and_ensemble_mean():
         detectors=abtem.AnnularDetector(10, 40),
         lazy=False,
     )
-    for result in (built, scanned):
-        axis = result.ensemble_axes_metadata[0]
-        assert axis._ensemble_mean
-        np.testing.assert_allclose(axis.weights, probe_axis.weights)
+    axis = built.ensemble_axes_metadata[0]
+    assert axis._ensemble_mean
+    np.testing.assert_allclose(axis.weights, probe_axis.weights)
+    # the measurements are averaged over the flagged axis, with those weights (see
+    # test_smatrix_energy_distribution_is_averaged_over_its_energies)
+    assert scanned.shape == (2, 2)
+
+
+def _energy_distribution_smatrix_setup(ensemble_mean):
+    import ase.build
+
+    import abtem
+    from abtem.distributions import gaussian
+
+    energy = gaussian(
+        1e3, 5, center=200e3, sampling_limit=2, ensemble_mean=ensemble_mean
+    )
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True), gpts=(32, 32), slice_thickness=2
+    )
+    scan = abtem.GridScan(gpts=(2, 3), potential=potential)
+    detector = abtem.AnnularDetector(10, 40)
+
+    def smatrix(energy):
+        return abtem.SMatrix(
+            potential=potential, energy=energy, semiangle_cutoff=20, interpolation=1
+        )
+
+    return energy, smatrix, scan, detector
+
+
+def _compute(measurement):
+    measurement = measurement.compute() if measurement.is_lazy else measurement
+    return np.asarray(asnumpy(measurement.array))
+
+
+@float64_devices
+@lazy_params
+def test_smatrix_energy_distribution_is_averaged_over_its_energies(device, lazy):
+    # Probe averages a distribution flagged ensemble_mean over its energies, as the
+    # frozen phonons of an S-matrix are averaged; the energy axis of an S-matrix was
+    # returned unreduced by every route, with the shape of the unaveraged ensemble.
+    energy, smatrix, scan, detector = _energy_distribution_smatrix_setup(True)
+    assert len(set(energy.weights)) > 1, "the weights must tell the mean from a sum"
+
+    # the probability-weighted mean of the runs of each single energy
+    singles = [
+        _compute(smatrix(float(e)).scan(scan=scan, detectors=detector, lazy=lazy))
+        for e in energy.values
+    ]
+    weights = np.asarray(energy.weights) / np.sum(energy.weights)
+    expected = np.tensordot(weights, np.stack(singles), axes=1)
+    assert expected.shape == (2, 3)
+
+    built = smatrix(energy).build(lazy=lazy)
+    routes = {
+        "scan": smatrix(energy).scan(scan=scan, detectors=detector, lazy=lazy),
+        "reduce": smatrix(energy).reduce(scan=scan, detectors=detector, lazy=lazy),
+        "build().reduce": built.reduce(scan=scan, detectors=detector),
+        "build().scan": built.scan(scan=scan, detectors=detector),
+    }
+    for route, measurement in routes.items():
+        assert measurement.shape == expected.shape, route
+        np.testing.assert_allclose(
+            _compute(measurement), expected, rtol=1e-8, err_msg=route
+        )
+
+
+@float64_devices
+@lazy_params
+def test_smatrix_energy_distribution_without_ensemble_mean_keeps_every_energy(
+    device, lazy
+):
+    energy, smatrix, scan, detector = _energy_distribution_smatrix_setup(False)
+
+    measurement = smatrix(energy).scan(scan=scan, detectors=detector, lazy=lazy)
+    array = _compute(measurement)
+
+    assert array.shape == (len(energy.values), 2, 3)
+    for i, e in enumerate(energy.values):
+        single = smatrix(float(e)).scan(scan=scan, detectors=detector, lazy=lazy)
+        np.testing.assert_allclose(array[i], _compute(single), rtol=1e-8)
+
+
+@float64_devices
+def test_smatrix_energy_distribution_averages_several_detectors(device):
+    # a list of detectors is averaged detector by detector
+    energy, smatrix, scan, _ = _energy_distribution_smatrix_setup(True)
+    detectors = [abtem.AnnularDetector(10, 25), abtem.AnnularDetector(25, 45)]
+
+    measurements = smatrix(energy).scan(scan=scan, detectors=detectors, lazy=False)
+
+    weights = np.asarray(energy.weights) / np.sum(energy.weights)
+    singles = [
+        smatrix(float(e)).scan(scan=scan, detectors=detectors, lazy=False)
+        for e in energy.values
+    ]
+    assert len(measurements) == 2
+    for i, measurement in enumerate(measurements):
+        expected = np.tensordot(
+            weights, np.stack([_compute(single[i]) for single in singles]), axes=1
+        )
+        np.testing.assert_allclose(_compute(measurement), expected, rtol=1e-8)
+
+
+@float64_devices
+def test_smatrix_energy_distribution_is_averaged_in_transition_potential_scan(device):
+    # transition_potential_scan splits a multi-energy S-matrix into its energies,
+    # and stacked their measurements along the unreduced energy axis
+    pytest.importorskip("gpaw")
+    from abtem.distributions import gaussian
+    from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+
+    atoms = ase.Atoms("B2", positions=[(2, 2, 1), (4, 5, 3)], cell=(8, 6, 8), pbc=True)
+    potential = abtem.Potential(atoms, gpts=(48, 56), slice_thickness=2)
+    energy = gaussian(1e3, 3, center=100e3, sampling_limit=2, ensemble_mean=True)
+    assert len(set(energy.weights)) > 1, "the weights must tell the mean from a sum"
+    transition_potential = TransitionPotential(
+        5,
+        SubshellTransitions(
+            Z=5, n=1, l=0, order=1, epsilon=1.0, xc="PBE"
+        ).get_transitions(),
+        double_channel=False,
+    )
+    kwargs = dict(
+        scan=abtem.GridScan((0, 0), (4, 3), gpts=(2, 2)),
+        detectors=abtem.PixelatedDetector(max_angle=30),
+        sites=atoms,
+        double_channel=False,
+        lazy=False,
+    )
+
+    def scan(energy):
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=energy, semiangle_cutoff=20
+        )
+        return _compute(
+            s_matrix.transition_potential_scan(transition_potential, **kwargs)
+        )
+
+    singles = np.stack([scan(float(e)) for e in energy.values])
+    weights = np.asarray(energy.weights) / np.sum(energy.weights)
+    expected = np.tensordot(weights, singles, axes=1)
+
+    result = scan(energy)
+
+    assert result.shape == expected.shape == singles.shape[1:]
+    np.testing.assert_allclose(
+        result, expected, rtol=1e-8, atol=1e-12 * np.abs(expected).max()
+    )
