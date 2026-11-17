@@ -52,7 +52,7 @@ BOUND_LABELS = {
     "max_intensity": "intensity",
     "max_abs_norm": "max_abs",
 }
-ENTRY_KEYS = {"case", "since", "commit", "reason", "pr", *BOUND_KEYS}
+ENTRY_KEYS = {"case", "commit", "reason", "pr", *BOUND_KEYS}
 
 #: Axis fields that only name or typeset an axis; differences are reported but
 #: are not a change of the result. Fields starting with ``_`` are abtem's
@@ -85,17 +85,15 @@ def _within(value: float | None, bound: float) -> bool:
 class Accepted:
     """One accepted_changes entry and what it matched in this comparison.
 
-    ``since`` and ``commit`` scope the entry: it applies only when the reference
-    bundle was captured at ``since`` (its label, its ``git describe``, or a
-    prefix of at least 7 hex digits of its sha) and the candidate contains
-    ``commit``, the commit that made the change. The optional bounds cap how
+    ``commit``, the commit that made the change, scopes the entry: it applies
+    only when the candidate contains it and the reference does not. The
+    optional bounds cap how
     large the accepted drift may be, per output; a drift beyond a bound stays
     ``DRIFT``. A non-finite value that differs between the two outputs is never
     accepted.
     """
 
     case: str
-    since: str
     commit: str
     reason: str
     pr: int | None = None
@@ -113,24 +111,13 @@ class Accepted:
     scope_note: str = ""
     #: the full sha ``commit`` resolves to: entries of one change share it
     change: str = ""
-    #: git could not check the candidate for this entry, so it was not applied
+    #: git could not check a bundle for this entry, so it was not applied
     unchecked: bool = False
 
     def matches(self, case_id: str) -> bool:
         cid = registry.CaseId.parse(case_id)
         return registry.glob_match(case_id, self.case) or registry.glob_match(
             cid.name, self.case
-        )
-
-    def applies_to(self, ref: dict[str, Any]) -> bool:
-        if self.since in (ref.get("label"), ref.get("describe")):
-            return True
-        since = self.since.lower()
-        sha = str(ref.get("sha") or "").lower()
-        return (
-            len(since) >= 7
-            and all(ch in string.hexdigits for ch in since)
-            and sha.startswith(since)
         )
 
     def bounds(self) -> dict[str, float]:
@@ -189,10 +176,10 @@ def load_accepted(
 ) -> list[Accepted]:
     """Read and validate accepted_changes.toml.
 
-    Every entry needs a non-empty ``case``, ``since`` and ``reason``, and a
-    ``commit`` of at least 7 hex digits; ``pr`` is
-    a positive integer; bounds are positive finite numbers; unknown keys are
-    refused (a misspelt bound would otherwise be silently unbounded).
+    Every entry needs a non-empty ``case`` and ``reason``, and a ``commit`` of
+    7 to 40 hex digits; ``pr`` is a positive integer; bounds are positive finite
+    numbers; unknown keys are refused (a misspelt bound would otherwise be
+    silently unbounded).
     ``max_abs_norm`` is required: the integrated intensity is unchanged by a
     shift, a flip or a phase scramble of the output, so only a bound on the
     largest elementwise difference rejects a corrupted result. With a
@@ -227,7 +214,7 @@ def load_accepted(
         unknown = set(entry) - ENTRY_KEYS
         if unknown:
             raise CompareError(f"{where}: unknown keys {sorted(unknown)}")
-        for key in ("case", "since", "reason"):
+        for key in ("case", "reason"):
             value = entry.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise CompareError(f"{where}: {key!r} must be a non-empty string")
@@ -256,7 +243,6 @@ def load_accepted(
             )
         acc = Accepted(
             entry["case"].strip(),
-            entry["since"].strip(),
             commit.strip().lower(),
             entry["reason"].strip(),
             pr,
@@ -956,22 +942,48 @@ def _contains(commit: str, sha: str) -> bool | None:
     return None if proc is None else {0: True, 1: False}.get(proc.returncode)
 
 
-def _in_scope(a: Accepted, ref: dict[str, Any], cand: dict[str, Any]) -> bool:
-    """Whether ``a`` applies to this pair; sets ``a.change``, and ``a.scope_note``
-    when it does not apply for want of the change."""
-    if not a.applies_to(ref):
-        return False
-    full = _resolve(a.commit)
-    contains = None if full is None else _contains(full, str(cand.get("sha") or ""))
-    if full is None:
-        a.scope_note = f"git could not resolve {a.commit} in the harness's repository"
-    elif contains is None:
-        a.scope_note = f"git could not tell whether the candidate contains {a.commit}"
-    elif not contains:
-        a.scope_note = f"the candidate does not contain {a.commit}"
-    a.change = full or ""
-    a.unchecked = contains is None
-    return bool(contains)
+def _partition_by_scope(
+    entries: list[Accepted], ref: dict[str, Any], cand: dict[str, Any]
+) -> tuple[list[Accepted], list[Accepted]]:
+    """Split ``entries`` into those that apply to this pair and those that do not.
+
+    An entry applies when the candidate's commit contains the entry's ``commit``
+    and the reference's does not. Otherwise ``scope_note`` says why, and
+    ``unchecked`` is set when git could not tell for a bundle. Each prefix is
+    resolved once and each bundle's sha checked once per commit.
+    """
+    resolved: dict[str, str | None] = {}
+    contained: dict[tuple[str, str], bool | None] = {}
+
+    def contains(full: str, bundle: dict[str, Any]) -> bool | None:
+        key = (full, str(bundle.get("sha") or ""))
+        if key not in contained:
+            contained[key] = _contains(*key)
+        return contained[key]
+
+    applied: list[Accepted] = []
+    skipped: list[Accepted] = []
+    for a in entries:
+        if a.commit not in resolved:
+            resolved[a.commit] = _resolve(a.commit)
+        full = resolved[a.commit]
+        a.change = full or ""
+        if full is None:
+            note = f"git could not resolve {a.commit} in the harness's repository"
+        elif (in_cand := contains(full, cand)) is None:
+            note = f"git could not tell whether the candidate contains {a.commit}"
+        elif not in_cand:
+            note = f"the candidate does not contain {a.commit}"
+        elif (in_ref := contains(full, ref)) is None:
+            note = f"git could not tell whether the reference contains {a.commit}"
+        elif in_ref:
+            note = f"the reference already contains {a.commit}"
+        else:
+            note = ""
+        a.scope_note = note
+        a.unchecked = note.startswith("git could not")
+        (skipped if note else applied).append(a)
+    return applied, skipped
 
 
 def compare(
@@ -1016,10 +1028,7 @@ def compare(
     entries = load_accepted(accepted_path, reg)
     used_path = accepted_path if accepted_path is not None else ACCEPTED_CHANGES_PATH
     ref_info, cand_info = man_r.get("ref", {}), man_c.get("ref", {})
-    accepted: list[Accepted] = []
-    not_applicable: list[Accepted] = []
-    for a in entries:
-        (accepted if _in_scope(a, ref_info, cand_info) else not_applicable).append(a)
+    accepted, not_applicable = _partition_by_scope(entries, ref_info, cand_info)
     noise = noise or {}
     thresholds = {
         "speed": speed_threshold,
@@ -1257,9 +1266,9 @@ def to_markdown(report: Report) -> str:
         )
         lines.append("")
         lines.append(
-            "| case glob | since | commit | PR | reason | bounds | matched | measured |"
+            "| case glob | commit | PR | reason | bounds | matched | measured |"
         )
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|")
         for a in changelog:
             matched = str(len(a.matched))
             if a.exceeded:
@@ -1267,8 +1276,7 @@ def to_markdown(report: Report) -> str:
             if a.dominated:
                 matched += f" ({len(a.dominated)} dominated)"
             lines.append(
-                f"| `{_cell(a.case)}` | {_cell(a.since)} | {a.commit} "
-                f"| {a.pr or ''} "
+                f"| `{_cell(a.case)}` | {a.commit} | {a.pr or ''} "
                 f"| {_cell(a.reason)} | {_bounds_text(a)} | {matched} "
                 f"| {_measured_text(a)} |"
             )
@@ -1283,13 +1291,9 @@ def to_markdown(report: Report) -> str:
         lines.append("")
     if report.not_applicable:
         lines.append(
-            "Accepted entries not applied (another reference, or a change the "
-            "candidate does not contain): "
-            + ", ".join(
-                f"`{a.case}` since {a.since}"
-                + (f" ({a.scope_note})" if a.scope_note else "")
-                for a in report.not_applicable
-            )
+            "Accepted entries not applied (the candidate lacks the change, the "
+            "reference already contains it, or git could not tell): "
+            + ", ".join(f"`{a.case}` ({a.scope_note})" for a in report.not_applicable)
             + "."
         )
         lines.append("")
@@ -1311,7 +1315,6 @@ def _counts(rows: Iterable[Row]) -> str:
 def _entry_json(a: Accepted) -> dict[str, Any]:
     return {
         "case": a.case,
-        "since": a.since,
         "commit": a.commit,
         "scope_note": a.scope_note,
         "pr": a.pr,

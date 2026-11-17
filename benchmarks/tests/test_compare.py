@@ -8,7 +8,7 @@ from abtem_bench import cli, store
 from abtem_bench import compare as cmp
 from abtem_bench.compare import _contains as real_contains  # before patching
 from abtem_bench.compare import _resolve as real_resolve
-from conftest import CID, bundle, one, record
+from conftest import CID, REFERENCE_SHA, bundle, one, record
 
 ARR = np.linspace(1.0, 2.0, 16).reshape(4, 4)
 #: the bound every accepted entry must set; loose enough for the drifts below
@@ -31,9 +31,9 @@ def _toml(tmp_path, *entries):
     return path
 
 
-def _drift(tmp_path, factor=1.5, label="v0", sha="0" * 40):
+def _drift(tmp_path, factor=1.5, label="v0"):
     ref = bundle(
-        tmp_path, "ref", {CID: (record(), {"out": (ARR, [], {})})}, label=label, sha=sha
+        tmp_path, "ref", {CID: (record(), {"out": (ARR, [], {})})}, label=label
     )
     return ref, one(tmp_path, "cand", ARR * factor)
 
@@ -46,8 +46,8 @@ def test_accepted_entry_turns_drift_into_accepted(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path)
     toml = _toml(
         tmp_path,
-        f'case = "demo.*"\nsince = "v0"\nreason = "intended"\npr = 1\n{LOOSE}',
-        f'case = "demo.case[auto]*"\nsince = "v0"\nreason = "never matches"\n{LOOSE}',
+        f'case = "demo.*"\nreason = "intended"\npr = 1\n{LOOSE}',
+        f'case = "demo.case[auto]*"\nreason = "never matches"\n{LOOSE}',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.ACCEPTED
@@ -85,8 +85,8 @@ def test_an_entry_for_a_compared_case_without_drift_is_stale(
     )
     toml = _toml(
         tmp_path,
-        f'case = "demo.case@quick/cpu"\nsince = "v0"\nreason = "r"\n{LOOSE}',
-        f'case = "demo.case@quick/gpu"\nsince = "v0"\nreason = "gone"\n{LOOSE}',
+        f'case = "demo.case@quick/cpu"\nreason = "r"\n{LOOSE}',
+        f'case = "demo.case@quick/gpu"\nreason = "gone"\n{LOOSE}',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert [a.case for a in report.stale_accepted] == ["demo.case@quick/gpu"]
@@ -99,8 +99,8 @@ def test_the_changelog_lists_only_entries_for_compared_cases(
     ref, cand = _drift(tmp_path)
     toml = _toml(
         tmp_path,
-        f'case = "demo.case@quick/*"\nsince = "v0"\nreason = "here"\n{LOOSE}',
-        f'case = "demo.case@standard/*"\nsince = "v0"\nreason = "elsewhere"\n{LOOSE}',
+        f'case = "demo.case@quick/*"\nreason = "here"\n{LOOSE}',
+        f'case = "demo.case@standard/*"\nreason = "elsewhere"\n{LOOSE}',
     )
     md = cmp.to_markdown(cmp.compare(ref, cand, registry_with_demo, accepted_path=toml))
     assert "| here |" in md and "elsewhere" not in md
@@ -108,59 +108,69 @@ def test_the_changelog_lists_only_entries_for_compared_cases(
 
 
 def test_brackets_in_an_entry_glob_are_literal(registry_with_demo):
-    entry = cmp.Accepted("demo.case[auto]@*", "v0", COMMIT, "r")
+    entry = cmp.Accepted("demo.case[auto]@*", COMMIT, "r")
     assert entry.matches("demo.case[auto]@quick/cpu")
     assert not entry.matches("demo.case@quick/cpu")
 
 
-def test_an_entry_applies_only_against_its_since_reference(
-    tmp_path, registry_with_demo
-):
-    toml = _toml(
-        tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "intended"\n{LOOSE}'
-    )
-    ref, cand = _drift(tmp_path, label="v1")
-    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
-    assert report.rows[0].verdict == cmp.DRIFT
-    assert report.failures({"drift": None}) == [f"{CID}: DRIFT"]
-    assert [a.case for a in report.not_applicable] == ["demo.*"]
-    assert report.stale_accepted == []
-    assert "candidate does not contain): `demo.*` since v0." in cmp.to_markdown(report)
+_CANDIDATE_LACKS = "the candidate does not contain abcdef0"
+_CANDIDATE_UNKNOWN = "git could not tell whether the candidate contains abcdef0"
+_REFERENCE_UNKNOWN = "git could not tell whether the reference contains abcdef0"
+_UNRESOLVED = "git could not resolve abcdef0 in the harness's repository"
 
 
 @pytest.mark.parametrize(
-    "resolves, contains, note",
+    "resolves, in_cand, in_ref, note",
     [
-        (True, False, "the candidate does not contain abcdef0"),
-        (True, None, "git could not tell whether the candidate contains abcdef0"),
-        (False, None, "git could not resolve abcdef0 in the harness's repository"),
+        (True, False, False, _CANDIDATE_LACKS),
+        (True, None, False, _CANDIDATE_UNKNOWN),
+        (False, None, None, _UNRESOLVED),
+        (True, True, None, _REFERENCE_UNKNOWN),
+        (True, True, True, "the reference already contains abcdef0"),
     ],
 )
-def test_an_entry_applies_only_when_the_candidate_contains_its_commit(
-    tmp_path, registry_with_demo, monkeypatch, resolves, contains, note
+def test_an_entry_applies_only_to_a_candidate_with_its_commit_and_a_reference_without(
+    tmp_path, registry_with_demo, monkeypatch, resolves, in_cand, in_ref, note
 ):
-    seen = []
+    resolved, asked = [], []
 
-    def fake(commit, sha):
-        seen.append((commit, sha))
-        return contains
+    def fake_resolve(commit):
+        resolved.append(commit)
+        return commit if resolves else None
 
-    monkeypatch.setattr(cmp, "_contains", fake)
-    if not resolves:
-        monkeypatch.setattr(cmp, "_resolve", lambda commit: None)
+    def fake_contains(commit, sha):
+        asked.append((commit, sha))
+        return in_ref if sha == REFERENCE_SHA else in_cand
+
+    monkeypatch.setattr(cmp, "_resolve", fake_resolve)
+    monkeypatch.setattr(cmp, "_contains", fake_contains)
     ref, cand = _drift(tmp_path)
-    toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
+    # two entries of one commit: git is asked once for the prefix and once per bundle
+    toml = _toml(
+        tmp_path,
+        f'case = "demo.*"\nreason = "r"\n{LOOSE}',
+        f'case = "demo.case*"\nreason = "s"\n{LOOSE}',
+    )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
-    sha = cand.read_manifest()["ref"]["sha"]
-    assert seen == ([(COMMIT, sha)] if resolves else [])
+    cand_sha = cand.read_manifest()["ref"]["sha"]
+    assert resolved == [COMMIT]
+    expected = [(COMMIT, cand_sha)] if resolves else []
+    if resolves and in_cand:
+        expected.append((COMMIT, REFERENCE_SHA))
+    assert asked == expected
     assert report.rows[0].verdict == cmp.DRIFT
-    assert [a.scope_note for a in report.not_applicable] == [note]
-    assert report.not_applicable[0].unchecked == (contains is None)
-    assert f"`demo.*` since v0 ({note})" in cmp.to_markdown(report)
+    assert [a.scope_note for a in report.not_applicable] == [note] * 2
+    unchecked = None in (in_cand, in_ref) or not resolves
+    assert [a.unchecked for a in report.not_applicable] == [unchecked] * 2
+    assert f"`demo.*` ({note})" in cmp.to_markdown(report)
     assert cmp.to_json(report)["not_applicable"][0]["scope_note"] == note
 
 
-def test_the_scope_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
+@pytest.fixture
+def history(tmp_path, monkeypatch):
+    """Four commits of a real repository standing in for the harness's, and git's
+    own answers in place of the fakes: ``[first, second, third, fourth]``."""
+
     def git(*args):
         return subprocess.run(
             ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -171,24 +181,90 @@ def test_the_scope_asks_git_and_says_when_it_cannot_tell(tmp_path, monkeypatch):
         ).stdout.strip()
 
     git("init", "-q")
-    git("commit", "-q", "--allow-empty", "-m", "a")
-    first = git("rev-parse", "HEAD")
-    git("commit", "-q", "--allow-empty", "-m", "b")
-    second = git("rev-parse", "HEAD")
+    shas = []
+    for msg in "abcd":
+        git("commit", "-q", "--allow-empty", "-m", msg)
+        shas.append(git("rev-parse", "HEAD"))
     monkeypatch.setattr(cmp.prepare, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(cmp, "_resolve", real_resolve)
     monkeypatch.setattr(cmp, "_contains", real_contains)
+    return shas
+
+
+def _compare_at(tmp_path, registry, toml, label, ref_sha, cand_sha):
+    ref = bundle(
+        tmp_path,
+        f"ref-{label}",
+        {CID: (record(), {"out": (ARR, [], {})})},
+        label=label,
+        sha=ref_sha,
+    )
+    cand = bundle(
+        tmp_path,
+        f"cand-{label}",
+        {CID: (record(), {"out": (ARR * 1.5, [], {})})},
+        sha=cand_sha,
+    )
+    return cmp.compare(ref, cand, registry, accepted_path=toml)
+
+
+def test_an_entry_applies_against_every_reference_that_lacks_its_commit(
+    tmp_path, registry_with_demo, history
+):
+    first, second, third, fourth = history
+    toml = _toml(
+        tmp_path, f'case = "demo.*"\nreason = "r"\ncommit = "{third[:8]}"\n{LOOSE}'
+    )
+    for label, ref_sha in (("v1.0.10", first), ("v1.0.11", second)):
+        report = _compare_at(tmp_path, registry_with_demo, toml, label, ref_sha, fourth)
+        assert report.rows[0].verdict == cmp.ACCEPTED, label
+        assert report.not_applicable == [] and report.accepted[0].change == third
+
+
+def test_an_entry_does_not_apply_when_the_reference_contains_its_commit(
+    tmp_path, registry_with_demo, history
+):
+    first, second, third, fourth = history
+    toml = _toml(
+        tmp_path, f'case = "demo.*"\nreason = "r"\ncommit = "{third[:8]}"\n{LOOSE}'
+    )
+    for label, ref_sha in (("at", third), ("after", fourth)):
+        report = _compare_at(tmp_path, registry_with_demo, toml, label, ref_sha, fourth)
+        assert report.rows[0].verdict == cmp.DRIFT, label
+        note = f"the reference already contains {third[:8]}"
+        assert [a.scope_note for a in report.not_applicable] == [note]
+        assert not report.not_applicable[0].unchecked
+    # and not when the candidate lacks it
+    report = _compare_at(tmp_path, registry_with_demo, toml, "old", first, second)
+    assert report.rows[0].verdict == cmp.DRIFT
+    assert report.not_applicable[0].scope_note == (
+        f"the candidate does not contain {third[:8]}"
+    )
+
+
+def test_an_entry_is_not_applied_when_git_cannot_check_the_reference(
+    tmp_path, registry_with_demo, history
+):
+    first, second, third, fourth = history
+    toml = _toml(
+        tmp_path, f'case = "demo.*"\nreason = "r"\ncommit = "{third[:8]}"\n{LOOSE}'
+    )
+    unknown = "1234567" + "0" * 33  # a sha this repository does not have
+    report = _compare_at(tmp_path, registry_with_demo, toml, "x", unknown, fourth)
+    assert report.rows[0].verdict == cmp.DRIFT
+    (entry,) = report.not_applicable
+    assert entry.unchecked
+    assert entry.scope_note == (
+        f"git could not tell whether the reference contains {third[:8]}"
+    )
+
+
+def test_git_answers_for_a_prefix_and_for_ancestry(tmp_path, history, monkeypatch):
+    first, second = history[:2]
     assert cmp._resolve(first[:7]) == first
     assert cmp._resolve("1234567") is None  # unknown to git
     assert cmp._contains(first, second) is True
     assert cmp._contains(second, first) is False
-
-    entry = cmp.Accepted("demo.*", "v0", first[:8], "r")
-    assert cmp._in_scope(entry, {"label": "v0"}, {"sha": second})
-    assert entry.change == first and entry.scope_note == ""
-    later = cmp.Accepted("demo.*", "v0", second[:7], "r")
-    assert not cmp._in_scope(later, {"label": "v0"}, {"sha": first})
-    assert later.scope_note == f"the candidate does not contain {second[:7]}"
 
     def no_repo():
         raise FileNotFoundError("no .git")
@@ -206,9 +282,8 @@ def test_of_two_changes_the_one_whose_entries_hold_accepts_the_drift(
     ref, cand = _drift(tmp_path, factor=1.5)
     toml = _toml(
         tmp_path,
-        f'case = "demo.*"\nsince = "v0"\ncommit = "aaaaaaa"\nreason = "large"\n{LOOSE}',
-        'case = "demo.*"\nsince = "v0"\ncommit = "bbbbbbb"\nreason = "small"\n'
-        "max_abs_norm = 1e-3",
+        f'case = "demo.*"\ncommit = "aaaaaaa"\nreason = "large"\n{LOOSE}',
+        'case = "demo.*"\ncommit = "bbbbbbb"\nreason = "small"\nmax_abs_norm = 1e-3',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.ACCEPTED
@@ -230,10 +305,8 @@ def test_prefixes_of_one_commit_are_one_change(
     ref, cand = _drift(tmp_path, factor=1.5)
     toml = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\ncommit = "abcdef0"\nreason = "tight"\n'
-        "max_abs_norm = 1e-3",
-        'case = "demo.*"\nsince = "v0"\ncommit = "abcdef01"\nreason = "loose"\n'
-        f"{LOOSE}",
+        'case = "demo.*"\ncommit = "abcdef0"\nreason = "tight"\nmax_abs_norm = 1e-3',
+        f'case = "demo.*"\ncommit = "abcdef01"\nreason = "loose"\n{LOOSE}',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.DRIFT
@@ -244,31 +317,19 @@ def test_a_drift_beyond_every_change_stays_drift(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path, factor=1.5)
     toml = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\ncommit = "aaaaaaa"\nreason = "a"\n'
-        "max_abs_norm = 1e-3",
-        'case = "demo.*"\nsince = "v0"\ncommit = "bbbbbbb"\nreason = "b"\n'
-        "max_abs_norm = 1e-2",
+        'case = "demo.*"\ncommit = "aaaaaaa"\nreason = "a"\nmax_abs_norm = 1e-3',
+        'case = "demo.*"\ncommit = "bbbbbbb"\nreason = "b"\nmax_abs_norm = 1e-2',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.DRIFT
     assert [a.exceeded for a in report.accepted] == [[CID], [CID]]
 
 
-def test_since_matches_a_sha_prefix_of_seven_or_more(tmp_path, registry_with_demo):
-    sha = "abcdef0123" + "0" * 30
-    ref = {"label": "main", "describe": "x", "sha": sha}
-    assert cmp.Accepted("demo.*", "abcdef0", COMMIT, "r").applies_to(ref)
-    assert cmp.Accepted("demo.*", "ABCDEF01", COMMIT, "r").applies_to(ref)
-    assert not cmp.Accepted("demo.*", "abcdef", COMMIT, "r").applies_to(ref)
-    assert not cmp.Accepted("demo.*", "abcdef1", COMMIT, "r").applies_to(ref)
-    assert cmp.Accepted("demo.*", "x", COMMIT, "r").applies_to(ref)  # git describe
-
-
 def test_a_drift_beyond_an_entry_bound_stays_drift(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path, factor=1.5)
     within = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\nreason = "r"\nmax_rel = 0.6\n'
+        'case = "demo.*"\nreason = "r"\nmax_rel = 0.6\n'
         "max_intensity = 0.6\nmax_abs_norm = 0.6",
     )
     assert (
@@ -277,7 +338,7 @@ def test_a_drift_beyond_an_entry_bound_stays_drift(tmp_path, registry_with_demo)
     )
     beyond = _toml(
         tmp_path,
-        f'case = "demo.*"\nsince = "v0"\nreason = "r"\nmax_rel = 0.1\n{LOOSE}',
+        f'case = "demo.*"\nreason = "r"\nmax_rel = 0.1\n{LOOSE}',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=beyond)
     row = report.rows[0]
@@ -293,9 +354,8 @@ def test_a_bound_on_any_matching_entry_holds(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path, factor=1.5)
     toml = _toml(
         tmp_path,
-        f'case = "demo.*"\nsince = "v0"\nreason = "broad"\n{LOOSE}',
-        f'case = "demo.case@*"\nsince = "v0"\nreason = "narrow"\nmax_rel = 0.1\n'
-        f"{LOOSE}",
+        f'case = "demo.*"\nreason = "broad"\n{LOOSE}',
+        f'case = "demo.case@*"\nreason = "narrow"\nmax_rel = 0.1\n{LOOSE}',
     )
     assert (
         cmp.compare(ref, cand, registry_with_demo, accepted_path=toml).rows[0].verdict
@@ -307,8 +367,8 @@ def test_every_matching_entry_is_credited(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path)
     toml = _toml(
         tmp_path,
-        f'case = "demo.*"\nsince = "v0"\nreason = "first"\n{LOOSE}',
-        f'case = "demo.case@*"\nsince = "v0"\nreason = "second"\n{LOOSE}',
+        f'case = "demo.*"\nreason = "first"\n{LOOSE}',
+        f'case = "demo.case@*"\nreason = "second"\n{LOOSE}',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].accepted_by == ["first", "second"]
@@ -319,9 +379,7 @@ def test_every_matching_entry_is_credited(tmp_path, registry_with_demo):
 def test_an_entry_without_a_commit_is_refused(tmp_path, registry_with_demo):
     ref, cand = _drift(tmp_path)
     path = tmp_path / "accepted.toml"
-    path.write_text(
-        f'[[accepted]]\ncase = "demo.*"\nsince = "v0"\nreason = "x"\n{LOOSE}'
-    )
+    path.write_text(f'[[accepted]]\ncase = "demo.*"\nreason = "x"\n{LOOSE}')
     with pytest.raises(cmp.CompareError, match="'commit' must be the sha"):
         cmp.compare(ref, cand, registry_with_demo, accepted_path=path)
 
@@ -330,47 +388,43 @@ def test_an_entry_without_a_commit_is_refused(tmp_path, registry_with_demo):
     "entry, message",
     [
         (
-            f'case = "nosuch.case*"\nsince = "v0"\nreason = "x"\n{LOOSE}',
+            f'case = "nosuch.case*"\nreason = "x"\n{LOOSE}',
             "matches no registered",
         ),
         (
-            f'case = "demo.case[nosuch]@*"\nsince = "v0"\nreason = "x"\n{LOOSE}',
+            f'case = "demo.case[nosuch]@*"\nreason = "x"\n{LOOSE}',
             "matches no",
         ),
-        ('case = "demo.*"\nsince = "v0"\nreason = " "', "'reason' must be"),
-        ('case = "demo.*"\nsince = ""\nreason = "x"', "'since' must be"),
-        ('case = "demo.*"\nreason = "x"', "'since' must be"),
-        ('case = "demo.*"\nsince = 1.0\nreason = "x"', "'since' must be"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"\npr = true', "'pr' must be"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"\npr = "12"', "'pr' must be"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rel = -1', "'max_rel'"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rel = nan', "'max_rel'"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rell = 1', "unknown keys"),
-        ('case = "demo.*"\nsince = "v0"\nreason = "x"', "'max_abs_norm' is required"),
+        ('case = "demo.*"\nreason = " "', "'reason' must be"),
+        ('case = "demo.*"\nsince = "v0"\nreason = "x"', "unknown keys \\['since'\\]"),
+        ('case = "demo.*"\nreason = "x"\npr = true', "'pr' must be"),
+        ('case = "demo.*"\nreason = "x"\npr = "12"', "'pr' must be"),
+        ('case = "demo.*"\nreason = "x"\nmax_rel = -1', "'max_rel'"),
+        ('case = "demo.*"\nreason = "x"\nmax_rel = nan', "'max_rel'"),
+        ('case = "demo.*"\nreason = "x"\nmax_rell = 1', "unknown keys"),
+        ('case = "demo.*"\nreason = "x"', "'max_abs_norm' is required"),
         (
-            f'case = "demo.*"\nsince = "v0"\ncommit = ""\nreason = "x"\n{LOOSE}',
+            f'case = "demo.*"\ncommit = ""\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
         (
-            f'case = "demo.*"\nsince = "v0"\ncommit = "abc"\nreason = "x"\n{LOOSE}',
+            f'case = "demo.*"\ncommit = "abc"\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
         (
-            f'case = "demo.*"\nsince = "v0"\ncommit = "{"a" * 41}"\nreason = "x"\n'
-            f"{LOOSE}",
+            f'case = "demo.*"\ncommit = "{"a" * 41}"\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
         (
-            f'case = "demo.*"\nsince = "v0"\ncommit = "v1.0.11"\nreason = "x"\n{LOOSE}',
+            f'case = "demo.*"\ncommit = "v1.0.11"\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
         (
-            f'case = "demo.*"\nsince = "v0"\ncommit = 1234567\nreason = "x"\n{LOOSE}',
+            f'case = "demo.*"\ncommit = 1234567\nreason = "x"\n{LOOSE}',
             "'commit'",
         ),
         (
-            'case = "demo.*"\nsince = "v0"\nreason = "x"\nmax_rel = 1\n'
-            "max_intensity = 1",
+            'case = "demo.*"\nreason = "x"\nmax_rel = 1\nmax_intensity = 1',
             "'max_abs_norm' is required",
         ),
     ],
@@ -418,15 +472,14 @@ def test_an_entry_without_max_abs_norm_is_refused_not_applied(
     ref, cand = _arrays(tmp_path, ref_arr, cand_arr)
     intensity_only = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\nreason = "r"\nmax_intensity = 0.5',
+        'case = "demo.*"\nreason = "r"\nmax_intensity = 0.5',
     )
     with pytest.raises(cmp.CompareError, match="'max_abs_norm' is required"):
         cmp.compare(ref, cand, registry_with_demo, accepted_path=intensity_only)
     # with the required bound, the corruption exceeds it and stays DRIFT
     bounded = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\nreason = "r"\nmax_intensity = 0.5\n'
-        "max_abs_norm = 0.05",
+        'case = "demo.*"\nreason = "r"\nmax_intensity = 0.5\nmax_abs_norm = 0.05',
     )
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=bounded)
     assert report.rows[0].verdict == cmp.DRIFT
@@ -440,16 +493,14 @@ def test_a_non_finite_mismatch_is_never_accepted(tmp_path, registry_with_demo):
     nan_arr[1, 1] = np.nan
     toml = _toml(
         tmp_path,
-        'case = "demo.*"\nsince = "v0"\nreason = "r"\nmax_rel = 1e30\n'
+        'case = "demo.*"\nreason = "r"\nmax_rel = 1e30\n'
         "max_intensity = 1e30\nmax_abs_norm = 1e30",
     )
     ref, cand = _arrays(tmp_path, ref_arr, nan_arr)
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.DRIFT
     # the entry's bounds as such do not see it: a NaN is masked out of the stats
-    entry = cmp.Accepted(
-        "demo.*", "v0", COMMIT, "r", max_abs_norm=1e30, max_intensity=1e30
-    )
+    entry = cmp.Accepted("demo.*", COMMIT, "r", max_abs_norm=1e30, max_intensity=1e30)
     stats = {
         "identical": False,
         "nonfinite_mismatch": 1,
@@ -493,7 +544,7 @@ def test_a_missing_default_accepted_file_is_reported(tmp_path, registry_with_dem
     out = cmp.to_json(report)
     assert out["accepted_path"] == str(report.accepted_path)
     assert out["accepted_exists"] is False
-    present = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
+    present = _toml(tmp_path, f'case = "demo.*"\nreason = "r"\n{LOOSE}')
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=present)
     assert report.accepted_exists and "no accepted_changes.toml" not in cmp.to_markdown(
         report
@@ -759,7 +810,7 @@ def test_worst_output_is_named_and_cells_are_escaped(tmp_path, registry_with_dem
         "cand",
         {CID: (record(), {"a": (ARR * (1 + 1e-3), [], {}), "b": (ARR * 1.5, [], {})})},
     )
-    toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "a | b"\n{LOOSE}')
+    toml = _toml(tmp_path, f'case = "demo.*"\nreason = "a | b"\n{LOOSE}')
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     md = cmp.to_markdown(report)
     assert "| 5.0e-01 (b) |" in md
@@ -858,7 +909,7 @@ def test_an_entry_for_a_case_that_failed_is_not_stale(tmp_path, registry_with_de
     cand = bundle(
         tmp_path, "cand", {CID: (record(status=store.STATUS_ERROR, error="x"), None)}
     )
-    toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
+    toml = _toml(tmp_path, f'case = "demo.*"\nreason = "r"\n{LOOSE}')
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.stale_accepted == []
 

@@ -102,19 +102,17 @@ def _pair(tmp_path, array=None):
     ]
 
 
-def test_compare_warns_when_git_cannot_check_the_candidate(
-    tmp_path, capsys, monkeypatch
-):
+def test_compare_warns_when_git_cannot_check_an_entry(tmp_path, capsys, monkeypatch):
     argv = _pair(tmp_path)
     (tmp_path / "accepted.toml").write_text(
-        '[[accepted]]\ncase = "hrtem.exitwave@*"\nsince = "ref"\n'
+        '[[accepted]]\ncase = "hrtem.exitwave@*"\n'
         'commit = "abcdef0"\nreason = "r"\nmax_abs_norm = 1'
     )
     monkeypatch.setattr(cli.cmp, "_resolve", lambda commit: None)
     assert cli.main(argv) == 0
     assert (
-        "warning: accepted entries not applied because git could not check the "
-        "candidate: 1 (first: git could not resolve abcdef0"
+        "warning: accepted entries not applied because git could not check "
+        "them: 1 (first: git could not resolve abcdef0"
     ) in capsys.readouterr().err
 
 

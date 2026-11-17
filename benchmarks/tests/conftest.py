@@ -16,6 +16,10 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 use_invoking_checkout()
 
 CID = "demo.case@quick/cpu"
+#: the sha of a reference bundle built by ``bundle(tmp_path, "ref", ...)``; every
+#: other bundle carries the default sha, and ``candidate_contains_every_commit``
+#: tells them apart
+REFERENCE_SHA = "1" * 40
 
 
 def manifest(
@@ -47,6 +51,8 @@ def record(median=1.0, cold=2.0, rss=100 * 1024**2, status=store.STATUS_OK, **ex
 def bundle(tmp_path, name, cases, **manifest_kw):
     """A bundle ``name`` under ``tmp_path``; ``cases`` maps id -> (record, outputs)."""
     manifest_kw.setdefault("label", name)
+    if name == "ref":
+        manifest_kw.setdefault("sha", REFERENCE_SHA)
     b = store.Bundle(tmp_path / name)
     b.write_manifest(manifest(**manifest_kw))
     for cid, (rec, outputs) in cases.items():
@@ -62,13 +68,13 @@ def one(tmp_path, name, array, axes=(), cid=CID, **record_kw):
 
 
 @pytest.fixture(autouse=True)
-def candidate_contains_every_commit(monkeypatch):
+def candidate_alone_contains_every_commit(monkeypatch):
     """Synthetic bundles carry made-up shas that git cannot resolve, so every
-    accepted entry's commit resolves to itself and counts as contained in the
-    candidate; tests of the candidate scope patch ``cmp._resolve`` and
-    ``cmp._contains`` themselves."""
+    accepted entry's commit resolves to itself and counts as contained in every
+    bundle but the reference built by ``bundle(tmp_path, "ref", ...)``; tests of
+    the scope patch ``cmp._resolve`` and ``cmp._contains`` themselves."""
     monkeypatch.setattr(cmp, "_resolve", lambda commit: commit)
-    monkeypatch.setattr(cmp, "_contains", lambda commit, sha: True)
+    monkeypatch.setattr(cmp, "_contains", lambda commit, sha: sha != REFERENCE_SHA)
 
 
 @pytest.fixture

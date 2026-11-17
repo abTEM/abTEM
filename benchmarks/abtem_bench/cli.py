@@ -238,7 +238,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if unchecked:
         print(
             f"warning: accepted entries not applied because git could not check "
-            f"the candidate: {len(unchecked)} (first: {unchecked[0].scope_note}); "
+            f"them: {len(unchecked)} (first: {unchecked[0].scope_note}); "
             "run compare where git sees the repository",
             file=sys.stderr,
         )

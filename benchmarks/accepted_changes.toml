@@ -10,15 +10,13 @@
 #   case          glob over case ids or names, e.g. "hrtem.exitwave@*" or
 #                 "stem.*@quick/cpu"; brackets are literal; must match at least
 #                 one registered case id
-#   since         the reference the entry applies against: a bundle's ref
-#                 label, its git describe, or a sha prefix of 7+ hex digits.
-#                 Against any other reference the entry is not applied.
 #   commit        the commit that made the change, as a sha prefix of 7 to 40
-#                 hex digits; the entry applies only to a candidate that
-#                 contains it (git rev-parse and merge-base --is-ancestor in the
-#                 harness's repository; where git cannot tell, the entry is not
-#                 applied and compare warns). Entries whose prefixes resolve to
-#                 one commit are one change.
+#                 hex digits. The entry applies when the candidate bundle's
+#                 commit contains it and the reference bundle's does not (git
+#                 rev-parse and merge-base --is-ancestor in the harness's
+#                 repository); where git cannot tell for either bundle, the
+#                 entry is not applied and compare warns. Entries whose
+#                 prefixes resolve to one commit are one change.
 #   reason        one line, present tense: what changed and why the result is
 #                 right
 #   pr            pull request number that introduced the change
@@ -53,7 +51,6 @@
 
 [[accepted]]
 case = "hrtem.exitwave@quick/*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
 pr = 298
@@ -63,7 +60,6 @@ max_abs_norm = 6e-3
 
 [[accepted]]
 case = "hrtem.exitwave@standard/*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); through 157 slices the order-1 phase error moved the exit wave by up to a quarter of its maximum."
 pr = 298
@@ -73,7 +69,6 @@ max_abs_norm = 6e-1
 
 [[accepted]]
 case = "diffraction.cbed@quick/*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
 pr = 298
@@ -83,7 +78,6 @@ max_abs_norm = 5e-3
 
 [[accepted]]
 case = "diffraction.cbed@standard/*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles, more so through 157 slices."
 pr = 298
@@ -93,7 +87,6 @@ max_abs_norm = 2e-1
 
 [[accepted]]
 case = "stem.multidetector@*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
 pr = 298
@@ -103,7 +96,6 @@ max_abs_norm = 1e-2
 
 [[accepted]]
 case = "stem.multidetector[eager]@*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
 pr = 298
@@ -113,7 +105,6 @@ max_abs_norm = 1e-2
 
 [[accepted]]
 case = "stem.multidetector[auto]@*"
-since = "v1.0.10"
 commit = "0a6f505a"
 reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
 pr = 298
@@ -132,7 +123,6 @@ max_abs_norm = 1e-2
 
 [[accepted]]
 case = "potential.infinite@*"
-since = "v1.0.10"
 commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, which moved the potential by up to 7e-8 relative."
 pr = 269
@@ -142,7 +132,6 @@ max_abs_norm = 2e-7
 
 [[accepted]]
 case = "hrtem.exitwave[order1]@*"
-since = "v1.0.10"
 commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
@@ -152,7 +141,6 @@ max_abs_norm = 2e-6
 
 [[accepted]]
 case = "diffraction.cbed[order1]@*"
-since = "v1.0.10"
 commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
@@ -162,7 +150,6 @@ max_abs_norm = 6e-7
 
 [[accepted]]
 case = "stem.multidetector[order1]@*"
-since = "v1.0.10"
 commit = "8fa77bdd"
 reason = "Lobato scattering factors use float64 pi and pi**2, and segmented-detector bins accumulate in the working precision instead of float32 (#269); the segmented signal moves by up to 4e-6 relative."
 pr = 269
@@ -181,7 +168,6 @@ max_abs_norm = 7e-6
 
 [[accepted]]
 case = "stem.multidetector*@*"
-since = "v1.0.10"
 commit = "0a2f4965"
 reason = "Segmented-detector bins accumulate in the working precision instead of float32 (port of #269 to 1.0.11); the segmented signal moves by up to 1e-6 relative."
 pr = 269
