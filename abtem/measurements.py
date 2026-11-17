@@ -4822,7 +4822,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _integrate_fourier_space(
-        array, sampling, inner, outer, fftshift, offset, sensitivity=None, result_dtype=None
+        array,
+        sampling,
+        inner,
+        outer,
+        fftshift,
+        offset,
+        sensitivity=None,
+        result_dtype=None,
     ):
         xp = get_array_module(array)
 
@@ -5289,7 +5296,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 _on_device_of(run, array) for run in step_runs
             )
             flat = array.reshape((-1, array.shape[-2] * array.shape[-1]))
-            sums = _sum_runs(flat[:, pixels], separators)
+            gathered = flat[:, pixels]
+            if not _is_inexact(gathered.dtype):
+                # Integer counts are summed in the precision of the average, not in
+                # their own type, which wraps around (uint8, int16, uint16) and which
+                # the floating point kernels of the GPU cannot read.
+                gathered = gathered.astype(
+                    result_dtype if _is_inexact(result_dtype) else get_dtype()
+                )
+            sums = _sum_runs(gathered, separators)
             # an empty bin averages to 0, as bin by bin
             values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
             values = values.reshape(array.shape[:-2] + centers.shape)

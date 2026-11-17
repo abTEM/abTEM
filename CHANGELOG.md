@@ -275,7 +275,10 @@ Bugfixes:
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
   configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
   configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
-  are now in the configured precision, and floating point counts keep their dtype
+  are now in the configured precision, and floating point counts keep their dtype. The step bins of `azimuthal_average`
+  summed small integer counts (`uint8`, `int16`, `uint16`) in their own type, which wraps around, so a uniform pattern
+  averaged to a different value in every bin; they are summed in the configured precision, which the GPU kernel needs too
+  (it only reads floating point values)
 - `AtomsEnsemble` with a multi-dimensional trajectory partitions along every axis, so each block holds its own part
   of the trajectory. Its blocks were built along the first axis only: `generate_blocks` raised an `AssertionError`
   before the partition helpers of [PR #679](https://github.com/abTEM/abTEM/pull/679), and gave every block of a row the
