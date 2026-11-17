@@ -311,3 +311,60 @@ def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
 
     assert ae.nspins == 1
     assert np.isclose(ae.rgd.integrate(ae.n_sg.sum(0)), ae.Z, atol=1e-3)
+
+
+@pytest.mark.skipif(GPAWParametrization is None, reason="requires gpaw")
+def test_gpaw_all_electron_fallback_names_the_failed_assertion(monkeypatch):
+    """The fallback's warning names the assertion that failed (its source line and
+    message) instead of calling the failure a convergence failure.
+    """
+    sentinel = object()
+
+    def run(symbol, added_electrons, spinpol):
+        if spinpol:
+            raise AssertionError("stand-in for an assertion in GPAW")
+        return sentinel
+
+    monkeypatch.setattr(
+        GPAWParametrization, "_run_all_electron_atom", staticmethod(run)
+    )
+    with pytest.warns(UserWarning, match="non-spin-polarized") as record:
+        ae = GPAWParametrization()._get_all_electron_atom("Si")
+
+    assert ae is sentinel
+    # The text before the location, which holds the checkout's path.
+    message = str(record[0].message).rpartition(" at ")[0]
+    assert "raise AssertionError" in message
+    assert message.count("stand-in for an assertion in GPAW") == 2  # source and message
+    assert "converge" not in message
+
+
+@pytest.mark.parametrize(
+    "text, expected", [("boom", "(boom at <gpaw>:2)"), ("", "(<gpaw>:2)")]
+)
+@pytest.mark.skipif(GPAWParametrization is None, reason="requires gpaw")
+def test_gpaw_all_electron_fallback_without_source_line(monkeypatch, text, expected):
+    """A failing frame without source (compiled by `exec`) leaves the source out of
+    the warning; its message and location remain.
+    """
+    namespace = {}
+    exec(
+        compile(
+            f"def run(*args, spinpol):\n    raise AssertionError({text!r})",
+            "<gpaw>",
+            "exec",
+        ),
+        namespace,
+    )
+    sentinel = object()
+
+    def run(symbol, added_electrons, spinpol):
+        return namespace["run"](spinpol=spinpol) if spinpol else sentinel
+
+    monkeypatch.setattr(
+        GPAWParametrization, "_run_all_electron_atom", staticmethod(run)
+    )
+    with pytest.warns(UserWarning, match="non-spin-polarized") as record:
+        GPAWParametrization()._get_all_electron_atom("Si")
+
+    assert expected in str(record[0].message)

@@ -12,6 +12,7 @@ import numpy as np
 from dask.utils import parse_bytes
 
 from abtem.core import config
+from abtem.core.backend import _visible_gpu_count
 
 Chunks = Union[int, str, tuple[Union[int, str, tuple[int, ...]], ...]]
 ChunksTuple = tuple[Union[int, str, tuple[int, ...]], ...]
@@ -419,6 +420,50 @@ def generate_chunks(
         start = end
 
 
+def _effective_free_gpu_memory() -> int | None:
+    """
+    Free memory of the current GPU in bytes, counting the blocks CuPy's memory pool
+    holds without using them, or None when CuPy is not installed or sees no device.
+    """
+    try:
+        import cupy as cp
+    except ImportError:
+        return None
+
+    if _visible_gpu_count(cp) == 0:
+        return None
+
+    pool = cp.get_default_memory_pool()
+
+    # CUDA-reported free memory alone understates what is actually
+    # available on any workload that calls this more than once:
+    # CuPy's pool never returns freed blocks to the driver (no
+    # free_all_blocks() call here), so once the pool has grown to
+    # its steady-state size -- typically within the first handful
+    # of chunks -- cp.cuda.Device().mem_info()'s free figure gets
+    # stuck at that reservation's residual gap to total VRAM,
+    # forever, regardless of how much of that reservation is idle
+    # and reusable. Measured on a scan workload (8000x8000 grid,
+    # 5 batches): after batch 1 grew the pool to ~20.9 GB reserved,
+    # every subsequent batch read the *same* ~3.9 GB CUDA-free
+    # figure even though ~11.4 GB of that reservation was sitting
+    # in the pool's own idle cache (pool.free_bytes()) the whole
+    # time -- collapsing chunk_size to 1 (the worst case) for the
+    # rest of the run despite ~15 GB of real headroom. Adding the
+    # pool's idle cache back in avoids that: it does not need
+    # free_all_blocks() (no driver round-trip, no risk of evicting
+    # blocks another concurrent allocation still wants) because
+    # CuPy already tracks exactly how much of its own reservation
+    # is currently unused.
+    free_mem, total_mem = cp.cuda.Device().mem_info
+
+    # Cross-check against pool live usage. This guards the rare
+    # case where dead blocks were released by someone else (e.g.
+    # cuFFT plan cache eviction), making free_mem higher than the
+    # live-data picture suggests.
+    return min(free_mem + pool.free_bytes(), total_mem - pool.used_bytes())
+
+
 def estimate_potential_chunk_size(
     slice_shape: tuple[int, ...],
     device: str = "cpu",
@@ -450,12 +495,11 @@ def estimate_potential_chunk_size(
     ``potential.slice-chunk-size`` in the configuration to a positive
     integer to enable CPU chunking when memory is genuinely limited.
 
-    On GPU the budget uses the CUDA-reported free memory without calling
-    ``free_all_blocks()`` first. Dead pool blocks represent recent memory
-    pressure from build/propagation temporaries; leaving them gives a
-    conservative estimate that self-adapts as the pool fills up over
-    successive scan batches. Falls back to ``dask.chunk-size-gpu`` when
-    CuPy is unavailable.
+    On GPU the budget uses the CUDA-reported free memory plus the idle blocks
+    of CuPy's memory pool, capped by the total memory minus the pool's live
+    blocks (see ``_effective_free_gpu_memory``), without calling
+    ``free_all_blocks()`` first. Falls back to ``dask.chunk-size-gpu`` when
+    CuPy is not installed or sees no device.
 
     Parameters
     ----------
@@ -503,67 +547,34 @@ def estimate_potential_chunk_size(
         # estimate_scan_batch_size alone.  What residual Bluestein cost there
         # is (one cached plan) this function already sees: it runs at
         # computation time and reads the live free-VRAM figure below.
-        try:
-            import cupy as cp
+        effective_free = _effective_free_gpu_memory()
 
-            pool = cp.get_default_memory_pool()
-
-            # CUDA-reported free memory alone understates what is actually
-            # available on any workload that calls this more than once:
-            # CuPy's pool never returns freed blocks to the driver (no
-            # free_all_blocks() call here), so once the pool has grown to
-            # its steady-state size -- typically within the first handful
-            # of chunks -- cp.cuda.Device().mem_info()'s free figure gets
-            # stuck at that reservation's residual gap to total VRAM,
-            # forever, regardless of how much of that reservation is idle
-            # and reusable. Measured on a scan workload (8000x8000 grid,
-            # 5 batches): after batch 1 grew the pool to ~20.9 GB reserved,
-            # every subsequent batch read the *same* ~3.9 GB CUDA-free
-            # figure even though ~11.4 GB of that reservation was sitting
-            # in the pool's own idle cache (pool.free_bytes()) the whole
-            # time -- collapsing chunk_size to 1 (the worst case) for the
-            # rest of the run despite ~15 GB of real headroom. Adding the
-            # pool's idle cache back in avoids that: it does not need
-            # free_all_blocks() (no driver round-trip, no risk of evicting
-            # blocks another concurrent allocation still wants) because
-            # CuPy already tracks exactly how much of its own reservation
-            # is currently unused.
-            free_mem, total_mem = cp.cuda.Device().mem_info
-
-            # Cross-check against pool live usage. This guards the rare
-            # case where dead blocks were released by someone else (e.g.
-            # cuFFT plan cache eviction), making free_mem higher than the
-            # live-data picture suggests.
-            pool_used = pool.used_bytes()
-            pool_free = pool.free_bytes()
-            effective_free = min(free_mem + pool_free, total_mem - pool_used)
-
-            # Per-slice cost: output array (1×) + transmission function
-            # (2×) + build temporaries (FFTs, Gaussian integrals) +
-            # propagation FFT workspace, once assumed at 5× (originally 8×)
-            # to cover all of that simultaneously. Instrumenting real peak
-            # pool.used_bytes() during a fixed chunk_size=15 run (not just
-            # the pool's total reservation, which includes a large amount
-            # of idle over-provisioned cache that is never actually live at
-            # once) showed real cost around 1.2-1.5× raw slice_bytes, fairly
-            # stable across rotations -- those build/propagation
-            # temporaries are evidently freed and reused within a chunk
-            # rather than staying simultaneously resident with each other.
-            # 2× keeps real margin above that measured figure.
-            #
-            # Budget: 35 % of effective-free VRAM at computation time.
-            # At this point the probe batch is already resident, so
-            # effective_free is already reduced by the probe allocation.
-            # Together with the 40 % claimed by estimate_scan_batch_size
-            # at graph-construction time, the joint budget is
-            # 40 % + 35 % × (1 − probe_fraction) ≈ 73 %, leaving 27 %
-            # headroom.  (estimate_scan_batch_size uses effective_free too,
-            # so both estimates operate on the same VRAM picture.)
-            effective_per_slice = slice_bytes * 2
-            budget_bytes = int(effective_free * 0.35)
-        except (ImportError, Exception):
-            effective_per_slice = slice_bytes * 2
+        # Per-slice cost: output array (1×) + transmission function
+        # (2×) + build temporaries (FFTs, Gaussian integrals) +
+        # propagation FFT workspace, once assumed at 5× (originally 8×)
+        # to cover all of that simultaneously. Instrumenting real peak
+        # pool.used_bytes() during a fixed chunk_size=15 run (not just
+        # the pool's total reservation, which includes a large amount
+        # of idle over-provisioned cache that is never actually live at
+        # once) showed real cost around 1.2-1.5× raw slice_bytes, fairly
+        # stable across rotations -- those build/propagation
+        # temporaries are evidently freed and reused within a chunk
+        # rather than staying simultaneously resident with each other.
+        # 2× keeps real margin above that measured figure.
+        #
+        # Budget: 35 % of effective-free VRAM at computation time.
+        # At this point the probe batch is already resident, so
+        # effective_free is already reduced by the probe allocation.
+        # Together with the 40 % claimed by estimate_scan_batch_size
+        # at graph-construction time, the joint budget is
+        # 40 % + 35 % × (1 − probe_fraction) ≈ 73 %, leaving 27 %
+        # headroom.  (estimate_scan_batch_size uses effective_free too,
+        # so both estimates operate on the same VRAM picture.)
+        effective_per_slice = slice_bytes * 2
+        if effective_free is None:
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+        else:
+            budget_bytes = int(effective_free * 0.35)
     else:
         # On CPU, system RAM is typically abundant and there is no
         # memory-pool fragmentation.  The default is therefore to place
@@ -639,7 +650,8 @@ def estimate_scan_batch_size(
     the upper power when within 25 % headroom) so that batch sizes snap
     to GPU-friendly values such as 8, 16, 32, 64.
 
-    For CPU, falls back to the ``dask.chunk-size`` configuration key.
+    For CPU, and for GPU without CuPy or a visible device, falls back to the
+    ``dask.chunk-size`` or ``dask.chunk-size-gpu`` configuration key.
 
     Parameters
     ----------
@@ -661,30 +673,18 @@ def estimate_scan_batch_size(
         # ``gpts`` is the wavefunction grid every probe lives on, not the scan
         # grid: the scan positions form the FFT *batch* dimension, so only the
         # transform lengths (ny, nx) decide whether cuFFT falls back to
-        # Bluestein.  The radix check cannot fail and needs no GPU -- keep it
-        # outside the try below, whose silent fallback is only for a
-        # missing/failing CUDA memory probe.
+        # Bluestein.  The radix check cannot fail and needs no GPU.
         from abtem.core.fft import is_fast_fft_size
 
         overhead = 6
         if not all(is_fast_fft_size(n) for n in gpts):
             overhead = 12
 
-        try:
-            import cupy as cp
+        effective_free = _effective_free_gpu_memory()
 
-            pool = cp.get_default_memory_pool()
-            free_mem, total_mem = cp.cuda.Device().mem_info
-            pool_used = pool.used_bytes()
-            pool_free = pool.free_bytes()
-            # Use the same effective-free formula as estimate_potential_chunk_size
-            # so both estimates operate on a consistent VRAM picture -- see the
-            # comment there for why pool.free_bytes() (idle, already-reserved
-            # pool cache) is added back to CUDA-reported free memory rather than
-            # relying on free_mem alone, which never recovers once the pool has
-            # grown to its steady-state size.
-            effective_free = min(free_mem + pool_free, total_mem - pool_used)
-
+        if effective_free is None:
+            chunk_bytes = _chunk_bytes("gpu")
+        else:
             # Allocate up to 50 % of effective VRAM for probe-batch overhead.
             # A 6× overhead factor accounts for transient copies during
             # transmission-function multiply, FFT workspaces, and cuFFT plan
@@ -699,14 +699,12 @@ def estimate_scan_batch_size(
             # estimate_potential_chunk_size runs at *computation* time, when
             # the probe batch is already resident; it sees the reduced free
             # memory and sizes the potential chunk to fit in what remains.
-            # Both functions now use the same pool-aware effective_free so
+            # Both functions use the same pool-aware effective_free so
             # the two estimates operate on a consistent VRAM picture.
             probe_budget = int(effective_free * 0.50)
             per_probe_effective = max(1, int(per_probe_bytes * overhead))
             n_probes = max(1, probe_budget // per_probe_effective)
             return _nearest_power_of_two(n_probes)
-        except Exception:  # noqa: BLE001 -- no CUDA memory probe available
-            chunk_bytes = _chunk_bytes("gpu")
     else:
         chunk_bytes = _chunk_bytes("cpu")
 

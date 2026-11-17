@@ -1,4 +1,6 @@
 import itertools
+import subprocess
+import sys
 import warnings
 
 import ase
@@ -124,6 +126,37 @@ def test_shrink_cell(structure, n):
     repeated_atoms = atoms * (n, n, n)
     shrinked_atoms = shrink_cell(repeated_atoms)
     assert_atoms_close(atoms, shrinked_atoms)
+
+
+def test_shrink_cell_stops_without_assertions():
+    """`shrink_cell` ends its search under `python -O`, which strips `assert`, and
+    refuses an `Atoms` object without atoms in both modes.
+
+    Pytest runs with assertions on, so the `-O` calls run in a subprocess. It takes
+    only ASE atoms, so no device is involved. The repetitions (2, 3, 2) differ, so
+    both entries of the default `repetitions` are exercised.
+    """
+    with pytest.raises(ValueError, match="at least one atom"):
+        shrink_cell(Atoms(cell=[4.0, 4.0, 4.0], pbc=True))
+
+    code = (
+        "from ase import Atoms\n"
+        "from ase.build import bulk\n"
+        "from abtem.atoms import shrink_cell\n"
+        "print(len(shrink_cell(bulk('Cu', cubic=True) * (2, 3, 2))))\n"
+        "try:\n"
+        "    shrink_cell(Atoms(cell=[4.0, 4.0, 4.0], pbc=True))\n"
+        "except ValueError as error:\n"
+        "    print(error)\n"
+    )
+    run = subprocess.run(
+        [sys.executable, "-O", "-W", "ignore", "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.split("\n")[:2] == ["4", "shrink_cell needs at least one atom"]
 
 
 @pytest.mark.parametrize("structure", [fcc, fcc110, fcc111, bcc, diamond, hcp])

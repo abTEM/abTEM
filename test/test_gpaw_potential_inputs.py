@@ -165,6 +165,48 @@ def test_a_single_path_builds_eagerly(fake_gpaw):
     )
 
 
+def test_lazy_reads_compare_by_path_without_reading(fake_gpaw, monkeypatch):
+    """A path is held as a delayed read keyed by the resolved path, so `==`
+    decides without reading the file: equal for the same file however it is
+    spelled (and for a copy), and undecided for different files."""
+    from abtem.core.utils import LazyComparisonError
+
+    reads = []
+    read = gpaw_module.GPAW
+    monkeypatch.setattr(
+        gpaw_module,
+        "GPAW",
+        lambda *args, **kwargs: reads.append(args) or read(*args, **kwargs),
+    )
+    potential = GPAWPotential("a.gpw", gpts=GPTS)
+
+    assert potential == potential.copy()
+    assert potential == GPAWPotential("a.gpw", gpts=GPTS)
+    assert potential == GPAWPotential("./a.gpw", gpts=GPTS)
+    with pytest.raises(LazyComparisonError):
+        potential == GPAWPotential("b.gpw", gpts=GPTS)
+    assert reads == []
+
+
+def test_a_path_list_equals_itself_without_reading(fake_gpaw, monkeypatch):
+    """A list of paths is held as a list of delayed reads. The potential, and a
+    crystal of it, equal themselves without reading a file."""
+    reads = []
+    read = gpaw_module.GPAW
+    monkeypatch.setattr(
+        gpaw_module,
+        "GPAW",
+        lambda *args, **kwargs: reads.append(args) or read(*args, **kwargs),
+    )
+    potential = GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS)
+    crystal = CrystalPotential(potential, repetitions=(2, 1, 1))
+
+    assert potential == potential
+    assert not potential != potential
+    assert crystal == crystal
+    assert reads == []
+
+
 def _single_calculator(kind):
     return "single.gpw" if kind == "path" else _loaded("single.gpw")
 

@@ -25,7 +25,7 @@ expressed in abTEM's ``plane_waves`` phase convention:
 from __future__ import annotations
 
 import numpy as np
-from scipy.spatial import Delaunay, cKDTree
+from scipy.spatial import Delaunay, QhullError, cKDTree
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
@@ -125,7 +125,7 @@ def _linear_barycentric_weights(
     if Bs >= 3:
         try:
             tri = Delaunay(known)
-        except Exception:
+        except QhullError:  # collinear or coincident parents
             tri = None
     if tri is None:
         _nearest(np.arange(B))
