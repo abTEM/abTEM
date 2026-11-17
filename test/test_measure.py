@@ -4102,7 +4102,16 @@ _COUNT_DTYPES = [np.int32, np.uint16, np.float32, np.float64]
 
 def _count_patterns(dtype, lazy, device="cpu"):
     counts = (np.random.default_rng(3).random((3, 4, 16, 16)) * 200).astype(dtype)
-    counts = copy_to_device(counts, device)
+    try:
+        on_device = copy_to_device(counts, device)
+    except RuntimeError as error:
+        # the torch backend holds no 8 or 16 bit integers
+        if "is not supported on Metal" not in str(error):
+            raise
+        pytest.skip(str(error))
+    if on_device.dtype != counts.dtype:
+        pytest.skip(f"{device} holds {counts.dtype} counts as {on_device.dtype}")
+    counts = on_device
     return DiffractionPatterns(
         da.from_array(counts, chunks=(2, 2, 16, 16)) if lazy else counts,
         sampling=0.1,
@@ -4155,12 +4164,15 @@ def test_radial_integrals_and_averages_declare_the_dtype_they_compute(
 def test_azimuthal_average_of_integer_counts_is_not_truncated(
     weighting_function, device
 ):
+    # the double precision reference stays on the host: a single precision backend
+    # has no float64
+    host = _count_patterns(np.int32, lazy=False)
     counts = _count_patterns(np.int32, lazy=False, device=device)
     exact = DiffractionPatterns(
-        counts.array.astype(np.float64),
-        sampling=counts.sampling,
-        ensemble_axes_metadata=counts.ensemble_axes_metadata,
-        metadata=counts.metadata,
+        host.array.astype(np.float64),
+        sampling=host.sampling,
+        ensemble_axes_metadata=host.ensemble_axes_metadata,
+        metadata=host.metadata,
     )
 
     averaged = counts.azimuthal_average(weighting_function=weighting_function).array
