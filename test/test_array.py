@@ -1098,6 +1098,21 @@ def test_a_decreasing_index_array_on_a_scan_axis_reverses_it(device):
     assert uneven_axis.values == pytest.approx((2.75, 1.25, 0.75))
 
 
+def test_an_outer_index_of_scan_axes_raises_an_index_error():
+    """The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((6, 6, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5, offset=0.0),
+            ScanAxis(label="y", sampling=0.5, offset=0.0),
+        ],
+    )
+
+    with pytest.raises(IndexError, match="one axis at a time"):
+        images[np.ix_([0, 1], [2, 3])]
+
+
 def test_a_reversed_scan_axis_indexed_again_lists_the_positions_it_selects():
     """The test indexes metadata only, so it pins no device."""
     images = Images(

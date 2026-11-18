@@ -827,7 +827,8 @@ def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]
 
 def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     """The metadata of an ensemble axis of length `n` indexed by `item`, a slice or
-    an integer or boolean index array.
+    an integer or boolean index array. A linear axis raises `IndexError` for an index
+    array of more than one dimension.
 
     A slice selecting every member gives a copy of the axis. Any other slice with a
     positive step is represented exactly by an axis of the same class, except that
@@ -841,6 +842,13 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     """
     if not isinstance(axis, LinearAxis):
         return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
+
+    if np.ndim(item) > 1:
+        raise IndexError(
+            f"{type(axis).__name__} '{axis.label}' cannot be indexed with an index "
+            f"array of {np.ndim(item)} dimensions (such as the arrays of `np.ix_`): "
+            f"index one axis at a time."
+        )
 
     # scan reductions find their scan axes by class, so an index array that a
     # slice could express keeps a scan axis as the slice does
