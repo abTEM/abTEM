@@ -1,7 +1,10 @@
 """Runner and worker end to end, and the runner's bookkeeping."""
 
+import os
+import signal
 import stat
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +80,41 @@ def test_a_worker_that_dies_never_inherits_the_previous_record(tmp_path, this_ch
     assert "SIGSEGV" in rec["error"]
     assert bundle.read_case(str(CID))["outputs"] == {}
     assert not bundle.case_dir(str(CID)).exists()
+
+
+@needs_posix
+def test_an_interrupted_run_kills_the_worker_and_writes_no_record(
+    tmp_path, monkeypatch, this_checkout
+):
+    pid_file = tmp_path / "pid"
+    script = tmp_path / "sleeper.sh"
+    script.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 60\n")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    bundle = store.Bundle(tmp_path / "b")
+    bundle.write_manifest({"case_hash": "h"})
+
+    def interrupted(pid, options):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            time.sleep(0.01)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner.os, "wait4", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            runner.run_case(this_checkout, CID, bundle, "accuracy", python=str(script))
+        pid = int(pid_file.read_text())
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+        assert not bundle.has_case(str(CID))
+    finally:
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
 
 
 def test_new_bundle_refuses_a_non_empty_directory_unless_overwriting(

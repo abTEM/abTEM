@@ -252,19 +252,28 @@ def run_case(
             start_new_session=True,
         )
 
+        def _kill_group():
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):  # gone, or a zombie group
+                pass
+
         def _kill():
             nonlocal timed_out
             timed_out = True
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            _kill_group()
 
         timer = threading.Timer(timeout, _kill) if timeout else None
         if timer:
             timer.start()
         try:
             _, status, rusage = os.wait4(proc.pid, 0)
+        except BaseException:
+            # the worker runs in its own session, so an interrupt of the
+            # runner does not reach it; it must not outlive the capture
+            _kill_group()
+            proc.wait()
+            raise
         finally:
             if timer:
                 timer.cancel()
