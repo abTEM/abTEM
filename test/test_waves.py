@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given, settings
+from test_detect import _REVERSED_SCANS, _scanned_waves
 from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
@@ -14,10 +15,12 @@ from utils import (
     devices,
     gpu,
     lazy_params,
+    xfail_lazy_torch_index_array,
 )
 
 import abtem
-from abtem.core.axes import OrdinalAxis
+from abtem.array import ArrayObject
+from abtem.core.axes import LinearAxis, OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
 from abtem.core.energy import energy2wavelength
 from abtem.distributions import uniform
@@ -1465,3 +1468,223 @@ def test_auto_multislice_batch_of_an_integrating_detector_ignores_the_exit_plane
 
     assert measurement.array.shape[0] == 4
     assert measurement.array.chunks[1:3] == probes.array.chunks[:2]
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda waves: waves.apply_ctf(defocus=50, semiangle_cutoff=30),
+        lambda waves: waves.normalize(),
+    ],
+    ids=["apply_ctf", "normalize"],
+)
+@pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
+def test_a_transform_of_reversed_waves_keeps_their_order_and_axes(
+    transform, item, increasing, lazy, device, request
+):
+    xfail_lazy_torch_index_array(request, device, lazy, item)
+    waves = _scanned_waves(device, lazy)
+
+    result = transform(waves[item])
+    expected = transform(waves)[item]
+
+    assert type(result) is Waves
+    assert [type(axis) for axis in result.ensemble_axes_metadata] == [ScanAxis] * 2
+    assert result.ensemble_axes_metadata == expected.ensemble_axes_metadata
+    expected_array = asnumpy(expected.copy().compute().array)
+    np.testing.assert_allclose(
+        asnumpy(result.copy().compute().array),
+        expected_array,
+        rtol=0,
+        atol=1e-6 * np.ptp(np.abs(expected_array)),
+    )
+
+
+def _scan_setup(device, lazy, frozen_phonons=False, exit_planes=None, line=False):
+    """A probe scan over a potential of two Si cells, and the scanned waves: the
+    scan of 7 by 5 positions (unequal, so a swapped axis fails) in lazy chunks of 3
+    and 2 positions, which a reversed axis crosses."""
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    if frozen_phonons:
+        atoms = abtem.FrozenPhonons(
+            atoms, num_configs=2, sigmas=0.05, seed=1, ensemble_mean=False
+        )
+    potential = abtem.Potential(
+        atoms,
+        gpts=(48, 40),
+        slice_thickness=2.7,
+        exit_planes=exit_planes,
+        device=device,
+    )
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    if line:
+        scan = abtem.LineScan(
+            start=(0, 0), end=(potential.extent[0], 0), gpts=7, endpoint=False
+        )
+    else:
+        scan = abtem.GridScan(
+            start=(0, 0), end=potential.extent, gpts=(7, 5), endpoint=False
+        )
+    waves = probe.build(scan, lazy=lazy)
+    if lazy:
+        waves = waves.rechunk((3, 2, -1, -1)[: len(scan.shape)] + (-1, -1))
+    return potential, waves
+
+
+_FULL = slice(None)
+_REVERSED = slice(None, None, -1)
+
+# (index of a reversed scan of 7 by 5 positions, index of the same positions in
+# increasing order)
+_SCAN_7_BY_5 = [
+    ((_REVERSED,), (_FULL,)),
+    ((_FULL, _REVERSED), (_FULL, _FULL)),
+    ((_REVERSED, _REVERSED), (_FULL, _FULL)),
+    ((np.arange(7)[::-1],), (_FULL,)),
+    ((slice(None, None, -3), _FULL), (slice(0, None, 3), _FULL)),
+    ((_FULL, [3, 1]), (_FULL, slice(1, None, 2))),
+]
+
+_DETECTOR_MIXES = {
+    "annular": lambda: [abtem.AnnularDetector(30, 60)],
+    "annular+pixelated": lambda: [
+        abtem.AnnularDetector(30, 60),
+        abtem.PixelatedDetector(max_angle=60),
+    ],
+    "pixelated+annular": lambda: [
+        abtem.PixelatedDetector(max_angle=60),
+        abtem.AnnularDetector(30, 60),
+    ],
+    "pixelated": lambda: [abtem.PixelatedDetector(max_angle=60)],
+    "waves": lambda: [abtem.WavesDetector()],
+    "flexible": lambda: [abtem.FlexibleAnnularDetector(step_size=10, outer=60)],
+    "segmented+annular": lambda: [
+        abtem.SegmentedDetector(nbins_radial=2, nbins_azimuthal=4, inner=30, outer=60),
+        abtem.AnnularDetector(30, 60),
+    ],
+}
+
+
+def _multislice(waves, potential, detectors):
+    outputs = waves.multislice(potential, detectors=detectors)
+    return outputs if isinstance(outputs, list) else [outputs]
+
+
+def _assert_outputs_match(outputs, expected_outputs):
+    for output, expected in zip(outputs, expected_outputs, strict=True):
+        assert type(output) is type(expected)
+        assert output.shape == expected.shape
+        for axis, expected_axis in zip(
+            output.axes_metadata, expected.axes_metadata, strict=True
+        ):
+            assert type(axis) is type(expected_axis)
+            if isinstance(axis, LinearAxis):
+                assert axis.sampling == pytest.approx(expected_axis.sampling)
+                assert axis.offset == pytest.approx(expected_axis.offset)
+            else:
+                assert axis == expected_axis
+        expected_array = asnumpy(expected.copy().compute().array)
+        np.testing.assert_allclose(
+            asnumpy(output.copy().compute().array),
+            expected_array,
+            rtol=0,
+            atol=1e-6 * np.ptp(np.abs(expected_array)),
+        )
+
+
+def _assert_multislice_of_reversed_waves(setup, detectors, item, increasing):
+    """The outputs of a multislice of reversed waves are those of the waves in
+    increasing order when one detector reduces the scan to the axes of images, which
+    puts every output of the multislice in order. Without one, the outputs keep the
+    reversed order of the waves."""
+    potential, waves = setup
+    reduces = any(isinstance(d, abtem.AnnularDetector) for d in detectors)
+
+    outputs = _multislice(waves[item], potential, detectors)
+
+    if reduces:
+        expected = _multislice(waves[increasing], potential, detectors)
+    else:
+        expected = [m[item] for m in _multislice(waves, potential, detectors)]
+    _assert_outputs_match(outputs, expected)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("mix", _DETECTOR_MIXES)
+@pytest.mark.parametrize("item, increasing", _SCAN_7_BY_5[:2])
+def test_multislice_of_reversed_waves_follows_the_detector_mix(
+    mix, item, increasing, lazy, device
+):
+    setup = _scan_setup(device, lazy)
+
+    _assert_multislice_of_reversed_waves(
+        setup, _DETECTOR_MIXES[mix](), item, increasing
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("item, increasing", _SCAN_7_BY_5)
+def test_multislice_of_reversed_waves_follows_the_indexing(
+    item, increasing, lazy, device, request
+):
+    xfail_lazy_torch_index_array(request, device, lazy, item)
+    setup = _scan_setup(device, lazy)
+
+    _assert_multislice_of_reversed_waves(
+        setup, _DETECTOR_MIXES["annular+pixelated"](), item, increasing
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "frozen_phonons, exit_planes",
+    [(True, None), (False, 1), (True, 1)],
+    ids=["frozen_phonons", "exit_planes", "frozen_phonons+exit_planes"],
+)
+def test_multislice_of_reversed_waves_with_ensemble_axes_before_the_scan(
+    frozen_phonons, exit_planes, lazy, device
+):
+    setup = _scan_setup(device, lazy, frozen_phonons, exit_planes)
+    item, increasing = _SCAN_7_BY_5[2]
+
+    _assert_multislice_of_reversed_waves(
+        setup, _DETECTOR_MIXES["annular+pixelated"](), item, increasing
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("mix", ["annular", "annular+pixelated", "pixelated"])
+def test_multislice_of_a_reversed_line_scan(mix, lazy, device):
+    setup = _scan_setup(device, lazy, line=True)
+
+    _assert_multislice_of_reversed_waves(
+        setup, _DETECTOR_MIXES[mix](), (_REVERSED,), (_FULL,)
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("item", [_FULL, slice(1, 4), slice(None, None, 2)])
+def test_multislice_of_waves_in_increasing_order_is_unchanged_by_the_reversal_hook(
+    item, lazy, device, monkeypatch
+):
+    potential, waves = _scan_setup(device, lazy)
+    detectors = _DETECTOR_MIXES["annular+pixelated"]()
+
+    outputs = _multislice(waves[item], potential, detectors)
+    monkeypatch.setattr(Waves, "apply_transform", ArrayObject.apply_transform)
+    expected = _multislice(waves[item], potential, detectors)
+
+    for output, expected_output in zip(outputs, expected, strict=True):
+        assert output.axes_metadata == expected_output.axes_metadata
+        np.testing.assert_array_equal(
+            asnumpy(output.copy().compute().array),
+            asnumpy(expected_output.copy().compute().array),
+        )

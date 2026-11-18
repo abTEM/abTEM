@@ -246,11 +246,12 @@ class ArrayObjectTransform(
     def _out_axes_metadata(
         self, array_object: ArrayObjectType
     ) -> tuple[list[AxisMetadata], ...]:
-        return (
-            [
-                *self._out_ensemble_axes_metadata(array_object)[0],
-                *self._out_base_axes_metadata(array_object)[0],
-            ],
+        return tuple(
+            [*ensemble_axes_metadata, *base_axes_metadata]
+            for ensemble_axes_metadata, base_axes_metadata in zip(
+                self._out_ensemble_axes_metadata(array_object),
+                self._out_base_axes_metadata(array_object),
+            )
         )
 
     @abstractmethod

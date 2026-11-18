@@ -24,6 +24,7 @@ from abtem.core.axes import (
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
+    ScanAxis,
     ThicknessAxis,
 )
 from abtem.core.backend import (
@@ -61,6 +62,7 @@ from abtem.measurements import (
     DiffractionPatterns,
     Images,
     RealSpaceLineProfiles,
+    _increasing_scan_index,
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
@@ -725,6 +727,23 @@ class Waves(BaseWaves, ArrayObject):
         if hasattr(self, "_device"):
             return self._device
         return device_name_from_array_module(get_array_module(self.array))
+
+    def apply_transform(self, transform, max_batch: int | str = "auto"):
+        # A transform that reduces the scan to the base axes of its output (a
+        # detector giving images or line profiles) gets the scan in increasing
+        # order, as the reductions of measurements do. It is flipped once, here:
+        # a lazy block, and the per-block detection of a multislice, then see
+        # increasing axes.
+        index = _increasing_scan_index(self)
+        if index is not None and any(
+            isinstance(axis, ScanAxis)
+            for cls, axes in zip(
+                transform._out_type(self), transform._out_axes_metadata(self)
+            )
+            for axis in axes[len(axes) - cls._base_dims :]
+        ):
+            return self[index].apply_transform(transform, max_batch)
+        return super().apply_transform(transform, max_batch)
 
     @property
     def base_tilt(self) -> tuple[float, float]:
