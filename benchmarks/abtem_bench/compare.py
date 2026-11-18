@@ -268,23 +268,23 @@ def parse_fail_on(text: str | None) -> dict[str, float | None]:
     """``"drift,speed:10%"`` -> ``{"drift": None, "speed": 0.1}``.
 
     A gate's value is its threshold as a fraction, or None for the compare
-    default. ``None`` gives DEFAULT_GATES and ``"none"`` gives no gate. Unknown
-    gates and malformed thresholds raise CompareError, and so does a given text
-    that names no gate or combines ``none`` with another gate.
+    default. ``None`` gives DEFAULT_GATES and ``"none"``, alone, gives no gate.
+    Unknown gates and malformed thresholds raise CompareError, and so does a
+    given text that names no gate.
     """
     if text is None:
         return dict.fromkeys(DEFAULT_GATES)
-    tokens = [t.strip() for t in text.split(",") if t.strip()]
-    if "none" in tokens:
-        if tokens != ["none"]:
-            raise CompareError("--fail-on: 'none' cannot be combined with a gate")
+    if text.strip() == "none":
         return {}
     gates: dict[str, float | None] = {}
-    for token in tokens:
+    for token in (t.strip() for t in text.split(",")):
+        if not token:
+            continue
         name, sep, value = (part.strip() for part in token.partition(":"))
         if name not in GATES:
             raise CompareError(
-                f"--fail-on: unknown gate {name!r}; known: {', '.join(GATES)}"
+                f"--fail-on: unknown gate {name!r}; known: {', '.join(GATES)}, "
+                "or 'none' alone"
             )
         if not sep:
             gates[name] = None

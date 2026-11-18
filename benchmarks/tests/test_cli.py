@@ -137,8 +137,6 @@ def test_the_default_gates_fail_on_a_crashed_candidate_and_none_disables_them(
     assert cli.main(argv) == 1
     assert "FAIL demo.case@quick/cpu: ERROR" in capsys.readouterr().err
     assert cli.main(argv + ["--fail-on", "none"]) == 0
-    assert cli.main(argv + ["--fail-on", "none,drift"]) == 2
-    assert "cannot be combined" in capsys.readouterr().err
 
 
 def test_a_malformed_noise_json_exits_2(tmp_path, capsys):

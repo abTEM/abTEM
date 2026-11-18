@@ -302,11 +302,14 @@ def test_a_case_requires_makes_every_variant_unsupported(
     assert calls == []
 
 
-def _capture_rounds(tmp_path, monkeypatch, preset, rounds, script, arrays_script=None):
+def _capture_rounds(
+    tmp_path, monkeypatch, preset, rounds, script, arrays_script=None, device="cpu"
+):
     """Capture ``demo.case`` with a fake ``run_case`` over several rounds.
 
     ``script`` lists the status of each call to ``run_case``; ``arrays_script``
-    the value of its single output ``out``. Returns the bundle and the calls made.
+    the value of its single output ``out``; ``device`` is the case id's. Returns
+    the bundle and the calls made.
     """
     calls = []
     ref = runner.Ref("x", "0" * 40, tmp_path, "x")
@@ -316,6 +319,8 @@ def _capture_rounds(tmp_path, monkeypatch, preset, rounds, script, arrays_script
         calls.append(str(cid))
         bundle.clear_case(str(cid))
         status = script[i]
+        if status == "raise":
+            raise RuntimeError("boom")
         record = {"status": status, "ref": ref.label}
         outputs = None
         if status == store.STATUS_OK:
@@ -332,7 +337,7 @@ def _capture_rounds(tmp_path, monkeypatch, preset, rounds, script, arrays_script
     [bundle] = runner.capture(
         tmp_path,
         ["x"],
-        [CaseId.parse("demo.case@quick/cpu")],
+        [CaseId.parse(f"demo.case@quick/{device}")],
         tmp_path / "out",
         preset,
         "quick",
@@ -355,6 +360,15 @@ def test_a_failed_round_keeps_its_record_and_ends_the_case(tmp_path, monkeypatch
     rec = bundle.read_case("demo.case@quick/cpu")
     assert rec["status"] == store.STATUS_ERROR and rec["error"] == "boom"
     assert len(calls) == 2  # round 3 did not run
+    assert not list(bundle.path.glob("cases/*.previous"))
+
+
+def test_a_run_case_that_raises_leaves_no_previous_outputs(tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match="boom"):
+        _capture_rounds(
+            tmp_path, monkeypatch, "accuracy", 2, [store.STATUS_OK, "raise"]
+        )
+    assert not list((tmp_path / "out" / "x").glob("cases/*.previous"))
 
 
 def test_a_failed_first_round_runs_no_further_round(tmp_path, monkeypatch):
@@ -380,6 +394,7 @@ def test_identical_rounds_are_merged_and_counted(tmp_path, monkeypatch, preset):
     assert rec["status"] == store.STATUS_OK and "notes" not in rec
     assert rec["timings"]["rounds"] == 3 and rec["timings"]["warm"] == [1.0] * 3
     assert len(calls) == 3
+    assert not list(bundle.path.glob("cases/*.previous"))
 
 
 @pytest.mark.parametrize(
@@ -408,18 +423,22 @@ def test_outputs_that_differ_between_rounds_are_an_error_under_accuracy(
     assert rec["timings"]["rounds"] == 2  # round 3 did not run
 
 
-def test_outputs_that_differ_between_rounds_are_a_note_under_speed(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "preset, device", [("speed", "cpu"), ("speed", "gpu"), ("accuracy", "gpu")]
+)
+def test_outputs_that_differ_between_rounds_are_a_note_unless_accuracy_on_cpu(
+    tmp_path, monkeypatch, preset, device
 ):
     bundle, calls = _capture_rounds(
         tmp_path,
         monkeypatch,
-        "speed",
+        preset,
         3,
         [store.STATUS_OK] * 3,
         [np.ones(3), np.zeros(3), np.zeros(3)],
+        device=device,
     )
-    rec = bundle.read_case("demo.case@quick/cpu")
+    rec = bundle.read_case(f"demo.case@quick/{device}")
     assert rec["status"] == store.STATUS_OK and len(calls) == 3
     assert rec["timings"]["rounds"] == 3
     assert len(rec["notes"]) == 1 and "round 1 and round 2: out" in rec["notes"][0]
@@ -463,6 +482,7 @@ def test_user_configuration_does_not_reach_the_captured_config(
     assert "chunk-size" in rec["config"]["dask_resolved"]["array"]
     assert rec["config"]["dask_resolved"]["scheduler"] == "synchronous"
     assert rec["config"]["abtem_resolved"]["precision"] == "float64"
+    assert "antialias" not in rec["config"]["dask_resolved"]
 
 
 @pytest.mark.parametrize(
@@ -470,3 +490,12 @@ def test_user_configuration_does_not_reach_the_captured_config(
 )
 def test_ru_maxrss_is_converted_to_bytes_per_platform(platform, expected):
     assert runner._maxrss_bytes(5, platform) == expected
+
+
+def test_an_output_only_one_round_holds_differs(tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    for directory, names in ((old, ("a", "gone")), (new, ("a", "added"))):
+        directory.mkdir()
+        for name in names:
+            np.savez(directory / f"{name}.npz", array=np.ones(2))
+    assert runner._differing_outputs(old, new) == ["added", "gone"]

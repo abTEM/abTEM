@@ -4,10 +4,6 @@ Invoked by the runner as ``python -P -m abtem_bench.worker ...`` with the
 harness directory and the ref's worktree on PYTHONPATH. The first lines it
 prints identify the abtem actually imported; it aborts if that is not the
 expected worktree, so a mislabelled bundle cannot be produced silently.
-
-The abTEM and dask configuration is reset to the package defaults before the
-preset is applied, so the user's environment variables and YAML files do not
-reach the record (see ``_reset_config``).
 """
 
 from __future__ import annotations

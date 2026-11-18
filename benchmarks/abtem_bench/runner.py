@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 
-from abtem_bench import prepare, presets, registry, store
+from abtem_bench import metrics, prepare, presets, registry, store
 
 HARNESS_DIR = Path(__file__).resolve().parents[1]  # .../benchmarks
 MEM_FLOOR_BYTES = 8 * 1024**3
@@ -396,8 +396,9 @@ def capture(
 
     A round that is not OK ends that case in its bundle: its record stays and
     no further round runs for it. Each later OK round's outputs are compared
-    with the previous round's; a difference makes the ``accuracy`` case ERROR
-    and is only a record note (``notes``) under ``speed``.
+    with the previous round's; a difference makes a CPU case under the
+    ``accuracy`` preset ERROR (bit identity is expected only there) and is
+    otherwise a record note (``notes``).
     """
     if rounds < 1:
         raise ValueError("rounds must be 1 or more")
@@ -413,34 +414,26 @@ def capture(
                 prev = bundle.read_case(str(cid)) if bundle.has_case(str(cid)) else None
                 if prev is not None and prev.get("status") != store.STATUS_OK:
                     continue  # a round that was not OK ended this case
-                before = _load_outputs(bundle, str(cid), prev) if prev else {}
-                rec = run_case(
-                    ref,
-                    cid,
-                    bundle,
-                    preset,
-                    repeats=repeats,
-                    timeout=case_timeout(cid),
-                )
-                if prev and rec.get("status") == store.STATUS_OK:
-                    merged = prev["timings"].get("rounds", 1) + 1
-                    differing = _differing_outputs(
-                        before, _load_outputs(bundle, str(cid), rec)
+                aside = _set_outputs_aside(bundle, str(cid))
+                try:
+                    rec = run_case(
+                        ref,
+                        cid,
+                        bundle,
+                        preset,
+                        repeats=repeats,
+                        timeout=case_timeout(cid),
                     )
-                    rec = _merge_rounds(prev, rec, merged)
-                    if prev.get("notes"):
-                        rec["notes"] = list(prev["notes"])
-                    if differing:
-                        text = (
-                            f"outputs differ between round {merged - 1} and "
-                            f"round {merged}: {', '.join(differing)}"
+                    if prev and rec.get("status") == store.STATUS_OK:
+                        rec = _merge_round(
+                            prev,
+                            rec,
+                            _differing_outputs(aside, bundle.case_dir(str(cid))),
+                            strict=preset == "accuracy" and cid.device == "cpu",
                         )
-                        if preset == "accuracy":
-                            rec["status"] = store.STATUS_ERROR
-                            rec["error"] = text
-                        else:
-                            rec.setdefault("notes", []).append(text)
-                    store.dump_json(bundle.case_json(str(cid)), rec)
+                        store.dump_json(bundle.case_json(str(cid)), rec)
+                finally:
+                    shutil.rmtree(aside, ignore_errors=True)
                 t = rec.get("timings", {}).get("median")
                 rss = (rec.get("memory") or {}).get("peak_rss_bytes")
                 progress(
@@ -454,28 +447,58 @@ def capture(
     return bundles
 
 
-def _load_outputs(
-    bundle: store.Bundle, cid: str, record: dict[str, Any]
-) -> dict[str, np.ndarray]:
-    """The arrays of the outputs a record lists."""
-    return {n: bundle.load_output(cid, n)[0] for n in record.get("outputs", {})}
+def _set_outputs_aside(bundle: store.Bundle, cid: str) -> Path:
+    """Move a case's output directory out of the way of ``run_case``'s clearing."""
+    directory = bundle.case_dir(cid)
+    aside = directory.with_name(directory.name + ".previous")
+    if directory.exists():
+        directory.rename(aside)
+    return aside
 
 
-def _differing_outputs(
-    before: dict[str, np.ndarray], after: dict[str, np.ndarray]
-) -> list[str]:
-    """Names of the outputs that are not bit-identical (NaN equals NaN).
+def _differing_outputs(old: Path, new: Path) -> list[str]:
+    """Names of the outputs in either directory that are not bit-identical.
 
-    An output only one side holds, or whose shape or dtype differs, differs.
+    An output only one directory holds differs.
     """
-    return sorted(
-        n
-        for n in before.keys() | after.keys()
-        if n not in before
-        or n not in after
-        or before[n].dtype != after[n].dtype
-        or not np.array_equal(before[n], after[n], equal_nan=True)
-    )
+
+    def load(directory: Path, name: str) -> np.ndarray | None:
+        path = directory / f"{name}.npz"
+        if not path.exists():
+            return None
+        with np.load(path, allow_pickle=False) as z:
+            return z["array"]
+
+    differing = []
+    for name in sorted({p.stem for d in (old, new) for p in d.glob("*.npz")}):
+        a, b = load(old, name), load(new, name)
+        if a is None or b is None or not metrics.bit_identical(a, b):
+            differing.append(name)
+    return differing
+
+
+def _merge_round(
+    prev: dict[str, Any], rec: dict[str, Any], differing: list[str], strict: bool
+) -> dict[str, Any]:
+    """Merge an OK round into the case's record and record any output difference.
+
+    A difference sets ERROR when ``strict``, else adds a ``notes`` entry.
+    """
+    merged = prev["timings"].get("rounds", 1) + 1
+    rec = _merge_rounds(prev, rec, merged)
+    if prev.get("notes"):
+        rec["notes"] = list(prev["notes"])
+    if differing:
+        text = (
+            f"outputs differ between round {merged - 1} and round {merged}: "
+            f"{', '.join(differing)}"
+        )
+        if strict:
+            rec["status"] = store.STATUS_ERROR
+            rec["error"] = text
+        else:
+            rec.setdefault("notes", []).append(text)
+    return rec
 
 
 def _merge_rounds(
@@ -486,7 +509,7 @@ def _merge_rounds(
     Timing statistics are recomputed over all warm repeats of all rounds; cold
     is the median of the per-round cold times (each round is a fresh process);
     peak memory is the largest peak of any round. Outputs are the latest
-    round's. ``rounds`` counts the rounds merged.
+    round's.
     """
     import statistics
 

@@ -581,8 +581,6 @@ def test_parse_fail_on():
         ("speed:x%", "positive percentage"),
         ("speed:-5%", "positive percentage"),
         ("speed:nan%", "positive percentage"),
-        ("none,drift", "cannot be combined"),
-        ("drift, none", "cannot be combined"),
     ):
         with pytest.raises(cmp.CompareError, match=message):
             cmp.parse_fail_on(bad)

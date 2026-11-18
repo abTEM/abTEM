@@ -13,6 +13,15 @@ from typing import Any
 import numpy as np
 
 
+def bit_identical(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two arrays agree in shape, dtype and every element (NaN equals NaN)."""
+    return bool(
+        a.shape == b.shape
+        and a.dtype == b.dtype
+        and np.array_equal(a, b, equal_nan=True)
+    )
+
+
 def close_stats(
     candidate: np.ndarray, reference: np.ndarray, above_rel: float = 1e-6
 ) -> dict[str, Any]:
@@ -58,9 +67,7 @@ def close_stats(
         )
         return stats
 
-    stats["identical"] = bool(np.array_equal(c, r, equal_nan=True)) and (
-        c.dtype == r.dtype
-    )
+    stats["identical"] = bit_identical(c, r)
 
     valid = np.isfinite(c) & np.isfinite(r)
     same = (c == r) | (np.isnan(c) & np.isnan(r))
