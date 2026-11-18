@@ -1003,8 +1003,8 @@ def _linear_axis_id(axis):
     return type(axis).__name__
 
 
-# (item, step of the slice or None for an index array, spacing of the members
-# when they increase evenly), over 9 members
+# (item, step of the slice or None for an index array, signed spacing of the members
+# when they are evenly spaced), over 9 members
 _LINEAR_AXIS_ITEMS = [
     (slice(None), 1, 1),
     (slice(1, 8, 2), 2, 2),
@@ -1012,14 +1012,16 @@ _LINEAR_AXIS_ITEMS = [
     (slice(-4, None), 1, 1),
     (slice(1, -2), 1, 1),
     (slice(-7, -1, 2), 2, 2),
-    (slice(None, None, -1), -1, None),
-    (slice(7, 1, -2), -2, None),
+    (slice(None, None, -1), -1, -1),
+    (slice(7, 1, -2), -2, -2),
     ([0, 3, 4, 8], None, None),
     (np.array([True, False, False, True, True, False, False, False, True]), None, None),
     ([1, 3, 5, 7], None, 2),
     (np.array([-8, -5, -2]), None, 3),
     ([4], None, 1),
     (np.arange(9) % 4 == 1, None, 4),
+    (np.arange(9)[::-1], None, -1),
+    ([8, 5, 2], None, -3),
 ]
 
 
@@ -1048,15 +1050,6 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
     if lazy:
         images = images.ensure_lazy(chunks=(4, -1, -1))
 
-    # a scan axis increases, so a reversed slice is refused; an index array is not
-    if isinstance(axis, ScanAxis) and step is not None and step < 0:
-        with pytest.raises(IndexError) as error:
-            images[item]
-        assert "ScanAxis 'z'" in str(error.value)
-        hint = {-1: "np.arange(9)[::-1]", -2: "np.arange(9)[7:1:-2]"}[step]
-        assert f"the explicit positions {hint} instead" in str(error.value)
-        return
-
     indexed = images[item]
     new_axis = indexed.ensemble_axes_metadata[0]
     expected = np.asarray(axis.coordinates(9))[item]
@@ -1069,9 +1062,10 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
     # a positive step keeps the class, except that a ReciprocalSpaceAxis rounds
     # its offset to a whole multiple of its sampling, which a step breaks, and an
     # unshifted one is not linear in storage order; selecting every member keeps it.
-    # A scan axis also keeps it for an index array of evenly increasing members.
+    # A scan axis also keeps it for a reversed slice and for an index array of evenly
+    # spaced members, its sampling being negative where the positions decrease.
     keeps_class = step is not None and step > 0
-    if isinstance(axis, ScanAxis) and step is None:
+    if isinstance(axis, ScanAxis):
         keeps_class = spacing is not None
     if isinstance(axis, ReciprocalSpaceAxis):
         keeps_class = step == 1 and (axis.fftshift or item == slice(None))
@@ -1084,9 +1078,9 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
 
 
 @devices
-def test_a_decreasing_index_array_on_a_scan_axis_gives_a_non_linear_axis(device):
-    """A reversed slice of a scan axis is refused, but the same members listed
-    by an index array keep their order on an axis with explicit coordinates."""
+def test_a_decreasing_index_array_on_a_scan_axis_reverses_it(device):
+    """Evenly spaced decreasing members keep a scan axis, with the first selected
+    position as offset and a negative sampling; uneven ones list their coordinates."""
     axis = ScanAxis(label="x", sampling=0.5, offset=0.25)
     images = Images(
         copy_to_device(np.zeros((6, 3, 2)), device),
@@ -1094,10 +1088,38 @@ def test_a_decreasing_index_array_on_a_scan_axis_gives_a_non_linear_axis(device)
         ensemble_axes_metadata=[axis],
     )
 
-    new_axis = images[np.arange(6)[::-1]].ensemble_axes_metadata[0]
+    reversed_axis = images[np.arange(6)[::-1]].ensemble_axes_metadata[0]
+    uneven_axis = images[[5, 2, 1]].ensemble_axes_metadata[0]
 
-    assert type(new_axis) is NonLinearAxis
-    assert new_axis.values == pytest.approx((2.75, 2.25, 1.75, 1.25, 0.75, 0.25))
+    assert type(reversed_axis) is ScanAxis
+    assert reversed_axis.offset == pytest.approx(2.75)
+    assert reversed_axis.sampling == pytest.approx(-0.5)
+    assert type(uneven_axis) is NonLinearAxis
+    assert uneven_axis.values == pytest.approx((2.75, 1.25, 0.75))
+
+
+def test_a_reversed_scan_axis_indexed_again_lists_the_positions_it_selects():
+    """The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((9, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5, offset=0.25)],
+    )
+
+    positions = 0.25 + 0.5 * np.arange(9)
+    for steps in [
+        (slice(None, None, -1), slice(None, None, -1)),
+        (slice(None, None, -1), slice(1, 8, 3)),
+        (slice(None, None, -2), slice(None, None, -1)),
+    ]:
+        indexed, expected = images, positions
+        for step in steps:
+            indexed, expected = indexed[step], expected[step]
+        axis = indexed.ensemble_axes_metadata[0]
+        assert type(axis) is ScanAxis
+        np.testing.assert_allclose(
+            axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12
+        )
 
 
 def test_evenly_spaced_scan_positions_from_an_index_array_still_give_images():
@@ -1118,17 +1140,20 @@ def test_evenly_spaced_scan_positions_from_an_index_array_still_give_images():
     assert images.sampling == pytest.approx((1.0, 0.5))
 
 
-def test_the_hint_of_a_refused_empty_reversed_slice_names_the_slice():
-    """An empty reversed slice is refused like any other, and the hint gives the
-    slice as written. The test indexes metadata only, so it pins no device."""
+@pytest.mark.parametrize("item", [slice(2, 5, -1), slice(-20, None, -1)])
+def test_an_empty_reversed_slice_of_a_scan_axis_gives_an_empty_scan_axis(item):
+    """The test indexes metadata only, so it pins no device."""
     images = Images(
         np.zeros((8, 3, 2)),
         sampling=0.1,
-        ensemble_axes_metadata=[ScanAxis(label="x")],
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5)],
     )
 
-    with pytest.raises(IndexError, match=r"np\.arange\(8\)\[2:5:-1\] instead"):
-        images[2:5:-1]
+    indexed = images[item]
+
+    assert indexed.shape == (0, 3, 2)
+    assert type(indexed.ensemble_axes_metadata[0]) is ScanAxis
+    assert indexed.ensemble_axes_metadata[0].sampling == pytest.approx(-0.5)
 
 
 @devices
@@ -1168,11 +1193,15 @@ def test_a_type_error_inside_an_axis_getitem_propagates(monkeypatch):
 
 @lazy_params
 @devices
+@pytest.mark.parametrize(
+    "item, chunks", [(slice(1, None, 2), (2, 2)), (slice(None, None, -2), (3, 2))]
+)
 def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinates(
-    lazy, device
+    item, chunks, lazy, device
 ):
     """The partition path indexes the already indexed axis with contiguous
-    forward slices; each block's coordinates are those of its members."""
+    forward slices; each block's coordinates are those of its members, also where
+    the sampling is negative."""
     images = Images(
         copy_to_device(np.zeros((9, 3, 2)), device),
         sampling=0.1,
@@ -1180,12 +1209,12 @@ def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinat
     )
     if lazy:
         images = images.ensure_lazy(chunks=(4, -1, -1))
-    indexed = images[1::2]
-    expected = indexed.ensemble_axes_metadata[0].coordinates(4)
+    indexed = images[item]
+    expected = indexed.ensemble_axes_metadata[0].coordinates(sum(chunks))
 
-    blocks = indexed._partition_ensemble_axes_metadata(chunks=((2, 2),), lazy=False)
+    blocks = indexed._partition_ensemble_axes_metadata(chunks=(chunks,), lazy=False)
 
-    for block, start in zip(blocks, (0, 2)):
+    for block, start, n in zip(blocks, np.cumsum((0,) + chunks), chunks):
         np.testing.assert_allclose(
-            block[0].coordinates(2), expected[start : start + 2], atol=1e-12
+            block[0].coordinates(n), expected[start : start + n], atol=1e-12
         )

@@ -834,9 +834,10 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     a `ReciprocalSpaceAxis` keeps its class only for a step of one and only with
     ``fftshift=True`` (with ``fftshift=False`` its coordinates are not linear in
     storage order). On a `ScanAxis`, an index array selecting evenly spaced members
-    in increasing order is treated as the equivalent slice. Every other slice and
-    index array give a `NonLinearAxis` with the selected coordinates, except that a
-    reversed slice of a `ScanAxis` raises, since a scan axis increases.
+    is treated as the equivalent slice, and so is a slice with a negative step: it
+    lists the same positions from the last, so the axis keeps its class with the
+    first selected member as its offset and a negative sampling. Every other slice
+    and index array give a `NonLinearAxis` with the selected coordinates.
     """
     if not isinstance(axis, LinearAxis):
         return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
@@ -846,10 +847,12 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     if isinstance(axis, ScanAxis) and not isinstance(item, slice):
         indices = np.arange(n)[item]
         if len(indices):
-            start, stop = int(indices[0]), int(indices[-1]) + 1
+            start = int(indices[0])
             step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
-            if step > 0 and np.array_equal(indices, np.arange(start, stop, step)):
-                item = slice(start, stop, step)
+            stop = int(indices[-1]) + (1 if step > 0 else -1)
+            if step != 0 and np.array_equal(indices, np.arange(start, stop, step)):
+                # a stop of -1 would count from the end; None runs to the first member
+                item = slice(start, None if stop < 0 else stop, step)
 
     if isinstance(item, slice):
         indices = range(n)[item]
@@ -861,21 +864,14 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
         if isinstance(axis, ReciprocalSpaceAxis):
             exact = indices.step == 1 and axis.fftshift
         else:
-            exact = indices.step > 0
+            # a reversed scan lists the same positions from the last: its offset is
+            # the first member selected and its sampling is negative
+            exact = indices.step > 0 or isinstance(axis, ScanAxis)
         if exact:
-            new_axis = axis[indices.start :]
+            # an empty reversed range can start at -1
+            new_axis = axis[max(indices.start, 0) :]
             new_axis.sampling = axis.sampling * indices.step
             return new_axis
-
-        if indices.step < 0 and isinstance(axis, ScanAxis):
-            bounds = ":".join(
-                "" if v is None else str(v) for v in (item.start, item.stop, item.step)
-            )
-            raise IndexError(
-                f"{type(axis).__name__} '{axis.label}' cannot be indexed with a "
-                f"negative step: a scan axis increases. Index with the explicit "
-                f"positions np.arange({n})[{bounds}] instead."
-            )
 
     kwargs = {
         field.name: getattr(axis, field.name)
