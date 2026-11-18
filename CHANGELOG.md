@@ -133,6 +133,17 @@ Features:
   overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
+- Plasmon-loss spectra: `plasmon_loss_spectrum` and `drude_loss_function` fold the loss-order channels of the
+  plasmon models into a low-loss EELS spectrum with an `EnergyLossAxis`, for single positions, diffraction
+  patterns and scans ([PR #657](https://github.com/abTEM/abTEM/pull/657))
+- First-principles plasmon parameters: `LossFunction` holds a momentum-resolved loss function, read from GPAW's
+  response output with `LossFunction.from_gpaw` (q and the cutoff from GPAW's log), and gives the plasmon energy,
+  the mean free path, an effective critical angle and the line shape; the plasmon models gain
+  `from_loss_function` ([PR #657](https://github.com/abTEM/abTEM/pull/657))
+- Core-shell loss functions: `subshell_oscillator_strength` gives atomic generalized oscillator strengths, and
+  `LossFunction.from_core_shells` adds the inner-shell losses to a valence loss function for total inelastic mean
+  free paths; for Si a GPAW valence response plus the core shells gives 149 nm at 200 kV and 182 nm at 300 kV,
+  against 150 and 179 nm measured ([PR #657](https://github.com/abTEM/abTEM/pull/657))
 
 Performance:
 

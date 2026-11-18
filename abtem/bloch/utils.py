@@ -168,7 +168,10 @@ def validate_use_wave_eq(use_wave_eq: bool | str) -> bool | Literal["exact"]:
 
 
 def excitation_errors(
-    g: np.ndarray, energy: float, use_wave_eq: bool | Literal["exact"] = "exact"
+    g: np.ndarray,
+    energy: float,
+    use_wave_eq: bool | Literal["exact"] = "exact",
+    beam_direction: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Calculate excitation errors for a set of reciprocal space vectors.
@@ -189,6 +192,13 @@ def excitation_errors(
         multislice with the first-order (Fresnel) propagator,
         ``FourierMultislice(order=1)``. If False, the standard excitation errors,
         ``-g_z - λ |g|² / 2``, from the Ewald sphere.
+    beam_direction : np.ndarray, optional
+        The incident-beam direction as a length-3 vector (need not be normalized).
+        Default is None, a beam along the surface normal ``z``. For a tilted beam
+        direction ``n``, every form above is evaluated in the frame of the beam:
+        ``g_z`` becomes ``g_n = n · g`` and ``g_⊥² = |g|² - g_n²`` (Mendis, Acta
+        Cryst. A80, 2024, Eq. 12). This re-evaluates the excitation errors after an
+        inelastic deflection of the incident wave vector.
 
     Returns
     -------
@@ -196,11 +206,21 @@ def excitation_errors(
         Excitation errors [1/Å].
     """
     assert g.shape[-1] == 3
+    xp = get_array_module(g)
     wavelength = energy2wavelength(energy)
     use_wave_eq = validate_use_wave_eq(use_wave_eq)
+
+    if beam_direction is None:
+        gn = g[..., 2]
+        g_perp2 = g[..., 0] ** 2 + g[..., 1] ** 2
+    else:
+        beam_direction = xp.asarray(beam_direction).astype(g.dtype)
+        beam_direction = beam_direction / xp.linalg.norm(beam_direction)
+        gn = g @ beam_direction
+        g_perp2 = xp.sum(g * g, axis=-1) - gn**2
+
     if use_wave_eq == "exact":
-        xp = get_array_module(g)
-        x = wavelength**2 * (g[..., 0] ** 2 + g[..., 1] ** 2)
+        x = wavelength**2 * g_perp2
         if x.size and float(x.max()) >= 1.0:
             raise ValueError(
                 "use_wave_eq='exact' requires wavelength * |g_perp| < 1 for every "
@@ -208,11 +228,11 @@ def excitation_errors(
             )
         # k (sqrt(1 - x) - 1), evaluated stably as -k x / (sqrt(1 - x) + 1), the
         # same form as the exact multislice propagator
-        sg = -g[..., 2] - x / (wavelength * (xp.sqrt(1.0 - x) + 1.0))
+        sg = -gn - x / (wavelength * (xp.sqrt(1.0 - x) + 1.0))
     elif use_wave_eq:
-        sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
+        sg = -gn - wavelength * g_perp2 / 2.0
     else:
-        sg = (-2 * g[..., 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
+        sg = -gn - wavelength * xp.sum(g * g, axis=-1) / 2.0
     return sg
 
 

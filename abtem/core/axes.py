@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numbers import Number
 from typing import Any, Optional
 
@@ -588,6 +588,86 @@ class WaveVectorAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class PlasmonOrderAxis(OrdinalAxis):
+    """Ensemble axis over the number of plasmon excitations (energy-loss order).
+
+    ``model`` names the plasmon model that produced the channels ("monte_carlo",
+    "phase_scramble" or "quadrature") and ``parameters`` holds its constructor
+    arguments, for provenance.
+    """
+
+    units: str = ""
+    label: str = "Plasmon excitations"
+    _ensemble_mean: bool = False
+    model: Optional[str] = None
+    parameters: Optional[dict] = field(default=None, hash=False, compare=False)
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class PlasmonAxis(OrdinalAxis):
+    """Ensemble axis over sampled plasmon scattering events (Monte Carlo).
+
+    Each value is a tuple ``(depths, radial_angles, azimuthal_angles, excitations)``
+    of one sampled event: the depths [Å] and scattering angles [mrad] of its
+    excitations and the number of excitations that have occurred so far in the
+    multislice, which :meth:`update` advances as the wave function propagates.
+    """
+
+    units: str = ""
+    label: str = "Plasmons excitations"
+    _ensemble_mean: bool = False
+
+    @property
+    def excitations(self):
+        return tuple(value[3] for value in self.values)
+
+    @property
+    def azimuthal_angles(self):
+        return tuple(value[2] for value in self.values)
+
+    @property
+    def radial_angles(self):
+        return tuple(value[1] for value in self.values)
+
+    @property
+    def depths(self):
+        return tuple(value[0] for value in self.values)
+
+    @property
+    def tilt(self):
+        """Cumulative tilt [mrad] of every event from the excitations so far."""
+        tilt = ()
+        for radial_angles, azimuthal_angles, excitations in zip(
+            self.radial_angles, self.azimuthal_angles, self.excitations
+        ):
+            # Successive scattering events add as vectors in the small-angle
+            # limit; sum the x and y tilt components rather than the angles.
+            tilt_x = sum(
+                r * np.cos(a)
+                for r, a in zip(radial_angles[:excitations], azimuthal_angles)
+            )
+            tilt_y = sum(
+                r * np.sin(a)
+                for r, a in zip(radial_angles[:excitations], azimuthal_angles)
+            )
+            tilt += ((float(tilt_x), float(tilt_y)),)
+        return tilt
+
+    def update(self, depth):
+        values = ()
+        for excitation_depths, value in zip(self.depths, self.values):
+            for i, excitation_depth in enumerate(excitation_depths):
+                if excitation_depth > depth:
+                    break
+            else:
+                i = len(excitation_depths)
+
+            values += (value[:-1] + (i,),)
+
+        self.values = values
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
 
@@ -659,10 +739,14 @@ class EnergyLossAxis(NonLinearAxis):
     """Ensemble axis for energy loss (e.g. phonon/TDS or EELS), distinct from
     the accelerating beam :class:`.EnergyAxis` so the two never collide in
     metadata or in code that pattern-matches on ``isinstance(ax, EnergyAxis)``.
+
+    The values are stored in eV; ``title_units`` ("meV" for phonon losses, "eV" for
+    plasmon losses) only sets how titles display them.
     """
 
     label: str = "energy loss"
     units: str = "eV"
+    title_units: str = "meV"
 
     def item_metadata(self, item, metadata=None):
         return {"energy_loss": self.values[item]}
@@ -670,15 +754,15 @@ class EnergyLossAxis(NonLinearAxis):
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
     ) -> str:
-        """Format title displaying energy loss in meV."""
+        """Format title displaying energy loss in ``title_units``."""
         if formatting is None:
             formatting = ".3g"
-        value_meV = self.values[0] * 1000.0
-        formatted = f"{value_meV:>{formatting}}"
+        scale = {"meV": 1000.0, "eV": 1.0}[self.title_units]
+        formatted = f"{self.values[0] * scale:>{formatting}}"
         if include_label:
-            return f"{self.label} = {formatted} meV"
+            return f"{self.label} = {formatted} {self.title_units}"
         else:
-            return f"{formatted} meV"
+            return f"{formatted} {self.title_units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

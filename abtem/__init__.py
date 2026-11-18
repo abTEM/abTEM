@@ -33,10 +33,18 @@ from abtem.ebsd import (
     ReferencePatternImages,
 )
 from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.inelastic.loss_function import LossFunction
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
+)
+from abtem.inelastic.plasmons import (
+    MonteCarloPlasmons,
+    PhaseScramblePlasmons,
+    QuadraturePlasmons,
+    drude_loss_function,
+    plasmon_loss_spectrum,
 )
 from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
 from abtem.measurements import (
@@ -107,6 +115,12 @@ __all__ = [
     "CompressedSMatrixArray",
     "FrozenPhonons",
     "AtomsEnsemble",
+    "MonteCarloPlasmons",
+    "PhaseScramblePlasmons",
+    "QuadraturePlasmons",
+    "plasmon_loss_spectrum",
+    "drude_loss_function",
+    "LossFunction",
     "EnergyResolvedAtomsEnsemble",
     "Potential",
     "CrystalPotential",
