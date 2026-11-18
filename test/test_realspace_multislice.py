@@ -809,16 +809,9 @@ class TestBackscattering:
                 atoms, gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1
             )
             probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
-            eager = probe.scan(
-                potential,
-                scan=scan,
-                detectors=detectors,
-                algorithm=algorithm,
-                lazy=False,
-            )
-            lazy = probe.scan(
-                potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
-            )
+            kwargs = dict(scan=scan, detectors=detectors, algorithm=algorithm)
+            eager = probe.scan(potential, lazy=False, **kwargs)
+            lazy = probe.scan(potential, lazy=True, **kwargs)
             assert eager[0].shape == (4, 3, 1) and eager[1].shape == (3, 1)
             for e, measurement in zip(eager, lazy):
                 assert measurement.shape == e.shape
