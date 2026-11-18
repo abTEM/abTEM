@@ -770,6 +770,8 @@ def _pair_row(
                 )
         return row
 
+    for side, rec in (("reference", rr), ("candidate", rc)):
+        row.notes.extend(f"{side}: {n}" for n in rec.get("notes", []))
     cid = registry.CaseId.parse(cand_id)
     case = reg.get(cid.name) if reg else None
     row.floors = dict(noise.get(cand_id, {}))

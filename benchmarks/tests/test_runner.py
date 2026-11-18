@@ -292,3 +292,138 @@ def test_a_case_requires_makes_every_variant_unsupported(
     assert rec["status"] == store.STATUS_UNSUPPORTED
     assert rec["error"] == "requires() is false on this ref"
     assert calls == []
+
+
+def _capture_rounds(tmp_path, monkeypatch, preset, rounds, script, arrays_script=None):
+    """Capture ``demo.case`` with a fake ``run_case`` over several rounds.
+
+    ``script`` lists the status of each call to ``run_case``; ``arrays_script``
+    the value of its single output ``out``. Returns the bundle and the calls made.
+    """
+    calls = []
+    ref = runner.Ref("x", "0" * 40, tmp_path, "x")
+
+    def fake_run_case(ref, cid, bundle, preset, repeats=None, timeout=None):
+        i = len(calls)
+        calls.append(str(cid))
+        bundle.clear_case(str(cid))
+        status = script[i]
+        record = {"status": status, "ref": ref.label}
+        outputs = None
+        if status == store.STATUS_OK:
+            record["timings"] = {"warm": [1.0], "median": 1.0, "cold": 2.0}
+            arrays = (arrays_script or [np.ones(3)] * len(script))[i]
+            outputs = {"out": (arrays, [], {})}
+        else:
+            record["error"] = "boom"
+        bundle.write_case(str(cid), record, outputs)
+        return bundle.read_case(str(cid))
+
+    monkeypatch.setattr(runner, "prepare_ref", lambda repo, r: ref)
+    monkeypatch.setattr(runner, "run_case", fake_run_case)
+    [bundle] = runner.capture(
+        tmp_path,
+        ["x"],
+        [CaseId.parse("demo.case@quick/cpu")],
+        tmp_path / "out",
+        preset,
+        "quick",
+        ["cpu"],
+        None,
+        rounds=rounds,
+        progress=lambda *a: None,
+    )
+    return bundle, calls
+
+
+def test_a_failed_round_keeps_its_record_and_ends_the_case(tmp_path, monkeypatch):
+    bundle, calls = _capture_rounds(
+        tmp_path,
+        monkeypatch,
+        "accuracy",
+        3,
+        [store.STATUS_OK, store.STATUS_ERROR, store.STATUS_OK],
+    )
+    rec = bundle.read_case("demo.case@quick/cpu")
+    assert rec["status"] == store.STATUS_ERROR and rec["error"] == "boom"
+    assert len(calls) == 2  # round 3 did not run
+
+
+def test_a_failed_first_round_runs_no_further_round(tmp_path, monkeypatch):
+    bundle, calls = _capture_rounds(
+        tmp_path, monkeypatch, "speed", 2, [store.STATUS_ERROR, store.STATUS_OK]
+    )
+    assert bundle.read_case("demo.case@quick/cpu")["status"] == store.STATUS_ERROR
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("preset", ["accuracy", "speed"])
+def test_identical_rounds_are_merged_and_counted(tmp_path, monkeypatch, preset):
+    nan = np.array([1.0, np.nan])
+    bundle, calls = _capture_rounds(
+        tmp_path,
+        monkeypatch,
+        preset,
+        3,
+        [store.STATUS_OK] * 3,
+        [nan, nan.copy(), nan.copy()],
+    )
+    rec = bundle.read_case("demo.case@quick/cpu")
+    assert rec["status"] == store.STATUS_OK and "notes" not in rec
+    assert rec["timings"]["rounds"] == 3 and rec["timings"]["warm"] == [1.0] * 3
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        np.array([1.0, 1.0, 1.5]),  # a value
+        np.ones(4),  # a shape
+        np.ones(3, dtype=np.float32),  # a dtype
+    ],
+    ids=["value", "shape", "dtype"],
+)
+def test_outputs_that_differ_between_rounds_are_an_error_under_accuracy(
+    tmp_path, monkeypatch, second
+):
+    bundle, _ = _capture_rounds(
+        tmp_path,
+        monkeypatch,
+        "accuracy",
+        3,
+        [store.STATUS_OK] * 3,
+        [np.ones(3), second, second],
+    )
+    rec = bundle.read_case("demo.case@quick/cpu")
+    assert rec["status"] == store.STATUS_ERROR
+    assert "out" in rec["error"] and "round 1 and round 2" in rec["error"]
+    assert rec["timings"]["rounds"] == 2  # round 3 did not run
+
+
+def test_outputs_that_differ_between_rounds_are_a_note_under_speed(
+    tmp_path, monkeypatch
+):
+    bundle, calls = _capture_rounds(
+        tmp_path,
+        monkeypatch,
+        "speed",
+        3,
+        [store.STATUS_OK] * 3,
+        [np.ones(3), np.zeros(3), np.zeros(3)],
+    )
+    rec = bundle.read_case("demo.case@quick/cpu")
+    assert rec["status"] == store.STATUS_OK and len(calls) == 3
+    assert rec["timings"]["rounds"] == 3
+    assert len(rec["notes"]) == 1 and "round 1 and round 2: out" in rec["notes"][0]
+
+
+def test_compare_reports_the_round_note(tmp_path, registry_with_demo):
+    from abtem_bench import compare as cmp
+    from conftest import CID, bundle, record
+
+    note = "outputs differ between round 1 and round 2: out"
+    cases = {CID: (record(notes=[note]), {"out": (np.ones(3), [], {})})}
+    ref = bundle(tmp_path, "ref", cases)
+    cand = bundle(tmp_path, "cand", cases)
+    report = cmp.compare(ref, cand, registry_with_demo)
+    assert f"candidate: {note}" in report.rows[0].notes

@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from abtem_bench import prepare, presets, registry, store
 
 HARNESS_DIR = Path(__file__).resolve().parents[1]  # .../benchmarks
@@ -386,6 +388,11 @@ def capture(
     One bundle per ref, at ``out/<label>``. ``labels`` overrides the bundle
     directory names (needed when the same ref is captured twice for a
     self-check).
+
+    A round that is not OK ends that case in its bundle: its record stays and
+    no further round runs for it. Each later OK round's outputs are compared
+    with the previous round's; a difference makes the ``accuracy`` case ERROR
+    and is only a record note (``notes``) under ``speed``.
     """
     if rounds < 1:
         raise ValueError("rounds must be 1 or more")
@@ -399,6 +406,9 @@ def capture(
         for cid in case_ids:
             for ref, bundle in zip(prepared, bundles):
                 prev = bundle.read_case(str(cid)) if bundle.has_case(str(cid)) else None
+                if prev is not None and prev.get("status") != store.STATUS_OK:
+                    continue  # a round that was not OK ended this case
+                before = _load_outputs(bundle, str(cid), prev) if prev else {}
                 rec = run_case(
                     ref,
                     cid,
@@ -407,12 +417,24 @@ def capture(
                     repeats=repeats,
                     timeout=case_timeout(cid),
                 )
-                if (
-                    prev
-                    and prev.get("status") == store.STATUS_OK
-                    and rec.get("status") == store.STATUS_OK
-                ):
-                    rec = _merge_rounds(prev, rec, rnd + 1)
+                if prev and rec.get("status") == store.STATUS_OK:
+                    merged = prev["timings"].get("rounds", 1) + 1
+                    differing = _differing_outputs(
+                        before, _load_outputs(bundle, str(cid), rec)
+                    )
+                    rec = _merge_rounds(prev, rec, merged)
+                    if prev.get("notes"):
+                        rec["notes"] = list(prev["notes"])
+                    if differing:
+                        text = (
+                            f"outputs differ between round {merged - 1} and "
+                            f"round {merged}: {', '.join(differing)}"
+                        )
+                        if preset == "accuracy":
+                            rec["status"] = store.STATUS_ERROR
+                            rec["error"] = text
+                        else:
+                            rec.setdefault("notes", []).append(text)
                     store.dump_json(bundle.case_json(str(cid)), rec)
                 t = rec.get("timings", {}).get("median")
                 rss = (rec.get("memory") or {}).get("peak_rss_bytes")
@@ -427,6 +449,30 @@ def capture(
     return bundles
 
 
+def _load_outputs(
+    bundle: store.Bundle, cid: str, record: dict[str, Any]
+) -> dict[str, np.ndarray]:
+    """The arrays of the outputs a record lists."""
+    return {n: bundle.load_output(cid, n)[0] for n in record.get("outputs", {})}
+
+
+def _differing_outputs(
+    before: dict[str, np.ndarray], after: dict[str, np.ndarray]
+) -> list[str]:
+    """Names of the outputs that are not bit-identical (NaN equals NaN).
+
+    An output only one side holds, or whose shape or dtype differs, differs.
+    """
+    return sorted(
+        n
+        for n in before.keys() | after.keys()
+        if n not in before
+        or n not in after
+        or before[n].dtype != after[n].dtype
+        or not np.array_equal(before[n], after[n], equal_nan=True)
+    )
+
+
 def _merge_rounds(
     prev: dict[str, Any], rec: dict[str, Any], rounds: int
 ) -> dict[str, Any]:
@@ -435,7 +481,7 @@ def _merge_rounds(
     Timing statistics are recomputed over all warm repeats of all rounds; cold
     is the median of the per-round cold times (each round is a fresh process);
     peak memory is the largest peak of any round. Outputs are the latest
-    round's.
+    round's. ``rounds`` counts the rounds merged.
     """
     import statistics
 
