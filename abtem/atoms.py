@@ -5,8 +5,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import itertools
-import os
-import sys
 import warnings
 from numbers import Number
 from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
@@ -19,7 +17,12 @@ from ase.data import chemical_symbols
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
-from abtem.core.utils import get_dtype, is_scalar, label_to_index
+from abtem.core.utils import (
+    _stacklevel_outside_package,
+    get_dtype,
+    is_scalar,
+    label_to_index,
+)
 
 axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
 
@@ -1130,17 +1133,6 @@ def _box_strain(cell, box, plane="xy") -> dict:
         "stretch": np.asarray(box, dtype=float) / lengths - 1.0,
         "cosines": cosines,
     }
-
-
-def _stacklevel_outside_package() -> int:
-    """The stack level of the first caller outside the abtem package."""
-    package = os.path.dirname(os.path.abspath(__file__)) + os.sep
-    frame, level = sys._getframe(1), 1
-    while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(
-        package
-    ):
-        frame, level = frame.f_back, level + 1
-    return level
 
 
 def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
