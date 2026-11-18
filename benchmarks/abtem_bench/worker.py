@@ -4,6 +4,10 @@ Invoked by the runner as ``python -P -m abtem_bench.worker ...`` with the
 harness directory and the ref's worktree on PYTHONPATH. The first lines it
 prints identify the abtem actually imported; it aborts if that is not the
 expected worktree, so a mislabelled bundle cannot be produced silently.
+
+The abTEM and dask configuration is reset to the package defaults before the
+preset is applied, so the user's environment variables and YAML files do not
+reach the record (see ``_reset_config``).
 """
 
 from __future__ import annotations
@@ -42,6 +46,22 @@ def _identify(expected_root: str | None) -> dict[str, Any]:
 #: Names what ``peak_rss_bytes`` measures, so a compare never sets it against a
 #: figure from another meter (bundles without the field hold ``wait4``).
 RSS_METER = "VmHWM"
+
+
+def _reset_config() -> None:
+    """Drop the user's configuration: abTEM's and dask's own defaults remain.
+
+    The environment variables (``ABTEM_*``, and ``DASK_*`` where the ref reads
+    them) and the YAML files under ``~/.config`` that ``import abtem`` read are
+    discarded, so a capture runs on the package defaults plus the preset.
+    Settings read once, while abtem is imported, are not covered.
+    """
+    import dask
+
+    import abtem
+
+    dask.config.refresh(paths=[], env={})
+    abtem.config.refresh(paths=[], env={})
 
 
 def _last_line(text: str) -> str:
@@ -122,6 +142,7 @@ def run(args: argparse.Namespace) -> int:
         record.update(_identify(args.expected_root))
         import abtem
 
+        _reset_config()
         reg = registry.load_cases()
         case = reg[cid.name]
         params = case.params(cid.tier, cid.variant, cid.device)

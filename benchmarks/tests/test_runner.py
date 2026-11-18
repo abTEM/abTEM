@@ -427,3 +427,31 @@ def test_compare_reports_the_round_note(tmp_path, registry_with_demo):
     cand = bundle(tmp_path, "cand", cases)
     report = cmp.compare(ref, cand, registry_with_demo)
     assert f"candidate: {note}" in report.rows[0].notes
+
+
+def test_user_configuration_does_not_reach_the_captured_config(
+    tmp_path, monkeypatch, this_checkout
+):
+    """YAML under ``~/.config`` and ``ABTEM_*``/``DASK_*`` variables are dropped."""
+    import yaml
+
+    leak = {"antialias": {"cutoff": 0.123}}
+    for package in ("abtem", "dask"):
+        (tmp_path / "home" / ".config" / package).mkdir(parents=True)
+        (tmp_path / "home" / ".config" / package / "x.yaml").write_text(
+            yaml.safe_dump(leak)
+        )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ABTEM_ANTIALIAS__CUTOFF", "0.234")
+    monkeypatch.setenv("DASK_ANTIALIAS__CUTOFF", "0.345")
+    bundle = runner.new_bundle(
+        tmp_path / "b", this_checkout, "accuracy", "quick", ["cpu"], "t"
+    )
+    rec = runner.run_case(this_checkout, CID, bundle, "accuracy", repeats=0)
+    assert rec["status"] == store.STATUS_OK, rec.get("error")
+    default = yaml.safe_load((CHECKOUT / "abtem" / "core" / "abtem.yaml").read_text())
+    assert rec["config"]["abtem_resolved"]["antialias"] == default["antialias"]
+    # dask's own defaults and the preset's settings remain
+    assert "chunk-size" in rec["config"]["dask_resolved"]["array"]
+    assert rec["config"]["dask_resolved"]["scheduler"] == "synchronous"
+    assert rec["config"]["abtem_resolved"]["precision"] == "float64"
