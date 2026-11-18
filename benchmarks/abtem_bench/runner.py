@@ -169,6 +169,11 @@ def classify_failure(returncode: int, stderr: str, timed_out: bool) -> tuple[str
     return store.STATUS_ERROR, (tail[-1][:200] if tail else f"exit code {returncode}")
 
 
+def _maxrss_bytes(ru_maxrss: int, platform: str = sys.platform) -> int:
+    """``ru_maxrss`` in bytes: macOS reports bytes, Linux kibibytes."""
+    return ru_maxrss if platform == "darwin" else ru_maxrss * 1024
+
+
 class WorkerResult(dict):
     pass
 
@@ -261,7 +266,7 @@ def run_case(
                 timer.cancel()
         proc.returncode = os.waitstatus_to_exitcode(status)
     wall = time.perf_counter() - t0
-    peak_rss_wait4 = rusage.ru_maxrss * 1024  # Linux reports kilobytes
+    peak_rss_wait4 = _maxrss_bytes(rusage.ru_maxrss)
 
     written_by_worker = bundle.has_case(cid)
     if written_by_worker:

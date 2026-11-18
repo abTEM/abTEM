@@ -1,6 +1,7 @@
 """Runner and worker end to end, and the runner's bookkeeping."""
 
 import stat
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,11 @@ from conftest import CHECKOUT
 
 CID = CaseId.parse("potential.infinite@quick/cpu")
 
+#: ``VmHWM`` is read from ``/proc/self/status``.
+needs_proc = pytest.mark.skipif(
+    sys.platform != "linux", reason="peak memory is read from /proc"
+)
+
 
 @pytest.fixture
 def this_checkout(monkeypatch):
@@ -20,6 +26,7 @@ def this_checkout(monkeypatch):
     return runner.Ref(label="checkout", sha="0" * 40, worktree=CHECKOUT, describe="x")
 
 
+@needs_proc
 def test_end_to_end_with_a_relative_bundle_path(tmp_path, monkeypatch, this_checkout):
     monkeypatch.chdir(tmp_path)
     bundle = runner.new_bundle(
@@ -119,6 +126,7 @@ def test_overwrite_never_deletes_the_current_directory_or_a_parent(
     assert (out / "manifest.json").exists() and inner.exists()
 
 
+@needs_proc
 @pytest.mark.parametrize(
     "exc, status", [(MemoryError, store.STATUS_OOM), (RuntimeError, store.STATUS_ERROR)]
 )
@@ -455,3 +463,10 @@ def test_user_configuration_does_not_reach_the_captured_config(
     assert "chunk-size" in rec["config"]["dask_resolved"]["array"]
     assert rec["config"]["dask_resolved"]["scheduler"] == "synchronous"
     assert rec["config"]["abtem_resolved"]["precision"] == "float64"
+
+
+@pytest.mark.parametrize(
+    "platform, expected", [("linux", 5 * 1024), ("darwin", 5), ("win32", 5 * 1024)]
+)
+def test_ru_maxrss_is_converted_to_bytes_per_platform(platform, expected):
+    assert runner._maxrss_bytes(5, platform) == expected
