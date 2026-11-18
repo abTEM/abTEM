@@ -1139,6 +1139,8 @@ def _reflected_waves(
             contribution._array += reflected._array
         reflected, _ = multislice_step(contribution, forward_slices[i], next_slice=None)
     reflected._array *= -1
+    # a new dict: the metadata may be shared with the transmitted waves
+    reflected._metadata = {**reflected.metadata, "reflected": True}
     return reflected
 
 

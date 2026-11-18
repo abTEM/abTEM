@@ -345,8 +345,9 @@ def validate_detectors(
 
     if not allow_reflected and any(getattr(d, "reflected", False) for d in detectors):
         raise ValueError(
-            "a detector with reflected=True measures the wave reflected by a "
-            "multislice algorithm that reflects, and cannot be used here"
+            "a detector with reflected=True needs the reflected wave, which only a "
+            "multislice algorithm that reflects computes, not PRISM or the core-loss "
+            "multislice"
         )
 
     if waves is not None:
@@ -376,14 +377,15 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        If True, the detector measures the wave reflected at the entrance of the
        specimen instead of the transmitted one, with angles measured from -z and x, y
        in the specimen's frame. It has no exit-plane axis. Only for a multislice
-       algorithm that reflects (default False); applied to waves directly with
-       `detect`, it measures those waves. A face of the specimen reflects only if the
-       potential has a vacuum slice on that side of it, so the potential needs at least
-       one vacuum slice before and one after the specimen. With a vacuum slice on one
-       side only, the transmitted wave is biased as well. The multislice keeps the wave
-       backscattered at every slice until the end of the pass, so a block of waves takes
-       the memory of one wave per slice more. The automatic batch of a `Probe` or
-       `PlaneWave` is smaller; a lazy `Waves` array keeps its chunks.
+       algorithm that reflects (default False); `detect` takes only reflected waves,
+       such as the output of a `WavesDetector(reflected=True)`. A face of the
+       specimen reflects only if the potential has a vacuum slice on that side of it,
+       so the potential needs at least one vacuum slice before and one after the
+       specimen. With a vacuum slice on one side only, the transmitted wave is biased
+       as well. The multislice keeps the wave backscattered at every slice until the
+       end of the pass, one wave per slice more per block, and the potential's slices,
+       which `potential_chunk_size` then does not bound. The automatic batch of a
+       `Probe` or `PlaneWave` counts the waves; a lazy `Waves` array keeps its chunks.
     """
 
     _splits_energy_ensembles = True
@@ -471,6 +473,12 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
     def apply(
         self, waves: Waves, max_batch: int | str = "auto"
     ) -> BaseMeasurements | Waves:
+        if self.reflected and not waves.metadata.get("reflected", False):
+            raise ValueError(
+                "a detector with reflected=True measures a reflected wave: use it in "
+                "a multislice that reflects, or on the output of a WavesDetector("
+                "reflected=True)"
+            )
         measurements = waves.apply_transform(self)
         assert isinstance(measurements, (BaseMeasurements, Waves))
         return measurements

@@ -391,8 +391,26 @@ class TestBackscattering:
     def test_reflected_detectors_are_refused_where_nothing_reflects(self):
         potential = _random_slices(None)
         s_matrix = abtem.SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20)
-        with pytest.raises(ValueError, match="cannot be used here"):
+        with pytest.raises(ValueError, match="not PRISM"):
             s_matrix.scan(detectors=abtem.AnnularDetector(0, 20, reflected=True))
+
+    def test_detect_takes_only_reflected_waves(self):
+        detector = abtem.AnnularDetector(0, 20, reflected=True)
+        transmitted = abtem.PlaneWave(energy=100e3).multislice(
+            _random_slices(None), lazy=False
+        )
+        with pytest.raises(ValueError, match="measures a reflected wave"):
+            detector.detect(transmitted)
+        reflected = abtem.PlaneWave(energy=100e3).multislice(
+            _random_slices(None),
+            detectors=abtem.WavesDetector(reflected=True),
+            algorithm=LanczosMultislice(),
+            lazy=False,
+        )
+        np.testing.assert_allclose(
+            to_host_array(detector.detect(reflected).array),
+            to_host_array(abtem.AnnularDetector(0, 20).detect(reflected).array),
+        )
 
     def test_the_multislice_function_refuses_what_the_transform_refuses(self):
         # multislice_and_detect is also called directly, without MultisliceTransform
@@ -438,18 +456,20 @@ class TestBackscattering:
         # the kept waves, and one more for the two annular outputs
         assert batch == unreduced // (potential.num_slices + 1)
 
+    @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("lazy", [False, True])
-    def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy):
-        results = abtem.PlaneWave(energy=100e3).multislice(
-            _random_slices(1),
-            detectors=[
-                abtem.WavesDetector(),
-                abtem.WavesDetector(reflected=True),
-                abtem.PixelatedDetector(reflected=True),
-            ],
-            algorithm=LanczosMultislice(),
-            lazy=lazy,
-        )
+    def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy, device):
+        with abtem.config.set({"device": device}):
+            results = abtem.PlaneWave(energy=100e3).multislice(
+                _random_slices(1),
+                detectors=[
+                    abtem.WavesDetector(),
+                    abtem.WavesDetector(reflected=True),
+                    abtem.PixelatedDetector(reflected=True),
+                ],
+                algorithm=LanczosMultislice(),
+                lazy=lazy,
+            )
         transmitted, reflected, pattern = results
         assert transmitted.shape == (4, 16, 12)  # the entrance and three planes
         assert reflected.shape == (16, 12)
@@ -465,37 +485,123 @@ class TestBackscattering:
             atol=1e-12,
         )
 
+    @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("frozen_phonons", [False, True])
-    def test_a_reflected_annular_scan_is_lazy_as_it_is_eager(self, frozen_phonons):
+    def test_a_reflected_annular_scan_is_lazy_as_it_is_eager(
+        self, frozen_phonons, device
+    ):
         # the reflected output drops the exit-plane axis and the wave's own axes
         atoms = ase.build.bulk("Si", cubic=True)
         if frozen_phonons:
             atoms = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
-        potential = abtem.Potential(
-            atoms, gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1
-        )
         detectors = [
             abtem.AnnularDetector(inner=0, outer=20),
             abtem.AnnularDetector(inner=0, outer=20, reflected=True),
         ]
         # three positions: no scan axis has the size of the two configurations
         scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 1))
-        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
         algorithm = LanczosMultislice()
-        eager = probe.scan(
-            potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=False
+        with abtem.config.set({"device": device}):
+            potential = abtem.Potential(
+                atoms, gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1
+            )
+            probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+            eager = probe.scan(
+                potential,
+                scan=scan,
+                detectors=detectors,
+                algorithm=algorithm,
+                lazy=False,
+            )
+            lazy = probe.scan(
+                potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
+            )
+            assert eager[0].shape == (4, 3, 1) and eager[1].shape == (3, 1)
+            for e, measurement in zip(eager, lazy):
+                assert measurement.shape == e.shape
+                # synchronously, as the other tests here: Numba's workqueue layer
+                # aborts on parallel stencils from several threads
+                computed = measurement.compute(
+                    scheduler="synchronous", progress_bar=False
+                )
+                np.testing.assert_allclose(
+                    to_host_array(computed.array), to_host_array(e.array), rtol=1e-5
+                )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize("scanned", [False, True], ids=["plane-wave", "scan"])
+    def test_an_energy_ensemble_is_its_energies_one_by_one(self, scanned, device):
+        # An eager run restacks the energies after the axes each output keeps, and
+        # a reflected output has no exit-plane axis.
+        from abtem.core.axes import EnergyAxis
+        from abtem.distributions import from_values
+
+        energies = [80e3, 100e3]
+        if scanned:
+            detectors = [
+                abtem.AnnularDetector(0, 20),
+                abtem.AnnularDetector(0, 20, reflected=True),
+            ]
+        else:
+            detectors = [abtem.WavesDetector(), abtem.WavesDetector(reflected=True)]
+
+        def run(energy, lazy):
+            kwargs = dict(
+                detectors=detectors,
+                algorithm=LanczosMultislice(),
+                lazy=lazy,
+            )
+            with abtem.config.set({"device": device}):
+                if scanned:
+                    scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(2, 1))
+                    probe = abtem.Probe(energy=energy, semiangle_cutoff=20)
+                    results = probe.scan(_random_slices(1), scan=scan, **kwargs)
+                else:
+                    wave = abtem.PlaneWave(energy=energy)
+                    results = wave.multislice(_random_slices(1), **kwargs)
+                if lazy:
+                    results = [
+                        r.compute(scheduler="synchronous", progress_bar=False)
+                        for r in results
+                    ]
+            return results
+
+        alone = [run(energy, False) for energy in energies]
+        for lazy in (False, True):
+            for i, output in enumerate(run(from_values(energies), lazy)):
+                axes = output.ensemble_axes_metadata
+                axis = [isinstance(a, EnergyAxis) for a in axes].index(True)
+                expected = np.stack(
+                    [to_host_array(member[i].array) for member in alone], axis=axis
+                )
+                np.testing.assert_allclose(
+                    to_host_array(output.array),
+                    expected,
+                    rtol=1e-5,
+                    atol=1e-6 * np.abs(expected).max(),
+                    err_msg=f"lazy={lazy}, output {i}",
+                )
+
+    def test_a_lazy_waves_array_is_measured_as_an_eager_one(self):
+        # a Waves array passed to multislice keeps its chunks, here one per position
+        potential = _random_slices(1)
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20).match_grid(potential)
+        positions = [[1.0, 1.0], [2.0, 1.5], [3.0, 2.0]]
+        waves = probe.build(scan=positions, lazy=True, max_batch=1)
+        assert waves.array.numblocks[0] == 3
+        detectors = [abtem.AnnularDetector(0, 20), abtem.WavesDetector(reflected=True)]
+        algorithm = LanczosMultislice()
+        lazy = waves.multislice(potential, detectors=detectors, algorithm=algorithm)
+        eager = waves.compute(scheduler="synchronous", progress_bar=False).multislice(
+            potential, detectors=detectors, algorithm=algorithm
         )
-        lazy = probe.scan(
-            potential, scan=scan, detectors=detectors, algorithm=algorithm, lazy=True
-        )
-        assert eager[0].shape == (4, 3, 1) and eager[1].shape == (3, 1)
-        for e, measurement in zip(eager, lazy):
-            assert measurement.shape == e.shape
-            # synchronously, as the other tests here: Numba's workqueue layer aborts
-            # on parallel stencils from several threads
+        for measurement, expected in zip(lazy, eager):
             computed = measurement.compute(scheduler="synchronous", progress_bar=False)
             np.testing.assert_allclose(
-                to_host_array(computed.array), to_host_array(e.array), rtol=1e-5
+                to_host_array(computed.array),
+                to_host_array(expected.array),
+                rtol=1e-5,
+                atol=1e-6 * np.abs(to_host_array(expected.array)).max(),
             )
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
@@ -687,6 +793,19 @@ class TestBackscatteringEnsemble:
             np.testing.assert_allclose(
                 output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
             )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_frozen_phonons_with_sparse_exit_planes_are_lazy_as_eager(self, device):
+        # an exit plane after every second slice, so the transmitted waves have
+        # fewer planes than slices while the reflected wave has none
+        make = _reflecting_potentials()["frozen_phonons"]
+        with abtem.config.set({"device": device}):
+            eager = _multislice_arrays(make(exit_planes=2), False)
+            lazy = _multislice_arrays(make(exit_planes=2), True)
+        assert eager[0].shape == (4, 4, 24, 20) and eager[1].shape == (4, 24, 20)
+        for e, l in zip(eager, lazy):
+            assert l.shape == e.shape
+            np.testing.assert_allclose(l, e, rtol=0, atol=1e-5 * np.abs(e).max())
 
 
 def _reflecting_potentials():

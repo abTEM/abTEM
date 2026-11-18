@@ -6,6 +6,7 @@ import copy
 import inspect
 import itertools
 import os
+import sys
 import warnings
 from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
@@ -522,3 +523,23 @@ def is_scalar(value) -> TypeGuard[float | int | np.floating | np.integer]:
         True if the value is a float, int, or a NumPy scalar, False otherwise.
     """
     return isinstance(value, (float, int, np.floating, np.integer))
+
+
+def _stacklevel_outside_package() -> int:
+    """The stack level of the first caller outside the abtem package, skipping
+    dataclasses and the ``__init__`` it generates (for ``__post_init__`` warnings)."""
+    import dataclasses
+
+    package = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+    dataclasses_file = os.path.abspath(dataclasses.__file__)
+
+    def inside(code) -> bool:
+        if code.co_filename == "<string>":
+            return code.co_name == "__init__"
+        filename = os.path.abspath(code.co_filename)
+        return filename.startswith(package) or filename == dataclasses_file
+
+    frame, level = sys._getframe(1), 1
+    while frame is not None and inside(frame.f_code):
+        frame, level = frame.f_back, level + 1
+    return level
