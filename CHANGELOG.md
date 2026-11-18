@@ -267,6 +267,10 @@ Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
+- The `mps` extra requires torch 2.14 (was 2.4). On torch 2.10 to 2.13, Metal has no `linalg.eigh`, and an FFT over
+  an axis before the last four (such as `gaussian_source_size` of a scan with a further ensemble axis) aborts the
+  process. Selecting the `mps` device with an older torch already installed now raises a `RuntimeError` asking for
+  an upgrade, instead of aborting later; upgrade with `pip install -U torch`
 
 Bugfixes:
 
@@ -343,6 +347,16 @@ Bugfixes:
   is within 1% below a whole number of Nyquist pitches, one or two fewer above about 99 points per axis); `LineScan()` with no
   `sampling` shares the change; the pitch is still never coarser than Nyquist, as the number of
   points is rounded up ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- A NumPy array works as an operand of a device array on the Metal (MPS) device, on either side of the arithmetic,
+  comparison and bitwise operators (not `//`, which device arrays do not support). The host array is moved onto the
+  device first, so the device side wins: a float64 host operand is narrowed to the device's float32, and a dtype Metal
+  lacks (`uint8`, `int16`, `float16`) raises a `RuntimeError`, also with the `cpu` torch device.
+  `device_array == host_array` raised "Expected all tensors to be on the same device", and with a host array, `!=`,
+  `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` raised a `TypeError`. The in-place operators (`+=`, `-=`, `*=`, `/=`)
+  take a host array now and update the array in place and in float32; with the `cpu` torch device they rebound the
+  tensor, and could turn it float64. The tensor methods a device array forwards (`take`, `clip`, ...) take one too.
+  This surfaced as `Images == Images` between a host and a device object failing in one operand order
+  ([PR #691](https://github.com/abTEM/abTEM/pull/691))
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
