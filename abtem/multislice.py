@@ -28,7 +28,11 @@ from abtem.core.ensemble import (
 )
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import expand_dims_to_broadcast, get_dtype
+from abtem.core.utils import (
+    _stacklevel_outside_package,
+    expand_dims_to_broadcast,
+    get_dtype,
+)
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator, _exact_root_step, _member_tilts
 from abtem.finite_difference import multislice_step as realspace_multislice_step
@@ -753,7 +757,7 @@ class FourierMultislice:
                 "FourierMultislice(expansion_scope=...) is deprecated, has no effect "
                 "and will be removed in abTEM 1.2; leave it out.",
                 FutureWarning,
-                stacklevel=3,
+                stacklevel=_stacklevel_outside_package(),
             )
         # equal to an instance given "propagator", as before the deprecation
         object.__setattr__(self, "expansion_scope", "propagator")
@@ -812,7 +816,7 @@ class RealSpaceMultislice:
             # equal to an instance given "propagator", as before the deprecation
             object.__setattr__(self, "expansion_scope", "propagator")
             return
-        warnings.warn(message, FutureWarning, stacklevel=3)
+        warnings.warn(message, FutureWarning, stacklevel=_stacklevel_outside_package())
 
 
 @dataclass(frozen=True)
@@ -880,9 +884,10 @@ def multislice_and_detect(
     potential: BasePotential,
     detectors: Optional[list[BaseDetector]] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
-    return_backscattered: bool = False,
+    return_backscattered: Optional[bool] = None,
     pbar: bool = False,
     potential_chunk_size: int | str = "auto",
+    _return_backscattered: bool = False,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
@@ -925,9 +930,8 @@ def multislice_and_detect(
         Algorithm used for multislice operator (default is FourierMultislice()).
     return_backscattered : bool, optional
         Deprecated: use a detector with ``reflected=True``. If True, the backscattered
-        waves at every exit plane are also returned. Requires
-        ``expansion_scope="full"`` and an exit plane after every slice (potential
-        exit_planes=1).
+        waves at every exit plane go to the last detector, a ``WavesDetector``.
+        Requires ``expansion_scope="full"`` and ``exit_planes=1``.
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -937,6 +941,12 @@ def multislice_and_detect(
         be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
+    # MultisliceTransform has warned and passes _return_backscattered
+    if return_backscattered is not None:
+        _warn_return_backscattered()
+        _return_backscattered = bool(return_backscattered)
+    return_backscattered = _return_backscattered
+
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors, allow_reflected=True)
     reflected = [detector.reflected for detector in detectors]
@@ -1204,6 +1214,16 @@ _REFLECTED_DETECTORS_MESSAGE = (
 )
 
 
+def _warn_return_backscattered() -> None:
+    warnings.warn(
+        "return_backscattered is deprecated and will be removed in abTEM 1.2: add a "
+        "detector with reflected=True, e.g. WavesDetector(reflected=True), which gives "
+        "the wave reflected at the entrance without exit_planes=1.",
+        FutureWarning,
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 def _reflects(algorithm) -> bool:
     """Whether a multislice algorithm makes a backscattered wave at every slice."""
     return isinstance(algorithm, LanczosMultislice) or _is_full_expansion_scope(
@@ -1250,6 +1270,8 @@ def _reflected_waves(
             contribution._array += reflected._array
         reflected, _ = multislice_step(contribution, forward_slices[i], next_slice=None)
     reflected._array *= -1
+    # a new dict: the metadata may be shared with the transmitted waves
+    reflected._metadata = {**reflected.metadata, "reflected": True}
     return reflected
 
 
@@ -1758,8 +1780,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         potential: BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         multislice_func: Optional[Callable] = None,
-        *,
-        _warn_deprecated: bool = True,
         **multislice_func_kwargs,
     ):
         if multislice_func is None:
@@ -1781,19 +1801,16 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             if not _reflects(multislice_func_kwargs.get("algorithm")):
                 raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
 
-        # the per-task rebuild of a lazy run does not warn again
-        if multislice_func_kwargs.get("return_backscattered", False):
-            from abtem.atoms import _stacklevel_outside_package
-
-            if _warn_deprecated:
-                warnings.warn(
-                    "return_backscattered is deprecated and will be removed in abTEM "
-                    "1.2: add a detector with reflected=True, e.g. WavesDetector("
-                    "reflected=True), which gives the wave reflected at the entrance "
-                    "without exit_planes=1.",
-                    FutureWarning,
-                    stacklevel=_stacklevel_outside_package(),
-                )
+        # warned once, here: the private name keeps the tasks from warning again
+        if (
+            "return_backscattered" in multislice_func_kwargs
+            and multislice_func is multislice_and_detect
+        ):
+            _warn_return_backscattered()
+            multislice_func_kwargs["_return_backscattered"] = bool(
+                multislice_func_kwargs.pop("return_backscattered")
+            )
+        if multislice_func_kwargs.get("_return_backscattered", False):
             detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
@@ -2048,7 +2065,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         potential = potential_partial(*args)
         potential = potential.item()
-        transform = MultisliceTransform(potential, _warn_deprecated=False, **kwargs)
+        transform = MultisliceTransform(potential, **kwargs)
 
         ndims = len(transform.ensemble_shape)
         wrapped_transform = _wrap_with_array(transform, ndims)

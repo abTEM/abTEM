@@ -2132,6 +2132,8 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+            A detector with ``reflected=True`` measures the wave reflected at the
+            entrance (see :class:`.BaseDetector`).
         potential_chunk_size : int or str, optional
             Number of potential slices to build and hold in memory at once.
             ``"auto"`` (default) selects a size based on the available memory
@@ -2184,6 +2186,8 @@ class Waves(BaseWaves, ArrayObject):
             given, the exit wave functions are returned (equivalent to
             :class:`WavesDetector`).
             See abtem.measurements.detect for a list of implemented detectors.
+            A detector with ``reflected=True`` measures the wave reflected at the
+            entrance (see :class:`.BaseDetector`).
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -2803,6 +2807,8 @@ class PlaneWave(WavesBuilder):
         detectors : Detector, list of detectors, optional
             A detector or a list of detectors defining how the wave functions should be
             converted to measurements after running the multislice algorithm.
+            A detector with ``reflected=True`` measures the wave reflected at the
+            entrance (see :class:`.BaseDetector`).
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -3183,6 +3189,8 @@ class Probe(WavesBuilder):
             given, the exit wave functions are returned (equivalent to
             :class:`WavesDetector`). Use :meth:`Probe.scan` for a STEM simulation
             that defaults to the :class:`FlexibleAnnularDetector`.
+            A detector with ``reflected=True`` measures the wave reflected at the
+            entrance (see :class:`.BaseDetector`).
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -3337,6 +3345,8 @@ class Probe(WavesBuilder):
             exit wave functions, pass :class:`WavesDetector` or use
             :meth:`Probe.multislice`.
             See abtem.measurements.detect for a list of implemented detectors.
+            A detector with ``reflected=True`` measures the wave reflected at the
+            entrance (see :class:`.BaseDetector`).
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
