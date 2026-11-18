@@ -729,6 +729,9 @@ class Waves(BaseWaves, ArrayObject):
         return device_name_from_array_module(get_array_module(self.array))
 
     def apply_transform(self, transform, max_batch: int | str = "auto"):
+        """Apply a transform to the waves. Reversed scan axes are put in increasing
+        order before a transform that reduces the scan; any other transform sees the
+        waves unchanged."""
         # A transform that reduces the scan to the base axes of its output (a
         # detector giving images or line profiles) gets the scan in increasing
         # order, as the reductions of measurements do. It is flipped once, here:
