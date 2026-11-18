@@ -49,9 +49,6 @@ else:
     Waves = object
     BaseMeasurements = object
 
-# if TYPE_CHECKING:
-#     from abtem.array import ArrayObject, ArrayObjectType, ArrayObjectTypeAlt
-#    from abtem.waves import Waves
 WavesType = TypeVar("WavesType", bound=Waves)
 
 

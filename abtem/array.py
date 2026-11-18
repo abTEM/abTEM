@@ -1419,11 +1419,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + ("auto",) * max((self.ensemble_dims - len(chunks), 0))
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
-        array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        return self._with_array(self._lazy_array.rechunk(chunks=chunks, **kwargs))
+
+    def _with_array(
+        self, array, *, update_metadata: Optional[dict] = None, **changes
+    ) -> Self:
+        """A new array object of the same class holding `array`.
+
+        Every other constructor argument is a deep copy of this object's, except
+        those given in `changes`, which replace them as they are. `update_metadata`
+        updates the copied metadata.
+        """
+        kwargs = self._copy_kwargs(exclude=("array",) + tuple(changes))
+        kwargs.update(changes)
+        if update_metadata:
+            kwargs["metadata"] = {**kwargs["metadata"], **update_metadata}
         # by keyword: not every subclass takes the array as its first argument
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self.__class__(array=array, **kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -1729,12 +1741,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         # than truncating the weights.
         array_object = self
         if self.array.dtype.kind not in "fc":
-            array_object = self.__class__(
-                **{
-                    **self._copy_kwargs(exclude=("array",)),
-                    "array": self.array.astype(get_dtype(complex=False)),
-                }
-            )
+            array_object = self._with_array(self.array.astype(get_dtype(complex=False)))
 
         # Average the equal-weight axes first: it shrinks the array before the
         # weighted pass, and the outer-product weights factorize over the axes.
@@ -1763,9 +1770,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         real_dtype = np.finfo(array_object.array.dtype).dtype
         array = array_object.array * xp.asarray(combined, dtype=real_dtype)
 
-        weighted = array_object.__class__(
-            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
-        )
+        weighted = array_object._with_array(array)
         return weighted._reduction(
             "sum", axes=tuple(weights), split_every=split_every
         )
@@ -1891,9 +1896,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:  # a reflected operation: "__rtruediv__" is other / self
             array = getattr(operator, name[1:])(other_array, self_array)
 
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     def _in_place_arithmetic(
         self, other: Self | np.ndarray | da.core.Array | Number, func: str
@@ -2141,9 +2144,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = da.from_array(self.array, chunks=chunks)
 
         # by keyword: not every subclass takes the array as its first argument
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self._with_array(array)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
@@ -2171,9 +2172,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             return self
 
         # by keyword: not every subclass takes the array as its first argument
-        new_kwargs = self._copy_kwargs(exclude=("array",))
-        new_kwargs["array"] = self.array
-        return self.__class__(**new_kwargs).compute(**kwargs)
+        return self._with_array(self.array).compute(**kwargs)
 
     def compute(
         self,
@@ -2227,10 +2226,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         -------
         object_on_device : ArrayObject
         """
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = copy_to_device(self.array, device)
-
-        return self.__class__(**kwargs)
+        return self._with_array(copy_to_device(self.array, device))
 
     def to_cpu(self) -> Self:
         """Move the array to the host memory from an arbitrary source array."""
@@ -2520,11 +2516,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             num_dropped_axes = tuple(
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
             )
-
-            # drop_axes = tuple(
-            #     tuple(range(self.ensemble_dims, self.ensemble_dims + num_dropped_axis))
-            #     for num_dropped_axis in num_dropped_axes
-            # )
 
             n = len(transform.ensemble_shape)
             drop_axes = tuple(
@@ -3278,9 +3269,6 @@ def stack(
     array_object : ArrayObject
         The stacked array object of the same type as the input.
     """
-
-    # if not all(isinstance(array, ArrayObject) for array in arrays):
-    #    raise ValueError("arrays must be a sequence of array objects.")
 
     assert axis <= len(arrays[0].ensemble_shape)
     assert axis >= 0

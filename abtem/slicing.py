@@ -652,20 +652,6 @@ class BaseSlicedAtoms(EqualityMixin):
         return self.get_atoms_in_slices(*_unpack_item(item, len(self)))
 
 
-# def find_closest_indices(list1, list2):
-#     # Convert lists to NumPy arrays
-#     arr1 = np.array(list1)[:, np.newaxis]  # Convert to column vector
-#     arr2 = np.array(list2)
-
-#     # Calculate the absolute differences using broadcasting
-#     differences = np.abs(arr1 - arr2)
-
-#     # Find the indices of the minimum differences
-#     closest_indices = np.argmin(differences, axis=1)
-
-#     return closest_indices
-
-
 def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
     """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
     [0, height]."""

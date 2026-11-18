@@ -13,7 +13,12 @@ import numpy as np
 
 from abtem.core.backend import ArrayModule, get_array_module
 from abtem.core.chunks import Chunks, equal_sized_chunks, is_tuple_of_ints
-from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    Ensemble,
+    _wrap_with_array,
+    partition_blocks,
+    unpack_blockwise_args,
+)
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, number_to_tuple
 
 
@@ -145,20 +150,15 @@ class DistributionFromValues(BaseDistribution):
         else:
             raise ValueError("chunks must be an int or a tuple of ints")
 
-        blocks = np.empty(len(chunks), dtype=object)
-        for i, (start, stop) in enumerate(
-            zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
-        ):
-            blocks[i] = self.__class__(
-                self.values[start:stop].copy(),
-                weights=self.weights[start:stop].copy(),
+        return partition_blocks(
+            (chunks,),
+            lambda s: self.__class__(
+                self.values[s[0]].copy(),
+                weights=self.weights[s[0]].copy(),
                 ensemble_mean=self.ensemble_mean,
-            )
-
-        if lazy:
-            blocks = da.from_array(blocks, chunks=1)
-
-        return blocks
+            ),
+            lazy,
+        )
 
     def __len__(self) -> int:
         return len(self._values)

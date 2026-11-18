@@ -800,3 +800,44 @@ def test_a_small_max_batch_multislice_builds_each_reseeded_pool_once(
     )
 
     assert list(builds.values()) == [1, 1, 1]
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_reduction_scheme_is_deprecated_and_has_no_effect(lazy):
+    # A lazy S-matrix is always reduced without rechunking: the reduction scheme
+    # and the rechunk argument only warn.
+    import warnings
+
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=2)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    )
+    scan = abtem.GridScan(gpts=(2, 2), potential=potential)
+    detector = abtem.AnnularDetector(inner=10, outer=40)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        expected = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy).compute()
+        s_matrix_array = s_matrix.build(lazy=lazy)
+        expected_array = s_matrix_array.scan(scan=scan, detectors=detector).compute()
+
+    with pytest.warns(FutureWarning, match="`reduction_scheme` is deprecated"):
+        result = s_matrix.scan(
+            scan=scan,
+            detectors=detector,
+            lazy=lazy,
+            reduction_scheme="multiple-rechunk",
+        )
+    np.testing.assert_allclose(result.compute().array, expected.array)
+
+    with pytest.warns(FutureWarning, match="`rechunk` is deprecated"):
+        result = s_matrix_array.scan(scan=scan, detectors=detector, rechunk=(2, 2))
+    np.testing.assert_allclose(result.compute().array, expected_array.array)
+
+    with pytest.warns(FutureWarning, match="`reduction_scheme` is deprecated"):
+        s_matrix_array.reduce(scan=scan, detectors=detector, reduction_scheme="auto")
