@@ -286,10 +286,11 @@ Dependencies:
 
 Deprecated (removed in 1.2):
 
-- `return_backscattered=True`: use a detector with `reflected=True`. `RealSpaceMultislice(expansion_scope="full")`,
-  the series of the full operator, which diverges below about 5 keV: use `LanczosMultislice`. The `expansion_scope`
-  argument of `RealSpaceMultislice` and `FourierMultislice`. Each warns with a `FutureWarning`; an algorithm still
-  equals one given `expansion_scope="propagator"`. An unknown `expansion_scope` now raises, and so does
+- `return_backscattered`: use a detector with `reflected=True`, which gives the reflected wave at the entrance only,
+  not at every exit plane. `RealSpaceMultislice(expansion_scope="full")`, the series of the full operator, which
+  diverges below about 5 keV: use `LanczosMultislice`. The `expansion_scope` argument of `RealSpaceMultislice` and
+  `FourierMultislice`. Each warns with a `FutureWarning` when given, `return_backscattered=False` included; an
+  algorithm still equals one given `expansion_scope="propagator"`. An unknown `expansion_scope` now raises, and so does
   `FourierMultislice(expansion_scope="full")`, which failed when the multislice ran
   ([PR #686](https://github.com/abTEM/abTEM/pull/686)).
 

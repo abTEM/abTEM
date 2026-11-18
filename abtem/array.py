@@ -241,10 +241,9 @@ def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
     for the whole array it is given, which is right for one energy only. Each
     energy member is therefore transformed separately and the results are
     restacked where indexing removed the energy axis: after the transform's own
-    ensemble axes, among the array object's own axes in their natural order,
-    which is the order every `_calculate_new_array` returns. This runs on the
-    whole array of an eager call and on every block of a lazy one, whatever
-    energies the block holds.
+    ensemble axes that the output keeps, among the array object's own axes in their
+    natural order, which is the order every `_calculate_new_array` returns. This
+    runs on the whole array of an eager call and on every block of a lazy one.
     """
     if not getattr(transform, "_splits_energy_ensembles", False):
         return transform._calculate_new_array(array_object)
@@ -258,13 +257,18 @@ def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
         items = array_object.get_items((slice(None),) * index + (j,))
         members.append(transform._calculate_new_array(array_object.__class__(**items)))
 
-    axis = len(transform.ensemble_shape) + index
+    own = len(transform.ensemble_shape)
+    dropped = transform._out_dropped_ensemble_axes(array_object)
     if isinstance(members[0], tuple):
         return tuple(
-            get_array_module(outputs[0]).stack(outputs, axis=axis)
-            for outputs in zip(*members)
+            get_array_module(outputs[0]).stack(
+                outputs, axis=own - len(dropped[i]) + index
+            )
+            for i, outputs in enumerate(zip(*members))
         )
-    return get_array_module(members[0]).stack(members, axis=axis)
+    return get_array_module(members[0]).stack(
+        members, axis=own - len(dropped[0]) + index
+    )
 
 
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):

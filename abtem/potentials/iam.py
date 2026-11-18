@@ -24,7 +24,6 @@ from abtem.atoms import (
     _box_strain_warning_suppressed,
     _cell_in_plane_frame,
     _rotate_atoms_to_plane,
-    _stacklevel_outside_package,
     _warn_if_box_is_strained,
     _wrap_far_atoms,
     wrap_and_snap_atoms,
@@ -50,6 +49,7 @@ from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    _stacklevel_outside_package,
     get_dtype,
     itemset,
     safe_ceiling_int,
