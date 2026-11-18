@@ -38,7 +38,7 @@ import ase.build
 import numpy as np
 import pytest
 import scipy.constants as const
-from utils import devices
+from utils import devices, each_angle_convention, grid_angle_by_hand  # noqa: F401
 
 from abtem import FrozenPhonons, Probe
 from abtem.core.backend import asnumpy, get_array_module
@@ -151,13 +151,15 @@ def test_chi_absolute_large_phase(device, defocus):
     assert np.abs(kernel - np.exp(-1j * expected_chi)).max() < 2e-4
 
 
-def test_ctf_profile_is_minus_sin_chi():
-    # CTF.profiles() returns Im[exp(-i chi)] = -sin(chi) along phi = 0.
+def test_ctf_profile_is_minus_sin_chi(each_angle_convention):
+    # CTF.profiles() returns Im[exp(-i chi)] = -sin(chi) along phi = 0, from k = 0
+    # to the spatial frequency of max_angle (wavelength * k = sin(max_angle) for a
+    # scattering angle).
     defocus, Cs = 300.0, 1e6
     wavelength = relativistic_wavelength(ENERGY)
     gpts, max_angle = 201, 25.0
     profile = CTF(energy=ENERGY, defocus=defocus, Cs=Cs).profiles(gpts=gpts, max_angle=max_angle)
-    k = np.linspace(0, max_angle * 1e-3, gpts) / wavelength
+    k = np.linspace(0, grid_angle_by_hand(max_angle) * 1e-3, gpts) / wavelength
     chi = np.pi * wavelength * k**2 * (0.5 * Cs * wavelength**2 * k**2 - defocus)
     assert np.allclose(profile.array, -np.sin(chi), atol=1e-5)
 
@@ -524,7 +526,7 @@ def test_hard_aperture_edge_is_inclusive():
 
 
 @devices
-def test_soft_aperture_edge_profile_and_area(device):
+def test_soft_aperture_edge_profile_and_area(device, each_angle_convention):
     # Pinned form: a linear ramp one pixel wide along the radial direction,
     # centred on the cutoff (value 1/2 at alpha = cutoff), where the pixel width
     # along azimuth phi is d = sqrt((cos phi da_x)^2 + (sin phi da_y)^2).
@@ -535,7 +537,8 @@ def test_soft_aperture_edge_profile_and_area(device):
     alpha, phi = cartesian_angular_grid(gpts, sampling, ENERGY)
     da = wavelength / (np.array(gpts) * np.array(sampling))  # rad
     d = np.hypot(np.cos(phi) * da[0], np.sin(phi) * da[1])
-    c = cutoff * 1e-3
+    # the edge on the grid, which is uniform in wavelength * k
+    c = grid_angle_by_hand(cutoff) * 1e-3
 
     ap = Aperture(cutoff, soft=True, energy=ENERGY, gpts=gpts, sampling=sampling)
     kernel = asnumpy(ab_kernel(ap, device))

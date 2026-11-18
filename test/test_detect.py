@@ -5,7 +5,16 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import devices, float64_devices, gpu, lazy_params, to_host_array
+from utils import (  # noqa: F401
+    angles_about_by_hand,
+    devices,
+    each_angle_convention,
+    float64_devices,
+    gpu,
+    is_exact_angles,
+    lazy_params,
+    to_host_array,
+)
 
 import abtem
 from abtem.core.backend import asnumpy
@@ -201,26 +210,31 @@ def _sensitivity_probe(device):
     )
 
 
-def _hand_region(gpts, sampling, inner, outer, sensitivity, shift=(0, 0)):
+def _hand_region(gpts, sampling, inner, outer, sensitivity, offset=(0.0, 0.0)):
     """The sensitivity-weighted annular region on a grid in unshifted FFT layout, by
-    hand in float64. The detector centre is displaced by ``shift`` pixels (the
-    detectors round an offset to whole pixels)."""
+    hand in float64. The detector centre is offset by ``offset`` [mrad], rounded to
+    a whole pixel as the detectors round it, and the angle from it is in the
+    configured convention (see `angles_about_by_hand`)."""
     freqs = [np.fft.fftfreq(n, 1 / (s * n)) for n, s in zip(gpts, sampling)]
     kx, ky = np.meshgrid(*freqs, indexing="ij")
-    alpha = np.sqrt(
-        (kx - shift[0] * sampling[0]) ** 2 + (ky - shift[1] * sampling[1]) ** 2
-    )
-    return np.where((alpha >= inner) & (alpha < outer), sensitivity(alpha), 0.0)
+    if is_exact_angles():
+        # rounded on the grid, where the centre is
+        alpha, _ = angles_about_by_hand(kx, ky, offset, sampling)
+    else:
+        rounded = tuple(round(o / s) * s for o, s in zip(offset, sampling))
+        alpha, _ = angles_about_by_hand(kx, ky, rounded)
+    inside = (alpha >= inner) & (alpha < outer)
+    return np.where(inside, sensitivity(np.where(inside, alpha, inner)), 0.0)
 
 
-def _hand_weighted_signal(waves, inner, outer, sensitivity, shift=(0, 0)):
+def _hand_weighted_signal(waves, inner, outer, sensitivity, offset=(0.0, 0.0)):
     """The sensitivity-weighted annular signal of ``waves``, summed by hand in float64
     from the raw diffraction pattern."""
     dp = to_host_array(
         waves.diffraction_patterns(max_angle="full", parity="same", fftshift=False)
     ).astype(np.float64)
     region = _hand_region(
-        dp.shape[-2:], waves.angular_sampling, inner, outer, sensitivity, shift
+        dp.shape[-2:], waves.angular_sampling, inner, outer, sensitivity, offset
     )
     return float((dp * region).sum())
 
@@ -228,7 +242,9 @@ def _hand_weighted_signal(waves, inner, outer, sensitivity, shift=(0, 0)):
 @devices
 @lazy_params
 @pytest.mark.parametrize("offset", [(0.0, 0.0), (5.0, -3.0)])
-def test_radial_sensitivity_agrees_between_detectors(device, lazy, offset):
+def test_radial_sensitivity_agrees_between_detectors(
+    device, lazy, offset, each_angle_convention
+):
     # The sensitivity is a function of the angle from the detector centre, offset
     # included, for every radial detector. Reference: a float64 sum by hand.
     inner, outer = 20.0, 80.0
@@ -237,8 +253,7 @@ def test_radial_sensitivity_agrees_between_detectors(device, lazy, offset):
         return (100.0 - alpha) / 80.0
 
     waves = _sensitivity_probe(device).build(lazy=False)
-    shift = tuple(int(round(o / s)) for o, s in zip(offset, waves.angular_sampling))
-    expected = _hand_weighted_signal(waves, inner, outer, sensitivity, shift)
+    expected = _hand_weighted_signal(waves, inner, outer, sensitivity, offset)
 
     # The same signal with the weights centred on the optical axis, which an offset
     # detector must not use.
@@ -273,7 +288,9 @@ def test_radial_sensitivity_agrees_between_detectors(device, lazy, offset):
 
 @devices
 @pytest.mark.parametrize("offset", [(0.0, 0.0), (5.0, -3.0)])
-def test_radial_sensitivity_detector_region_follows_the_offset(device, offset):
+def test_radial_sensitivity_detector_region_follows_the_offset(
+    device, offset, each_angle_convention
+):
     # AnnularDetector.get_detector_region is the efficiency [%] the detector applies,
     # centred on the (whole-pixel) offset detector centre.
     inner, outer = 20.0, 80.0
@@ -282,9 +299,8 @@ def test_radial_sensitivity_detector_region_follows_the_offset(device, offset):
         return (100.0 - alpha) / 80.0
 
     waves = _sensitivity_probe(device).build(lazy=False)
-    shift = tuple(int(round(o / s)) for o, s in zip(offset, waves.angular_sampling))
     gpts, sampling, _, _ = _gpts_and_sampling_from_obj(waves)
-    region = _hand_region(gpts, sampling, inner, outer, sensitivity, shift)
+    region = _hand_region(gpts, sampling, inner, outer, sensitivity, offset)
 
     detector = abtem.AnnularDetector(
         inner=inner, outer=outer, offset=offset, sensitivity=sensitivity

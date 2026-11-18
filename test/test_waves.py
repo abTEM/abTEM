@@ -8,10 +8,12 @@ import pytest
 import strategies as abtem_st
 from hypothesis import assume, given, settings
 from test_grid import check_grid_consistent
-from utils import (
+from utils import (  # noqa: F401
+    angle_by_hand,
     assert_array_matches_device,
     assert_array_matches_laziness,
     devices,
+    each_angle_convention,
     gpu,
     lazy_params,
 )
@@ -524,7 +526,7 @@ def test_downsample(data, max_angle, normalization, lazy, device):
 
 @pytest.mark.parametrize("gpts", [None, (45, 45), (39, 41)])
 @devices
-def test_downsample_keeps_the_antialias_cutoff(gpts, device):
+def test_downsample_keeps_the_antialias_cutoff(gpts, device, each_angle_convention):
     # a grid sampled differently along x and y: the pixel count within the
     # antialias cutoff of the resampled waves still means the same angles when
     # the new grid holds them, and is capped at its own grid otherwise
@@ -536,7 +538,7 @@ def test_downsample_keeps_the_antialias_cutoff(gpts, device):
 
     assert downsampled.gpts != waves.gpts
     expected = [
-        min(angle, nyquist)
+        min(angle, angle_by_hand(nyquist))
         for angle, nyquist in zip(
             waves.cutoff_angles,
             np.array(downsampled.gpts) // 2 * downsampled.angular_sampling,
@@ -547,7 +549,9 @@ def test_downsample_keeps_the_antialias_cutoff(gpts, device):
 
 @pytest.mark.parametrize("gpts", [(45, 45), (45, 50)])
 @devices
-def test_downsample_to_gpts_of_the_other_parity_keeps_the_cutoff_count(gpts, device):
+def test_downsample_to_gpts_of_the_other_parity_keeps_the_cutoff_count(
+    gpts, device, each_angle_convention
+):
     # the pixel count within the antialias cutoff takes the parity of the grid
     # the waves come from; (45, 45) and (45, 50) are not the parity of the (56, 64)
     # grid, and the angles, the "cutoff" pattern and the bins of a
@@ -558,14 +562,18 @@ def test_downsample_to_gpts_of_the_other_parity_keeps_the_cutoff_count(gpts, dev
 
     downsampled = waves.downsample(gpts=gpts)
 
-    assert downsampled.cutoff_angles == pytest.approx([66.62585871, 64.77514041])
+    # on the grid; cutoff_angles are in the configured convention
+    expected = angle_by_hand([66.62585871, 64.77514041])
+    assert downsampled.cutoff_angles == pytest.approx(expected)
     assert downsampled.diffraction_patterns("cutoff").shape[-2:] == (37, 43)
     assert abtem.FlexibleAnnularDetector().detect(downsampled).shape == (64, 1)
 
 
 @pytest.mark.parametrize("route", ["downsample", "detector"])
 @devices
-def test_resampling_onto_a_finer_grid_keeps_the_cap_of_the_coarser_grid(route, device):
+def test_resampling_onto_a_finer_grid_keeps_the_cap_of_the_coarser_grid(
+    route, device, each_angle_convention
+):
     # the content of waves resampled to (30, 40) ends at the edge of that grid, and
     # resampling them onto the finer (45, 50) grid does not extend it
     waves = abtem.Probe(
@@ -579,7 +587,9 @@ def test_resampling_onto_a_finer_grid_keeps_the_cap_of_the_coarser_grid(route, d
     fine = coarse.downsample(gpts=(45, 50))
 
     assert fine.antialias_cutoff_gpts == (30, 40)
-    assert fine.cutoff_angles == pytest.approx([55.52154893, 61.69060992])
+    assert fine.cutoff_angles == pytest.approx(
+        angle_by_hand([55.52154893, 61.69060992])
+    )
     assert fine.diffraction_patterns("cutoff").shape[-2:] == (31, 41)
     assert fine.diffraction_patterns("valid").shape[-2:] == (21, 29)
     assert abtem.FlexibleAnnularDetector().detect(fine).shape == (55, 1)
