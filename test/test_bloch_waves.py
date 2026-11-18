@@ -496,6 +496,30 @@ def test_structure_factor_build_runs_on_the_requested_device(device, lazy):
         assert get_array_module(built.array._meta) is xp
 
 
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bloch_wave_results_are_on_the_requested_device(device, lazy):
+    # Comparing values after asnumpy cannot see a silent fall-back to the host (a
+    # kernel that never got its device), and a lazy array can declare one device
+    # in its meta while computing on another.
+    xp = get_array_module(device)
+    bloch_waves = _silicon_bloch_waves(device, g_max=2.0)
+
+    results = {
+        "structure matrix": bloch_waves.calculate_structure_matrix(lazy=lazy),
+        "scattering matrix": bloch_waves.calculate_scattering_matrix(50.0, lazy=lazy),
+        "diffraction patterns": bloch_waves.calculate_diffraction_patterns(
+            [50.0, 200.0], lazy=lazy
+        ).array,
+    }
+
+    for name, array in results.items():
+        computed = array.compute() if lazy else array
+        assert get_array_module(computed) is xp, name
+        if lazy:
+            assert get_array_module(array._meta) is xp, name
+
+
 @pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
 def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     # Regression: StructureFactorArray.get_projected_potential ignored its lazy

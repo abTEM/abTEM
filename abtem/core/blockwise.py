@@ -69,12 +69,55 @@ def merge_base_chunks(array: da.Array, base_ndim: int) -> da.Array:
     An array whose base axes are already in one chunk is returned as it is.
     Otherwise dask chooses the chunks of the leading (ensemble) axes again, so that
     a block holds the whole base array of as many members as fit dask's
-    ``array.chunk-size``.
+    ``array.chunk-size``. Ensemble axes of unknown (``nan``) chunk size, e.g. after
+    boolean indexing, cannot be chosen again and keep their chunks.
     """
     n_ensemble = array.ndim - base_ndim
     if all(len(c) == 1 for c in array.chunks[n_ensemble:]):
         return array
+    if any(np.isnan(n) for c in array.chunks[:n_ensemble] for n in c):
+        return array.rechunk({axis: -1 for axis in range(n_ensemble, array.ndim)})
     return array.rechunk(("auto",) * n_ensemble + (-1,) * base_ndim)
+
+
+# Keyword names that dask.array.apply_gufunc and blockwise take for themselves: a
+# kernel keyword of the same name would be dropped or misused for a lazy array only.
+_RESERVED_KWARGS = frozenset(
+    {
+        "axes",
+        "axis",
+        "keepdims",
+        "output_dtypes",
+        "output_sizes",
+        "vectorize",
+        "allow_rechunk",
+        "meta",
+        "name",
+        "token",
+        "concatenate",
+        "align_arrays",
+        "adjust_chunks",
+        "new_axes",
+    }
+)
+
+
+def _validate_member_args(member_args: tuple, ensemble_shape: tuple) -> None:
+    n_ensemble = len(ensemble_shape)
+    for i, arg in enumerate(member_args):
+        shape = getattr(arg, "shape", None)
+        if shape is None or isinstance(arg, da.Array):
+            raise TypeError(
+                f"member argument {i} must be a NumPy or CuPy array, got {type(arg)}"
+            )
+        if len(shape) < n_ensemble or any(
+            n != 1 and n != m and not np.isnan(m)
+            for n, m in zip(shape[:n_ensemble], ensemble_shape)
+        ):
+            raise ValueError(
+                f"member argument {i} of shape {shape} must have the ensemble axes "
+                f"{ensemble_shape} as its leading axes, each of that length or 1"
+            )
 
 
 def _member_chunks(arg: np.ndarray, ensemble_chunks: tuple) -> tuple:
@@ -110,10 +153,11 @@ def map_kernel(
         trailing `base_ndim` axes of `array` and keeps the leading axes; see the
         module docstring for the full contract.
     member_args : array
-        Arrays with one entry per member, e.g. one orientation matrix per pattern.
-        Their leading axes line up with the ensemble axes of `source` (each has
-        that length or 1); their remaining axes are passed whole. For a lazy
-        source they are chunked like its ensemble axes.
+        NumPy or CuPy arrays with one entry per member, e.g. one orientation matrix
+        per pattern. Their leading axes line up with the ensemble axes of `source`
+        (each has that length or 1) and they need at least that many axes; their
+        remaining axes are passed whole. For a lazy source they are chunked like its
+        ensemble axes.
     base_shape_out : tuple of int, optional
         The shape of the trailing axes returned by the kernel, which may differ in
         number from the base axes of `source`. Default is the base shape of
@@ -130,7 +174,10 @@ def map_kernel(
         own ``device`` keyword receives it through `kwargs`.
     kwargs :
         Keyword arguments passed to the kernel. They are baked into every task of a
-        lazy array.
+        lazy array. The names that dask takes for itself (``axes``, ``axis``,
+        ``keepdims``, ``output_dtypes``, ``output_sizes``, ``vectorize``,
+        ``allow_rechunk``, ``meta``, ``name``, ``token``, ``concatenate``,
+        ``align_arrays``, ``adjust_chunks``, ``new_axes``) are rejected.
 
     Returns
     -------
@@ -139,10 +186,19 @@ def map_kernel(
     """
     array, base_ndim = _array_and_base_ndim(source, base_ndim)
 
+    reserved = _RESERVED_KWARGS.intersection(kwargs)
+    if reserved:
+        raise ValueError(
+            f"kernel keyword arguments {sorted(reserved)} are reserved by dask and "
+            "would not reach the kernel of a lazy array; rename them or bind them "
+            "to the kernel with functools.partial"
+        )
+    n_ensemble = array.ndim - base_ndim
+    _validate_member_args(member_args, array.shape[:n_ensemble])
+
     if not isinstance(array, da.Array):
         return kernel(array, *member_args, **kwargs)
 
-    n_ensemble = array.ndim - base_ndim
     array = merge_base_chunks(array, base_ndim)
     ensemble_chunks = array.chunks[:n_ensemble]
 
@@ -237,7 +293,8 @@ def map_overlapping_kernel(
     if dtype is None:
         dtype = array.dtype
 
-    # Clip to the axis length: dask refuses an overlap larger than a chunk.
+    # Clip to the axis length: dask refuses an overlap larger than the whole axis
+    # (it merges chunks that are smaller than the overlap itself).
     depth = {axis: min(d, array.shape[axis]) for axis, d in depth.items()}
 
     return da.map_overlap(

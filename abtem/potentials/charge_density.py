@@ -516,16 +516,8 @@ class ChargeDensityPotential(_PotentialBuilder):
                     charge_densities = da.from_array(
                         charge_densities, chunks=(1, -1, -1, -1)
                     )
-                if charge_densities.shape[0] == 1 and n_ensemble > 1:
-                    charge_densities = da.tile(
-                        charge_densities, (n_ensemble,) + (1,) * 3
-                    )
-                charge_densities = charge_densities.to_delayed().ravel()
             elif hasattr(charge_densities, "compute"):
                 raise RuntimeError
-            elif charge_densities.shape[0] == 1 and n_ensemble > 1:
-                # One charge density shared by every configuration.
-                charge_densities = [charge_densities[0]] * n_ensemble
 
             frozen_phonon_blocks = (
                 self._get_ewald_potential()
@@ -537,9 +529,21 @@ class ChargeDensityPotential(_PotentialBuilder):
                 # delayed blocks of to_delayed() compose correctly.
                 frozen_phonon_blocks = frozen_phonon_blocks.to_delayed().ravel()
 
-            entries = [
-                entry(cd, fp) for cd, fp in zip(charge_densities, frozen_phonon_blocks)
-            ]
+            # A chunk of configurations holds the charge densities of those
+            # configurations (the block then pairs them again one by one when it is
+            # built), or the one density that all of them share.
+            per_configuration = charge_densities.shape[0] > 1
+            bounds = np.concatenate([[0], np.cumsum(chunks[0])])
+            entries = []
+            for block, start, stop in zip(frozen_phonon_blocks, bounds, bounds[1:]):
+                if per_configuration:
+                    densities = charge_densities[start:stop]
+                else:
+                    densities = charge_densities[:1]
+                if lazy:
+                    # one dask chunk, so that the block is a single graph node
+                    densities = densities.rechunk(-1).to_delayed().item()
+                entries.append(entry(densities, block))
 
         return (partition_entries(entries, lazy),)
 
