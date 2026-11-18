@@ -13,7 +13,7 @@ import numba as nb
 import numpy as np
 
 from abtem.core.backend import get_array_module
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import energy2wavelength, to_grid_angle
 from abtem.core.fft import ifft2
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import get_dtype
@@ -149,6 +149,7 @@ def partitioned_prism_wave_vectors(
     cutoff, extent, energy, num_rings, num_points_per_ring=6, xp=np
 ):
     wavelength = energy2wavelength(energy)
+    cutoff = to_grid_angle(cutoff)
 
     rings = [xp.array((0.0, 0.0))]
     if num_rings == 1:
