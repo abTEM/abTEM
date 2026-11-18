@@ -44,6 +44,10 @@ class RefError(RuntimeError):
     """A ref cannot be resolved (unknown to git, or missing from the prepared index)."""
 
 
+class PlatformError(RuntimeError):
+    """Workers cannot be started on this operating system."""
+
+
 class BundleExistsError(RuntimeError):
     """The output directory already holds a bundle and overwrite was not asked for."""
 
@@ -400,6 +404,11 @@ def capture(
     ``accuracy`` preset ERROR (bit identity is expected only there) and is
     otherwise a record note (``notes``).
     """
+    if sys.platform == "win32":
+        raise PlatformError(
+            "capture needs Linux or macOS (the runner waits for workers with "
+            "os.wait4 and kills them by process group)"
+        )
     if rounds < 1:
         raise ValueError("rounds must be 1 or more")
     prepared = [prepare_ref(repo, r) for r in refs]

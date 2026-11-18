@@ -51,9 +51,14 @@ def test_compare_runs_from_the_readme_command_line_without_importing_abtem(tmp_p
     run = subprocess.run(
         [sys.executable, "-P", "-c", probe, *argv],
         cwd=tmp_path,
-        env={**os.environ, "PYTHONPATH": str(HARNESS)},
+        # a Windows pipe defaults to cp1252, which cannot print the report
+        env={
+            **os.environ,
+            "PYTHONPATH": str(HARNESS),
+            "PYTHONIOENCODING": "cp1252:strict",
+        },
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
     assert run.returncode == 0, run.stderr[-2000:]
     assert "IDENTICAL" in run.stdout
@@ -246,3 +251,16 @@ def test_only_patterns_that_match_nothing_are_warned_about(
         assert cli.main([command] + out + ["--only", "nosuch.*"]) == 2
         err = capsys.readouterr().err
         assert warning in err and "no cases selected" in err
+
+
+def test_capture_and_self_check_exit_2_on_windows(tmp_path, monkeypatch, capsys):
+    from abtem_bench import registry
+
+    registry.load_cases()  # import the cases before the platform changes
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(runner, "find_repo", lambda: tmp_path)
+    argv = ["--ref", "x", "--out", str(tmp_path / "out")]
+    for command in ("capture", "self-check"):
+        assert cli.main([command] + argv + ["--only", "potential.infinite*"]) == 2
+        assert "needs Linux or macOS" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()

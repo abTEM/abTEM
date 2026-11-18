@@ -265,7 +265,7 @@ def validate_case_sources(package_dir: Path | None = None) -> None:
 
     package_dir = package_dir or cases_package_dir()
     for path in sorted(package_dir.glob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_bytes(), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue

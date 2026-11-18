@@ -16,11 +16,21 @@ CID = CaseId.parse("potential.infinite@quick/cpu")
 needs_proc = pytest.mark.skipif(
     sys.platform != "linux", reason="peak memory is read from /proc"
 )
+#: ``capture`` starts workers with ``os.wait4`` and ``os.killpg``, POSIX only.
+needs_posix = pytest.mark.skipif(
+    sys.platform == "win32", reason="the runner starts workers with POSIX calls"
+)
 
 
 @pytest.fixture
 def this_checkout(monkeypatch):
-    """A Ref whose worktree is the checkout under test: no git, no other commit."""
+    """A Ref whose worktree is the checkout under test: no git, no other commit.
+
+    Skips on Windows: the tests that use it build bundles (``os.getloadavg``)
+    or start workers.
+    """
+    if sys.platform == "win32":
+        pytest.skip("bundles and workers are POSIX only")
     monkeypatch.setattr(runner, "MEM_FLOOR_BYTES", 0)
     registry.load_cases()
     return runner.Ref(label="checkout", sha="0" * 40, worktree=CHECKOUT, describe="x")
@@ -172,6 +182,7 @@ def test_rounds_recompute_statistics_over_all_rounds():
     assert rec["memory"]["peak_rss_wait4_bytes"] == 300
 
 
+@needs_posix  # signal.SIGKILL
 def test_failure_classification_reads_only_the_end_of_the_log():
     log = "hipErrorNoDevice: from an early device probe\n" + "ok\n" * 60
     log += "Traceback (most recent call last):\nValueError: boom\n"
@@ -311,6 +322,8 @@ def _capture_rounds(
     the value of its single output ``out``; ``device`` is the case id's. Returns
     the bundle and the calls made.
     """
+    if sys.platform == "win32":
+        pytest.skip("capture is POSIX only")
     calls = []
     ref = runner.Ref("x", "0" * 40, tmp_path, "x")
 
@@ -499,3 +512,12 @@ def test_an_output_only_one_round_holds_differs(tmp_path):
         for name in names:
             np.savez(directory / f"{name}.npz", array=np.ones(2))
     assert runner._differing_outputs(old, new) == ["added", "gone"]
+
+
+def test_capture_refuses_windows_before_doing_anything(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(runner.PlatformError, match="needs Linux or macOS"):
+        runner.capture(
+            tmp_path, ["x"], [CID], tmp_path / "out", "accuracy", "quick", ["cpu"], None
+        )
+    assert not (tmp_path / "out").exists()

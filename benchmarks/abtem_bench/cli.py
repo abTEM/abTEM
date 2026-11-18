@@ -163,7 +163,7 @@ def cmd_self_check(args: argparse.Namespace) -> int:
     store.dump_json(out / "noise.json", floors)
     report = cmp.compare(bundles[0], bundles[1], reg)
     md = cmp.to_markdown(report)
-    (out / "self_check.md").write_text(md)
+    (out / "self_check.md").write_text(md, encoding="utf-8")
     print(md)
     not_identical = [
         str(r.cand_id)
@@ -223,7 +223,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     )
     md = cmp.to_markdown(report)
     if args.md:
-        Path(args.md).write_text(md)
+        Path(args.md).write_text(md, encoding="utf-8")
     if args.json:
         store.dump_json(Path(args.json), cmp.to_json(report))
     print(md)
@@ -337,9 +337,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # the reports hold non-ASCII characters; a Windows pipe defaults to cp1252
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     try:
         return args.func(args)
-    except (cmp.CompareError, runner.BundleExistsError, runner.RefError) as exc:
+    except (
+        cmp.CompareError,
+        runner.BundleExistsError,
+        runner.PlatformError,
+        runner.RefError,
+    ) as exc:
         # Input problems, not gate failures: exit 2, which --fail-on never uses.
         print(f"error: {exc}", file=sys.stderr)
         return 2

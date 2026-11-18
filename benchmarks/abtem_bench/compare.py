@@ -198,7 +198,7 @@ def load_accepted(
     elif not path.exists():
         raise CompareError(f"accepted changes file not found: {path}")
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise CompareError(f"{path.name}: {exc}") from exc
     extra = set(data) - {"accepted"}
