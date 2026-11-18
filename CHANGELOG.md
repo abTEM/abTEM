@@ -940,7 +940,7 @@ Bugfixes:
       scan; `integrated_center_of_mass`, `gaussian_source_size` (of diffraction patterns and of polar measurements)
       and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
       `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of both scan axes with `np.ix_` raises
-      `TypeError`
+      `IndexError`
 
 Documentation:
 
