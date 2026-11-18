@@ -940,8 +940,8 @@ Bugfixes:
       scan; `integrated_center_of_mass`, the source-size filters (`gaussian_source_size`, `lorentzian_source_size`,
       `voigtian_source_size` and `pseudo_voigtian_source_size`, of diffraction patterns and of polar measurements)
       and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
-      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes (`np.ix_`), or any index array of more than one dimension on one,
-      raises `IndexError`
+      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes
+      (`np.ix_`), or any index array of more than one dimension on one, raises `IndexError`.
 
 Documentation:
 
