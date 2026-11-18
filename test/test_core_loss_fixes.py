@@ -1074,7 +1074,7 @@ class TestFilterByIntensity:
 def test_a_single_transition_potential_equals_a_one_element_list():
     """Waves.transition_potential_multislice wraps a non-list/tuple transition
     potential into a list; the two spellings must give the same measurement."""
-    atoms, potential, probe = _expansion_scope_setup()
+    atoms, potential, probe = _core_loss_setup()
     single = synthetic_transition_potential(
         gpts=potential.gpts, extent=potential.extent, n_transitions=3
     )
@@ -2385,7 +2385,7 @@ class TestScatteringSitesReadReciprocalSpaceWaves:
         )
 
 
-def _expansion_scope_setup():
+def _core_loss_setup():
     """Si cell with one seeded displacement and three slices."""
     atoms = list(
         abtem.FrozenPhonons(ase.build.bulk("Si", cubic=True), 1, sigmas=0.1, seed=1)
@@ -2399,7 +2399,7 @@ def _expansion_scope_setup():
 
 
 def _core_loss_scan(lazy, double_channel=False, **kwargs):
-    atoms, potential, probe = _expansion_scope_setup()
+    atoms, potential, probe = _core_loss_setup()
     return probe.transition_potential_scan(
         potential=potential,
         transition_potentials=synthetic_transition_potential(
@@ -2414,21 +2414,17 @@ def _core_loss_scan(lazy, double_channel=False, **kwargs):
     )
 
 
-@pytest.mark.filterwarnings(
-    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning"
-)
 @pytest.mark.parametrize(
     "option, match",
     [
         ("detectors_elastic", "detectors_elastic"),
-        ("algorithm", "expansion_scope='full'"),
+        ("algorithm", "LanczosMultislice"),
     ],
 )
 def test_unsupported_core_loss_options_are_refused_up_front(option, match, monkeypatch):
     """``detectors_elastic`` was declared and never read, so elastic detectors
     were accepted in silence and only the inelastic measurement came back;
-    ``RealSpaceMultislice(expansion_scope="full")`` is not supported by the
-    core-loss multislice.
+    ``LanczosMultislice`` is not supported by the core-loss multislice.
 
     Both are refused when the call is made, before the probe is built at every
     scan position, eager or lazy: abTEM is lazy by default, and a check in the
@@ -2437,16 +2433,16 @@ def test_unsupported_core_loss_options_are_refused_up_front(option, match, monke
     use of ``double_channel``, so one channel stands for both.
     """
     from abtem.multislice import (
-        RealSpaceMultislice,
+        LanczosMultislice,
         transition_potential_multislice_and_detect,
     )
 
     refused = {
         "detectors_elastic": [abtem.AnnularDetector(inner=50, outer=150)],
-        "algorithm": RealSpaceMultislice(expansion_scope="full"),
+        "algorithm": LanczosMultislice(),
     }[option]
 
-    atoms, potential, probe = _expansion_scope_setup()
+    atoms, potential, probe = _core_loss_setup()
     with pytest.raises(NotImplementedError, match=match):
         transition_potential_multislice_and_detect(
             probe.build(scan=np.array([[0.0, 0.0]]), lazy=False),
@@ -2489,7 +2485,7 @@ def test_no_elastic_detectors_are_not_refused():
 
 
 @pytest.mark.parametrize("double_channel", [False, True])
-def test_propagator_expansion_scope_runs_in_the_core_loss_multislice(double_channel):
+def test_realspace_multislice_runs_in_the_core_loss_multislice(double_channel):
     """``RealSpaceMultislice()``, the split step, is the supported real-space
     choice."""
     from abtem.multislice import RealSpaceMultislice

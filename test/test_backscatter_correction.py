@@ -4,22 +4,14 @@ import ase
 import ase.build
 import numpy as np
 import pytest
-from scipy.linalg import sqrtm
-from scipy.special import binom
 from utils import float64_devices, to_host_array
 
 import abtem
-from abtem.antialias import antialias_aperture
-from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
-from abtem.finite_difference import LaplaceOperator, _exact_root_step, multislice_step
+from abtem.finite_difference import _exact_root_step
 from abtem.multislice import LanczosMultislice, RealSpaceMultislice
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::UserWarning",
-    # the series it is compared with is deprecated
-    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
-)
+pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 
 def _sto_potential(**kwargs):
@@ -38,34 +30,6 @@ def _sto_potential(**kwargs):
     return abtem.Potential(
         atoms, gpts=(40, 40), slice_thickness=0.75, projection="finite", **kwargs
     )
-
-
-def test_the_forward_wave_of_the_full_scope_is_corrected_by_eq_10_of_the_micron_paper():
-    # Oracle: for one slice with a next slice, the forward wave is the plain series
-    # (the step without a next slice, which has no backscattered wave) minus the
-    # backscattered wave (Eq. 10), which is computed from the same stepped wave.
-    slices = _sto_potential().build(lazy=False)
-    waves = abtem.PlaneWave(energy=30e3).match_grid(slices).build(lazy=False)
-
-    def step(next_slice):
-        result = multislice_step(
-            waves.copy(),
-            slices[0],
-            next_slice,
-            LaplaceOperator(6),
-            order=3,
-            fully_corrected=True,
-        )
-        return tuple(to_host_array(w) for w in result)
-
-    plain = step(None)[0]
-    forward, backscattered = step(slices[1])
-
-    assert np.abs(backscattered).max() > 1e-3
-    # the step returns the backscattered wave band-limited but subtracts it unfiltered
-    mask = antialias_aperture(waves._valid_gpts, waves._valid_sampling, np)
-    subtracted = np.fft.ifft2(np.fft.fft2(plain - forward) * mask)
-    np.testing.assert_allclose(subtracted, backscattered, atol=1e-6)
 
 
 def test_requesting_the_backscattered_wave_leaves_the_forward_wave_unchanged():
@@ -153,10 +117,10 @@ def test_the_correction_brings_the_wide_angle_beams_to_the_exact_solution():
     assert abs(total["plain"] - EXACT_TOTAL_INTENSITY_2_KEV) > 2e-3
 
 
-def test_the_full_scope_warns_about_the_infinite_projection():
+def test_lanczos_multislice_warns_about_the_infinite_projection():
     # Oracle: the infinite projection (the default of Potential) puts the whole
     # projected potential of an atom in one slice, so the potential per unit
-    # thickness that the full scope needs is not defined; the propagator scope uses
+    # thickness that the full operator needs is not defined; the split step uses
     # the potential to first order only and does not mind.
     atoms = ase.Atoms("Si", cell=[3.0, 3.0, 3.0], pbc=True)
     potential = abtem.Potential(atoms, gpts=(16, 16), slice_thickness=1.0)
@@ -173,26 +137,6 @@ def test_the_full_scope_warns_about_the_infinite_projection():
         plane_wave.multislice(potential, algorithm=RealSpaceMultislice(), lazy=False)
 
 
-def _series_step(order):
-    def step(waves, potential_slice, next_slice):
-        return multislice_step(
-            waves,
-            potential_slice,
-            next_slice,
-            LaplaceOperator(6),
-            order=order,
-            fully_corrected=True,
-        )
-
-    return step
-
-
-def _algorithm(name):
-    if name == "lanczos":
-        return LanczosMultislice()
-    return RealSpaceMultislice(order=1, expansion_scope="full")
-
-
 def _reflected_and_transmitted(potential, algorithm, amplitude=1.0):
     """The wave reflected at the entrance and the transmitted waves at every exit
     plane, of a plane wave of the given amplitude at 1 keV."""
@@ -207,8 +151,7 @@ def _reflected_and_transmitted(potential, algorithm, amplitude=1.0):
 
 
 @float64_devices
-@pytest.mark.parametrize("order", [1, 2])
-def test_the_full_expansion_is_linear_in_the_incident_wave(order, device):
+def test_lanczos_multislice_is_linear_in_the_incident_wave(device):
     # Oracle: the Schrödinger equation is linear, so doubling the incident wave
     # doubles the reflected wave and the transmitted waves at every exit plane. The
     # potential is laterally structured, so the backscatter is not a constant.
@@ -216,7 +159,7 @@ def test_the_full_expansion_is_linear_in_the_incident_wave(order, device):
     potential = abtem.PotentialArray(
         array, slice_thickness=0.1, extent=(4.0, 3.0), exit_planes=1
     )
-    algorithm = RealSpaceMultislice(order=order, expansion_scope="full")
+    algorithm = LanczosMultislice()
 
     once = _reflected_and_transmitted(potential, algorithm, 1.0)
     twice = _reflected_and_transmitted(potential, algorithm, 2.0)
@@ -228,100 +171,7 @@ def test_the_full_expansion_is_linear_in_the_incident_wave(order, device):
 
 
 @float64_devices
-@pytest.mark.parametrize("order", [1, 2, 3])
-@pytest.mark.parametrize("thickness", [0.01, 0.05])
-@pytest.mark.parametrize("amplitude", [1.0, 1e-3])
-def test_the_backscatter_of_a_uniform_step_is_the_series_of_the_wave_numbers(
-    order, thickness, amplitude, device
-):
-    # Oracle: for a constant wave across a step from 0 to U, k_next - k_current acts
-    # as K0 sum_{i=1..order} binom(1/2, i) x^i, and 1 / k_next as the series
-    # sum_{i=0..order} binom(-1/2, i) x^i / K0 (Eq. 13 of the Micron paper), with
-    # x = sigma U / (pi K0): the backscatter over the wave is
-    # (k_next - k_current) / (2 k_next) of the same truncated series.
-    energy, volts = 1000.0, 10.0
-    k0, sigma = 1 / energy2wavelength(energy), energy2sigma(energy)
-    x = sigma * volts / (np.pi * k0)
-    difference = sum(binom(0.5, i) * x**i for i in range(1, order + 1))
-    inverse = sum(binom(-0.5, i) * x**i for i in range(order + 1))
-    expected = difference * inverse / 2
-
-    array = np.zeros((2, 8, 8), dtype=np.float32)
-    array[1] = volts * thickness
-    slices = abtem.PotentialArray(array, slice_thickness=thickness, extent=(4.0, 4.0))
-    waves = abtem.PlaneWave(energy=energy).match_grid(slices).build(lazy=False)
-    waves._array = waves._array * amplitude
-
-    _, backscattered = _series_step(order)(waves, slices[0], slices[1])
-
-    ratio = to_host_array(backscattered) / amplitude
-    np.testing.assert_allclose(ratio, expected, rtol=1e-6, atol=0)
-
-
-@float64_devices
-@pytest.mark.parametrize("order", [4, 6])
-def test_the_backscatter_of_a_structured_wave_is_the_exact_operator_of_eq_7(
-    order, device
-):
-    # Oracle: B = (2 k_next)^-1 (k_next - k_current), with the wave-number operators
-    # k = K0 sqrt(1 + (laplacian / (4 pi K0) + sigma V) / (pi K0)) as dense matrices
-    # of the stencil of the step on a 12 x 12 grid, and their matrix square roots.
-    # 1 / k_next acts to the left of the difference, which differs from acting to
-    # its right for a structured wave and structured potentials. The first slice is
-    # so thin that the wave is the same after it. The comparison is at 30 keV, where
-    # the series of order 4 is converged to 2e-8 of the backscatter.
-    n, sampling, energy = 12, 0.2, 30e3
-    rng = np.random.default_rng(1)
-    q2 = np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None] ** 2
-
-    def structured_potential():  # smooth, 0 to 20 V
-        v = np.fft.ifft2(np.fft.fft2(rng.random((n, n))) * np.exp(-60 * q2)).real
-        return 20 * (v - v.min()) / np.ptp(v)
-
-    volts = [structured_potential(), structured_potential()]
-    thicknesses = [1e-9, 0.1]
-    slices = abtem.PotentialArray(
-        np.stack([v * t for v, t in zip(volts, thicknesses)]),
-        slice_thickness=thicknesses,
-        sampling=sampling,
-    )
-    waves = abtem.PlaneWave(energy=energy).match_grid(slices).build(lazy=False)
-    xp = get_array_module(waves.array)
-    wave = rng.random((n, n)) * np.exp(2j * np.pi * rng.random((n, n)))
-    waves._array = xp.asarray(wave.reshape(waves.array.shape))
-
-    stencil = LaplaceOperator(6).get_stencil(waves, device=waves.device)
-    basis = np.eye(n * n, dtype=complex).reshape(n * n, n, n)
-    laplacian = asnumpy(stencil(xp.asarray(basis))).reshape(n * n, n * n).T
-    k0, sigma = 1 / energy2wavelength(energy), energy2sigma(energy)
-
-    def wave_number(v):
-        a = laplacian / (4 * np.pi * k0) + np.diag(sigma * v.ravel())
-        return k0 * sqrtm(np.eye(n * n) + a / (np.pi * k0))
-
-    k_current, k_next = (wave_number(v) for v in volts)
-    mask = antialias_aperture(waves._valid_gpts, waves._valid_sampling, np)
-
-    def bandlimit(a):
-        return np.fft.ifft2(np.fft.fft2(a.reshape(n, n)) * mask).ravel()
-
-    expected = bandlimit(
-        np.linalg.solve(2 * k_next, (k_next - k_current) @ bandlimit(wave))
-    )
-
-    _, backscattered = _series_step(order)(waves, slices[0], slices[1])
-
-    np.testing.assert_allclose(
-        to_host_array(backscattered).ravel(),
-        expected,
-        rtol=0,
-        atol=1e-6 * np.abs(expected).max(),
-    )
-
-
-@float64_devices
-@pytest.mark.parametrize("algorithm", ["series", "lanczos"])
-def test_a_uniform_medium_sliced_unevenly_reflects_nothing(algorithm, device):
+def test_a_uniform_medium_sliced_unevenly_reflects_nothing(device):
     # Oracle: a laterally uniform medium of 10 V with no vacuum has no interface,
     # however it is sliced, so it reflects nothing (|r|^2 < 1e-20).
     thicknesses = np.array([0.01, 0.02, 0.03, 0.01, 0.02] * 6)
@@ -333,7 +183,7 @@ def test_a_uniform_medium_sliced_unevenly_reflects_nothing(algorithm, device):
     waves = abtem.PlaneWave(energy=1000.0).match_grid(potential).build(lazy=False)
     reflected = waves.multislice(
         potential,
-        algorithm=_algorithm(algorithm),
+        algorithm=LanczosMultislice(),
         detectors=abtem.WavesDetector(reflected=True),
     )
 
@@ -341,9 +191,8 @@ def test_a_uniform_medium_sliced_unevenly_reflects_nothing(algorithm, device):
 
 
 @float64_devices
-@pytest.mark.parametrize("algorithm", ["series", "lanczos"])
 def test_the_reflection_of_a_slab_does_not_depend_on_how_unevenly_it_is_sliced(
-    algorithm, device
+    device,
 ):
     # Oracle: the reflection of a slab of potential V0 and thickness d, in vacuum, is
     # r12 (1 - exp(2 i k2 d)) / (1 - r12^2 exp(2 i k2 d)), with k2 the wave number in
@@ -367,7 +216,7 @@ def test_the_reflection_of_a_slab_does_not_depend_on_how_unevenly_it_is_sliced(
     waves = abtem.PlaneWave(energy=energy).match_grid(potential).build(lazy=False)
     reflected = waves.multislice(
         potential,
-        algorithm=_algorithm(algorithm),
+        algorithm=LanczosMultislice(),
         detectors=abtem.WavesDetector(reflected=True),
     )
 

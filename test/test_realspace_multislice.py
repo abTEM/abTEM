@@ -1,6 +1,3 @@
-import dataclasses
-import os
-
 import ase
 import ase.build
 import numpy as np
@@ -9,19 +6,14 @@ from utils import devices, gpu, requires_gpu, to_host_array
 
 import abtem
 from abtem.core.energy import energy2wavelength
-from abtem.finite_difference import (
-    _series_prefactor,
-    full_series,
-    propagator_taylor_series,
-)
-from abtem.multislice import FourierMultislice, RealSpaceMultislice
+from abtem.finite_difference import _series_prefactor, propagator_taylor_series
+from abtem.multislice import FourierMultislice, LanczosMultislice, RealSpaceMultislice
 
-# Suppress Numba performance warnings during tests; the series of the full operator is
-# deprecated (and tested here until it is removed)
+# Suppress Numba performance warnings during tests, and LanczosMultislice's warning
+# about the infinite projection, which the structural tests here do not mind
 pytestmark = pytest.mark.filterwarnings(
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::UserWarning",
-    "ignore:RealSpaceMultislice\\(expansion_scope='full'\\):FutureWarning",
 )
 
 
@@ -267,44 +259,28 @@ class TestOperatorSeries:
     K = 2 * np.pi / wavelength
     thickness = 0.2
 
-    def series_offset(self, function, order, laplacian, potential):
+    def series_offset(self, order, laplacian, potential):
         # per-slice phase rate (rad / Angstrom), the series divided by i * thickness
-        wave = np.ones(1, dtype=complex)
-        args = (wave, lambda w: laplacian * w, np.full(1, potential))
-        if function is full_series:
-            result = function(*args, order, self.wavelength, self.thickness)
-        else:
-            result = function(wave, order, *args[1:], self.wavelength, self.thickness)
+        result = propagator_taylor_series(
+            np.ones(1, dtype=complex),
+            order,
+            lambda w: laplacian * w,
+            np.full(1, potential),
+            self.wavelength,
+            self.thickness,
+        )
         return (result / (1j * self.thickness))[0].real
 
-    @pytest.mark.parametrize(
-        "function, sine_angle, potential",
-        [
-            (full_series, 0.3, 0.0),
-            (full_series, 0.3, 1.5),
-            (full_series, 0.0, 1.5),
-            (propagator_taylor_series, 0.3, 0.0),
-        ],
-    )
-    def test_error_falls_with_every_order_up_to_six(
-        self, function, sine_angle, potential
-    ):
-        # K (sqrt(1 + 2C / K) - 1) with C = Laplacian / (2K) + potential. The
-        # propagator scope expands only the Laplacian part. Measured relative
-        # errors for the 300 mrad vacuum case, orders 1 to 6: 2.2e-2, 9.9e-4,
-        # 5.4e-5, 3.3e-6, 2.2e-7, 1.5e-8; each order gains at least 14x, against
-        # the asserted 5x. Coefficients that are not the binomial ones stall the
-        # error, for example a geometric series at 1.2e-5 from order 4 on.
-        laplacian = -((self.K * np.sin(sine_angle)) ** 2)
-        c_laplacian = laplacian / (2 * self.K)
-        c_total = c_laplacian + potential
-        if function is full_series:
-            exact = self.K * (np.sqrt(1 + 2 * c_total / self.K) - 1)
-        else:
-            exact = self.K * (np.sqrt(1 + 2 * c_laplacian / self.K) - 1) + potential
+    def test_error_falls_with_every_order_up_to_six(self):
+        # K (sqrt(1 + 2C / K) - 1) with C = Laplacian / (2K), for a 300 mrad wave in
+        # vacuum. Measured relative errors, orders 1 to 6: 2.2e-2, 9.9e-4, 5.4e-5,
+        # 3.3e-6, 2.2e-7, 1.5e-8; each order gains at least 14x, against the asserted
+        # 5x. Coefficients that are not the binomial ones stall the error, for
+        # example a geometric series at 1.2e-5 from order 4 on.
+        laplacian = -((self.K * np.sin(0.3)) ** 2)
+        exact = self.K * (np.sqrt(1 + laplacian / self.K**2) - 1)
         errors = [
-            abs(self.series_offset(function, n, laplacian, potential) - exact)
-            for n in range(1, 7)
+            abs(self.series_offset(n, laplacian, 0.0) - exact) for n in range(1, 7)
         ]
         for lower, higher in zip(errors[:-1], errors[1:]):
             assert higher < lower / 5, errors
@@ -323,27 +299,14 @@ class TestOperatorSeries:
                 rtol=1e-12,
             )
 
-    @pytest.mark.parametrize(
-        "potential, offsets",
-        [
-            (0.0, (-3.931207462702469, -4.017037704469395, -4.020785576069488)),
-            (1.5, (-2.431207462702469, -2.464034557479313, -2.4649210455047244)),
-        ],
-    )
-    def test_orders_one_to_three_of_full_series_are_unchanged(self, potential, offsets):
+    def test_orders_one_to_three_of_propagator_series_are_unchanged(self):
         # 300 mrad plane wave at 30 keV. The coefficients of orders 1 to 3 are
         # 1, -1/(2K), 1/(2K^2), so these hard-coded values do not depend on the
         # coefficients of the higher orders.
         laplacian = -((self.K * np.sin(0.3)) ** 2)
-        for order, offset in enumerate(offsets, start=1):
-            result = self.series_offset(full_series, order, laplacian, potential)
-            np.testing.assert_allclose(result, offset, rtol=1e-13)
-
-    def test_orders_one_to_three_of_propagator_series_are_unchanged(self):
-        laplacian = -((self.K * np.sin(0.3)) ** 2)
         offsets = (-2.431207462702469, -2.5170377044693955, -2.520785576069488)
         for order, offset in enumerate(offsets, start=1):
-            result = self.series_offset(propagator_taylor_series, order, laplacian, 1.5)
+            result = self.series_offset(order, laplacian, 1.5)
             np.testing.assert_allclose(result, offset, rtol=1e-13)
 
 
@@ -410,249 +373,6 @@ def _random_slices(exit_planes):
     )
 
 
-@pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
-class TestDeprecatedReturnBackscattered:
-    """The deprecated return_backscattered: the backscattered waves at every exit
-    plane, which need an exit plane after every slice."""
-
-    def test_backscattering_requires_full_expansion(self, test_system):
-        """Test that backscattering requires expansion_scope='full'."""
-        probe = test_system["probe"]
-        potential_exit_planes = test_system["potential_exit_planes"]
-        scan = test_system["single_point_scan"]
-
-        with pytest.raises(
-            ValueError,
-            match="Backscattering contributions require expansion_scope='full'",
-        ):
-            probe.multislice(
-                potential=potential_exit_planes,
-                scan=scan,
-                lazy=False,
-                algorithm=RealSpaceMultislice(order=3),
-                return_backscattered=True,
-            )
-
-    def test_backscattering_requires_exit_planes(self, test_system):
-        """Test that backscattering requires exit_planes."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        with pytest.raises(
-            ValueError,
-            match="Backscattering contributions require potential.exit_planes",
-        ):
-            probe.multislice(
-                potential=potential,
-                scan=scan,
-                lazy=False,
-                algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
-                return_backscattered=True,
-            )
-
-    def test_backscattering_requires_the_entrance_plane(self):
-        # the back-propagation sums the backscattered waves into the entrance
-        # plane: a plane after every slice is not enough without it
-        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
-        potential = abtem.Potential(
-            atoms,
-            gpts=(24, 20),
-            slice_thickness=atoms.cell[2, 2] / 6,
-            exit_planes=tuple(range(6)),
-        )
-        with pytest.raises(ValueError, match="starting with the entrance plane -1"):
-            _deprecated_backscattered_arrays(potential, False)
-
-    # One tuple comparison checks every spelling, before the lazy/eager split;
-    # the lazy case checks that the error surfaces from the dask task.
-    @pytest.mark.parametrize(
-        "exit_planes, lazy",
-        [
-            (2, False),
-            ((-1, 0, 1, 2, 3, 4), False),  # all but the last plane
-            (np.array([-1, 1, 3, 5]), True),
-        ],
-        ids=["int", "tuple", "array-lazy"],
-    )
-    def test_backscattering_requires_an_exit_plane_after_every_slice(
-        self, exit_planes, lazy
-    ):
-        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
-        potential = abtem.Potential(
-            atoms,
-            gpts=(24, 20),
-            slice_thickness=atoms.cell[2, 2] / 6,
-            exit_planes=exit_planes,
-        )
-        with pytest.raises(ValueError, match="after every slice"):
-            _deprecated_backscattered_arrays(potential, lazy)
-
-    def test_backscattering_accepts_every_exit_plane_as_a_sequence(self):
-        # a sequence spelling of every plane must give the result of exit_planes=1
-        reference = _deprecated_backscattered_arrays(_random_slices(1), False)[1]
-        assert np.abs(reference[0]).max() > 0
-        for exit_planes in (tuple(range(-1, 3)), list(range(-1, 3)), np.arange(-1, 3)):
-            spelled = _random_slices(exit_planes)
-            assert tuple(spelled.exit_planes) == _random_slices(1).exit_planes
-            np.testing.assert_array_equal(
-                _deprecated_backscattered_arrays(spelled, False)[1],
-                reference,
-                err_msg=type(exit_planes).__name__,
-            )
-
-    @pytest.mark.parametrize("device", ["cpu", gpu])
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_backscattered_wave_crosses_each_slab_slice_once(self, lazy, device):
-        # Slab over vacuum: the only source is the slab/vacuum interface at plane 3
-        # (after slice 2). A laterally uniform backward wave crossing a uniform
-        # slice of projected potential V (in V Å) turns its phase by sigma * V and
-        # keeps its modulus, so each plane above the interface differs from the one
-        # below by exactly sigma, whichever sign the backward step is given.
-        array = np.zeros((7, 24, 20), dtype=np.float32)
-        array[:3] = 1.0
-        with abtem.config.set({"device": device}):
-            potential = abtem.PotentialArray(
-                array, slice_thickness=1.0, extent=(6.0, 5.0), exit_planes=1
-            )
-            _, backscattered = _deprecated_backscattered_arrays(potential, lazy)
-
-        source = backscattered[3]
-        assert np.abs(source).min() > 0
-        for plane in range(3):
-            np.testing.assert_allclose(
-                np.abs(backscattered[plane]), np.abs(source), rtol=1e-4
-            )
-            step = np.angle(backscattered[plane] * np.conj(backscattered[plane + 1]))
-            np.testing.assert_allclose(
-                np.abs(step), abtem.core.energy.energy2sigma(100e3), rtol=1e-2
-            )
-        assert not np.any(backscattered[4:])
-
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_the_deprecated_output_of_two_configurations_and_detectors(self, lazy):
-        # guards the deprecated output until it is removed: each configuration of a
-        # frozen-phonon potential gives the outputs of its run alone, averaged by
-        # the detectors and kept apart in the backscattered waves
-        atoms = ase.build.bulk("Si", cubic=True)
-        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
-        kwargs = dict(gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1)
-        detectors = [abtem.AnnularDetector(0, 20), abtem.PixelatedDetector()]
-        algorithm = RealSpaceMultislice(expansion_scope="full")
-
-        def run(potential, lazy):
-            results = abtem.PlaneWave(energy=100e3).multislice(
-                potential,
-                detectors=detectors,
-                algorithm=algorithm,
-                return_backscattered=True,
-                lazy=lazy,
-            )
-            if lazy:
-                results = [
-                    r.compute(scheduler="synchronous", progress_bar=False)
-                    for r in results
-                ]
-            return [to_host_array(r.array) for r in results]
-
-        members = [
-            run(abtem.Potential(config, **kwargs), False) for config in frozen_phonons
-        ]
-        result = run(abtem.Potential(frozen_phonons, **kwargs), lazy)
-        assert len(result) == 3
-        for i, output in enumerate(result):
-            expected = np.stack([member[i] for member in members])
-            if i < len(detectors):
-                expected = expected.mean(axis=0)
-            np.testing.assert_allclose(
-                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
-            )
-
-    @pytest.mark.parametrize("value", [False, True])
-    def test_return_backscattered_warns_whenever_given(self, value):
-        # False too: it becomes a TypeError when the keyword is removed
-        with pytest.warns(FutureWarning) as record:
-            abtem.PlaneWave(energy=100e3).multislice(
-                _random_slices(1),
-                algorithm=RealSpaceMultislice(expansion_scope="full"),
-                return_backscattered=value,
-                lazy=False,
-            )
-        ours = [r for r in record if "return_backscattered" in str(r.message)]
-        assert len(ours) == 1 and os.path.samefile(ours[0].filename, __file__)
-
-    def test_a_direct_call_of_the_multislice_function_warns(self):
-        from abtem.multislice import multislice_and_detect
-
-        potential = _random_slices(1)
-        waves = abtem.PlaneWave(energy=100e3).match_grid(potential).build(lazy=False)
-        with pytest.warns(FutureWarning, match="return_backscattered"):
-            multislice_and_detect(
-                waves, potential, [abtem.WavesDetector()], return_backscattered=False
-            )
-
-    def test_a_lazy_deprecated_call_warns_once(self):
-        # the tasks of a lazy run rebuild the transform, and must not warn again
-        with pytest.warns(FutureWarning) as record:
-            outputs = abtem.PlaneWave(energy=100e3).multislice(
-                _random_slices(1),
-                algorithm=RealSpaceMultislice(expansion_scope="full"),
-                return_backscattered=True,
-                lazy=True,
-            )
-            for output in outputs:
-                output.compute(scheduler="synchronous", progress_bar=False)
-        messages = [str(r.message) for r in record]
-        assert sum("return_backscattered" in m for m in messages) == 1
-
-
-@pytest.mark.filterwarnings("ignore:return_backscattered is deprecated:FutureWarning")
-class TestDeprecatedExpansionScope:
-    """The deprecated expansion_scope: each value warns at the caller's line, and the
-    algorithms compare equal as before."""
-
-    @pytest.mark.parametrize(
-        "make, match",
-        [
-            (lambda: RealSpaceMultislice(expansion_scope="full"), "series of the full"),
-            (lambda: RealSpaceMultislice(expansion_scope="propagator"), "leave it out"),
-            (lambda: FourierMultislice(expansion_scope="propagator"), "no effect"),
-            (
-                lambda: dataclasses.replace(
-                    RealSpaceMultislice(expansion_scope="full"), order=2
-                ),
-                "series of the full",
-            ),
-        ],
-    )
-    def test_an_expansion_scope_warns_at_the_callers_line(self, make, match):
-        with pytest.warns(FutureWarning, match=match) as record:
-            make()
-        assert all(os.path.samefile(r.filename, __file__) for r in record)
-
-    def test_the_algorithms_compare_as_before(self):
-        with pytest.warns(FutureWarning):
-            assert RealSpaceMultislice() == RealSpaceMultislice(
-                expansion_scope="propagator"
-            )
-            assert FourierMultislice() == FourierMultislice(
-                expansion_scope="propagator"
-            )
-        assert RealSpaceMultislice().expansion_scope == "propagator"
-        assert FourierMultislice().expansion_scope == "propagator"
-
-    @pytest.mark.parametrize(
-        "make",
-        [
-            lambda: RealSpaceMultislice(expansion_scope="bogus"),
-            lambda: FourierMultislice(expansion_scope="full"),
-        ],
-    )
-    def test_an_unknown_expansion_scope_is_refused(self, make):
-        with pytest.raises(ValueError, match="expansion_scope"):
-            make()
-
-
 class TestBackscattering:
     """The wave reflected at the entrance, measured by detectors with
     reflected=True."""
@@ -684,7 +404,7 @@ class TestBackscattering:
         reflected = abtem.PlaneWave(energy=100e3).multislice(
             _random_slices(None),
             detectors=abtem.WavesDetector(reflected=True),
-            algorithm=RealSpaceMultislice(expansion_scope="full"),
+            algorithm=LanczosMultislice(),
             lazy=False,
         )
         np.testing.assert_allclose(
@@ -705,18 +425,12 @@ class TestBackscattering:
         reflected = [abtem.WavesDetector(reflected=True)]
         with pytest.raises(ValueError, match="needs an algorithm that reflects"):
             multislice_and_detect(waves, potential, reflected, RealSpaceMultislice())
-        with pytest.warns(FutureWarning):
-            full = RealSpaceMultislice(expansion_scope="full")
-        with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not both"):
-            multislice_and_detect(
-                waves, _random_slices(1), reflected, full, return_backscattered=True
-            )
         with pytest.raises(ValueError, match="only for the elastic multislice"):
             MultisliceTransform(
                 potential,
                 reflected,
                 multislice_func=transition_potential_multislice_and_detect,
-                algorithm=full,
+                algorithm=LanczosMultislice(),
             )
 
     def test_the_automatic_batch_counts_the_waves_a_reflected_detector_keeps(self):
@@ -744,23 +458,6 @@ class TestBackscattering:
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("lazy", [False, True])
-    def test_the_reflected_wave_is_minus_the_deprecated_one_at_the_entrance(
-        self, lazy, device
-    ):
-        # the deprecated output is the backscattered component B psi, the reflected
-        # wave is -B psi
-        with abtem.config.set({"device": device}):
-            with pytest.warns(
-                FutureWarning, match="return_backscattered is deprecated"
-            ):
-                _, old = _deprecated_backscattered_arrays(_random_slices(1), lazy)
-            transmitted, reflected = _multislice_arrays(_random_slices(None), lazy)
-        assert reflected.shape == transmitted.shape
-        assert np.abs(reflected).max() > 0
-        np.testing.assert_allclose(reflected, -old[0], rtol=1e-5, atol=1e-9)
-
-    @pytest.mark.parametrize("device", ["cpu", gpu])
-    @pytest.mark.parametrize("lazy", [False, True])
     def test_a_reflected_detector_has_no_exit_plane_axis(self, lazy, device):
         with abtem.config.set({"device": device}):
             results = abtem.PlaneWave(energy=100e3).multislice(
@@ -770,7 +467,7 @@ class TestBackscattering:
                     abtem.WavesDetector(reflected=True),
                     abtem.PixelatedDetector(reflected=True),
                 ],
-                algorithm=RealSpaceMultislice(expansion_scope="full"),
+                algorithm=LanczosMultislice(),
                 lazy=lazy,
             )
         transmitted, reflected, pattern = results
@@ -803,7 +500,7 @@ class TestBackscattering:
         ]
         # three positions: no scan axis has the size of the two configurations
         scan = abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 1))
-        algorithm = RealSpaceMultislice(expansion_scope="full")
+        algorithm = LanczosMultislice()
         with abtem.config.set({"device": device}):
             potential = abtem.Potential(
                 atoms, gpts=(24, 20), slice_thickness=5.43 / 3, exit_planes=1
@@ -844,7 +541,7 @@ class TestBackscattering:
         def run(energy, lazy):
             kwargs = dict(
                 detectors=detectors,
-                algorithm=RealSpaceMultislice(expansion_scope="full"),
+                algorithm=LanczosMultislice(),
                 lazy=lazy,
             )
             with abtem.config.set({"device": device}):
@@ -886,7 +583,7 @@ class TestBackscattering:
         waves = probe.build(scan=positions, lazy=True, max_batch=1)
         assert waves.array.numblocks[0] == 3
         detectors = [abtem.AnnularDetector(0, 20), abtem.WavesDetector(reflected=True)]
-        algorithm = RealSpaceMultislice(expansion_scope="full")
+        algorithm = LanczosMultislice()
         lazy = waves.multislice(potential, detectors=detectors, algorithm=algorithm)
         eager = waves.compute(scheduler="synchronous", progress_bar=False).multislice(
             potential, detectors=detectors, algorithm=algorithm
@@ -921,7 +618,7 @@ class TestBackscattering:
             scan=scan,
             detectors=detectors(False) + detectors(True),
             lazy=False,
-            algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
+            algorithm=LanczosMultislice(),
         )
 
         assert isinstance(results, (list, tuple))
@@ -962,8 +659,8 @@ class TestBackscattering:
 def _multislice_arrays(
     potential, lazy, scan=None, backscattered=True, potential_chunk_size="auto"
 ):
-    """The arrays of a full-expansion real-space multislice: the transmitted
-    waves, and with `backscattered` also the wave reflected at the entrance."""
+    """The arrays of LanczosMultislice: the transmitted waves, and with
+    `backscattered` also the wave reflected at the entrance."""
     detectors = [abtem.WavesDetector()]
     if backscattered:
         detectors.append(abtem.WavesDetector(reflected=True))
@@ -971,20 +668,9 @@ def _multislice_arrays(
         lazy=lazy,
         detectors=detectors,
         potential_chunk_size=potential_chunk_size,
-        algorithm=RealSpaceMultislice(expansion_scope="full"),
+        algorithm=LanczosMultislice(),
     )
     return _computed(potential, kwargs, scan, backscattered, lazy)
-
-
-def _deprecated_backscattered_arrays(potential, lazy):
-    """The transmitted waves and the backscattered waves at every exit plane, of the
-    deprecated return_backscattered."""
-    kwargs = dict(
-        lazy=lazy,
-        return_backscattered=True,
-        algorithm=RealSpaceMultislice(expansion_scope="full"),
-    )
-    return _computed(potential, kwargs, None, True, lazy)
 
 
 def _computed(potential, kwargs, scan, several, lazy):
@@ -1022,7 +708,7 @@ class TestBackscatteringEnsemble:
                 (2, 3, None),  # 4 exit planes
                 (3, 2, [(1.0, 1.0), (2.0, 3.0)]),  # two probe positions
             ]
-            # lazy device runs are covered by TestFullExpansionChunking
+            # lazy device runs are covered by TestReflectedChunking
             for lazy, device in ((False, "cpu"), (False, gpu), (True, "cpu"))
         ],
     )
@@ -1105,7 +791,7 @@ class TestBackscatteringEnsemble:
     def test_frozen_phonons_with_sparse_exit_planes_are_lazy_as_eager(self, device):
         # an exit plane after every second slice, so the transmitted waves have
         # fewer planes than slices while the reflected wave has none
-        make = _full_expansion_potentials()["frozen_phonons"]
+        make = _reflecting_potentials()["frozen_phonons"]
         with abtem.config.set({"device": device}):
             eager = _multislice_arrays(make(exit_planes=2), False)
             lazy = _multislice_arrays(make(exit_planes=2), True)
@@ -1115,7 +801,7 @@ class TestBackscatteringEnsemble:
             np.testing.assert_allclose(l, e, rtol=0, atol=1e-5 * np.abs(e).max())
 
 
-def _full_expansion_potentials():
+def _reflecting_potentials():
     atoms = ase.build.bulk("Si", cubic=True)
     grid = dict(gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3)  # 6 slices
 
@@ -1141,7 +827,7 @@ def _full_expansion_potentials():
     }
 
 
-class TestFullExpansionChunking:
+class TestReflectedChunking:
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("backscattered", [False, True])
     # Lazy chunking is covered by the lazy single potential; lazy == eager for
@@ -1150,14 +836,14 @@ class TestFullExpansionChunking:
         "name, lazy",
         [
             (name, lazy)
-            for name in _full_expansion_potentials()
+            for name in _reflecting_potentials()
             for lazy in ((False, True) if name == "potential" else (False,))
         ],
     )
     def test_independent_of_the_potential_chunk_size(
         self, name, backscattered, lazy, device
     ):
-        make = _full_expansion_potentials()[name]
+        make = _reflecting_potentials()[name]
 
         def arrays(chunk_size):
             with abtem.config.set({"device": device}):
@@ -1255,7 +941,7 @@ class TestFullExpansionChunking:
                 ).multislice(
                     potential,
                     detectors=abtem.WavesDetector(reflected=True),
-                    algorithm=RealSpaceMultislice(order=1, expansion_scope="full"),
+                    algorithm=LanczosMultislice(),
                     lazy=False,
                 )
             stored = to_host_array(reflected.array).mean(axis=(-2, -1))

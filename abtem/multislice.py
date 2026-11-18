@@ -28,11 +28,7 @@ from abtem.core.ensemble import (
 )
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import (
-    _stacklevel_outside_package,
-    expand_dims_to_broadcast,
-    get_dtype,
-)
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator, _exact_root_step, _member_tilts
 from abtem.finite_difference import multislice_step as realspace_multislice_step
@@ -736,31 +732,11 @@ class FourierMultislice:
         If True, use the conjugate of the transmission function (default is False)
     transpose : bool, optional
         If True, reverse the order of propagation and transmission (default is False)
-    expansion_scope : str, optional
-        Deprecated, and without effect: the Fourier multislice always takes the split
-        step (``"propagator"``, the only value it takes).
     """
 
     order: Literal[1, 2, "exact"] = "exact"
-    expansion_scope: Optional[str] = None
     conjugate: bool = False
     transpose: bool = False
-
-    def __post_init__(self):
-        if self.expansion_scope not in (None, "propagator"):
-            raise ValueError(
-                "FourierMultislice takes the split step only: expansion_scope must be "
-                f"'propagator', got {self.expansion_scope!r}"
-            )
-        if self.expansion_scope is not None:
-            warnings.warn(
-                "FourierMultislice(expansion_scope=...) is deprecated, has no effect "
-                "and will be removed in abTEM 1.2; leave it out.",
-                FutureWarning,
-                stacklevel=_stacklevel_outside_package(),
-            )
-        # equal to an instance given "propagator", as before the deprecation
-        object.__setattr__(self, "expansion_scope", "propagator")
 
 
 @dataclass(frozen=True)
@@ -781,48 +757,12 @@ class RealSpaceMultislice:
         Amplitude below which the exponent Taylor series is truncated
         (default 1e-16). Raise it to stop the expansion early at the cost of
         accuracy; the series also stops at `max_terms` regardless.
-    expansion_scope : {"propagator", "full"}, optional
-        Deprecated. ``"full"`` expands the transmission operator too, with the
-        backscatter correction of each slice (Eq. 10 in Micron 190 (2025) 103778):
-        the series of the full operator, which diverges below about 5 keV and will be
-        removed. The inverse wave number of the backscatter is the series of Eq. 13,
-        which converges only for in-plane frequencies below 1/wavelength; above it the
-        truncated series grows with the order. The antialiasing aperture passes such
-        frequencies when the sampling is below about wavelength / 3.
-        ``LanczosMultislice`` evaluates that operator exactly and keeps only the
-        frequencies below 0.95/wavelength. The reflected wave needs vacuum slices
-        around the specimen, see :class:`.BaseDetector`.
     """
 
     order: int = 1
-    expansion_scope: Optional[Literal["propagator", "full"]] = None
     derivative_accuracy: int = 6
     max_terms: int = 80
     tolerance: float = 1e-16
-
-    def __post_init__(self):
-        if self.expansion_scope not in (None, "propagator", "full"):
-            raise ValueError(
-                f"expansion_scope must be 'propagator' or 'full', got "
-                f"{self.expansion_scope!r}"
-            )
-        if self.expansion_scope == "full":
-            message = (
-                "RealSpaceMultislice(expansion_scope='full'), the series of the full "
-                "operator, is deprecated and will be removed in abTEM 1.2; "
-                "LanczosMultislice evaluates the full operator exactly."
-            )
-        elif self.expansion_scope == "propagator":
-            message = (
-                "RealSpaceMultislice(expansion_scope=...) is deprecated and will be "
-                "removed in abTEM 1.2; 'propagator' is what RealSpaceMultislice does, "
-                "so leave it out."
-            )
-        else:
-            # equal to an instance given "propagator", as before the deprecation
-            object.__setattr__(self, "expansion_scope", "propagator")
-            return
-        warnings.warn(message, FutureWarning, stacklevel=_stacklevel_outside_package())
 
 
 @dataclass(frozen=True)
@@ -890,11 +830,11 @@ def multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
     detectors: Optional[list[BaseDetector]] = None,
-    algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
-    return_backscattered: Optional[bool] = None,
+    algorithm: (
+        FourierMultislice | RealSpaceMultislice | LanczosMultislice
+    ) = FourierMultislice(),
     pbar: bool = False,
     potential_chunk_size: int | str = "auto",
-    _return_backscattered: bool = False,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
@@ -933,12 +873,8 @@ def multislice_and_detect(
         potential configuration (it has no exit-plane axis); it needs an algorithm
         that reflects, and the backscattered wave of every slice is kept until the
         end of the pass.
-    algorithm : FourierMultislice or RealSpaceMultislice, optional
+    algorithm : FourierMultislice, RealSpaceMultislice or LanczosMultislice, optional
         Algorithm used for multislice operator (default is FourierMultislice()).
-    return_backscattered : bool, optional
-        Deprecated: use a detector with ``reflected=True``. If True, the backscattered
-        waves at every exit plane go to the last detector, a ``WavesDetector``.
-        Requires ``expansion_scope="full"`` and ``exit_planes=1``.
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -948,41 +884,12 @@ def multislice_and_detect(
         be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
-    # MultisliceTransform has warned and passes _return_backscattered
-    if return_backscattered is not None:
-        _warn_return_backscattered()
-        _return_backscattered = bool(return_backscattered)
-    return_backscattered = _return_backscattered
-
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors, allow_reflected=True)
     reflected = [detector.reflected for detector in detectors]
-    if any(reflected):
-        if not _reflects(algorithm):
-            raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
-        if return_backscattered:
-            raise ValueError(
-                "give detectors with reflected=True or return_backscattered, not both"
-            )
+    if any(reflected) and not _reflects(algorithm):
+        raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
     waves = waves.copy()
-
-    if return_backscattered:
-        # the deprecated flag is only for the deprecated series of the full operator
-        if not _is_full_expansion_scope(algorithm):
-            raise ValueError(
-                "Backscattering contributions require expansion_scope='full'; "
-                "for LanczosMultislice use a detector with reflected=True."
-            )
-        # A slice's backscattered wave is kept only at an exit plane, and the
-        # back-propagation sums the kept waves into the entrance plane.
-        if tuple(potential.exit_planes) != tuple(range(-1, potential.num_slices)):
-            raise ValueError(
-                "Backscattering contributions require potential.exit_planes after "
-                "every slice, starting with the entrance plane -1 (exit_planes=1)."
-            )
-
-        # moved to MultisliceTransform
-        # detectors = list(detectors) + [WavesDetector()]
 
     if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
@@ -1014,28 +921,20 @@ def multislice_and_detect(
             )
 
     else:
-        if _is_full_expansion_scope(algorithm):
-            _warn_if_infinite_projection(potential)
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
-            result = realspace_multislice_step(
+            waves = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
-                next_slice=next_slice,
                 laplace=laplace_operator,
                 tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=algorithm.expansion_scope == "full",
             )
             # the stencil knows nothing of the tilt of the beams, which the Fourier
             # propagator applies as a translation
-            if isinstance(result, tuple):
-                _translate_tilted_waves(result[0], potential_slice.thickness)
-            else:
-                _translate_tilted_waves(result, potential_slice.thickness)
-            return result
+            return _translate_tilted_waves(waves, potential_slice.thickness)
 
     (
         extra_ensemble_axes_shape,
@@ -1135,10 +1034,9 @@ def multislice_and_detect(
                 waves = multislice_step(waves, potential_slice, next_slice=None)
             tqdm_pbar.update_if_exists(int(n_waves))
 
-            if return_backscattered or reflected_detectors:
+            if reflected_detectors:
                 # a copy, so no view keeps the potential chunk alive
                 forward_slices.append(potential_slice.copy())
-            if reflected_detectors:
                 backscattered.append(backscatter_waves)
 
             depth += potential_slice.axes_metadata[0].values[0]
@@ -1151,37 +1049,13 @@ def multislice_and_detect(
                 )
 
                 if measurements is not None:
-                    if return_backscattered:
-                        _update_measurements(
-                            waves,
-                            detectors[:-1],
-                            measurements[:-1],
-                            measurement_index,
-                        )
-                        _update_measurements(
-                            backscatter_waves,
-                            detectors[-1:],
-                            measurements[-1:],
-                            measurement_index,
-                        )
-                    else:
-                        _update_measurements(
-                            waves,
-                            transmitted_detectors,
-                            transmitted_measurements,
-                            measurement_index,
-                        )
+                    _update_measurements(
+                        waves,
+                        transmitted_detectors,
+                        transmitted_measurements,
+                        measurement_index,
+                    )
                 exit_plane_index += 1
-
-        if return_backscattered:
-            _back_propagate_backscattered_waves(
-                measurements[-1][  # type: ignore
-                    _validate_potential_ensemble_indices(potential_index, (), potential)
-                ],
-                forward_slices,
-                multislice_step,
-                _reference_wave_numbers(waves_input),
-            )
 
         if reflected_detectors:
             reflected_waves = _reflected_waves(
@@ -1217,25 +1091,13 @@ def multislice_and_detect(
 
 _REFLECTED_DETECTORS_MESSAGE = (
     "a detector with reflected=True needs an algorithm that reflects: "
-    "LanczosMultislice (or the deprecated RealSpaceMultislice(expansion_scope='full'))"
+    "LanczosMultislice"
 )
-
-
-def _warn_return_backscattered() -> None:
-    warnings.warn(
-        "return_backscattered is deprecated and will be removed in abTEM 1.2: add a "
-        "detector with reflected=True, e.g. WavesDetector(reflected=True), which gives "
-        "the wave reflected at the entrance without exit_planes=1.",
-        FutureWarning,
-        stacklevel=_stacklevel_outside_package(),
-    )
 
 
 def _reflects(algorithm) -> bool:
     """Whether a multislice algorithm makes a backscattered wave at every slice."""
-    return isinstance(algorithm, LanczosMultislice) or _is_full_expansion_scope(
-        algorithm
-    )
+    return isinstance(algorithm, LanczosMultislice)
 
 
 def _with_round_trip_phase(waves: Waves, depth: float, reference_wave_number):
@@ -1291,46 +1153,6 @@ def _reference_wave_numbers(waves: Waves) -> np.ndarray:
     return 2 * np.pi / waves.wavelength / np.sqrt(1 + np.sum(tangent**2, axis=-1))
 
 
-def _back_propagate_backscattered_waves(
-    backscattered_waves: Waves,
-    forward_slices: list[BasePotential],
-    multislice_step: Callable,
-    reference_wave_number: Optional[float | np.ndarray] = None,
-) -> Waves:
-    """
-    Carry the waves backscattered at every plane back towards the entrance, so that
-    plane `i` holds the wave reflected by the slices below it (the deprecated
-    ``return_backscattered``; see `_reflected_waves`).
-
-    `backscattered_waves` are those of one configuration, with one exit plane after
-    every slice and the entrance plane first, and `forward_slices` are the slices its
-    forward pass used. The reflected wave has the carrier exp(-i K z), and its envelope
-    obeys the forward step, so it is stepped through slice `i` from plane `i + 1` to
-    plane `i`. A wave backscattered at depth z leaves the forward wave, of carrier
-    exp(i K z), with the round-trip phase exp(2 i K z). `K` [rad/Å] is the wave number
-    that the step takes out, k_z = k cos(theta) of each member for a tilted wave
-    (`reference_wave_number`, as a number or per member; 2 pi / wavelength if None).
-
-    The stored waves are the backscattered components B psi of Eq. 7 in Micron 190
-    (2025) 103778, which are minus the reflected wave: the reflection of an interface
-    is -B to first order.
-    """
-    depths = np.cumsum([0.0] + [float(s.thickness) for s in forward_slices])
-
-    # nothing is reflected before the wave enters
-    backscattered_waves[0]._array[:] = 0
-    for j in range(1, len(depths)):
-        _with_round_trip_phase(backscattered_waves[j], depths[j], reference_wave_number)
-
-    for i in range(len(forward_slices) - 1, -1, -1):
-        contribution, _ = multislice_step(
-            backscattered_waves[i + 1].copy(), forward_slices[i], next_slice=None
-        )
-        backscattered_waves[i].array += contribution.array
-
-    return backscattered_waves
-
-
 _DETECTORS_ELASTIC_MESSAGE = (
     # Declared but never read: elastic detectors passed here were accepted in
     # silence and only the inelastic measurement came back, so a caller
@@ -1344,18 +1166,10 @@ _DETECTORS_ELASTIC_MESSAGE = (
 )
 
 
-_FULL_EXPANSION_SCOPE_MESSAGE = (
-    "LanczosMultislice and RealSpaceMultislice(expansion_scope='full') are not "
-    "supported by the core-loss multislice. Use FourierMultislice or "
-    "RealSpaceMultislice()."
+_LANCZOS_CORE_LOSS_MESSAGE = (
+    "LanczosMultislice is not supported by the core-loss multislice. Use "
+    "FourierMultislice or RealSpaceMultislice."
 )
-
-
-def _is_full_expansion_scope(algorithm) -> bool:
-    return (
-        isinstance(algorithm, RealSpaceMultislice)
-        and algorithm.expansion_scope == "full"
-    )
 
 
 def transition_potential_multislice_and_detect(
@@ -1386,8 +1200,7 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice()). A
-        RealSpaceMultislice must take the split step (no ``expansion_scope="full"``).
+        Algorithm used for multislice operator (default is FourierMultislice()).
 
     Returns
     -------
@@ -1401,7 +1214,7 @@ def transition_potential_multislice_and_detect(
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
     if _reflects(algorithm):
-        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+        raise NotImplementedError(_LANCZOS_CORE_LOSS_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
@@ -1450,12 +1263,10 @@ def transition_potential_multislice_and_detect(
             waves = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
-                next_slice=None,
                 laplace=laplace_operator,
                 tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=False,
             )
             return _translate_tilted_waves(waves, potential_slice.thickness)
 
@@ -1797,7 +1608,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         self._potential = potential
 
         detectors = validate_detectors(detectors, allow_reflected=True)
-        self._user_detectors = detectors
 
         # refused here, before a graph is built, rather than at compute time
         if any(detector.reflected for detector in detectors):
@@ -1807,18 +1617,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
                 )
             if not _reflects(multislice_func_kwargs.get("algorithm")):
                 raise ValueError(_REFLECTED_DETECTORS_MESSAGE)
-
-        # warned once, here: the private name keeps the tasks from warning again
-        if (
-            "return_backscattered" in multislice_func_kwargs
-            and multislice_func is multislice_and_detect
-        ):
-            _warn_return_backscattered()
-            multislice_func_kwargs["_return_backscattered"] = bool(
-                multislice_func_kwargs.pop("return_backscattered")
-            )
-        if multislice_func_kwargs.get("_return_backscattered", False):
-            detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
             multislice_func_kwargs["pbar"] = config.get(
@@ -2098,7 +1896,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             potential_partial=potential_partial,
             graph_node_keys=graph_node_keys,
             paired_sites=paired_sites,
-            detectors=self._user_detectors,
+            detectors=self._detectors,
             multislice_func=self.multislice_func,
             **func_kwargs,
         )
@@ -2118,7 +1916,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         transform = copy.copy(self)
         transform._detectors = matched
-        transform._user_detectors = matched[: len(self._user_detectors)]
         return transform
 
     def _calculate_new_array(self, waves: Waves):

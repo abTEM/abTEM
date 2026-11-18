@@ -64,7 +64,7 @@ from abtem.measurements import (
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
-    _FULL_EXPANSION_SCOPE_MESSAGE,
+    _LANCZOS_CORE_LOSS_MESSAGE,
     MultisliceTransform,
     _reflects,
     transition_potential_multislice_and_detect,
@@ -244,7 +244,7 @@ def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
     if _reflects(multislice_func_kwargs.get("algorithm")):
-        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+        raise NotImplementedError(_LANCZOS_CORE_LOSS_MESSAGE)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
