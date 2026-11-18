@@ -131,7 +131,9 @@ class BaseScan(ReciprocalSpaceMultiplication):
         """Get the scan positions as numpy array."""
 
     def _get_weights(self):
-        raise NotImplementedError
+        """Weights of the positions, or None for an unweighted scan."""
+
+        return None
 
     @abstractmethod
     def match_probe(self, probe: Probe | BaseSMatrix):
@@ -179,10 +181,9 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         kernel = fft_shift_kernel(positions, shape=waves._valid_gpts)
 
-        try:
-            kernel *= self._get_weights()[..., None, None]
-        except NotImplementedError:
-            pass
+        weights = self._get_weights()
+        if weights is not None:
+            kernel *= weights[..., None, None]
 
         return kernel
 

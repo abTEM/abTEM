@@ -22,6 +22,7 @@ from abtem.ebsd.measurements import SphericalPattern
 from abtem.ebsd.orientations import (
     _crystal_and_displacements,
     _displaced,
+    _SymmetryNotFoundError,
     bulk_block,
     central_origin,
     estimate_repetitions,
@@ -357,13 +358,14 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         """:attr:`centrosymmetric`, or None with a warning if it cannot be found.
 
         It only fills the pattern's metadata, so a crystal whose symmetry spglib
-        cannot find, or a missing spglib, does not stop the build.
+        cannot find, or an spglib that cannot be imported, does not stop the build.
         """
         try:
             return self.centrosymmetric
-        except ImportError:
-            reason, remedy = "spglib is not installed", "install spglib or give"
-        except ValueError:
+        except ImportError as error:
+            reason = f"spglib could not be imported ({error.__cause__ or error})"
+            remedy = "install spglib or give"
+        except _SymmetryNotFoundError:
             reason, remedy = "spglib could not determine the symmetry", "give"
         warnings.warn(
             f"{reason}, so the pattern does not record whether the crystal has an "

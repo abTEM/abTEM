@@ -49,10 +49,13 @@ from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 from abtem.slicing import _integrate_planes
 
+# The import error is kept and chained into the error raised when GPAW is used.
+_gpaw_import_error: ImportError | None = None
 try:
     from gpaw import GPAW
-except ImportError:
+except ImportError as error:
     GPAW = None
+    _gpaw_import_error = error
 
 
 if GPAW is not None:
@@ -550,7 +553,7 @@ class GPAWPotential(_PotentialBuilder):
         if GPAW is None:
             raise RuntimeError(
                 "This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/."
-            )
+            ) from _gpaw_import_error
 
         if isinstance(calculators, (tuple, list)):
             atoms = _safe_read_atoms(calculators[0])
@@ -658,10 +661,8 @@ class GPAWPotential(_PotentialBuilder):
             else self.calculators
         )
 
-        try:
+        if isinstance(calculator, Delayed):
             calculator = calculator.compute()
-        except AttributeError:
-            pass
 
         # assert len(self.calculators) == 1
 

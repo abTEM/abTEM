@@ -13,32 +13,26 @@ from dask.array.core import broadcast_chunks
 from threadpoolctl import threadpool_limits  # type: ignore
 
 from abtem.core import backend, config
-from abtem.core.backend import check_cupy_is_installed, get_array_module
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import get_dtype
 
+# Why an FFT library could not be imported, chained into the error raised when
+# it is used.
+_import_errors: dict[str, ImportError] = {}
+
 try:
     import pyfftw  # type: ignore
-except (ModuleNotFoundError, ImportError):
+except ImportError as error:
     pyfftw = None
+    _import_errors["pyfftw"] = error
 
 try:
     import mkl_fft  # type: ignore
-except ModuleNotFoundError:
+except ImportError as error:
     mkl_fft = None
-
-try:
-    import cupy as cp  # type: ignore
-except ModuleNotFoundError:
-    cp = None
-except ImportError:
-    if config.get("device") == "gpu":
-        warnings.warn(
-            "The CuPy library could not be imported. Please check your installation, or"
-            "change your configuration to use CPU."
-        )
-    cp = None
+    _import_errors["mkl_fft"] = error
 
 
 # Deliberately NOT scipy.fft.next_fast_len's set: scipy targets pocketfft,
@@ -227,9 +221,9 @@ def warn_if_slow_gpu_fft(x, func_name: str = "fft2", **kwargs):
 
 def _raise_fft_lib_not_present(lib_name: str):
     raise RuntimeError(
-        f"FFT library {lib_name} not present. Install this package or change the FFT"
-        "library in your configuration."
-    )
+        f"FFT library {lib_name} could not be imported. Install this package or change"
+        " the FFT library in your configuration."
+    ) from _import_errors.get(lib_name)
 
 
 def _fft_name_to_fftw_direction(name: str) -> str:

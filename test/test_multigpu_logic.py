@@ -776,3 +776,28 @@ def test_cpu_distributed_to_zarr_compute_false_uses_the_clients_config(
         delayed.compute()
 
     assert abtem.from_zarr(path).array.dtype == np.complex128
+
+
+def test_an_attribute_error_from_the_config_plugin_reaches_the_caller(monkeypatch):
+    # Registering the plugin runs its setup on every worker; an error there
+    # comes back from ``push_config_to_workers`` as it was raised.
+    distributed = pytest.importorskip("distributed")
+    from distributed.diagnostics.plugin import WorkerPlugin
+
+    class FailingPlugin(WorkerPlugin):
+        name = backend._CONFIG_PLUGIN_NAME
+
+        def setup(self, worker=None):
+            raise AttributeError("setup of the configuration plugin failed")
+
+    plugin = FailingPlugin()
+    monkeypatch.setattr(backend, "_make_config_plugin", lambda snapshot: plugin)
+    monkeypatch.setattr(backend, "_pushed_config_token", None)
+    with (
+        distributed.LocalCluster(
+            n_workers=1, processes=False, threads_per_worker=1, dashboard_address=":0"
+        ) as cluster,
+        distributed.Client(cluster, set_as_default=False) as client,
+    ):
+        with pytest.raises(AttributeError, match="configuration plugin failed"):
+            backend.push_config_to_workers(client)

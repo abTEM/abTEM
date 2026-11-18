@@ -25,10 +25,13 @@ from typing import Any
 import dask.array as da
 import numpy as np
 
+# The import error is kept and chained into the error raised when torch is used.
+_torch_import_error: ImportError | None = None
 try:
     import torch
-except ModuleNotFoundError:
+except ImportError as error:
     torch = None  # type: ignore[assignment]
+    _torch_import_error = error
 
 
 # The torch device the arrays live on: "mps", or "cpu" to run this layer on any
@@ -131,9 +134,9 @@ def is_available() -> bool:
 def _check_available() -> None:
     if torch is None:
         raise RuntimeError(
-            "PyTorch is not installed, Metal (MPS) calculations are disabled. "
+            "PyTorch could not be imported, Metal (MPS) calculations are disabled. "
             "Install it from https://pytorch.org, or change the device to 'cpu'."
-        )
+        ) from _torch_import_error
     if DEVICE == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError(
             "The Metal (MPS) backend is not available: it needs macOS with a "
