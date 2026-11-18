@@ -6,6 +6,7 @@ import ctypes
 import importlib.util
 import logging
 import os
+import re
 import sys
 import threading
 import warnings
@@ -133,6 +134,34 @@ def check_cupy_is_installed():
         ) from _cupy_import_error
 
 
+# The oldest PyTorch whose Metal backend abTEM supports. Before it MPS has no
+# ``linalg.eigh``, and an FFT over an axis before the last four dimensions makes
+# MPSGraph abort the whole process (not a Python exception), so it is refused up
+# front. Keep in sync with the `mps` extra in pyproject.toml.
+_MIN_TORCH_VERSION_FOR_MPS = (2, 14)
+
+
+def _check_torch_version_for_mps(version: str) -> None:
+    """
+    Raise if a PyTorch version string is older than the Metal (MPS) floor.
+
+    An unparseable version string is let through: refusing a working torch over
+    an unfamiliar version scheme would be worse than the check it replaces.
+    """
+    match = re.match(r"(\d+)\.(\d+)", version)
+    if match is None:
+        return
+    if (int(match[1]), int(match[2])) < _MIN_TORCH_VERSION_FOR_MPS:
+        minimum = ".".join(str(n) for n in _MIN_TORCH_VERSION_FOR_MPS)
+        raise RuntimeError(
+            f"The Metal (MPS) backend requires PyTorch {minimum} or newer, but "
+            f"PyTorch {version} is installed. Before {minimum}, MPS has no "
+            "`linalg.eigh`, and an FFT over an axis before the last four aborts "
+            "the whole process. Upgrade PyTorch (`pip install -U torch`), or "
+            "change the device to 'cpu'."
+        )
+
+
 def check_mps_is_available():
     """
     Load the Metal (MPS) array namespace, raising if it is unusable.
@@ -184,6 +213,9 @@ def check_mps_is_available():
 
                 _torch._check_available()
 
+                if torch_device == "mps":
+                    _check_torch_version_for_mps(_torch.torch.__version__)
+
                 # tp last: other threads test it without the lock, and must
                 # not see it before TorchNDArray is in place too.
                 TorchNDArray = _torch.TorchNDArray
@@ -201,6 +233,35 @@ def check_mps_is_available():
 
 
 _cuda_cluster_client = None
+
+# CUDARuntimeError.status of cudaErrorNoDevice (CUDA) and hipErrorNoDevice (HIP).
+_CUDA_ERROR_NO_DEVICE = 100
+
+
+def _visible_gpu_count(cupy_module) -> int:
+    """
+    Number of GPUs that CuPy sees, 0 when there is none.
+
+    Only the no-device error means 0; any other CUDA error is raised. This is not
+    ``cupy.cuda.is_available()``, which caches a failed query as False and so
+    reports every later call, after the first one raised, as "no device".
+
+    Parameters
+    ----------
+    cupy_module : module
+        The ``cupy`` module.
+
+    Returns
+    -------
+    int
+        The number of visible GPUs.
+    """
+    try:
+        return cupy_module.cuda.runtime.getDeviceCount()
+    except cupy_module.cuda.runtime.CUDARuntimeError as exc:
+        if exc.status != _CUDA_ERROR_NO_DEVICE:
+            raise
+        return 0
 
 
 def ensure_cuda_cluster():
@@ -240,15 +301,12 @@ def ensure_cuda_cluster():
     # memory-constrained allocation (e.g. a Slurm cgroup) spills instead of being
     # OOM-killed. dask-cuda otherwise sizes workers from the node total, which
     # over-commits when the cgroup grants less than the node has.
-    cluster_kwargs: dict = {}
-    try:
-        from distributed.system import MEMORY_LIMIT
+    from distributed.system import MEMORY_LIMIT
 
-        n_gpus = cp.cuda.runtime.getDeviceCount() if cp is not None else 0
-        if n_gpus > 0:
-            cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
-    except Exception:  # noqa: BLE001 -- fall back to dask-cuda's default sizing
-        pass
+    cluster_kwargs: dict = {}
+    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
+    if n_gpus > 0:
+        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
 
     # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
     # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
@@ -408,18 +466,17 @@ def is_gpu_dask_client(client) -> bool:
     -------
     bool
         True if the client is running and all of its workers are single-threaded.
+        An asynchronous client inside its event loop gives False: it answers with
+        coroutines, which abTEM's synchronous compute does not await. An error from
+        the scheduler's reply is raised, not read as "no".
     """
     if client is None:
         return False
 
-    if getattr(client, "status", None) != "running":
+    if getattr(client, "status", None) != "running" or client.asynchronous:
         return False
 
-    try:
-        nthreads = client.nthreads()
-    except Exception:
-        return False
-
+    nthreads = client.nthreads()
     return len(nthreads) > 0 and all(n == 1 for n in nthreads.values())
 
 
