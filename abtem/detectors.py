@@ -2938,7 +2938,11 @@ class WavesDetector(BaseDetector):
             waves = waves.to_cpu()
 
         if self._gpts:
-            array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
+            array = fft_interpolate(
+                waves._eager_array,
+                new_shape=tuple(self._gpts),
+                normalization=waves._fft_resampling_normalization(waves.metadata),
+            )
         else:
             array = waves.array
 

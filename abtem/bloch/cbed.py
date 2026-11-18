@@ -125,9 +125,7 @@ def _orientations(
     """The orientation matrix of `bloch_waves` relative to its structure factor's
     cell, and the 'xy' Euler angles [rad] of the rotations that then bring each
     direction, given in the frame of `bloch_waves`, onto +z."""
-    base = np.linalg.solve(
-        np.array(bloch_waves.structure_factor.cell), np.array(bloch_waves.cell)
-    ).T
+    base = bloch_waves.orientation_matrix
 
     # R_y(b) R_x(a) maps d to +z for a = atan2(d_y, d_z), b = -asin(d_x)
     angles = np.stack(

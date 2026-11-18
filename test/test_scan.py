@@ -341,3 +341,42 @@ def test_a_zero_length_line_scan_of_gpts_can_have_a_margin(endpoint):
     positions = scan.get_positions()
     assert positions.shape == (scan.gpts, 2)
     np.testing.assert_allclose(positions[0], (0.0, 1.0))
+
+
+@pytest.mark.parametrize("extent_in_nyquists", [12.0, 12.4], ids=["exact", "generic"])
+def test_default_scan_is_the_same_for_multislice_and_both_prism_routes(
+    extent_in_nyquists,
+):
+    # `SMatrix.scan` built its own grid at the Nyquist sampling while every other
+    # route went through validate_scan, which used 0.99 of it: an extent of a whole
+    # number of Nyquist pitches then gave one scan point fewer by `SMatrix.scan`
+    from ase import Atoms
+
+    import abtem
+    from abtem.transfer import nyquist_sampling
+
+    energy, cutoff = 100e3, 20.0
+    nyquist = nyquist_sampling(cutoff, energy)
+    side = extent_in_nyquists * nyquist
+    atoms = Atoms(
+        "Si", positions=[(side / 2, side / 2, 2.0)], cell=(side, side, 4.0), pbc=True
+    )
+    potential = abtem.Potential(atoms, gpts=96, slice_thickness=2.0)
+    detector = abtem.AnnularDetector(inner=40, outer=100)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=cutoff)
+    probe.grid.match(potential)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=cutoff, interpolation=2
+    )
+
+    shapes = {
+        "Probe.scan": probe.scan(potential=potential, detectors=detector, lazy=False),
+        "SMatrix.scan": s_matrix.scan(detectors=detector, lazy=False),
+        "SMatrix.build().scan": s_matrix.build(lazy=False).scan(detectors=detector),
+    }
+
+    expected = int(
+        np.ceil(np.round(extent_in_nyquists, 7))
+    )  # points of a Nyquist pitch
+    for name, measurement in shapes.items():
+        assert measurement.shape == (expected, expected), name

@@ -390,10 +390,10 @@ def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
     np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
 
 
+@float64_devices
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
-@pytest.mark.parametrize(
-    "chunks", [2, 4, ((1, 3),)], ids=["pairs", "one block", "uneven"]
-)
+# uneven chunks of several configurations; equal ones and one block add no case
+@pytest.mark.parametrize("chunks", [((1, 3),)], ids=["uneven"])
 @pytest.mark.parametrize(
     "charge_densities", [1, 4], ids=["shared", "per_configuration"]
 )
@@ -415,7 +415,7 @@ def test_chunks_of_several_configurations_get_their_own_charge_densities(
         blocks = [block.item() for *_, block in potential.generate_blocks(chunks)]
     built = np.concatenate(
         [
-            block.build(lazy=False).array.reshape((-1,) + block.base_shape)
+            asnumpy(block.build(lazy=False).array).reshape((-1,) + block.base_shape)
             for block in blocks
         ]
     )
@@ -426,7 +426,40 @@ def test_chunks_of_several_configurations_get_their_own_charge_densities(
     for i, atoms in enumerate(frozen_phonons):
         density = densities[i if charge_densities > 1 else 0]
         expected = ChargeDensityPotential(atoms, density, sampling=0.2)
-        expected = expected.build(lazy=False).array
+        expected = asnumpy(expected.build(lazy=False).array)
         np.testing.assert_allclose(
             built[i], expected, rtol=0, atol=1e-6 * expected.max()
         )
+
+
+@float64_devices
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_repeated_cell_displaces_each_frozen_phonon_configuration(
+    carbon_atoms, charge_density_3d, lazy
+):
+    """With `repetitions` the potential was made from the undisplaced repeated atoms,
+    so every configuration was the same."""
+
+    def build(sigmas, seed=4):
+        frozen_phonons = FrozenPhonons(
+            carbon_atoms, num_configs=3, sigmas=sigmas, seed=seed, ensemble_mean=False
+        )
+        potential = ChargeDensityPotential(
+            frozen_phonons, charge_density_3d, sampling=0.4, repetitions=(2, 1, 1)
+        )
+        built = potential.build(lazy=lazy)
+        return asnumpy((built.compute() if lazy else built).array)
+
+    displaced = build(0.1)
+    undisplaced = build(0.0)
+    scale = np.abs(undisplaced).max()
+
+    for i, j in [(0, 1), (0, 2), (1, 2)]:
+        assert np.abs(displaced[i] - displaced[j]).max() > 1e-3 * scale
+    # no displacement: the configurations are the repeated cell, all alike
+    np.testing.assert_allclose(undisplaced[0], undisplaced[1], atol=1e-6 * scale)
+    assert np.abs(displaced[0] - undisplaced[0]).max() > 1e-3 * scale
+    # a seed gives the same configurations again, another seed other ones
+    # (not bitwise: the sums of a GPU build are not ordered)
+    np.testing.assert_allclose(displaced, build(0.1), rtol=0, atol=1e-10 * scale)
+    assert np.abs(displaced - build(0.1, seed=5)).max() > 1e-3 * scale
