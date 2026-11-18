@@ -69,11 +69,11 @@ jobs:
         run: uv run pytest test -n logical ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
       # The benchmark harness (benchmarks/abtem_bench) needs only the `test`
-      # group. Its tests read peak memory from /proc and kill a worker with a
-      # signal, so they run in one Linux cell. They sit in this job, whose
-      # cells are required checks, so a failure blocks the merge.
+      # group. It runs in every cell: `compare`, the registry and the store are
+      # portable, and the tests that start a worker skip on Windows and those
+      # that read /proc skip off Linux. The step sits in this job, whose cells
+      # are required checks, so a failure blocks the merge.
       - name: Run benchmark harness tests
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
         run: uv run python -P -m pytest benchmarks/tests
         env:
           PYTHONPATH: benchmarks
