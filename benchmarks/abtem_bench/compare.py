@@ -39,6 +39,8 @@ FAILED_STATUSES = (
 #: Gates ``--fail-on`` accepts. Those in THRESHOLD_GATES take ``:<N>%``.
 GATES = ("drift", "shape", "error", "missing", "speed", "memory")
 THRESHOLD_GATES = ("speed", "memory")
+#: The gates applied when ``--fail-on`` is not given; ``--fail-on none`` applies none.
+DEFAULT_GATES = ("drift", "shape", "error", "missing")
 
 #: Bounds an accepted_changes entry may set, by the close_stats key they bound.
 BOUND_KEYS = {
@@ -266,16 +268,19 @@ def parse_fail_on(text: str | None) -> dict[str, float | None]:
     """``"drift,speed:10%"`` -> ``{"drift": None, "speed": 0.1}``.
 
     A gate's value is its threshold as a fraction, or None for the compare
-    default. Unknown gates and malformed thresholds raise CompareError, and so
-    does a given text that names no gate; None means no gates.
+    default. ``None`` gives DEFAULT_GATES and ``"none"`` gives no gate. Unknown
+    gates and malformed thresholds raise CompareError, and so does a given text
+    that names no gate or combines ``none`` with another gate.
     """
-    gates: dict[str, float | None] = {}
     if text is None:
-        return gates
-    for token in text.split(","):
-        token = token.strip()
-        if not token:
-            continue
+        return dict.fromkeys(DEFAULT_GATES)
+    tokens = [t.strip() for t in text.split(",") if t.strip()]
+    if "none" in tokens:
+        if tokens != ["none"]:
+            raise CompareError("--fail-on: 'none' cannot be combined with a gate")
+        return {}
+    gates: dict[str, float | None] = {}
+    for token in tokens:
         name, sep, value = (part.strip() for part in token.partition(":"))
         if name not in GATES:
             raise CompareError(

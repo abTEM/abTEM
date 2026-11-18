@@ -123,7 +123,22 @@ def test_an_empty_fail_on_exits_2(tmp_path, capsys):
     argv = _pair(tmp_path)
     assert cli.main(argv + ["--fail-on", " , "]) == 2
     assert "--fail-on names no gate" in capsys.readouterr().err
-    assert cli.main(argv) == 0  # absent: no gates
+    assert cli.main(argv) == 0  # absent: the default gates, which pass here
+
+
+def test_the_default_gates_fail_on_a_crashed_candidate_and_none_disables_them(
+    tmp_path, capsys
+):
+    argv = _pair(tmp_path)
+    cand = store.Bundle(tmp_path / "cand")
+    cand.write_case(
+        "demo.case@quick/cpu", {"status": store.STATUS_ERROR, "error": "boom"}
+    )
+    assert cli.main(argv) == 1
+    assert "FAIL demo.case@quick/cpu: ERROR" in capsys.readouterr().err
+    assert cli.main(argv + ["--fail-on", "none"]) == 0
+    assert cli.main(argv + ["--fail-on", "none,drift"]) == 2
+    assert "cannot be combined" in capsys.readouterr().err
 
 
 def test_a_malformed_noise_json_exits_2(tmp_path, capsys):
@@ -154,7 +169,7 @@ def test_the_json_report_is_strict_json(tmp_path):
     argv = _pair(tmp_path, a)
     _bundle(tmp_path / "cand", "cand", b)
     out = tmp_path / "report.json"
-    assert cli.main(argv + ["--json", str(out)]) == 0
+    assert cli.main(argv + ["--json", str(out), "--fail-on", "none"]) == 0
     report = json.loads(out.read_text(), parse_constant=_no_constants)
     stats = report["rows"][0]["outputs"]["out"]
     assert stats["max_abs_norm"] == "inf" and stats["nonfinite_mismatch"] == 1

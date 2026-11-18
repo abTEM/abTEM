@@ -562,7 +562,13 @@ def test_a_fail_on_that_names_no_gate_is_refused(text):
 
 
 def test_parse_fail_on():
-    assert cmp.parse_fail_on(None) == {}
+    assert cmp.parse_fail_on(None) == {
+        "drift": None,
+        "shape": None,
+        "error": None,
+        "missing": None,
+    }
+    assert cmp.parse_fail_on(" none ") == {}
     assert cmp.parse_fail_on(" drift , speed:10% ,memory:2.5%") == {
         "drift": None,
         "speed": 0.1,
@@ -575,6 +581,8 @@ def test_parse_fail_on():
         ("speed:x%", "positive percentage"),
         ("speed:-5%", "positive percentage"),
         ("speed:nan%", "positive percentage"),
+        ("none,drift", "cannot be combined"),
+        ("drift, none", "cannot be combined"),
     ):
         with pytest.raises(cmp.CompareError, match=message):
             cmp.parse_fail_on(bad)

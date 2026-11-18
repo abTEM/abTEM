@@ -328,7 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--fail-on",
         help="comma-separated gates: drift, shape, error, missing, speed[:N%%], "
-        "memory[:N%%] (memory needs --noise); exit 1 if any fails",
+        "memory[:N%%] (memory needs --noise); exit 1 if any fails. Default: "
+        "drift,shape,error,missing. 'none' applies no gate",
     )
     s.set_defaults(func=cmd_compare)
     return p
