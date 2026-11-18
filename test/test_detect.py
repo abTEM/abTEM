@@ -759,9 +759,15 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
     """show() from energy, gpts and sampling alone draws in mrad by default."""
     import matplotlib.pyplot as plt
 
+    from matplotlib.collections import QuadMesh
+
     def drawn(**kwargs):
         detector.show(energy=100e3, gpts=64, sampling=0.05, **kwargs)
-        image = np.ma.filled(plt.gcf().axes[0].images[0].get_array(), np.nan)
+        ax = plt.gcf().axes[0]
+        # an image of the grid, or (in angles, with the exact convention) a mesh on
+        # the scattering angles
+        (shown,) = ax.images or [c for c in ax.collections if isinstance(c, QuadMesh)]
+        image = np.ma.filled(shown.get_array(), np.nan)
         plt.close("all")
         return image
 

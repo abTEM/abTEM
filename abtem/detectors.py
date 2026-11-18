@@ -25,6 +25,7 @@ from abtem.core.energy import (
     angle_convention,
     energy2wavelength,
     offset_to_grid,
+    to_angle_plane,
     to_grid_angle,
     to_scattering_angle,
     to_scattering_angle_limit,
@@ -1281,11 +1282,32 @@ class AnnularDetector(_AbstractRadialDetector):
 
 
 def _label_reciprocal_axes(ax) -> None:
-    """Label the axes of a plot on the angular grid, as the axes of diffraction
-    patterns are: the scattering angle only with the paraxial convention."""
-    label = "k" if angle_convention() == "paraxial" else "λk "
+    """Label the axes of a plot of a detector: on the angular grid with the
+    paraxial convention, and on scattering angles (see `_to_plot`) with the exact
+    one, as diffraction patterns in angles are drawn."""
+    label = "k" if angle_convention() == "paraxial" else "scattering angle "
     ax.set_xlabel(f"{label}x [mrad]")
     ax.set_ylabel(f"{label}y [mrad]")
+
+
+def _to_plot(points: np.ndarray, densify: bool = False) -> np.ndarray:
+    """Points [mrad on the angular grid], shape ``(n, 2)``, where a plot of a
+    detector draws them: the grid with the paraxial convention, and at their
+    scattering angle from the centre with the exact one (see `to_angle_plane`), as
+    diffraction patterns in angles are drawn. ``densify`` puts 64 points on every
+    segment of a closed polygon first, so that its edges, which are not straight
+    there, are drawn curved."""
+    points = np.asarray(points)
+    if angle_convention() != "exact":
+        return points
+    if densify:
+        t = np.linspace(0.0, 1.0, 64, endpoint=False)[:, None]
+        closed = np.vstack([points, points[:1]])
+        points = np.vstack(
+            [a + t * (b - a) for a, b in zip(closed[:-1], closed[1:])]
+        )
+    x, y = to_angle_plane(points[:, 0], points[:, 1], "exact")
+    return np.column_stack([x, y])
 
 
 def _slit_detector_mask(
@@ -1825,6 +1847,23 @@ class SpectralSlitDetector(BaseDetector):
         from abtem.core import config
 
         cmap = config.get("visualize.cmap", "viridis")
+        if angle_convention() == "exact":
+            # drawn on scattering angles, as DiffractionPatterns.show draws it
+            from abtem.visualize.artists import angle_plane_mesh
+
+            shape = arr.shape[-2:]
+            sampling = waves.angular_sampling
+            left = tuple(-(n // 2 + 0.5) * d for n, d in zip(shape, sampling))
+            x, y, evanescent = angle_plane_mesh(shape, left, sampling)
+            ax.pcolormesh(
+                x.T,
+                y.T,
+                np.ma.masked_array(arr, mask=evanescent).T,
+                cmap=cmap,
+                rasterized=True,
+            )
+            ax.set_aspect("equal")
+            return float(np.abs(x).max()), float(np.abs(y).max())
         ax.imshow(
             arr,
             extent=[-mx, mx, -my, my],
@@ -1890,8 +1929,9 @@ class SpectralSlitDetector(BaseDetector):
         ])
         world = local @ R.T + center
         if angle_convention() == "exact":
-            # the axes of the pattern are on the angular grid
-            world = self._grid_corners()
+            # a rectangle on the angular grid, not on the scattering angles of the
+            # plot
+            world = _to_plot(self._grid_corners(), densify=True)
 
         patch = MplPolygon(
             world,
@@ -2171,7 +2211,7 @@ class SpectralAnnularDetector(AnnularDetector):
             if exact:
                 # the beams within the angle of a tilted centre are not a circle on
                 # the angular grid of the axes
-                outline = _exact_cone_outline((cx, cy), self.outer)
+                outline = _to_plot(_exact_cone_outline((cx, cy), self.outer))
                 ax.add_patch(MplPolygon(outline, closed=True, **style))
             else:
                 ax.add_patch(Circle((cx, cy), self.outer, **style))
@@ -2185,7 +2225,10 @@ class SpectralAnnularDetector(AnnularDetector):
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
         else:
-            lim = to_grid_angle(q_max + self.outer) * 1.1
+            reach = q_max + self.outer
+            if exact:
+                reach = min(reach, 1e3 * np.pi / 2)
+            lim = reach * 1.1
             ax.set_xlim(-lim, lim)
             ax.set_ylim(-lim, lim)
         ax.set_title(
