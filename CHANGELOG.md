@@ -937,10 +937,11 @@ Bugfixes:
       spaced is the equivalent slice (`dp[[0, 2, 4]]` is `dp[0:5:2]`) and keeps the scan axis. Any other index array
       gives a `NonLinearAxis` there too, so the axis is no longer a scan axis: reductions over it return line
       profiles instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D
-      scan; `integrated_center_of_mass`, `gaussian_source_size` (of diffraction patterns and of polar measurements)
+      scan; `integrated_center_of_mass`, the source-size filters (`gaussian_source_size`, `lorentzian_source_size`,
+      `voigtian_source_size` and `pseudo_voigtian_source_size`, of diffraction patterns and of polar measurements)
       and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
-      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of both scan axes with `np.ix_` raises
-      `IndexError`
+      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes (`np.ix_`), or any index array of more than one dimension on one,
+      raises `IndexError`
 
 Documentation:
 
