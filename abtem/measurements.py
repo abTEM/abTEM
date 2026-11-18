@@ -135,6 +135,11 @@ def _reduced_scanned_images_or_line_profiles(
         if i not in source
     ]
 
+    # a reduced scan is in increasing order, whatever order the positions were in
+    index = _increasing_scan_index(old_measurement)
+    if index is not None:
+        new_array = new_array[index]
+
     if source != destination:
         xp = get_array_module(new_array)
         if old_measurement.is_lazy:
@@ -194,8 +199,26 @@ def _scan_axes(measurement):
 
 
 def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, ...]:
+    """The distance between neighbouring scan positions along each scan axis; a
+    reversed scan axis has a negative sampling and the same distance."""
     return tuple(
-        measurements.axes_metadata[i].sampling for i in _scan_axes(measurements)
+        abs(measurements.axes_metadata[i].sampling) for i in _scan_axes(measurements)
+    )
+
+
+def _increasing_scan_index(
+    array_object: BaseMeasurements | BaseWaves,
+) -> tuple[slice, ...] | None:
+    """The index of the ensemble axes that puts every reversed scan axis (negative
+    sampling) of `array_object` back in increasing order, or None if none is
+    reversed."""
+    scan_axes = _scan_axes(array_object)
+    reversed_axes = [i for i in scan_axes if array_object.axes_metadata[i].sampling < 0]
+    if not reversed_axes:
+        return None
+    return tuple(
+        slice(None, None, -1) if i in reversed_axes else slice(None)
+        for i in range(max(reversed_axes) + 1)
     )
 
 
@@ -6631,7 +6654,11 @@ class PolarMeasurements(BaseMeasurements):
 
         # np.moveaxis dispatches to da.moveaxis or cupy.moveaxis; cupy.moveaxis
         # rejects a dask array
-        array = np.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        array = self.array
+        index = _increasing_scan_index(self)
+        if index is not None:
+            array = array[index]
+        array = np.moveaxis(array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()

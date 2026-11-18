@@ -29,6 +29,7 @@ from utils import (
     gpu,
     lazy_params,
     requires_gpu,
+    xfail_lazy_torch_index_array,
 )
 
 import abtem
@@ -128,6 +129,147 @@ def test_subsampled_scan_images_have_the_subsampled_scan_sampling(lazy, device):
         np.testing.assert_allclose(
             new_axis.coordinates(n), np.asarray(axis.coordinates(n_full))[item]
         )
+
+
+def _scanned_patterns(device, lazy):
+    """Diffraction patterns of a scan of 8 by 9 positions (unequal, so a swapped
+    axis fails), whose lazy chunks of 3 and 4 positions are crossed by a reversed
+    axis."""
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ]
+    array = np.random.default_rng(0).random((8, 9, 6, 6), dtype=np.float32)
+    dp = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=0.2,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 100e3},
+    )
+    if lazy:
+        dp = dp.ensure_lazy(chunks=(3, 4, -1, -1))
+    return dp
+
+
+_FULL = slice(None)
+_REVERSED = slice(None, None, -1)
+
+# (index of a reversed scan, index of the same positions in increasing order)
+_REVERSED_SCANS = [
+    ((_REVERSED,), (_FULL,)),
+    ((_FULL, _REVERSED), (_FULL, _FULL)),
+    ((_REVERSED, _REVERSED), (_FULL, _FULL)),
+    ((np.arange(8)[::-1],), (_FULL,)),
+    # every other position from the last: those of dp[:, 0::2] in reverse
+    ((_FULL, slice(None, None, -2)), (_FULL, slice(0, None, 2))),
+    ((_FULL, [7, 4, 1]), (_FULL, slice(1, 8, 3))),
+]
+
+_REDUCTIONS = {
+    "integrate_radial": lambda dp: dp.integrate_radial(0, 20),
+    "center_of_mass": lambda dp: dp.center_of_mass(),
+    "integrated_center_of_mass": lambda dp: dp.integrated_center_of_mass(),
+    "polar_integrate": lambda dp: dp.polar_binning(2, 4, 0, 20).integrate(
+        radial_limits=(0, 20)
+    ),
+    "differentials": lambda dp: dp.polar_binning(1, 4, 0, 20).differentials(
+        (0, 2), (1, 3)
+    ),
+    "to_image_ensemble": lambda dp: dp.polar_binning(2, 4, 0, 20).to_image_ensemble(),
+}
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("reduction", _REDUCTIONS.values(), ids=_REDUCTIONS.keys())
+@pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
+def test_a_reversed_scan_reduces_to_the_images_of_the_same_positions_in_order(
+    item, increasing, reduction, lazy, device, request
+):
+    xfail_lazy_torch_index_array(request, device, lazy, item)
+    if device == "mps" and not lazy and reduction is _REDUCTIONS["to_image_ensemble"]:
+        request.applymarker(
+            pytest.mark.xfail(
+                raises=TypeError,
+                strict=True,
+                reason="np.moveaxis has no implementation for a torch array",
+            )
+        )
+    dp = _scanned_patterns(device, lazy)
+
+    reversed_images = reduction(dp[item])
+    images = reduction(dp[increasing])
+
+    assert type(reversed_images) is Images
+    assert reversed_images.sampling == pytest.approx(images.sampling)
+    expected = asnumpy(images.compute().array)
+    np.testing.assert_allclose(
+        asnumpy(reversed_images.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-6 * np.ptp(np.abs(expected)),
+    )
+
+
+@lazy_params
+@devices
+def test_a_reversed_line_scan_reduces_to_the_line_profile_in_order(lazy, device):
+    dp = _scanned_patterns(device, lazy)[:, 3]
+
+    profiles = dp[::-1].integrate_radial(0, 20)
+    expected = asnumpy(dp.integrate_radial(0, 20).compute().array)
+
+    assert type(profiles) is RealSpaceLineProfiles
+    assert profiles.sampling == pytest.approx(0.5)
+    np.testing.assert_allclose(
+        asnumpy(profiles.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-6 * np.ptp(expected),
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "filtered",
+    [
+        lambda dp: dp.gaussian_source_size((0.6, 0.9)),
+        lambda dp: dp.lorentzian_source_size((0.6, 0.9)),
+        lambda dp: dp.polar_binning(2, 4, 0, 20).gaussian_source_size((0.6, 0.9)),
+    ],
+    ids=["gaussian", "lorentzian", "polar_gaussian"],
+)
+def test_a_source_size_filters_a_reversed_scan_in_its_own_order(filtered, lazy, device):
+    dp = _scanned_patterns(device, lazy)
+    item = (_REVERSED, _REVERSED)
+
+    reversed_result = filtered(dp[item])
+    expected = asnumpy(filtered(dp).compute().array)[item]
+
+    assert reversed_result.ensemble_axes_metadata[0].sampling == pytest.approx(-0.5)
+    # a convolution sums the same terms in the reverse order, which float32
+    # rounding shows at a few 1e-7 of the range
+    np.testing.assert_allclose(
+        asnumpy(reversed_result.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-5 * np.ptp(expected),
+    )
+
+
+@devices
+@pytest.mark.parametrize("item", [(_REVERSED,), (_FULL, _REVERSED)])
+def test_poisson_noise_per_area_of_a_reversed_scan_has_the_dose_of_the_scan(
+    item, device
+):
+    dp = _scanned_patterns(device, lazy=False)
+    dose_per_area = 1e6
+
+    counts = asnumpy(dp[item].poisson_noise(dose_per_area=dose_per_area, seed=0).array)
+    expected = float(asnumpy(dp.array).sum()) * dose_per_area * 0.5 * 0.4
+
+    assert counts.sum() == pytest.approx(expected, rel=10 / np.sqrt(expected))
 
 
 @settings(max_examples=5)
