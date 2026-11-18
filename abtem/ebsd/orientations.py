@@ -437,6 +437,10 @@ def _displaced(
     )
 
 
+class _SymmetryNotFoundError(ValueError):
+    """spglib found no symmetry for the crystal."""
+
+
 def _spglib_errors() -> tuple[type[Exception], ...]:
     """The errors spglib raises where it used to return None.
 
@@ -469,11 +473,11 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     """
     try:
         import spglib  # type: ignore[import-untyped]
-    except ImportError:
+    except ImportError as error:
         raise ImportError(
             "finding the inversion centre requires spglib; install it with "
             "'pip install spglib', or install abtem[ebsd]"
-        ) from None
+        ) from error
 
     cell = (atoms.cell.array, atoms.get_scaled_positions(), atoms.numbers)
     with warnings.catch_warnings():
@@ -484,7 +488,9 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
         except _spglib_errors():
             symmetry = None
     if symmetry is None:
-        raise ValueError("spglib could not determine the symmetry of the crystal")
+        raise _SymmetryNotFoundError(
+            "spglib could not determine the symmetry of the crystal"
+        )
     inversion = -np.eye(3, dtype=int)
     return any(
         np.array_equal(rotation, inversion) for rotation in symmetry["rotations"]

@@ -1428,3 +1428,19 @@ class TestGaussianProjectionIntegralsUsable:
         assert len(restored._gaussians) == 0
         # and it must still work after the round trip
         self._build(restored)
+
+
+def test_an_attribute_error_inside_the_scatter_add_reaches_the_caller():
+    """``superpose_deltas`` passes on an error from its scatter-add unchanged. The
+    stand-in is a NumPy subclass whose ufuncs raise, so the device does not
+    matter."""
+    from abtem.integrals import superpose_deltas
+
+    class FailingScatterAdd(np.ndarray):
+        def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+            raise AttributeError(f"{ufunc.__name__}.{method} failed in the stand-in")
+
+    array = np.zeros((6, 5), dtype=np.float32).view(FailingScatterAdd)
+
+    with pytest.raises(AttributeError, match="add.at failed in the stand-in"):
+        superpose_deltas(np.array([[1.2, 2.7], [3.5, 0.4]]), array)

@@ -360,6 +360,27 @@ def collect(
     return merge(*configs)
 
 
+def _warn_about_values_in_place_of_sections(
+    config: dict, defaults: list[Mapping] = defaults
+) -> None:
+    """Warn about the sections of the defaults that ``config`` sets to a value.
+
+    Every key under such a section reads its default, without notice from
+    :func:`get`, so the configuration is checked once, where it is loaded.
+    """
+    found = [
+        f"{key!r} to {config[key]!r}"
+        for key, section in merge(*defaults).items()
+        if isinstance(section, dict) and not isinstance(config.get(key, section), dict)
+    ]
+    if found:
+        warnings.warn(
+            f"abTEM config sets {', '.join(found)} where a section of keys is "
+            "expected, so the keys in each take their defaults",
+            stacklevel=3,
+        )
+
+
 def refresh(
     config: dict = config, defaults: list[Mapping] = defaults, **kwargs
 ) -> None:
@@ -395,6 +416,7 @@ def refresh(
     kwargs.setdefault("defaults", defaults)
 
     update(config, collect(**kwargs))
+    _warn_about_values_in_place_of_sections(config, defaults)
 
 
 def get(

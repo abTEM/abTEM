@@ -274,6 +274,36 @@ Dependencies:
 
 Bugfixes:
 
+- When an installed CuPy, pyFFTW, mkl_fft or PyTorch fails to import, the error raised on using it says that the
+  package "could not be imported" and carries the original import error, where it said the package was not
+  installed. A CuPy that fails to import warns at `import abtem` when the device is `"gpu"` (once, not twice), a
+  plain `ImportError` from mkl_fft no longer makes `import abtem` fail whichever FFT library is configured, and the
+  message of a missing FFT library now has the space it lacked. The error of `GPAWPotential` without a usable GPAW
+  carries the import error. `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`, and the
+  interactive `show`, which failed with an `AttributeError`, raise the import error of a missing or broken GPAW or
+  ipywidgets itself. In `abtem.ebsd` the errors of a missing spglib or h5py carry the import error, and an EBSD
+  reference pattern or an EMsoft master pattern made without an importable spglib warns or raises that spglib "could
+  not be imported", with the cause, where it said spglib was not installed.
+  `abtem.visualize.widgets.ipywidgets_not_installed` and `abtem.inelastic.phonons.Reader`, which abTEM did not use,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- `slider_from_axes_metadata` starts a slider at the coordinate nearest a `default_value` given as a plain Python
+  number (it started at the first item), and builds range sliders over axes whose coordinates are Python floats (it
+  raised `TypeError`). An index slider given a `default_value` that is not one number starts at the first item for
+  every axis length ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- An eager build of a `GPAWPotential` from a `.gpw` path raises the error of reading the file instead of
+  `TypeError: Delayed objects are immutable` ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors raised while registering the configuration plugin on dask workers, or inside the scatter-add of an
+  infinite projection, reach the caller unchanged instead of being replaced by an unrelated error. The fallbacks
+  for `distributed` without `Client.register_plugin` and CuPy without `ufunc.at`, which the dependencies exclude,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors that used to be absorbed reach the caller: a `NotImplementedError` raised inside an override of a scan's
+  `_get_weights` (the weights were dropped), an error of the symmetry search of an EBSD reference pattern other than
+  spglib finding no symmetry (the pattern was built with the symmetry unknown), and an error of the strain check of a
+  default box other than a box with no whole repetition or a cell without a third vector (the check was skipped)
+  ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- abTEM warns once, where the configuration is loaded, about a section of keys that a configuration file or an
+  environment variable sets to a value (for example `diagnostics: true` or `ABTEM_DIAGNOSTICS=1`); every key in it
+  reads its default, as before, but did so silently ([PR #697](https://github.com/abTEM/abTEM/pull/697))
 - A NumPy array works as an operand of a device array on the Metal (MPS) device, on either side of the arithmetic,
   comparison and bitwise operators (not `//`, which device arrays do not support). The host array is moved onto the
   device first, so the device side wins: a float64 host operand is narrowed to the device's float32, and a dtype Metal

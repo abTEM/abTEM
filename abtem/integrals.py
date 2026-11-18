@@ -21,7 +21,6 @@ from abtem.core import _numba_threads, backend
 from abtem.core.backend import (
     asnumpy,
     cp,
-    cupyx,
     device_name_from_array_module,
     get_array_module,
     get_ndimage_module,
@@ -756,15 +755,8 @@ def superpose_deltas(
 
     if weights is not None:
         v = v * weights[None]
-    
-    try:
-        xp.add.at(array, (i, j), v)
-    except AttributeError:
-        
-        if device_name_from_array_module(xp) == "gpu":
-            cupyx.scatter_add(array, (i, j), v)
-        else:
-            raise RuntimeError()
+
+    xp.add.at(array, (i, j), v)
 
     return array
 
