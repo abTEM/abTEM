@@ -920,17 +920,27 @@ Bugfixes:
   partial slice of a `ReciprocalSpaceAxis` with `fftshift=False` kept the class, whose coordinates for the
   shorter length are not those of the selected members of an axis stored in `ifftshift` order
   ([PR #696](https://github.com/abTEM/abTEM/pull/696))
-    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`) raises `IndexError`; index with the
-      explicit positions (`dp[np.arange(n)[::-1]]`) instead. A reversed slice of another linear axis, and an index
-      array on one, give a `NonLinearAxis` with the selected coordinates, and so do a slice with a step other than
-      one of a `ReciprocalSpaceAxis` and any slice of one with `fftshift=False` that does not select every member.
-      On a scan axis, an index array whose members increase evenly is the equivalent slice (`dp[[0, 2, 4]]` is
-      `dp[0:5:2]`) and keeps the scan axis. Any other index array gives a `NonLinearAxis` there too, so the axis is
-      no longer a scan axis: reductions over it return line profiles instead of `Images` for a 2D scan, and a
-      `MeasurementsEnsemble` instead of line profiles for a 1D scan; `integrated_center_of_mass`,
-      `gaussian_source_size` (of diffraction patterns and of polar measurements) and `poisson_noise` with
-      `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of `dp[:, [1, 2, 4]]`
-      puts the indexed axis first. Outer indexing of both scan axes with `np.ix_` raises `TypeError`
+    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`), or an index array whose members decrease
+      evenly, lists the same positions from the last. The axis stays a scan axis, with the first selected position as
+      its offset and a negative sampling. Before, `dp[::-1]` reversed the data and kept the axes, so its reductions
+      were mirrored. Reductions of a scan to images or line profiles return the positions in increasing order, with
+      a positive sampling, so `dp[::-1]` and `dp` give the same images: `integrate_radial`, `center_of_mass`,
+      `integrated_center_of_mass`, `PolarMeasurements.integrate`, `differentials` and `to_image_ensemble`, and the
+      detectors that reduce the scan of waves (`AnnularDetector` and the spectral detectors), `multislice` included.
+      When several detectors share one `multislice` of reversed waves, the scan of every output is in increasing
+      order if one of them reduces it, and in the reversed order of the waves otherwise. Operations that keep the
+      scan as ensemble axes (a `PixelatedDetector` alone, the source-size filters, `poisson_noise`) keep the reversed
+      order, and the filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring positions.
+      A reversed slice of another linear axis, and an index array on one, give a `NonLinearAxis` with the selected
+      coordinates, and so do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with
+      `fftshift=False` that does not select every member. On a scan axis, an index array whose members are evenly
+      spaced is the equivalent slice (`dp[[0, 2, 4]]` is `dp[0:5:2]`) and keeps the scan axis. Any other index array
+      gives a `NonLinearAxis` there too, so the axis is no longer a scan axis: reductions over it return line
+      profiles instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D
+      scan; `integrated_center_of_mass`, `gaussian_source_size` (of diffraction patterns and of polar measurements)
+      and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
+      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of both scan axes with `np.ix_` raises
+      `TypeError`
 
 Documentation:
 
