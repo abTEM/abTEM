@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import itertools
-import warnings
-from typing import Optional, Sequence
+from typing import Iterable, Literal, Optional, Sequence
 
 import numpy as np
-import pandas as pd  # type: ignore
 from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
-from abtem.core.backend import cp, get_array_module
+from abtem.atoms import AtomProperties, validate_per_atom_property, validate_sigmas
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 
 
@@ -159,10 +158,19 @@ def make_hkl_grid(
     return hkl
 
 
+def validate_use_wave_eq(use_wave_eq: bool | str) -> bool | Literal["exact"]:
+    """Check that use_wave_eq is True, False or 'exact', and return it."""
+    if isinstance(use_wave_eq, (bool, np.bool_)):
+        return bool(use_wave_eq)
+    if isinstance(use_wave_eq, str) and use_wave_eq == "exact":
+        return "exact"
+    raise ValueError(f"use_wave_eq must be True, False or 'exact', not {use_wave_eq!r}")
+
+
 def excitation_errors(
     g: np.ndarray,
     energy: float,
-    use_wave_eq: bool = False,
+    use_wave_eq: bool | Literal["exact"] = "exact",
     beam_direction: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
@@ -174,17 +182,23 @@ def excitation_errors(
         Reciprocal space vectors [1/Å], as an array of shape (N, 3).
     energy : float
         Electron energy [eV].
-    use_wave_eq : bool, optional
-        Whether to use the excitation errors derived from the wave equation.
-        Default is False.
+    use_wave_eq : bool or 'exact', optional
+        If 'exact' (default), the non-paraxial form,
+        ``-g_z + k (sqrt(1 - λ² g_⊥²) - 1)`` with ``k = 1 / λ``, the counterpart of
+        ``FourierMultislice(order="exact")``; to first order in ``λ² g_⊥²`` it
+        equals the paraxial form. Requires ``λ g_⊥ < 1`` (no evanescent beams).
+        If True, the excitation errors derived from the paraxial wave equation,
+        ``-g_z - λ g_⊥² / 2``; Bloch waves then solve the same equation as
+        multislice with the first-order (Fresnel) propagator,
+        ``FourierMultislice(order=1)``. If False, the standard excitation errors,
+        ``-g_z - λ |g|² / 2``, from the Ewald sphere.
     beam_direction : np.ndarray, optional
         The incident-beam direction as a length-3 vector (need not be normalized).
-        Default is None, which corresponds to a beam along the surface normal ``z``,
-        i.e. ``[0, 0, 1]``. A tilted beam direction generalizes the excitation error
-        to ``sg = -(n_hat . g) - lambda/2 (|g|^2 - <wave-eq term>)`` following Mendis
-        (Acta Cryst. A80, 2024), Eq. 12, where ``n_hat`` is the normalized beam
-        direction. This is used to re-evaluate the excitation errors after an inelastic
-        deflection of the incident wavevector.
+        Default is None, a beam along the surface normal ``z``. For a tilted beam
+        direction ``n``, every form above is evaluated in the frame of the beam:
+        ``g_z`` becomes ``g_n = n · g`` and ``g_⊥² = |g|² - g_n²`` (Mendis, Acta
+        Cryst. A80, 2024, Eq. 12). This re-evaluates the excitation errors after an
+        inelastic deflection of the incident wave vector.
 
     Returns
     -------
@@ -194,25 +208,31 @@ def excitation_errors(
     assert g.shape[-1] == 3
     xp = get_array_module(g)
     wavelength = energy2wavelength(energy)
+    use_wave_eq = validate_use_wave_eq(use_wave_eq)
 
     if beam_direction is None:
-        # Beam along the surface normal z; preserve the exact legacy expressions
-        # (bit-for-bit) so existing Bloch results are unchanged.
-        if use_wave_eq:
-            sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
-        else:
-            sg = (-2 * g[..., 2] - wavelength * xp.sum(g * g, axis=-1)) / 2.0
-        return sg
-
-    beam_direction = xp.asarray(beam_direction).astype(g.dtype)
-    beam_direction = beam_direction / xp.linalg.norm(beam_direction)
-    gn = g @ beam_direction
-    g2 = xp.sum(g * g, axis=-1)
-
-    if use_wave_eq:
-        sg = -gn - wavelength * (g2 - gn**2) / 2.0
+        gn = g[..., 2]
+        g_perp2 = g[..., 0] ** 2 + g[..., 1] ** 2
     else:
-        sg = -gn - wavelength * g2 / 2.0
+        beam_direction = xp.asarray(beam_direction).astype(g.dtype)
+        beam_direction = beam_direction / xp.linalg.norm(beam_direction)
+        gn = g @ beam_direction
+        g_perp2 = xp.sum(g * g, axis=-1) - gn**2
+
+    if use_wave_eq == "exact":
+        x = wavelength**2 * g_perp2
+        if x.size and float(x.max()) >= 1.0:
+            raise ValueError(
+                "use_wave_eq='exact' requires wavelength * |g_perp| < 1 for every "
+                "beam; reduce g_max or sg_max"
+            )
+        # k (sqrt(1 - x) - 1), evaluated stably as -k x / (sqrt(1 - x) + 1), the
+        # same form as the exact multislice propagator
+        sg = -gn - x / (wavelength * (xp.sqrt(1.0 - x) + 1.0))
+    elif use_wave_eq:
+        sg = -gn - wavelength * g_perp2 / 2.0
+    else:
+        sg = -gn - wavelength * xp.sum(g * g, axis=-1) / 2.0
     return sg
 
 
@@ -226,29 +246,34 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     hkl : numpy.ndarray
         Array of shape (N, 3) representing the Miller indices of reflections.
     centering : str
-        The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
+        The lattice centering type: one of "P", "I", "F", "A", "B" or "C", or several
+        of them combined, such as "FI", for a cell with the lattice translations of
+        each. A reflection must then satisfy all of their conditions.
 
     Returns
     -------
     numpy.ndarray
         Boolean mask indicating which reflections satisfy the reflection condition.
     """
-    if centering.lower() == "f":
-        all_even = (hkl % 2 == 0).all(axis=1)
-        all_odd = (hkl % 2 == 1).all(axis=1)
-        return all_even + all_odd
-    elif centering.lower() == "i":
-        return hkl.sum(axis=1) % 2 == 0
-    elif centering.lower() == "a":
-        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0)
-    elif centering.lower() == "b":
-        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0)
-    elif centering.lower() == "c":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0)
-    elif centering.lower() == "p":
-        return np.ones(len(hkl), dtype=bool)
-    else:
+    centering = centering.lower()
+    if not centering or set(centering) - set("pifabc"):
         raise ValueError("Invalid crystal centering type.")
+
+    mask = np.ones(len(hkl), dtype=bool)
+    for letter in centering:
+        if letter == "f":
+            all_even = (hkl % 2 == 0).all(axis=1)
+            all_odd = (hkl % 2 == 1).all(axis=1)
+            mask &= all_even | all_odd
+        elif letter == "i":
+            mask &= hkl.sum(axis=1) % 2 == 0
+        elif letter == "a":
+            mask &= hkl[:, [1, 2]].sum(axis=1) % 2 == 0
+        elif letter == "b":
+            mask &= hkl[:, [0, 2]].sum(axis=1) % 2 == 0
+        elif letter == "c":
+            mask &= hkl[:, [0, 1]].sum(axis=1) % 2 == 0
+    return mask
 
 
 @njit(nogil=True)
@@ -342,6 +367,17 @@ def ravel_hkl(hkl: np.ndarray, gpts: tuple[int, int, int]) -> np.ndarray:
     return np.ravel_multi_index(multi_index, gpts)
 
 
+def _dense_structure_factor(
+    array: np.ndarray, hkl_source: np.ndarray, gpts: tuple[int, int, int]
+) -> np.ndarray:
+    """The structure factors on the raveled `gpts` grid, zero away from `hkl_source`,
+    on the device of `array`."""
+    xp = get_array_module(array)
+    dense = xp.zeros(int(np.prod(gpts)), dtype=array.dtype)
+    dense[xp.asarray(ravel_hkl(hkl_source, gpts))] = array
+    return dense
+
+
 def retrieve_structure_factor_values(
     array: np.ndarray,
     hkl_source: np.ndarray,
@@ -349,93 +385,106 @@ def retrieve_structure_factor_values(
     gpts: tuple[int, int, int],
 ) -> np.ndarray:
     """
-    Convert a raveled array to a 3D array with the shape of the structure factor.
+    Look up the structure factors at a set of reciprocal space vectors.
 
     Parameters
     ----------
     array : numpy.ndarray
-        The raveled array.
+        The structure factors as a 1D array.
     hkl_source : numpy.ndarray
         The reciprocal space vectors as Miller indices for the source array.
     hkl_destination : numpy.ndarray
-        The reciprocal space vectors as Miller indices for the destination array.
+        The reciprocal space vectors as Miller indices to look up. Those on the grid
+        but not in `hkl_source` (beyond its g_max) give zero.
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
 
     Returns
     -------
     numpy.ndarray
-        The 3D array.
+        The structure factors at `hkl_destination`, on the device of `array`.
     """
-
-    hkl_source = ravel_hkl(hkl_source, gpts)
-    hkl_destination = ravel_hkl(hkl_destination, gpts)
-
-    if cp is not None and isinstance(array, cp.ndarray):
-        convert_to_numpy = True
-    else:
-        convert_to_numpy = False
-
-    if convert_to_numpy:
-        array = cp.asnumpy(array)
-
-    df = pd.Series(array, index=hkl_source)
-    array = df.loc[hkl_destination].to_numpy()
-
-    if convert_to_numpy:
-        array = cp.asarray(array)
-
-    return array
+    xp = get_array_module(array)
+    dense = _dense_structure_factor(array, hkl_source, gpts)
+    return dense[xp.asarray(ravel_hkl(hkl_destination, gpts))]
 
 
-def are_vectors_orthogonal(v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:
-    """
-    Check if two vectors are orthogonal within a given tolerance.
+def structure_factor_coupling_matrix(
+    array: np.ndarray,
+    hkl_source: np.ndarray,
+    hkl: np.ndarray,
+    gpts: tuple[int, int, int],
+    inversion_center: Optional[np.ndarray] = None,
+    max_block_size: int = 2**26,
+) -> np.ndarray:
+    """The matrix of structure factors coupling a set of beams, A[i, j] = U(g_j - g_i).
+
+    The matrix is gathered on the device of `array` from the structure factors on a
+    dense grid, with the raveled index of g_j - g_i computed from those of g_i and
+    g_j: no array of the beams x beams Miller index differences is made. The grid is
+    enlarged as needed to hold every difference; differences beyond the g_max of
+    `hkl_source` couple through zero.
 
     Parameters
     ----------
-    v1 : numpy.ndarray
-        The first vector.
-    v2 : numpy.ndarray
-        The second vector.
-    tol : float
-        The tolerance for floating-point comparison.
+    array : numpy.ndarray
+        The structure factors as a 1D array.
+    hkl_source : numpy.ndarray
+        The reciprocal space vectors of `array` as Miller indices, (M, 3).
+    hkl : numpy.ndarray
+        The Miller indices of the beams, (N, 3).
+    gpts : tuple of ints
+        The number of grid points in the 3D structure factor.
+    inversion_center : numpy.ndarray, optional
+        A center of inversion symmetry t of the crystal in scaled coordinates (see
+        `find_inversion_center`). If given, the matrix is that of the crystal moved
+        by -t: real, U(g) exp(-2 pi i g.t), and of the real dtype. It is D A D^H with
+        D = diag(exp(2 pi i g_i.t)).
+    max_block_size : int
+        The largest number of matrix elements gathered at once, bounding the memory
+        of the temporary index array.
 
     Returns
-    --------
-    bool
-        True if the vectors are orthogonal within the given tolerance, False otherwise.
+    -------
+    numpy.ndarray
+        The (N, N) matrix, Fortran-ordered (the layout LAPACK and cuSOLVER use).
     """
-    dot_product = np.dot(v1, v2)
-    return bool(np.isclose(dot_product, 0, atol=tol))
+    xp = get_array_module(array)
+    hkl = np.asarray(hkl)
+    hkl_source = np.asarray(hkl_source)
 
+    if inversion_center is not None:
+        phase = np.exp(-2j * np.pi * (hkl_source @ np.asarray(inversion_center)))
+        array = (array * xp.asarray(phase, dtype=array.dtype)).real
 
-def check_orthogonality(vectors: np.ndarray, tol: float = 1e-9) -> bool:
-    """
-    Check if three vectors are pairwise orthogonal within a given tolerance.
+    n = len(hkl)
+    if n == 0:
+        return xp.zeros((0, 0), dtype=array.dtype)
 
-    Parameters
-    ----------
-    vectors : numpy.ndarray
-        A 2D array where each row is a vector.
-    tol : float
-        The tolerance for floating-point comparison.
+    # A grid holding both the structure factors and every difference g_j - g_i,
+    # whose components span [-span, span]: the `gpts` grid can be too small when
+    # the beams' g_max exceeds half the structure factor's.
+    span = hkl.max(axis=0) - hkl.min(axis=0)
+    nx, ny, nz = (max(int(m), 2 * int(s) + 1) for m, s in zip(gpts, span))
+    shape = (nx, ny, nz)
+    dense = _dense_structure_factor(array, hkl_source, shape)
 
-    Returns
-    --------
-    bool
-        True if all pairs of vectors are orthogonal within the given tolerance, False
-        otherwise.
-    """
-    if vectors.shape[1] != 3:
-        raise ValueError("Each vector must be 3-dimensional.")
+    # The raveled index is linear in the Miller indices, so the index of g_i - g_j
+    # is that of g_i less that of g_j (as the components are on the grid).
+    strides = np.array((shape[1] * shape[2], shape[2], 1))
+    offset = int(ravel_hkl(np.zeros(3, dtype=int), shape))
+    index_dtype = np.int32 if dense.size < 2**31 else np.int64
+    rows = xp.asarray(hkl @ strides + offset, dtype=index_dtype)
+    columns = xp.asarray(hkl @ strides, dtype=index_dtype)
 
-    num_vectors = vectors.shape[0]
-    for i in range(num_vectors):
-        for j in range(i + 1, num_vectors):
-            if not are_vectors_orthogonal(vectors[i], vectors[j], tol):
-                return False
-    return True
+    # transposed[i, j] = U(g_i - g_j) = A[j, i]: gathering the transpose in C order
+    # gives A in Fortran order
+    transposed = xp.empty((n, n), dtype=array.dtype)
+    block = max(1, max_block_size // n)
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        transposed[start:stop] = dense[rows[start:stop, None] - columns[None, :]]
+    return transposed.T
 
 
 def relative_positions_for_centering() -> dict[str, np.ndarray]:
@@ -466,19 +515,19 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
         "A": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.5, 0.0, 0.0],
+                [0.0, 0.5, 0.5],
             ]
         ),
         "B": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.5, 0.0],
+                [0.5, 0.0, 0.5],
             ]
         ),
         "C": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.5],
+                [0.5, 0.5, 0.0],
             ]
         ),
         "P": np.array([[0.0, 0.0, 0.0]]),
@@ -516,74 +565,184 @@ def all_positions_have_relative_periodic_pair(
     if not np.isclose(basis_size, np.round(basis_size), atol=1e-6):
         return False
 
-    num_match_total = 0
+    # Every translate of every position must be one of the positions. Counting
+    # matches instead lets a position that matches several others (coincident
+    # atoms) stand in for a translate that is missing.
     for position in positions:
         shifted_position = (position + relative_positions) % 1.0
         position_is_close = wrapped_is_close(shifted_position, positions)
-        num_match_total += position_is_close.all(axis=2).sum()
+        if not position_is_close.all(axis=2).any(axis=0).all():
+            return False
 
-    if num_match_total >= len(relative_positions) * len(positions):
-        return True
-    else:
-        return False
+    return True
+
+
+def _sites_with_multiplicity(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Merge coincident scaled positions (periodically) into sites, returning the
+    distinct sites and the number of positions on each."""
+    is_close = wrapped_is_close(positions, positions).all(axis=2)
+    assigned = np.zeros(len(positions), dtype=bool)
+    sites, multiplicities = [], []
+    for i in range(len(positions)):
+        if assigned[i]:
+            continue
+        on_site = is_close[i] & ~assigned
+        assigned |= on_site
+        sites.append(positions[i])
+        multiplicities.append(int(on_site.sum()))
+    return np.array(sites).reshape((-1, 3)), np.array(multiplicities, dtype=int)
 
 
 def auto_detect_centering(
-    atoms: Atoms, centerings_to_check: Optional[set] = None
+    atoms: Atoms, centerings_to_check: Optional[Iterable[str]] = None
 ) -> str:
     """
     Automatically detect the lattice centering of a crystal structure.
+
+    A centering is detected when every atom has a periodic image of the same species
+    at each of its lattice translations (see `relative_positions_for_centering`). The
+    reflection conditions these translations imply depend only on the fractional
+    translations, not on the cell metric, so any cell can be centered. Coincident
+    atoms of the same species count as one site with a multiple occupancy, which the
+    translations must preserve.
+
+    A cell can have the translations of several centerings: a 2x2x2 supercell has
+    those of both F and I, for example. All of them are then returned together, here
+    "FI", and `get_reflection_condition` applies each of their conditions.
 
     Parameters
     ----------
     atoms : Atoms
         The crystal structure.
-    centerings_to_check : set, optional
+    centerings_to_check : iterable of str, optional
         The centering types to check. If None, all centering types are checked.
 
     Returns
     --------
     str
-        The detected lattice centering type.
+        The detected lattice centering: "P" if none is found, otherwise those found
+        among "F", "I", "A", "B" and "C", in that order.
     """
-    if centerings_to_check is None:
-        centerings_to_check = set(relative_positions_for_centering().keys())
-
-    if "P" in centerings_to_check:
-        centerings_to_check.remove("P")
-
-    if not check_orthogonality(atoms.cell):
-        centerings_to_check.remove("F")
-        centerings_to_check.remove("I")
-
-    if not check_orthogonality(atoms.cell[[0, 1]]):
-        centerings_to_check.remove("A")
-
-    if not check_orthogonality(atoms.cell[[0, 2]]):
-        centerings_to_check.remove("B")
-
-    if not check_orthogonality(atoms.cell[[1, 2]]):
-        centerings_to_check.remove("C")
-
-    positions = atoms.get_scaled_positions()
     relative_positions = relative_positions_for_centering()
 
-    for number in np.unique(atoms.numbers):
-        centerings_to_check = {
-            centering
-            for centering in centerings_to_check
-            if all_positions_have_relative_periodic_pair(
-                positions[atoms.numbers == number], relative_positions[centering]
-            )
-        }
-
-    if len(centerings_to_check) == 1:
-        return next(iter(centerings_to_check))
-    elif len(centerings_to_check) == 0:
-        return "P"
+    if centerings_to_check is None:
+        centerings_to_check = relative_positions.keys()
     else:
-        warnings.warn(
-            "Something went wrong with the centering detection"
-            " using primitive. Set manually to mute warning."
+        centerings_to_check = {centering.upper() for centering in centerings_to_check}
+        unknown = centerings_to_check - relative_positions.keys()
+        if unknown:
+            raise ValueError(f"Invalid crystal centering types: {sorted(unknown)}")
+
+    positions = atoms.get_scaled_positions()
+
+    # Coincident atoms of one species are one site with a multiple occupancy. A
+    # centering translation must map each site onto a site of the same species
+    # and the same occupancy, so the sites are grouped by both.
+    groups = []
+    for number in np.unique(atoms.numbers):
+        sites, multiplicities = _sites_with_multiplicity(
+            positions[atoms.numbers == number]
         )
-        return "P"
+        groups.extend(sites[multiplicities == m] for m in np.unique(multiplicities))
+
+    detected = [
+        centering
+        for centering in "FIABC"
+        if centering in centerings_to_check
+        and all(
+            all_positions_have_relative_periodic_pair(
+                group, relative_positions[centering]
+            )
+            for group in groups
+        )
+    ]
+
+    # The F-centering translations include those of A-, B- and C-centering.
+    if "F" in detected:
+        detected = [centering for centering in detected if centering not in "ABC"]
+
+    return "".join(detected) or "P"
+
+
+def _wrap_scaled(positions: np.ndarray) -> np.ndarray:
+    """Scaled positions in [0, 1), as a periodic cKDTree requires (the remainder of a
+    small negative number rounds to 1.0)."""
+    positions = positions % 1.0
+    positions[positions >= 1.0] = 0.0
+    return positions
+
+
+def find_inversion_center(
+    atoms: Atoms,
+    thermal_sigma: AtomProperties = 0.0,
+    occupancy: AtomProperties = 1.0,
+    tol: float = 1e-6,
+) -> Optional[np.ndarray]:
+    """
+    Find a center of inversion symmetry of a crystal.
+
+    The crystal is centrosymmetric about t when inverting it through t, r -> 2t - r,
+    maps every atom onto a periodic image of an atom of the same species, thermal
+    displacement and occupancy, with coincident atoms counted. Its structure factors
+    are then U(g) = exp(2 pi i g.t) times a real number, which makes the Bloch-wave
+    eigenproblem real symmetric up to a diagonal phase. If t is a center, so is
+    t + n / 2 for any lattice vector n; one of them is returned.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The crystal structure.
+    thermal_sigma : float, dict or sequence
+        The thermal displacements of the atoms, as for the structure factors.
+    occupancy : float, dict or sequence
+        The occupancies of the atoms, as for the structure factors.
+    tol : float
+        The largest distance in scaled coordinates at which an inverted atom matches
+        an atom. Small enough that the asymmetry it could hide is below the rounding
+        of single precision.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        The center in scaled coordinates, or None if the crystal has none.
+    """
+    from scipy.spatial import cKDTree  # type: ignore
+
+    if len(atoms) == 0:
+        return None
+
+    sigmas = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+    occupancies = validate_per_atom_property(atoms, occupancy, return_array=True)
+    assert isinstance(sigmas, np.ndarray)  # Type narrowing for mypy
+    assert isinstance(occupancies, np.ndarray)  # Type narrowing for mypy
+
+    # atoms that may map onto each other: same species, displacement and occupancy
+    properties = np.column_stack(
+        [atoms.numbers, np.reshape(sigmas, (len(atoms), -1)), occupancies]
+    )
+    kinds = np.unique(properties, axis=0, return_inverse=True)[1].ravel()
+
+    positions = _wrap_scaled(atoms.get_scaled_positions(wrap=False))
+    groups = [positions[kinds == kind] for kind in range(kinds.max() + 1)]
+    trees = [cKDTree(group, boxsize=1.0) for group in groups]
+    # the number of atoms on each site, which the inversion must preserve
+    multiplicities = [
+        tree.query_ball_point(group, tol, return_length=True)
+        for tree, group in zip(trees, groups)
+    ]
+
+    # a center lies halfway between an atom of the rarest kind and its inverse
+    rarest = groups[np.argmin([len(group) for group in groups])]
+    for partner in rarest:
+        center = (rarest[0] + partner) / 2
+        if all(
+            np.array_equal(
+                tree.query_ball_point(
+                    _wrap_scaled(2 * center - group), tol, return_length=True
+                ),
+                multiplicity,
+            )
+            for tree, group, multiplicity in zip(trees, groups, multiplicities)
+        ):
+            return center
+    return None

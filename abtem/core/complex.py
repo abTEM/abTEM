@@ -1,14 +1,14 @@
+import functools
+
 import dask.array as da
 import numba as nb  # type: ignore
 import numpy as np
 
+from abtem.core import backend
 from abtem.core.backend import check_cupy_is_installed, cp
 
 
-@nb.vectorize(
-    [nb.complex64(nb.float32), nb.complex128(nb.float64), nb.complex64(nb.complex64)]
-)
-def _complex_exponential(x):
+def _complex_exponential_kernel(x):
     """
     Calculate the complex exponential.
 
@@ -19,12 +19,30 @@ def _complex_exponential(x):
     return np.cos(x) + 1.0j * np.sin(x)
 
 
-@nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
-def _abs2(x):
+def _abs2_kernel(x):
     """
     Calculate the absolute square of a complex number.
     """
     return x.real**2 + x.imag**2
+
+
+# The ufuncs are compiled on first use, not at import: with their signatures
+# given, Numba compiles them when they are made, which was ~0.6 s of every
+# `import abtem` (every process, every pytest-xdist worker). cache=True keeps
+# the compiled code on disk between processes.
+@functools.cache
+def _complex_exponential_ufunc():
+    return nb.vectorize(
+        [nb.complex64(nb.float32), nb.complex128(nb.float64), nb.complex64(nb.complex64)],
+        cache=True,
+    )(_complex_exponential_kernel)
+
+
+@functools.cache
+def _abs2_ufunc():
+    return nb.vectorize(
+        [nb.float32(nb.complex64), nb.float64(nb.complex128)], cache=True
+    )(_abs2_kernel)
 
 
 if cp is not None:
@@ -84,10 +102,13 @@ def abs2(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.Array:
     Fast calculation of the absolute square of a complex number.
     """
     if isinstance(x, np.ndarray):
-        return _abs2(x)
+        return _abs2_ufunc()(x)
 
     if isinstance(x, da.core.Array):
         return da.map_blocks(abs2, x)
+
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return x.real**2 + x.imag**2
 
     check_cupy_is_installed()  # type: ignore
 
@@ -114,10 +135,13 @@ def complex_exponential(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.A
             # cos(z) + i sin(z) overflows for large |Im z| (strongly evanescent
             # propagator components); exp is overflow-safe and decays to zero.
             return np.exp(1.0j * x)
-        return _complex_exponential(x)
+        return _complex_exponential_ufunc()(x)
 
     if isinstance(x, da.core.Array):
         return da.map_blocks(complex_exponential, x)
+
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return backend.tp.exp(1.0j * x)
 
     check_cupy_is_installed()  # type: ignore
 
@@ -154,10 +178,13 @@ def complex_exponential_scaled(
         Scalar multiplier applied before the exponential.
     """
     if isinstance(x, np.ndarray):
-        return _complex_exponential(x.dtype.type(scale) * x)
+        return _complex_exponential_ufunc()(x.dtype.type(scale) * x)
 
     if isinstance(x, da.core.Array):
         return da.map_blocks(complex_exponential_scaled, x, scale=scale)
+
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return backend.tp.exp((1.0j * scale) * x)
 
     check_cupy_is_installed()  # type: ignore
 

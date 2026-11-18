@@ -1,0 +1,282 @@
+"""Core-loss PRISM (SMatrix.transition_potential_scan) against core-loss multislice
+(Probe.transition_potential_scan): output shapes, frames and metadata."""
+
+import ase
+import numpy as np
+import pytest
+from utils import devices, synthetic_transition_potential, to_host_array
+
+import abtem
+from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
+
+GPTS = (48, 56)
+ENERGY = 100e3
+ATOMS = ase.Atoms("B2", positions=[(2, 2, 1), (4, 5, 3)], cell=(8, 6, 8), pbc=True)
+
+# float32 round-off of the PRISM reduction and of the multislice oracle
+TOLERANCE = 1e-4
+
+
+def _potential(device, num_configs=None, ensemble_mean=True):
+    atoms = ATOMS
+    if num_configs:
+        atoms = abtem.FrozenPhonons(
+            ATOMS,
+            num_configs=num_configs,
+            sigmas=0.1,
+            seed=3,
+            ensemble_mean=ensemble_mean,
+        )
+    return abtem.Potential(atoms, gpts=GPTS, slice_thickness=2, device=device)
+
+
+def _energy_resolved_potential(device, ensemble_mean):
+    # 2 energy losses x 4 configurations: two potential ensemble axes of
+    # different sizes, every member displaced differently
+    rng = np.random.default_rng(3)
+    snapshots = []
+    for _ in range(2):
+        row = []
+        for _ in range(4):
+            atoms = ATOMS.copy()
+            atoms.positions += rng.normal(scale=0.1, size=atoms.positions.shape)
+            row.append(atoms)
+        snapshots.append(row)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, energies=[10.0, 20.0], ensemble_mean=ensemble_mean
+    )
+    return abtem.Potential(ensemble, gpts=GPTS, slice_thickness=2, device=device)
+
+
+def _scan(potential):
+    return abtem.GridScan(
+        (0, 0),
+        (1, 1),
+        gpts=(3, 5),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+
+def _detector(name):
+    return {
+        "pixelated": abtem.PixelatedDetector,
+        "flexible": abtem.FlexibleAnnularDetector,
+        "annular": lambda: abtem.AnnularDetector(5, 40),
+        "waves": abtem.WavesDetector,
+        "real-space": lambda: abtem.PixelatedDetector(reciprocal_space=False),
+    }[name]()
+
+
+def _tp(potential):
+    return synthetic_transition_potential(
+        Z=5,
+        gpts=GPTS,
+        extent=potential.extent,
+        energy=ENERGY,
+        device=potential.device,
+    )
+
+
+def _assert_close(measured, expected):
+    a, b = to_host_array(measured), to_host_array(expected)
+    assert np.abs(a - b).max() <= TOLERANCE * np.abs(b).max()
+
+
+def _prism(potential, detector, lazy, **kwargs):
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, **kwargs
+    )
+    result = s_matrix.transition_potential_scan(
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=detector,
+        sites=ATOMS,
+        lazy=lazy,
+        double_channel=False,
+    )
+    return result.copy().compute(progress_bar=False) if lazy else result
+
+
+def _multislice(potential, detector):
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20, device=potential.device)
+    return probe.transition_potential_scan(
+        potential,
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=detector,
+        sites=ATOMS,
+        lazy=False,
+        double_channel=False,
+    )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "num_configs, ensemble_mean", [(None, True), (3, True), (3, False)]
+)
+@pytest.mark.parametrize("detector", ["waves", "real-space"])
+def test_real_space_outputs_match_multislice(
+    device, detector, num_configs, ensemble_mean, lazy
+):
+    potential = _potential(device, num_configs, ensemble_mean)
+    measured = _prism(
+        potential, _detector(detector), lazy, interpolation=1, downsample=False
+    )
+    expected = _multislice(potential, _detector(detector))
+    assert measured.shape == expected.shape
+    _assert_close(measured, expected)
+
+
+@devices
+@pytest.mark.parametrize("interpolation, upsample", [(1, False), (2, False), (1, True)])
+@pytest.mark.parametrize("num_configs", [None, 3])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible", "annular", "waves"])
+def test_lazy_declared_shape_matches_computed_and_eager(
+    device, detector, num_configs, interpolation, upsample
+):
+    potential = _potential(device, num_configs)
+    kwargs = dict(interpolation=interpolation, downsample="cutoff", upsample=upsample)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, **kwargs
+    )
+    declared = s_matrix.transition_potential_scan(
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=_detector(detector),
+        sites=ATOMS,
+        lazy=True,
+        double_channel=False,
+    )
+    computed = declared.copy().compute(progress_bar=False)
+    eager = _prism(potential, _detector(detector), lazy=False, **kwargs)
+    assert declared.shape == computed.shape == eager.shape
+    _assert_close(computed, eager)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("num_configs", [None, 3])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible"])
+def test_downsampled_outputs_detect_to_the_cutoff_of_multislice(
+    device, detector, num_configs, lazy
+):
+    # downsample="cutoff" keeps the full grid's antialias cutoff, so the size of
+    # the pixelated patterns and of the flexible annular bins is multislice's
+    potential = _potential(device, num_configs)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=ENERGY,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample="cutoff",
+    )
+    declared = s_matrix.transition_potential_scan(
+        _tp(potential),
+        scan=_scan(potential),
+        detectors=_detector(detector),
+        sites=ATOMS,
+        lazy=lazy,
+        double_channel=False,
+    )
+    measured = declared.copy().compute(progress_bar=False) if lazy else declared
+    expected = _multislice(potential, _detector(detector))
+
+    assert declared.shape == measured.shape == expected.shape
+    _assert_close(measured, expected)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("num_configs", [None, 3])
+def test_results_carry_the_probe_metadata_of_multislice(device, num_configs, lazy):
+    # the semiangle cutoff and the base tilt of the probe are what
+    # DiffractionPatterns.block_direct reads
+    potential = _potential(device, num_configs)
+    kwargs = dict(interpolation=1, downsample=False)
+    measured = _prism(potential, _detector("pixelated"), lazy, **kwargs)
+    expected = _multislice(potential, _detector("pixelated"))
+
+    for key in ("semiangle_cutoff", "base_tilt_x", "base_tilt_y"):
+        assert measured.metadata[key] == expected.metadata[key]
+    _assert_close(measured.block_direct(), expected.block_direct())
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_upsample_with_a_cropped_window_has_the_outputs_of_the_full_window(
+    device, lazy
+):
+    # a window smaller than the downsampled grid (32, 24) only crops the probe:
+    # the grids of the patterns and of the radial bins follow the cell. The scan
+    # takes whole pixels of the downsampled grid.
+    potential = _potential(device)
+    scan = abtem.GridScan(
+        (0, 0),
+        (1, 1),
+        gpts=(2, 4),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+    def s_matrix(window_gpts):
+        return abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20,
+            interpolation=2,
+            upsample=True,
+            window_gpts=window_gpts,
+        )
+
+    def scan_with(window_gpts):
+        result = s_matrix(window_gpts).transition_potential_scan(
+            _tp(potential),
+            scan=scan,
+            detectors=[
+                abtem.PixelatedDetector(max_angle="cutoff"),
+                abtem.PixelatedDetector(),
+                abtem.FlexibleAnnularDetector(),
+                abtem.AnnularDetector(5),
+            ],
+            sites=ATOMS,
+            lazy=lazy,
+            double_channel=False,
+        )
+        declared = [m.shape for m in result]
+        return declared, [
+            m.copy().compute(progress_bar=False) if lazy else m for m in result
+        ]
+
+    declared, cropped = scan_with((20, 24))
+    _, full = scan_with("full")
+
+    assert [m.shape[-2:] for m in cropped[:2]] == [(16, 12), (12, 8)]
+    assert cropped[2].shape == (2, 4, 74, 1)
+    assert declared == [m.shape for m in cropped]
+    assert [m.shape for m in cropped] == [m.shape for m in full]
+
+    plain = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=2
+    )
+    assert s_matrix((20, 24)).dummy_probes().cutoff_angles == pytest.approx(
+        plain.dummy_probes().cutoff_angles
+    )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("ensemble_mean", [False, True])
+def test_core_loss_of_an_energy_resolved_ensemble_matches_multislice(
+    device, ensemble_mean, lazy
+):
+    potential = _energy_resolved_potential(device, ensemble_mean)
+    measured = _prism(potential, _detector("annular"), lazy)
+    expected = _multislice(potential, _detector("annular"))
+
+    assert measured.shape == expected.shape
+    assert measured.shape == ((2, 3, 5) if ensemble_mean else (2, 4, 3, 5))
+    _assert_close(measured, expected)
