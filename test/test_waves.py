@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given, settings
-from test_detect import _REVERSED_SCANS, _scanned_waves
+from test_detect import _FULL, _REVERSED, _REVERSED_SCANS, _scanned_waves
 from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
@@ -1533,9 +1533,6 @@ def _scan_setup(device, lazy, frozen_phonons=False, exit_planes=None, line=False
         waves = waves.rechunk((3, 2, -1, -1)[: len(scan.shape)] + (-1, -1))
     return potential, waves
 
-
-_FULL = slice(None)
-_REVERSED = slice(None, None, -1)
 
 # (index of a reversed scan of 7 by 5 positions, index of the same positions in
 # increasing order)
