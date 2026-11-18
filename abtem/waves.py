@@ -731,7 +731,24 @@ class Waves(BaseWaves, ArrayObject):
     def apply_transform(self, transform, max_batch: int | str = "auto"):
         """Apply a transform to the waves. Reversed scan axes are put in increasing
         order before a transform that reduces the scan; any other transform sees the
-        waves unchanged."""
+        waves unchanged.
+
+        Parameters
+        ----------
+        transform : ArrayObjectTransform
+            The transformation to apply to the waves.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+
+        Returns
+        -------
+        transformed_array_object : ArrayObject or list of ArrayObject
+            The transformed waves, or the measurements or waves the transform
+            produces.
+        """
         # A transform that reduces the scan to the base axes of its output (a
         # detector giving images or line profiles) gets the scan in increasing
         # order, as the reductions of measurements do. It is flipped once, here:
