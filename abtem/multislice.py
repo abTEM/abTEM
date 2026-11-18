@@ -15,7 +15,7 @@ from ase import Atoms
 
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
-from abtem.core.axes import AxisMetadata
+from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
@@ -51,6 +51,7 @@ from abtem.tilt import _get_tilt_axes
 from abtem.transform import WavesTransform
 
 if TYPE_CHECKING:
+    from abtem.inelastic.plasmons import PhaseScramblePlasmons, QuadraturePlasmons
     from abtem.waves import Waves
 
 
@@ -623,6 +624,108 @@ def conventional_multislice_step(
     return waves
 
 
+def _configuration_seed(potential_configuration) -> Optional[int]:
+    """Per-configuration frozen-phonon seed, if available.
+
+    Used to give the plasmon phase-scramble a globally-unique, reproducible,
+    partition-safe per-configuration random stream. Returns ``None`` for potentials
+    without frozen-phonon seeds (e.g. a static potential).
+    """
+    frozen_phonons = getattr(potential_configuration, "frozen_phonons", None)
+    seed = getattr(frozen_phonons, "seed", None)
+    if seed is None:
+        return None
+    if hasattr(seed, "__len__"):
+        return int(seed[0]) if len(seed) else None
+    return int(seed)
+
+
+def _plasmon_total_intensity(waves: Waves):
+    """Total wave-function intensity per ensemble member (summed over the grid axes)."""
+    xp = get_array_module(waves.device)
+    arr = xp.abs(waves._array).astype(xp.float64)
+    return xp.sum(arr**2, axis=(-2, -1), keepdims=True)
+
+
+def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
+    """Return a copy of ``waves`` rescaled to the given per-member total intensity.
+
+    The phase-scramble plasmon operator is non-unitary, so the exit wave is renormalized
+    to conserve the incident electron count before detection (following the reference
+    implementation, which normalizes the wave before forming the diffraction pattern).
+    """
+    xp = get_array_module(waves.device)
+    arr = xp.abs(waves._array).astype(xp.float64)
+    current = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
+    current = xp.maximum(current, xp.finfo(xp.float64).tiny)
+    scale = xp.sqrt(target_norm / current)
+    max_scale = xp.finfo(waves._array.dtype).max
+    scale = xp.minimum(scale, max_scale)
+    scale = scale.astype(waves._array.dtype)
+    kwargs = waves._copy_kwargs(exclude=("array",))
+    kwargs["array"] = waves._array * scale
+    return waves.__class__(**kwargs)
+
+
+def _renormalize_order_waves(order_waves: list, target_norm) -> None:
+    """Renormalize order-resolved waves so their total intensity matches the
+    incident beam.  The same scale factor is applied to every order so that
+    relative intensities are preserved. No-op when ``target_norm`` is None."""
+    if target_norm is None:
+        return
+    xp = get_array_module(order_waves[0].device)
+    total = sum(
+        xp.sum(
+            xp.abs(w._array).astype(xp.float64) ** 2,
+            axis=(-2, -1),
+            keepdims=True,
+        )
+        for w in order_waves
+    )
+    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
+    scale = xp.sqrt(target_norm / total)
+    max_scale = xp.finfo(order_waves[0]._array.dtype).max
+    scale = xp.minimum(scale, max_scale)
+    scale = scale.astype(order_waves[0]._array.dtype)
+    for w in order_waves:
+        w._array = w._array * scale
+
+
+def _detect_order_resolved(
+    order_waves: list,
+    target_norm,
+    detectors: list,
+    measurements: list,
+    config_meas_index: tuple[int, ...],
+) -> None:
+    """Renormalize and detect each order, writing into the pre-allocated
+    measurements at ``(order_index,) + config_meas_index``."""
+    _renormalize_order_waves(order_waves, target_norm)
+    for n, w in enumerate(order_waves):
+        idx = (n,) + config_meas_index
+        _update_measurements(w, detectors, measurements, idx)
+
+
+def _stack_order_detections(
+    order_waves: list,
+    detector,
+    potential_ensemble_shape: tuple[int, ...],
+    order_axis: "OrdinalAxis",
+):
+    """Detect each order and stack with a leading order axis (single-config
+    path where ``measurements is None``)."""
+    xp = get_array_module(order_waves[0].device)
+    detected = [detector.detect(w) for w in order_waves]
+    arrays = xp.stack([d.array for d in detected], axis=0)
+    pad = (None,) * len(potential_ensemble_shape)
+    arrays = arrays[pad]
+
+    kwargs = detected[0]._copy_kwargs(exclude=("array",))
+    kwargs["array"] = arrays
+    kwargs["ensemble_axes_metadata"] = [order_axis] + kwargs["ensemble_axes_metadata"]
+    return detected[0].__class__(**kwargs)
+
+
 def _update_measurements(
     waves: Waves,
     detectors: list[BaseDetector],
@@ -777,6 +880,8 @@ def multislice_and_detect(
     detectors: Optional[list[BaseDetector]] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
+    plasmons: Optional["PhaseScramblePlasmons | QuadraturePlasmons"] = None,
+    renormalize_plasmons: bool = False,
     pbar: bool = False,
     potential_chunk_size: int | str = "auto",
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -819,6 +924,23 @@ def multislice_and_detect(
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
         backscattered components are also returned. Requires an exit plane after
         every slice (potential exit_planes=1).
+    plasmons : PhaseScramblePlasmons, optional
+        If given, plasmon energy-loss scattering is applied inline at every slice using
+        the fast phase-scramble method. Phase-scramble repetitions are realised through
+        the potential's frozen-phonon configuration ensemble, so use a potential with
+        ``num_configs`` (frozen phonons) set to the desired number of repetitions and
+        ``ensemble_mean=True`` to obtain the incoherent average. The operator is a
+        real-space multiplication at each slice boundary, so it composes with both the
+        ``FourierMultislice`` and ``RealSpaceMultislice`` algorithms (including
+        real-space ``expansion_scope='full'`` backscattering). A
+        :class:`QuadraturePlasmons` model is dispatched to
+        :func:`~abtem.inelastic.plasmons.quadrature_plasmon_multislice_and_detect`.
+    renormalize_plasmons : bool, optional
+        Whether to rescale the plasmon exit wave of every configuration to the incident
+        electron count before detection (default False). The phase-scramble operator
+        conserves the electron count in expectation over configurations, and rescaling
+        each configuration separately biases the average; the option is kept for
+        comparison with the original phase-scrambling algorithm.
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -828,6 +950,27 @@ def multislice_and_detect(
         be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
+    from abtem.inelastic.plasmons import (
+        QuadraturePlasmons,
+        quadrature_plasmon_multislice_and_detect,
+    )
+
+    if isinstance(plasmons, QuadraturePlasmons):
+        if return_backscattered or renormalize_plasmons:
+            raise NotImplementedError(
+                "'return_backscattered' and 'renormalize_plasmons' are not supported "
+                "with quadrature plasmon scattering"
+            )
+        return quadrature_plasmon_multislice_and_detect(
+            waves,
+            potential,
+            plasmons,
+            detectors=detectors,
+            algorithm=algorithm,
+            pbar=pbar,
+            potential_chunk_size=potential_chunk_size,
+        )
+
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
     waves = waves.copy()
@@ -848,7 +991,9 @@ def multislice_and_detect(
         # moved to MultisliceTransform
         # detectors = list(detectors) + [WavesDetector()]
 
-    if isinstance(algorithm, FourierMultislice):
+    is_fourier = isinstance(algorithm, FourierMultislice)
+
+    if is_fourier:
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
@@ -890,6 +1035,20 @@ def multislice_and_detect(
         extra_ensemble_axes_metadata,
     ) = _potential_ensemble_shape_and_metadata(potential)
 
+    # Order-resolved plasmon scattering: prepend a loss-order axis.
+    max_loss_order = plasmons.max_loss_order if plasmons is not None else None
+    order_resolved = max_loss_order is not None
+    # Per-loss-order backscattering: each forward loss-order channel produces its
+    # own backscattered component, reverse-propagated independently at the end.
+    order_resolved_backscatter = (
+        order_resolved and algorithm.expansion_scope == "full" and return_backscattered
+    )
+    if order_resolved:
+        n_orders = max_loss_order + 1
+        order_axis = plasmons.order_axis
+        extra_ensemble_axes_shape = (n_orders,) + extra_ensemble_axes_shape
+        extra_ensemble_axes_metadata = [order_axis] + extra_ensemble_axes_metadata
+
     if sum(extra_ensemble_axes_shape) == 1:
         measurements = None
     else:
@@ -922,6 +1081,32 @@ def multislice_and_detect(
         waves = waves_input.copy()
         exit_plane_index = 0
 
+        if plasmons is not None:
+            plasmon_operator = plasmons._build_operator(
+                waves,
+                potential_index,
+                config_seed=_configuration_seed(potential_configuration),
+            )
+            plasmon_target_norm = (
+                _plasmon_total_intensity(waves) if renormalize_plasmons else None
+            )
+        else:
+            plasmon_operator = None
+            plasmon_target_norm = None
+
+        # Initialise per-order wave channels for order-resolved mode. Only the
+        # zero-loss channel starts from the incident wave; the higher orders
+        # start empty, so allocate their zero arrays directly rather than copying
+        # the incident wave and overwriting it.
+        if order_resolved:
+            xp = get_array_module(waves.device)
+            order_waves = [waves.copy()]
+            empty_kwargs = waves._copy_kwargs(exclude=("array",))
+            for _ in range(1, n_orders):
+                order_waves.append(
+                    waves.__class__(xp.zeros_like(waves._array), **empty_kwargs)
+                )
+
         # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
@@ -950,63 +1135,157 @@ def multislice_and_detect(
         )
 
         for potential_slice, next_slice in lookahead(potential_slices):
-            if algorithm.expansion_scope == "full":
+            if order_resolved:
+                # Build a single slice operand shared across all loss-order
+                # channels, then step each channel through the same
+                # (algorithm-agnostic) ``multislice_step`` closure.
+                if is_fourier:
+                    # Pre-compute the transmission function once per slice so
+                    # ``exp(i·sigma·V)`` is not recomputed for every order.
+                    if isinstance(potential_slice, TransmissionFunction):
+                        shared_slice = potential_slice
+                    else:
+                        shared_slice = potential_slice.transmission_function(
+                            energy=order_waves[0]._valid_energy
+                        )
+                        shared_slice = antialias_aperture.bandlimit(
+                            shared_slice, in_place=False
+                        )
+                else:
+                    # The real-space (finite-difference) step consumes the
+                    # potential slice directly.
+                    shared_slice = potential_slice
+                order_backscatter = (
+                    [None] * n_orders if order_resolved_backscatter else None
+                )
+                for n in range(n_orders):
+                    stepped = multislice_step(
+                        order_waves[n],
+                        shared_slice,
+                        next_slice=next_slice if order_resolved_backscatter else None,
+                    )
+                    if order_resolved_backscatter:
+                        order_waves[n], order_backscatter[n] = stepped
+                    else:
+                        order_waves[n] = stepped
+
+            elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
+
             tqdm_pbar.update_if_exists(int(n_waves))
 
             if return_backscattered:
                 # a copy, so no view keeps the potential chunk alive
                 forward_slices.append(potential_slice.copy())
 
-            depth += potential_slice.axes_metadata[0].values[0]
+            slice_thickness = potential_slice.axes_metadata[0].values[0]
+            depth += slice_thickness
 
-            _update_plasmon_axes(waves, depth)
+            if order_resolved:
+                for n in range(n_orders):
+                    _update_plasmon_axes(order_waves[n], depth)
+                plasmon_operator.scatter_by_order(order_waves, depth, slice_thickness)
+            else:
+                _update_plasmon_axes(waves, depth)
+                if plasmon_operator is not None:
+                    plasmon_operator.scatter(waves, depth, slice_thickness)
 
             if potential_slice.exit_planes:
-                measurement_index = _validate_potential_ensemble_indices(
+                config_meas_index = _validate_potential_ensemble_indices(
                     potential_index, exit_plane_index, potential
                 )
 
                 if measurements is not None:
-                    if algorithm.expansion_scope == "full" and return_backscattered:
-                        _update_measurements(
-                            waves,
+                    if order_resolved_backscatter:
+                        # Forward loss-order channels -> forward detectors;
+                        # per-order backscattered waves -> the backscatter
+                        # detector, indexed by loss order and exit plane.
+                        _detect_order_resolved(
+                            order_waves,
+                            plasmon_target_norm,
                             detectors[:-1],
                             measurements[:-1],
-                            measurement_index,
+                            config_meas_index,
+                        )
+                        for n in range(n_orders):
+                            _update_measurements(
+                                order_backscatter[n],
+                                detectors[-1:],
+                                measurements[-1:],
+                                (n,) + config_meas_index,
+                            )
+                    elif order_resolved:
+                        _detect_order_resolved(
+                            order_waves,
+                            plasmon_target_norm,
+                            detectors,
+                            measurements,
+                            config_meas_index,
+                        )
+                    elif algorithm.expansion_scope == "full" and return_backscattered:
+                        _update_measurements(
+                            waves, detectors[:-1], measurements[:-1], config_meas_index
                         )
                         _update_measurements(
                             backscatter_waves,
                             detectors[-1:],
                             measurements[-1:],
-                            measurement_index,
+                            config_meas_index,
                         )
                     else:
+                        detect_waves = waves
+                        if plasmon_operator is not None and renormalize_plasmons:
+                            detect_waves = _renormalize_total_intensity(
+                                waves, plasmon_target_norm
+                            )
                         _update_measurements(
-                            waves, detectors, measurements, measurement_index
+                            detect_waves, detectors, measurements, config_meas_index
                         )
                 exit_plane_index += 1
 
         if return_backscattered:
-            _back_propagate_backscattered_waves(
-                measurements[-1][  # type: ignore
-                    _validate_potential_ensemble_indices(potential_index, (), potential)
-                ],
-                forward_slices,
-                multislice_step,
+            config_index = _validate_potential_ensemble_indices(
+                potential_index, (), potential
             )
+            if order_resolved_backscatter:
+                # Backscattering is elastic on the way out (it carries no further
+                # plasmon loss), so every loss-order channel is reverse-propagated
+                # through the same slices independently.
+                for n in range(n_orders):
+                    _back_propagate_backscattered_waves(
+                        measurements[-1][(n,) + config_index],  # type: ignore
+                        forward_slices,
+                        multislice_step,
+                    )
+            else:
+                _back_propagate_backscattered_waves(
+                    measurements[-1][config_index],  # type: ignore
+                    forward_slices,
+                    multislice_step,
+                )
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
-        with waves._share_diffraction_pattern_fft():
+        if order_resolved:
+            _renormalize_order_waves(order_waves, plasmon_target_norm)
             measurements = [
-                detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                _stack_order_detections(
+                    order_waves, detector, potential.ensemble_shape, order_axis
+                )
                 for detector in detectors
             ]
+        else:
+            if plasmon_operator is not None and renormalize_plasmons:
+                waves = _renormalize_total_intensity(waves, plasmon_target_norm)
+            with waves._share_diffraction_pattern_fft():
+                measurements = [
+                    detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                    for detector in detectors
+                ]
 
     tqdm_pbar.close_if_exists()
 
@@ -1509,6 +1788,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         potential = validate_potential(potential)
 
+        # Static-structure plasmons: when the model requests phase-scramble
+        # repetitions over a potential without frozen phonons, expand it into a
+        # zero-displacement frozen-phonon ensemble so each repetition gets an
+        # independent scramble and the usual ensemble_mean forms the average.
+        plasmons = multislice_func_kwargs.get("plasmons")
+        if plasmons is not None and getattr(plasmons, "num_repetitions", None):
+            potential = plasmons.expand_static_potential(potential)
+
         self._potential = potential
 
         detectors = validate_detectors(detectors)
@@ -1547,7 +1834,17 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return self._detectors
 
     @property
+    def _plasmon_order_axis(self):
+        plasmons = self._multislice_func_kwargs.get("plasmons")
+        if plasmons is not None and plasmons.max_loss_order is not None:
+            return plasmons.order_axis
+        return None
+
+    @property
     def ensemble_axes_metadata(self):
+        order_axis = self._plasmon_order_axis
+        order_meta = [order_axis] if order_axis is not None else []
+
         ensemble_axes_metadata = self.potential.ensemble_axes_metadata
 
         if len(self.potential.exit_planes) > 1:
@@ -1556,6 +1853,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             exit_planes_metadata = []
 
         ensemble_axes_metadata = [
+            *order_meta,
             *ensemble_axes_metadata,
             *exit_planes_metadata,
         ]
@@ -1563,10 +1861,13 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
     @property
     def ensemble_shape(self):
+        order_axis = self._plasmon_order_axis
+        order_shape = (len(order_axis.values),) if order_axis is not None else ()
+
         ensemble_shape = self._potential.ensemble_shape
         if len(self._potential.exit_planes) > 1:
             ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
-        return ensemble_shape
+        return order_shape + ensemble_shape
 
     def _out_metadata(self, waves: Waves) -> tuple[dict, ...]:
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
@@ -1614,6 +1915,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     def _out_ensemble_axes_metadata(
         self, waves: Waves
     ) -> tuple[list[AxisMetadata], ...]:
+        order_axis = self._plasmon_order_axis
+        order_meta = [order_axis] if order_axis is not None else []
+
         if len(self.potential.exit_planes) > 1:
             potential_axes_metadata = self.potential.ensemble_axes_metadata + [
                 self.potential._get_exit_planes_axes_metadata()
@@ -1622,7 +1926,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             potential_axes_metadata = self.potential.ensemble_axes_metadata
 
         ensemble_axes_metadata = tuple(
-            potential_axes_metadata + detector._out_ensemble_axes_metadata(waves)[0]
+            order_meta
+            + potential_axes_metadata
+            + detector._out_ensemble_axes_metadata(waves)[0]
             for detector in self.detectors
         )
 
@@ -1631,6 +1937,10 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     @property
     def _default_ensemble_chunks(self) -> Chunks:
         chunks: tuple[int, ...] = ()
+
+        order_axis = self._plasmon_order_axis
+        if order_axis is not None:
+            chunks = chunks + (len(order_axis.values),)
 
         if len(self.potential.ensemble_shape) > 0:
             chunks = chunks + (1,) * len(self.potential.ensemble_shape)
@@ -1676,10 +1986,16 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
-        if self.potential.num_exit_planes > 1:
-            chunks = chunks[:-1]
+        # Strip the order-axis chunk (not a potential dimension).
+        order_axis = self._plasmon_order_axis
+        pot_chunks = chunks
+        if order_axis is not None:
+            pot_chunks = pot_chunks[1:]
 
-        args = self._potential._partition_args(chunks=chunks, lazy=lazy)
+        if self.potential.num_exit_planes > 1:
+            pot_chunks = pot_chunks[:-1]
+
+        args = self._potential._partition_args(chunks=pot_chunks, lazy=lazy)
 
         # Scattering sites resolved per configuration travel with the block of
         # the potential holding those configurations. See
@@ -1691,6 +2007,12 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         if len(self._potential.exit_planes) > 1:
             args = (args[0][..., None],)
+
+        # Prepend a trivial dimension for the order axis so blockwise
+        # broadcasting works (the order dimension is produced entirely
+        # inside multislice_and_detect, not partitioned here).
+        if order_axis is not None:
+            args = (args[0][None],) + args[1:]
 
         # Trailing zero-dimensional args, one per large kwarg: dask sees
         # these (unlike anything baked into the partial below) and keeps a
