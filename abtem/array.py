@@ -3280,8 +3280,12 @@ def _short(value: Any, width: int = 40) -> str:
 def _describe_field(key: str, a: Any, b: Any) -> str:
     """A field with its two differing values. Sequences are described by their length
     or by their first differing element, which a shortened printout would cut off."""
-    if isinstance(a, (tuple, list, np.ndarray)) and isinstance(
-        b, (tuple, list, np.ndarray)
+    sequences = (tuple, list, np.ndarray)
+    if (
+        isinstance(a, sequences)
+        and isinstance(b, sequences)
+        and np.ndim(a) > 0
+        and np.ndim(b) > 0
     ):
         if len(a) != len(b):
             return f"{key} of length {len(a)} vs {len(b)}"

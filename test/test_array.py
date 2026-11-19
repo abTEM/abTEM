@@ -604,6 +604,22 @@ def test_the_error_of_a_stack_names_the_differing_element_of_a_long_axis(
         stack((images, other), ("a", "b"))
 
 
+def test_the_error_of_a_stack_names_the_values_of_zero_dimensional_array_fields():
+    first, second = (
+        Images(
+            np.ones((3, 6, 5), dtype=np.float32),
+            sampling=0.2,
+            ensemble_axes_metadata=[
+                ScanAxis(label="x", sampling=np.array(sampling), offset=0.0)
+            ],
+        )
+        for sampling in (0.5, 0.6)
+    )
+
+    with pytest.raises(ValueError, match=re.escape("sampling 0.5 vs 0.6")):
+        stack((first, second), ("a", "b"))
+
+
 def test_the_error_of_a_stack_of_probes_names_the_differing_defocus():
     first, second = (
         abtem.Probe(
