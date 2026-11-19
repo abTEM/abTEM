@@ -42,13 +42,6 @@ if TYPE_CHECKING:
     pass
 
 
-Reader: Optional[Callable] = None
-try:
-    from gpaw.io import Reader  # noqa
-except ImportError:
-    Reader = None
-
-
 # Per-atom array naming, for each atom of a transformed or repeated structure, the
 # index of the atom of the original structure it is a copy of. A potential sets it
 # before transforming the atoms, so that per-atom displacement standard deviations
@@ -85,7 +78,8 @@ def _accepts_keyword(method: Callable, name: str) -> bool:
 
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
-        assert Reader is not None
+        from gpaw.io import Reader
+
         with Reader(calculator) as reader:
             atoms = read_atoms(reader.atoms)
     else:

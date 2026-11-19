@@ -2957,6 +2957,40 @@ def test_default_box_warns_once_when_it_strains_the_atoms():
         assert records == [], repetitions
 
 
+def test_default_box_without_a_whole_repetition_of_the_cell_is_not_checked():
+    # The default box of this skewed cell holds no whole repetition of it. The
+    # check of the box abTEM chose stays silent, and the potential is made.
+    atoms = Atoms("C", cell=[[0, 2, 0], [-1, -1, 1], [3, 0, -2]], pbc=True)
+    with pytest.raises(ValueError, match="no whole repetition"):
+        orthogonalize_cell(atoms)
+
+    _, records = _construct_chosen(abtem.Potential, atoms, **STRAIN_GRID)
+
+    assert records == []
+
+
+def test_default_box_check_lets_an_unrelated_error_through(monkeypatch):
+    # The check of the box abTEM chose is silent only for a box that holds no whole
+    # repetition of the cell, or for a singular one; any other error is raised.
+    def in_plane_frame(cell, plane="xy"):
+        raise ValueError("stand-in for an unrelated error")
+
+    monkeypatch.setattr(abtem.atoms, "_cell_in_plane_frame", in_plane_frame)
+    with pytest.raises(ValueError, match="stand-in"):
+        abtem.Potential(_bn((3, 1, 1)), **STRAIN_GRID)
+
+
+@pytest.mark.parametrize("structure", [graphene, mx2])
+def test_default_box_of_a_cell_without_a_third_vector_is_reported_by_the_build(
+    structure,
+):
+    # the cell of graphene() and mx2() has no vacuum, so its third vector is zero:
+    # the potential is made, and building it reports the cell
+    potential = abtem.Potential(structure(), gpts=16)
+    with pytest.raises(RuntimeError, match="non-zero length"):
+        potential.build(lazy=False)
+
+
 @ignore_strain_warning
 def test_non_periodic_default_box_is_silent():
     for repetitions in STRAINED:

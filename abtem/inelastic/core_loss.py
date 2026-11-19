@@ -1040,7 +1040,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         super()._replace_array(array)
         self._derive_from_array()
 
-    def from_array_and_metadata(self, array, metadata):
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     def local_potential(self, max_angle=None, space="reciprocal"):

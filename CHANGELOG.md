@@ -277,9 +277,53 @@ Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
+- The `mps` extra requires torch 2.14 (was 2.4). On torch 2.10 to 2.13, Metal has no `linalg.eigh`, and an FFT over
+  an axis before the last four (such as `gaussian_source_size` of a scan with a further ensemble axis) aborts the
+  process. Selecting the `mps` device with an older torch already installed now raises a `RuntimeError` asking for
+  an upgrade, instead of aborting later; upgrade with `pip install -U torch`
 
 Bugfixes:
 
+- When an installed CuPy, pyFFTW, mkl_fft or PyTorch fails to import, the error raised on using it says that the
+  package "could not be imported" and carries the original import error, where it said the package was not
+  installed. A CuPy that fails to import warns at `import abtem` when the device is `"gpu"` (once, not twice), a
+  plain `ImportError` from mkl_fft no longer makes `import abtem` fail whichever FFT library is configured, and the
+  message of a missing FFT library now has the space it lacked. The error of `GPAWPotential` without a usable GPAW
+  carries the import error. `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`, and the
+  interactive `show`, which failed with an `AttributeError`, raise the import error of a missing or broken GPAW or
+  ipywidgets itself. In `abtem.ebsd` the errors of a missing spglib or h5py carry the import error, and an EBSD
+  reference pattern or an EMsoft master pattern made without an importable spglib warns or raises that spglib "could
+  not be imported", with the cause, where it said spglib was not installed.
+  `abtem.visualize.widgets.ipywidgets_not_installed` and `abtem.inelastic.phonons.Reader`, which abTEM did not use,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- `slider_from_axes_metadata` starts a slider at the coordinate nearest a `default_value` given as a plain Python
+  number (it started at the first item), and builds range sliders over axes whose coordinates are Python floats (it
+  raised `TypeError`). An index slider given a `default_value` that is not one number starts at the first item for
+  every axis length ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- An eager build of a `GPAWPotential` from a `.gpw` path raises the error of reading the file instead of
+  `TypeError: Delayed objects are immutable` ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors raised while registering the configuration plugin on dask workers, or inside the scatter-add of an
+  infinite projection, reach the caller unchanged instead of being replaced by an unrelated error. The fallbacks
+  for `distributed` without `Client.register_plugin` and CuPy without `ufunc.at`, which the dependencies exclude,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors that used to be absorbed reach the caller: a `NotImplementedError` raised inside an override of a scan's
+  `_get_weights` (the weights were dropped), an error of the symmetry search of an EBSD reference pattern other than
+  spglib finding no symmetry (the pattern was built with the symmetry unknown), and an error of the strain check of a
+  default box other than a box with no whole repetition or a cell without a third vector (the check was skipped)
+  ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- abTEM warns once, where the configuration is loaded, about a section of keys that a configuration file or an
+  environment variable sets to a value (for example `diagnostics: true` or `ABTEM_DIAGNOSTICS=1`); every key in it
+  reads its default, as before, but did so silently ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- A NumPy array works as an operand of a device array on the Metal (MPS) device, on either side of the arithmetic,
+  comparison and bitwise operators (not `//`, which device arrays do not support). The host array is moved onto the
+  device first, so the device side wins: a float64 host operand is narrowed to the device's float32, and a dtype Metal
+  lacks (`uint8`, `int16`, `float16`) raises a `RuntimeError`, also with the `cpu` torch device.
+  `device_array == host_array` raised "Expected all tensors to be on the same device", and with a host array, `!=`,
+  `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` raised a `TypeError`. The in-place operators (`+=`, `-=`, `*=`, `/=`)
+  take a host array now and update the array in place and in float32; with the `cpu` torch device they rebound the
+  tensor, and could turn it float64. The tensor methods a device array forwards (`take`, `clip`, ...) take one too.
+  This surfaced as `Images == Images` between a host and a device object failing in one operand order
+  ([PR #691](https://github.com/abTEM/abTEM/pull/691))
 - `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
   more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
   returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
@@ -779,7 +823,10 @@ Bugfixes:
   judged it by the generic rule and skipped any check the object's class adds (the slice index of
   `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
   `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
-  unequal the other, and is unequal both ways, as the two objects are on their own
+  unequal the other, and is unequal both ways, as the two objects are on their own. An error that the held
+  object's comparison raises (`TypeError`, `ValueError`, `KeyError`) escapes `==` and `!=` when the object is an
+  attribute itself; held in a list, tuple or dict it still makes the holder unequal, and a lazy comparison is
+  still deferred
 - `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
   in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
   `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
@@ -857,6 +904,35 @@ Bugfixes:
   `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
   NumPy, Metal and float64 CuPy are unchanged
   ([PR #680](https://github.com/abTEM/abTEM/pull/680))
+- `set_ensemble_axes_metadata` raises when the new axis does not fit the array (a `RuntimeError` for an ordinal axis
+  of the wrong length) or contradicts its energy (a `ValueError`), and leaves the object's axes unchanged. It no
+  longer writes into an axes list the object shares with its caller or with other objects, so a list read from
+  `ensemble_axes_metadata` before the call keeps the old axes
+    - **Behaviour change:** the call returned without an error and without changing anything for an axis of the
+      wrong length, and installed a contradicting `EnergyAxis`
+- `from_zarr` builds an object from the axes and metadata the file stores, and falls back to the stored constructor
+  arguments only for the classes that cannot be built that way. A file whose axes do not fit its array raises
+  instead of loading with other axes, and an error inside `from_array_and_metadata` is no longer hidden. Files
+  written by abTEM 1.0.10 and 1.0.11 load to the same objects as before
+- `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
+  per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
+  limit; every other error, an insufficient driver included, raises on every call
+- A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
+  where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
+  returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
+  `TypeError`
+- The GPU chunk and batch size estimates raise a CUDA error from their memory probe, where they fell back to
+  `dask.chunk-size-gpu`. They still use that setting when CuPy is not installed or sees no device
+- `natural_neighbor_weights` falls back to nearest-parent weights only for degenerate (collinear or coincident)
+  parent beams; any other error from the triangulation is raised
+- `shrink_cell` works under `python -O`
+    - **Behaviour change:** an `Atoms` object without atoms raises `ValueError`, where it returned an empty
+      `Atoms` with a zero cell (and did not return under `python -O`)
+- The Miller-index labels of an indexed diffraction-pattern plot delegate only the methods of matplotlib's
+  `Annotation`: `hasattr`, `getattr` with a default and `copy.deepcopy` work on them, and any other name raises
+  `AttributeError`
+- The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
+  location), where it reported a convergence failure for any assertion
 
 Documentation:
 

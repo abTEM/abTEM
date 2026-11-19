@@ -102,16 +102,16 @@ def _conventional_cell(
 
     try:
         import spglib
-    except ImportError:
+    except ImportError as error:
         if space_group is None:
             raise ValueError(
-                "the space group could not be determined because spglib is not "
-                "installed; pass space_group=... explicitly or install spglib"
-            ) from None
+                "the space group could not be determined because spglib could not "
+                "be imported; pass space_group=... explicitly or install spglib"
+            ) from error
         warnings.warn(
-            "spglib is not installed, so the cell is written as given rather "
-            "than in the conventional setting of the space group; this may "
-            "disagree with the space group number recorded alongside it"
+            f"spglib could not be imported ({error}), so the cell is written as "
+            "given rather than in the conventional setting of the space group; "
+            "this may disagree with the space group number recorded alongside it"
         )
         lattice = np.asarray(atoms.cell[:], dtype=float)
         return (
@@ -245,11 +245,11 @@ def write_emsoft_master_pattern(
     """
     try:
         import h5py  # type: ignore[import-untyped]
-    except ImportError:
+    except ImportError as error:
         raise ImportError(
             "writing EMsoft master patterns requires h5py; install it with "
             "'pip install h5py', or install abtem[ebsd]"
-        ) from None
+        ) from error
 
     if pattern.ensemble_shape != ():
         raise ValueError(
