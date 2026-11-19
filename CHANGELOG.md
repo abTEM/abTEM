@@ -946,10 +946,12 @@ Bugfixes:
       and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
       `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes
       (`np.ix_`), or any index array of more than one dimension on one, raises `IndexError`.
-- **Behaviour change:** `abtem.stack` and `abtem.concatenate` raise a `ValueError` naming the first axis that differs
-  when the members have different axes (another part of a scan, a different offset or sampling, a reversed scan),
-  except the axis `concatenate` joins. They gave every member the axes of the first one, so the others silently
-  got its coordinates. The `RuntimeError` of `concatenate` for an axis that cannot be joined now carries a message
+- **Behaviour change:** `abtem.stack` and `abtem.concatenate` raise a `ValueError` when the members have a different
+  number of axes (naming both numbers) or different axes (another part of a scan, a different offset or sampling, a
+  reversed scan), except the axis `concatenate` joins. The message names the first differing axis, the fields that
+  differ and both values (for example `offset 0.25 vs 2.25`). They gave every member the axes of the first one, so
+  the others silently got its coordinates. The `RuntimeError` of `concatenate` for an axis that cannot be joined now
+  carries a message
 - `get_items(index, keepdims=True)` with a negative integer index returns the member counted from the end of the axis,
   and an index out of range raises `IndexError`. It returned an empty array and an empty axis
 - `LinearAxis[i]` raises `TypeError` for a negative integer instead of returning an axis with the wrong offset
@@ -957,8 +959,8 @@ Bugfixes:
   (`numpy.take` is implemented), and `PolarMeasurements.to_image_ensemble` works on an eager measurement
   (`numpy.moveaxis` is implemented)
 - **Behaviour change:** `DiffractionPatterns.index_diffraction_spots` raises a `ValueError` for orientation matrices
-  with more ensemble axes than the patterns. It failed with an `AssertionError` or an error of dask, except for an
-  extra axis of length 1 on an eager pattern without ensemble axes, which was indexed
+  with more ensemble axes than the patterns, unless the extra leading axes have length 1: those are dropped, for
+  eager and lazy patterns alike. It failed with an `AssertionError` or an error of dask
 
 Documentation:
 
