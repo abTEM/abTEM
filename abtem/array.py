@@ -17,6 +17,7 @@ from typing import (
     Any,
     Callable,
     Generator,
+    Iterator,
     Optional,
     Self,
     Sequence,
@@ -1174,18 +1175,31 @@ def _validate_array_items(
             )
         )
 
-    if keepdims:
-        items = tuple(
-            slice(item, item + 1) if isinstance(item, int) else item for item in items
-        )
-
     if any(isinstance(item, (type(...),)) for item in items):
         raise NotImplementedError
 
     if len(tuple(item for item in items if item is not None)) > len(shape):
         raise _TooManyIndicesError("too many indices for array")
 
+    if keepdims:
+        lengths = iter(shape)
+        items = tuple(_keep_dimension(item, lengths) for item in items)
+
     return items
+
+
+def _keep_dimension(item: ArrayItemType, lengths: Iterator[int]) -> ArrayItemType:
+    """The slice of length one selecting the integer `item` of the axis whose length
+    `lengths` yields next. `None` indexes no axis."""
+    if item is None:
+        return item
+
+    length = next(lengths)
+    if isinstance(item, int):
+        i = range(length)[item]
+        return slice(i, i + 1)
+
+    return item
 
 
 class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -2008,8 +2022,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        indexed_array : ArrayObject or subclass of ArrayObject
-            The indexed array object.
+        kwargs : dict
+            The keyword arguments of the constructor of the indexed array object.
         """
         items = _validate_array_items(
             items, shape=self.ensemble_shape, keepdims=keepdims

@@ -1078,6 +1078,74 @@ def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
 
 
 @devices
+@pytest.mark.parametrize(
+    "items, expected",
+    [
+        ((-1, -2), (slice(2, 3), slice(3, 4))),
+        ((2, 3), (slice(2, 3), slice(3, 4))),
+        ((-1, -1), (slice(2, 3), slice(4, 5))),
+        ((-1, slice(None)), (slice(2, 3), slice(None))),
+    ],
+)
+def test_get_items_with_keepdims_keeps_a_negative_integer_as_a_length_one_axis(
+    items, expected, device
+):
+    """A negative integer selects the member counted from the end, and the axes have
+    different lengths so that an index resolved against the wrong one differs."""
+    host = np.arange(3 * 5 * 2 * 2.0).reshape(3, 5, 2, 2)
+    axes = [
+        OrdinalAxis(label="a", values=(10, 11, 12)),
+        OrdinalAxis(label="b", values=(0, 1, 2, 3, 4)),
+    ]
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=axes
+    )
+
+    kwargs = images.get_items(items, keepdims=True)
+
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[expected])
+    for new_axis, axis, item in zip(kwargs["ensemble_axes_metadata"], axes, expected):
+        assert new_axis.values == axis.values[item]
+
+
+@devices
+def test_get_items_with_keepdims_and_a_new_axis_resolves_against_the_indexed_axis(
+    device,
+):
+    """`None` adds an axis of the array without consuming an ensemble axis, so the
+    integer after it is counted against the first ensemble axis."""
+    host = np.arange(3 * 5 * 2 * 2.0).reshape(3, 5, 2, 2)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=(10, 11, 12)),
+            OrdinalAxis(label="b", values=(0, 1, 2, 3, 4)),
+        ],
+    )
+
+    kwargs = images.get_items((None, -1), keepdims=True)
+
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[None, 2:3])
+
+
+@pytest.mark.parametrize("item", [3, -4])
+def test_get_items_with_keepdims_raises_an_index_error_out_of_range(item):
+    # the error is raised before any array work, so the device does not matter
+    images = Images(
+        np.zeros((3, 5, 2, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1, 2)),
+            OrdinalAxis(values=(0, 1, 2, 3, 4)),
+        ],
+    )
+
+    with pytest.raises(IndexError):
+        images.get_items(item, keepdims=True)
+
+
+@devices
 def test_a_decreasing_index_array_on_a_scan_axis_reverses_it(device):
     """Evenly spaced decreasing members keep a scan axis, with the first selected
     position as offset and a negative sampling; uneven ones list their coordinates."""
