@@ -266,7 +266,8 @@ def _visible_gpu_count(cupy_module) -> int:
 
 def ensure_cuda_cluster():
     """
-    Start a dask-cuda cluster spanning all visible GPUs and return its client.
+    Start a dask-cuda cluster spanning all visible GPUs, or the ones listed in the
+    configuration option ``dask.multi-gpu-devices``, and return its client.
 
     The cluster assigns one worker process to each GPU, allowing dask to distribute
     computations across all of them. It is created once per process and reused on
@@ -304,16 +305,6 @@ def ensure_cuda_cluster():
     from distributed.system import MEMORY_LIMIT
 
     cluster_kwargs: dict = {}
-    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
-    if n_gpus > 0:
-        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
-
-    # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
-    # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
-    # workloads.
-    rmm_pool = _config_get("dask.multi-gpu-rmm-pool", None)
-    if rmm_pool:
-        cluster_kwargs["rmm_pool_size"] = rmm_pool
 
     # Optional subset of GPUs to span, as a list of device indices or a
     # comma-separated string. By default the cluster spans all visible GPUs.
@@ -322,6 +313,19 @@ def ensure_cuda_cluster():
         if not isinstance(devices, str):
             devices = ",".join(str(d) for d in devices)
         cluster_kwargs["CUDA_VISIBLE_DEVICES"] = devices
+
+    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
+    if n_gpus > 0:
+        # One worker per spanned GPU.
+        n_workers = len(devices.split(",")) if devices else n_gpus
+        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_workers)
+
+    # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
+    # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
+    # workloads.
+    rmm_pool = _config_get("dask.multi-gpu-rmm-pool", None)
+    if rmm_pool:
+        cluster_kwargs["rmm_pool_size"] = rmm_pool
 
     try:
         _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
@@ -343,7 +347,7 @@ def ensure_cuda_cluster():
 
     logger.info(
         "dask.multi-gpu: started a dask-cuda LocalCUDACluster; computations "
-        "will be distributed with one worker per visible GPU."
+        "will be distributed with one worker per spanned GPU."
     )
 
     return _cuda_cluster_client

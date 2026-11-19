@@ -234,6 +234,19 @@ def test_ensure_cuda_cluster_gives_each_worker_a_share_of_the_memory(
     assert captured["memory_limit"] == int(0.85 * MEMORY_LIMIT / n_gpus)
 
 
+@pytest.mark.parametrize(
+    "devices, n_workers", [([0, 1], 2), ("0,2,3", 3), ((1,), 1)], ids=str
+)
+def test_ensure_cuda_cluster_divides_the_memory_among_the_listed_devices(
+    monkeypatch, devices, n_workers
+):
+    from distributed.system import MEMORY_LIMIT
+
+    with abtem.config.set({"dask.multi-gpu-devices": devices}):
+        captured = _start_cuda_cluster(monkeypatch, _fake_cupy(lambda: 4))
+    assert captured["memory_limit"] == int(0.85 * MEMORY_LIMIT / n_workers)
+
+
 def _no_device_count():
     raise CUDARuntimeErrorStandIn(*NO_DEVICE_ERROR)
 
