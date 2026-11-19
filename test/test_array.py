@@ -1167,19 +1167,8 @@ _LINEAR_AXIS_ITEMS = [
 @pytest.mark.parametrize("axis", _linear_axes(), ids=_linear_axis_id)
 @pytest.mark.parametrize("item, step, spacing", _LINEAR_AXIS_ITEMS)
 def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
-    axis, item, step, spacing, lazy, device, request
+    axis, item, step, spacing, lazy, device
 ):
-    # dask gathers members from several chunks (of 4, below) through numpy.take
-    chunks_spanned = len(set(np.arange(9)[item] // 4))
-    if lazy and device == "mps" and step is None and chunks_spanned > 1:
-        request.applymarker(
-            pytest.mark.xfail(
-                raises=TypeError,
-                strict=True,
-                reason="dask gathers members from several chunks through "
-                "numpy.take, which torch lacks (#689)",
-            )
-        )
     host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
     images = Images(
         copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]

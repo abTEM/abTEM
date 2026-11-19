@@ -15,7 +15,6 @@ from utils import (
     devices,
     gpu,
     lazy_params,
-    xfail_lazy_torch_index_array,
 )
 
 import abtem
@@ -1482,9 +1481,8 @@ def test_auto_multislice_batch_of_an_integrating_detector_ignores_the_exit_plane
 )
 @pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
 def test_a_transform_of_reversed_waves_keeps_their_order_and_axes(
-    transform, item, increasing, lazy, device, request
+    transform, item, increasing, lazy, device
 ):
-    xfail_lazy_torch_index_array(request, device, lazy, item)
     waves = _scanned_waves(device, lazy)
 
     result = transform(waves[item])
@@ -1638,9 +1636,8 @@ def test_multislice_of_reversed_waves_follows_the_detector_mix(
 @devices
 @pytest.mark.parametrize("item, increasing", _SCAN_7_BY_5)
 def test_multislice_of_reversed_waves_follows_the_indexing(
-    item, increasing, lazy, device, request
+    item, increasing, lazy, device
 ):
-    xfail_lazy_torch_index_array(request, device, lazy, item)
     setup = _scan_setup(device, lazy)
 
     _assert_multislice_of_reversed_waves(

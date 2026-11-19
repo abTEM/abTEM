@@ -11,7 +11,6 @@ from utils import (
     gpu,
     lazy_params,
     to_host_array,
-    xfail_lazy_torch_index_array,
 )
 
 import abtem
@@ -1512,9 +1511,8 @@ def _host(measurement):
 )
 @pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
 def test_a_detector_reduces_reversed_scanned_waves_to_the_images_in_order(
-    detector, item, increasing, lazy, device, request
+    detector, item, increasing, lazy, device
 ):
-    xfail_lazy_torch_index_array(request, device, lazy, item)
     waves = _scanned_waves(device, lazy)
 
     reversed_images = detector.detect(waves[item])
@@ -1553,9 +1551,8 @@ def test_a_detector_reduces_a_reversed_line_scan_to_the_line_profile_in_order(
 )
 @pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
 def test_a_detector_keeps_the_order_of_reversed_scanned_waves_a_reduction_restores_it(
-    detector, reduction, item, increasing, lazy, device, request
+    detector, reduction, item, increasing, lazy, device
 ):
-    xfail_lazy_torch_index_array(request, device, lazy, item)
     waves = _scanned_waves(device, lazy)
 
     kept = detector.detect(waves[item])

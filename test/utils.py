@@ -296,26 +296,6 @@ devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
 
-def xfail_lazy_torch_index_array(request, device, lazy, item):
-    """Mark a test strictly xfail where a lazy array on Metal is indexed by an index
-    array along an axis of several chunks: dask gathers the members through
-    numpy.take, which torch lacks (#689). `item` is the index of the test."""
-    items = item if isinstance(item, tuple) else (item,)
-    if (
-        lazy
-        and device == "mps"
-        and any(isinstance(i, (list, np.ndarray)) for i in items)
-    ):
-        request.applymarker(
-            pytest.mark.xfail(
-                raises=TypeError,
-                strict=True,
-                reason="dask gathers members from several chunks through "
-                "numpy.take, which torch lacks (#689)",
-            )
-        )
-
-
 def float64_devices(function):
     """Parametrize a test over `device` and run it in double precision with the
     numpy FFT, which the comparisons at 1e-10 of the maximum need (the

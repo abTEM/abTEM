@@ -349,6 +349,29 @@ def test_diag_and_fill_diagonal_match_numpy():
     assert np.array_equal(asnumpy(on_device), expected)
 
 
+@pytest.mark.parametrize(
+    "indices, axis",
+    [
+        ([0, 2], 0),
+        ([3, -1, 0], 1),
+        ([[0, 1], [4, -5]], -1),
+        (np.array([1, 0, 0], dtype=np.uint8), 2),
+        (2, 1),
+        ([7, -12, 3], None),
+    ],
+)
+def test_take_matches_numpy(indices, axis):
+    """The axes differ in length, so an index resolved against the wrong one differs."""
+    xp = get_array_module("mps")
+    array = np.arange(60, dtype=np.float32).reshape(3, 4, 5)
+    on_device = copy_to_device(array, "mps")
+
+    result = np.take(on_device, indices, axis=axis)
+
+    assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(result), np.take(array, indices, axis=axis))
+
+
 def test_flip_and_broadcasting_match_numpy():
     xp = get_array_module("mps")
     array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)

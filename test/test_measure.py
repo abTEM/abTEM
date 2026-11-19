@@ -29,7 +29,6 @@ from utils import (
     gpu,
     lazy_params,
     requires_gpu,
-    xfail_lazy_torch_index_array,
 )
 
 import abtem
@@ -186,7 +185,6 @@ _REDUCTIONS = {
 def test_a_reversed_scan_reduces_to_the_images_of_the_same_positions_in_order(
     item, increasing, reduction, lazy, device, request
 ):
-    xfail_lazy_torch_index_array(request, device, lazy, item)
     if device == "mps" and not lazy and reduction is _REDUCTIONS["to_image_ensemble"]:
         request.applymarker(
             pytest.mark.xfail(
