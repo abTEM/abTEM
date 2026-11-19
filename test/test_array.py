@@ -1,4 +1,5 @@
 import os
+import re
 from numbers import Number
 
 import ase
@@ -570,19 +571,49 @@ def test_the_error_of_a_stack_names_the_types_of_axes_of_different_classes():
         stack((images, other), ("a", "b"))
 
 
-def test_the_error_of_a_stack_says_when_the_differing_field_cannot_be_determined():
-    class UnequalAxis(ScanAxis):
-        def __eq__(self, other):
-            return False
+_NUMBERS = tuple(np.linspace(0, 4.9, 50))
+_LETTERS = tuple("ab" * 24) + ("c", "c")
 
-    images = _scanned_images("cpu", False)
-    other = images.copy()
-    axis = UnequalAxis(label="x", sampling=0.5, offset=0.25)
-    images._ensemble_axes_metadata[0] = axis
-    other._ensemble_axes_metadata[0] = axis.copy()
 
-    with pytest.raises(ValueError, match="could not be determined"):
+@pytest.mark.parametrize(
+    "values, other_values, field",
+    [
+        # differing only at the last of many elements, which a shortened printout of
+        # the whole tuple would cut off
+        (_NUMBERS, _NUMBERS[:-1] + (5.0,), "values[49] 4.9 vs 5.0"),
+        (_NUMBERS, _NUMBERS[:-1] + (5.0, 6.0), "values of length 50 vs 51"),
+        # elements that are not numbers
+        (_LETTERS, _LETTERS[:-1] + ("d",), "values[49] c vs d"),
+    ],
+)
+def test_the_error_of_a_stack_names_the_differing_element_of_a_long_axis(
+    values, other_values, field
+):
+    images = Images(
+        np.ones((50, 6, 5), dtype=np.float32),
+        sampling=0.2,
+        ensemble_axes_metadata=[OrdinalAxis(label="t", values=values)],
+    )
+    other = Images(
+        np.ones((len(other_values), 6, 5), dtype=np.float32),
+        sampling=0.2,
+        ensemble_axes_metadata=[OrdinalAxis(label="t", values=other_values)],
+    )
+
+    with pytest.raises(ValueError, match=re.escape(field)):
         stack((images, other), ("a", "b"))
+
+
+def test_the_error_of_a_stack_of_probes_names_the_differing_defocus():
+    first, second = (
+        abtem.Probe(
+            energy=100e3, semiangle_cutoff=20, gpts=32, extent=10, defocus=defocus
+        ).build()
+        for defocus in (np.linspace(0, 100, 3), np.linspace(0, 200, 3))
+    )
+
+    with pytest.raises(ValueError, match=re.escape("values[1] -50.0 vs -100.0")):
+        stack((first, second))
 
 
 def _images_with_axes_of_the_base_as_ensemble_axes(device, lazy):

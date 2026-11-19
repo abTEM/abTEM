@@ -3277,18 +3277,38 @@ def _short(value: Any, width: int = 40) -> str:
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
+def _describe_field(key: str, a: Any, b: Any) -> str:
+    """A field with its two differing values. Sequences are described by their length
+    or by their first differing element, which a shortened printout would cut off."""
+    if isinstance(a, (tuple, list, np.ndarray)) and isinstance(
+        b, (tuple, list, np.ndarray)
+    ):
+        if len(a) != len(b):
+            return f"{key} of length {len(a)} vs {len(b)}"
+
+        for i, (x, y) in enumerate(zip(a, b)):
+            try:
+                differs = not np.allclose(x, y)
+            except TypeError:  # elements that are not numbers
+                differs = bool(x != y)
+            if differs:
+                x, y = (v.item() if isinstance(v, np.generic) else v for v in (x, y))
+                return f"{key}[{i}] {_short(x)} vs {_short(y)}"
+
+    return f"{key} {_short(a)} vs {_short(b)}"
+
+
 def _differing_fields(a: AxisMetadata, b: AxisMetadata) -> str:
     """The fields in which two axes differ, each with both values. A field differs by
     the rule of the axes' equality."""
     if type(a) is not type(b):
         return f"type {type(a).__name__} vs {type(b).__name__}"
 
-    fields = [
-        f"{key} {_short(a.__dict__[key])} vs {_short(b.__dict__[key])}"
+    return ", ".join(
+        _describe_field(key, a.__dict__[key], b.__dict__[key])
         for key in a.__dict__
         if not safe_equality(a, b, exclude=tuple(k for k in a.__dict__ if k != key))
-    ]
-    return ", ".join(fields) or "in a way that could not be determined"
+    )
 
 
 def _check_same_axes(
