@@ -953,14 +953,20 @@ Bugfixes:
   the others silently got its coordinates. The `RuntimeError` of `concatenate` for an axis that cannot be joined now
   carries a message
 - `get_items(index, keepdims=True)` with a negative integer index returns the member counted from the end of the axis,
-  and an index out of range raises `IndexError`. It returned an empty array and an empty axis
+  and an index out of range raises `IndexError`. It returned an empty array and an empty axis. A numpy integer index
+  (`np.int64(2)`) keeps a length-1 axis like an `int`; it returned an array without the ensemble axis
 - `LinearAxis[i]` raises `TypeError` for a negative integer instead of returning an axis with the wrong offset
 - Lazy arrays on the Metal (torch) backend can be indexed with a list or a boolean mask along a chunked axis
   (`numpy.take` is implemented), and `PolarMeasurements.to_image_ensemble` works on an eager measurement
   (`numpy.moveaxis` is implemented)
+- `DiffractionPatterns.index_diffraction_spots` drops extra leading axes of length 1 of the orientation matrices
+  beyond the ensemble axes of the patterns, for eager and lazy patterns alike. Lazy patterns failed with an error of
+  dask for any extra axis. Eager patterns were indexed with some of these matrices and raised an `AssertionError`
+  for others, and patterns of ensemble shape `(4, 3)` with matrices of ensemble shape `(1, 4, 1)` were indexed with
+  the wrong matrices (9 of 12 members); they now equal the `(4, 1)` call
 - **Behaviour change:** `DiffractionPatterns.index_diffraction_spots` raises a `ValueError` for orientation matrices
-  with more ensemble axes than the patterns, unless the extra leading axes have length 1: those are dropped, for
-  eager and lazy patterns alike. It failed with an `AssertionError` or an error of dask
+  with extra axes longer than 1, and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape
+  `(3,)` with matrices of ensemble shape `(3, 1)`, or `(4, 3)` with `(4, 1, 1)`, were indexed with the right matrices
 
 Documentation:
 
