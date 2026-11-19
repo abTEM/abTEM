@@ -102,6 +102,12 @@ def test_is_gpu_dask_client_rejects_real_cpu_cluster():
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture
+def no_gpu(monkeypatch):
+    """No CuPy, so the cluster tests do not probe the machine's own driver."""
+    monkeypatch.setattr(backend, "cp", None)
+
+
 def _fake_dask_cuda_module():
     m = types.ModuleType("dask_cuda")
     # ensure_cuda_cluster may pass memory_limit=..., so accept **kwargs
@@ -109,7 +115,7 @@ def _fake_dask_cuda_module():
     return m
 
 
-def test_ensure_cuda_cluster_memoizes(monkeypatch):
+def test_ensure_cuda_cluster_memoizes(monkeypatch, no_gpu):
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)
     monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_module())
     created = []
@@ -126,7 +132,7 @@ def test_ensure_cuda_cluster_memoizes(monkeypatch):
     assert len(created) == 1  # created once, then reused
 
 
-def test_ensure_cuda_cluster_recreates_when_dead(monkeypatch):
+def test_ensure_cuda_cluster_recreates_when_dead(monkeypatch, no_gpu):
     monkeypatch.setattr(backend, "_cuda_cluster_client", mock.Mock(status="closed"))
     monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_module())
     created = []
@@ -159,7 +165,7 @@ def _fake_dask_cuda_capturing(captured):
     return m
 
 
-def test_ensure_cuda_cluster_forwards_rmm_pool_and_devices(monkeypatch):
+def test_ensure_cuda_cluster_forwards_rmm_pool_and_devices(monkeypatch, no_gpu):
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)
     captured = {}
     monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_capturing(captured))
@@ -174,7 +180,7 @@ def test_ensure_cuda_cluster_forwards_rmm_pool_and_devices(monkeypatch):
     assert captured.get("CUDA_VISIBLE_DEVICES") == "0,2"
 
 
-def test_ensure_cuda_cluster_defaults_omit_optional_kwargs(monkeypatch):
+def test_ensure_cuda_cluster_defaults_omit_optional_kwargs(monkeypatch, no_gpu):
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)
     captured = {}
     monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_capturing(captured))
@@ -243,7 +249,7 @@ def test_ensure_cuda_cluster_without_a_device_leaves_worker_memory_to_dask_cuda(
     assert "memory_limit" not in _start_cuda_cluster(monkeypatch, cupy_stand_in)
 
 
-def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch):
+def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch, no_gpu):
     """The cryptic multiprocessing spawn error is translated into guidance."""
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)
 
@@ -260,7 +266,7 @@ def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch):
         backend.ensure_cuda_cluster()
 
 
-def test_ensure_cuda_cluster_reraises_other_runtime_errors(monkeypatch):
+def test_ensure_cuda_cluster_reraises_other_runtime_errors(monkeypatch, no_gpu):
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)
 
     def raise_other(self, **kwargs):
