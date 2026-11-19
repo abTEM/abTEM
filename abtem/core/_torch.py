@@ -1673,6 +1673,7 @@ _ARRAY_FUNCTIONS.update(
         np.broadcast_arrays: broadcast_arrays,
         np.flip: flip,
         np.take: take,
+        np.moveaxis: torch_numpy.moveaxis,
         np.ones_like: torch_numpy.ones_like,
         np.empty_like: torch_numpy.empty_like,
         np.sum: torch_numpy.sum,

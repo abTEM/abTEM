@@ -183,16 +183,8 @@ _REDUCTIONS = {
 @pytest.mark.parametrize("reduction", _REDUCTIONS.values(), ids=_REDUCTIONS.keys())
 @pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
 def test_a_reversed_scan_reduces_to_the_images_of_the_same_positions_in_order(
-    item, increasing, reduction, lazy, device, request
+    item, increasing, reduction, lazy, device
 ):
-    if device == "mps" and not lazy and reduction is _REDUCTIONS["to_image_ensemble"]:
-        request.applymarker(
-            pytest.mark.xfail(
-                raises=TypeError,
-                strict=True,
-                reason="np.moveaxis has no implementation for a torch array",
-            )
-        )
     dp = _scanned_patterns(device, lazy)
 
     reversed_images = reduction(dp[item])

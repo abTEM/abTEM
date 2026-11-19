@@ -372,6 +372,18 @@ def test_take_matches_numpy(indices, axis):
     assert np.array_equal(asnumpy(result), np.take(array, indices, axis=axis))
 
 
+def test_moveaxis_matches_numpy():
+    xp = get_array_module("mps")
+    array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    on_device = copy_to_device(array, "mps")
+
+    for source, destination in [(0, -1), ((0, 1), (-2, -1)), (-1, 0)]:
+        result = np.moveaxis(on_device, source, destination)
+
+        assert get_array_module(result) is xp
+        assert np.array_equal(asnumpy(result), np.moveaxis(array, source, destination))
+
+
 def test_flip_and_broadcasting_match_numpy():
     xp = get_array_module("mps")
     array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
