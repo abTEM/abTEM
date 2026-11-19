@@ -32,7 +32,14 @@ try:
 except ImportError:
     pass
 
-pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+pytestmark = [
+    pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw"),
+    # These tests use small, fast cells below the inelastic delocalisation
+    # margin of their edges -- deliberate, since they check site placement,
+    # symmetry and route agreement, not cross-section convergence. Same
+    # convention as test/test_ionization.py.
+    pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning"),
+]
 
 devices = pytest.mark.parametrize("device", ["cpu", gpu])
 
