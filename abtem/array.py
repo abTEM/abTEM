@@ -3271,6 +3271,21 @@ def validate_axis_metadata(
     return validated_axis_metadata
 
 
+def _check_same_axes(
+    array_objects: Sequence[ArrayObject], joined: Optional[int] = None
+) -> None:
+    """Raise a ValueError naming the first axis, other than `joined`, along which an
+    array object has axis metadata different from the first one's."""
+    first = array_objects[0].axes_metadata
+    for i, other in enumerate(array_objects[1:], start=1):
+        for j, (a, b) in enumerate(zip(first, other.axes_metadata)):
+            if j != joined and a != b:
+                raise ValueError(
+                    f"array objects 0 and {i} have different axes along axis {j} "
+                    f"'{a.label}'"
+                )
+
+
 def stack(
     arrays: Sequence[ArrayObjectType],
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
@@ -3293,6 +3308,12 @@ def stack(
     -------
     array_object : ArrayObject
         The stacked array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes of the array objects differ, since the stacked array object has
+        one set of axes for all of them.
     """
 
     # if not all(isinstance(array, ArrayObject) for array in arrays):
@@ -3302,6 +3323,7 @@ def stack(
     assert axis >= 0
 
     axis_metadata = validate_axis_metadata(axis_metadata)
+    _check_same_axes(arrays)
 
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
@@ -3314,7 +3336,8 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     arrays : sequence of array objects
         Each abTEM array object must have the same type and shape, except in the
         dimension corresponding to axis. The axis metadata along the concatenated
-        axis must be compatible for concatenation.
+        axis must be compatible for concatenation, and that along every other axis
+        must be equal.
     axis : int, optional
         The axis along which the arrays will be joined. Default is 0.
 
@@ -3322,7 +3345,16 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     -------
     array_object : ArrayObject
         The concatenated array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes other than the concatenated one differ between the array objects.
+    RuntimeError
+        If the axis metadata along the concatenated axis cannot be concatenated.
     """
+
+    _check_same_axes(arrays, joined=axis % len(arrays[0].axes_metadata))
 
     xp = get_array_module(arrays[0].array)
 

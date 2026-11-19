@@ -490,6 +490,143 @@ def test_concatenate_matches_its_parts(data, has_array, lazy, device):
     )
 
 
+def _scanned_images(device, lazy, x_offset=0.25, y_offset=-0.2, n=(8, 9)):
+    """Images over a scan whose axes have different lengths (8 and 9)."""
+    host = np.arange(np.prod(n) * 6 * 5, dtype=np.float32).reshape(n + (6, 5))
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5, offset=x_offset),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "other_kwargs, differing_axis",
+    [
+        ({"x_offset": 2.25}, 0),
+        ({"y_offset": 0.2}, 1),
+    ],
+)
+def test_stack_raises_for_members_with_different_axes(
+    other_kwargs, differing_axis, lazy, device
+):
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, **other_kwargs)
+
+    with pytest.raises(ValueError, match=f"axis {differing_axis}"):
+        stack((first, second), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_the_two_halves_of_a_scan(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((images[:4], images[4:]), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_a_reversed_scan_and_its_original(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((images[::-1], images), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_stack_of_members_with_identical_axes_keeps_them(lazy, device):
+    first = _scanned_images(device, lazy)
+    second = _distinct_twin(first)
+
+    stacked = stack((first, second), ("a", "b"))
+
+    assert stacked.ensemble_axes_metadata[1:] == first.ensemble_axes_metadata
+    for i, member in enumerate((first, second)):
+        np.testing.assert_array_equal(
+            asnumpy(stacked[i].compute().array), asnumpy(member.compute().array)
+        )
+
+
+@lazy_params
+def test_stack_of_indexed_diffraction_patterns_raises_for_members_with_different_axes(
+    lazy,
+):
+    """`IndexedDiffractionPatterns` has a `_stack` of its own."""
+    # only the axes metadata is compared, so the device does not matter
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((4, 17, 21)).astype(np.float32),
+        sampling=0.5,
+        metadata={"energy": 100e3},
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5, offset=0.25)],
+    )
+    if lazy:
+        patterns = patterns.ensure_lazy()
+    indexed = patterns.index_diffraction_spots(cell=4.0)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((indexed[:2], indexed[2:]), ("a", "b"))
+
+    stacked = stack((indexed[:2], indexed[:2].copy()), ("a", "b"))
+    assert stacked.shape[:2] == (2, 2)
+
+
+def _ordinal_scanned_images(device, lazy, n_a, y_offset=-0.2):
+    host = np.ones((n_a, 9, 6, 5), dtype=np.float32)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=tuple(range(n_a))),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+@lazy_params
+@devices
+def test_concatenate_raises_for_members_with_different_axes_besides_the_joined_one(
+    lazy, device
+):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2, y_offset=0.2)
+
+    with pytest.raises(ValueError, match="axis 1 'y'"):
+        concatenate((first, second), axis=0)
+
+
+@lazy_params
+@devices
+def test_concatenate_of_members_with_identical_other_axes_joins_them(lazy, device):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2)
+
+    joined = concatenate((first, second), axis=0)
+
+    assert joined.shape == (5, 9, 6, 5)
+    assert joined.ensemble_axes_metadata[0].values == (0, 1, 2, 0, 1)
+
+
+@pytest.mark.parametrize("axis", [0, -4])
+def test_concatenate_raises_with_a_message_for_a_joined_axis_that_cannot_be_joined(
+    axis,
+):
+    # the error is raised before any array work, so the device does not matter
+    images = _scanned_images("cpu", False)
+
+    with pytest.raises(RuntimeError, match="along the ScanAxis 'x'"):
+        concatenate((images[:4], images[4:]), axis=axis)
+
+
 # @given(data=st.data())
 # def test_ensemble_blocks(data):
 #     array_object = data.draw(random_array_object(lazy=True))

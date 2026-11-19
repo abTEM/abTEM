@@ -87,6 +87,21 @@ def test_linear_axis_getitem_rejects_unsupported_types():
         axis[np.array([0, 2, 3])]
 
 
+def test_concatenating_an_axis_that_cannot_be_joined_names_it():
+    axis = LinearAxis(label="a", _concatenate=False)
+
+    with pytest.raises(RuntimeError, match="along the LinearAxis 'a'"):
+        axis.concatenate(axis.copy())
+
+
+def test_concatenating_axes_with_other_parameters_names_them():
+    axis = OrdinalAxis(label="a", values=(1, 2))
+    other = OrdinalAxis(label="b", values=(3, 4))
+
+    with pytest.raises(RuntimeError, match="OrdinalAxis 'a' with the OrdinalAxis 'b'"):
+        axis.concatenate(other)
+
+
 def test_linear_axis_to_blocks_partitions_offset_per_chunk():
     """The regression this file exists for: partitioning a LinearAxis into
     multiple dask chunks must give each chunk its own, chunk-local offset --
