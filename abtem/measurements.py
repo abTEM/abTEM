@@ -4366,8 +4366,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Orientation matrices used for indexing the diffraction spots. The shape of
             the orientation matrices, without the last two axes, must broadcast to the
             ensemble shape of the diffraction patterns: each axis has length 1 or the
-            length of that ensemble axis, and there are no more axes than ensemble
-            axes. Each pattern is indexed with its own matrix.
+            length of that ensemble axis. Extra leading axes of length 1 beyond the
+            ensemble axes are dropped; longer ones raise an error. Each pattern is
+            indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -4396,20 +4397,26 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        # each pattern is indexed with one matrix: the matrices have no more axes
-        # than the ensemble, and an axis of them is either 1 or as long as the
-        # matching ensemble axis
+        # each pattern is indexed with one matrix: leading axes of length 1 beyond
+        # the ensemble are dropped, and an axis of the remaining ensemble shape is
+        # either 1 or as long as the matching ensemble axis
         if orientation_matrices is not None:
-            matrices_shape = orientation_matrices.shape[:-2]
-            if len(matrices_shape) > len(self.ensemble_shape):
-                raise ValueError(
-                    "The orientation matrices have more ensemble axes than the "
-                    "diffraction patterns: the ensemble shape of the matrices is "
-                    f"{matrices_shape}, that of the patterns is {self.ensemble_shape}."
-                )
+            n_extra = orientation_matrices.ndim - 2 - len(self.ensemble_shape)
+            if n_extra > 0:
+                if any(n != 1 for n in orientation_matrices.shape[:n_extra]):
+                    raise ValueError(
+                        "The orientation matrices have more ensemble axes than the "
+                        "diffraction patterns, and the extra leading axes are not of "
+                        "length 1: the ensemble shape of the matrices is "
+                        f"{orientation_matrices.shape[:-2]}, that of the patterns is "
+                        f"{self.ensemble_shape}."
+                    )
+                orientation_matrices = orientation_matrices[(0,) * n_extra]
             if any(
                 m not in (1, n)
-                for n, m in zip(self.ensemble_shape[::-1], matrices_shape[::-1])
+                for n, m in zip(
+                    self.ensemble_shape[::-1], orientation_matrices.shape[-3::-1]
+                )
             ):
                 raise ValueError(
                     "Every axis of the orientation matrices' ensemble shape must have"
