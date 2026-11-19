@@ -525,6 +525,100 @@ def test_stack_raises_for_members_with_different_axes(
 
 @lazy_params
 @devices
+@pytest.mark.parametrize(
+    "other_kwargs, fields",
+    [
+        ({"x_offset": 2.25}, ["offset 0.25 vs 2.25"]),
+        ({"y_offset": 0.2}, ["offset -0.2 vs 0.2"]),
+    ],
+)
+def test_the_error_of_a_stack_names_the_differing_field_and_both_values(
+    other_kwargs, fields, lazy, device
+):
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, **other_kwargs)
+
+    with pytest.raises(ValueError) as error:
+        stack((first, second), ("a", "b"))
+
+    for field in fields:
+        assert field in str(error.value)
+    assert "sampling" not in str(error.value)
+
+
+@lazy_params
+@devices
+def test_the_error_of_a_stack_names_the_sampling_of_a_reversed_scan(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError) as error:
+        stack((images[::-1], images), ("a", "b"))
+
+    message = str(error.value)
+    assert "sampling -0.5 vs 0.5" in message
+    assert "offset 3.75 vs 0.25" in message
+
+
+def test_the_error_of_a_stack_names_the_types_of_axes_of_different_classes():
+    images = _scanned_images("cpu", False)
+    other = images.copy()
+    other._ensemble_axes_metadata[0] = RealSpaceAxis(
+        label="x", sampling=0.5, offset=0.25
+    )
+
+    with pytest.raises(ValueError, match="type ScanAxis vs RealSpaceAxis"):
+        stack((images, other), ("a", "b"))
+
+
+def test_the_error_of_a_stack_says_when_the_differing_field_cannot_be_determined():
+    class UnequalAxis(ScanAxis):
+        def __eq__(self, other):
+            return False
+
+    images = _scanned_images("cpu", False)
+    other = images.copy()
+    axis = UnequalAxis(label="x", sampling=0.5, offset=0.25)
+    images._ensemble_axes_metadata[0] = axis
+    other._ensemble_axes_metadata[0] = axis.copy()
+
+    with pytest.raises(ValueError, match="could not be determined"):
+        stack((images, other), ("a", "b"))
+
+
+def _images_with_axes_of_the_base_as_ensemble_axes(device, lazy):
+    """Images whose leading axes are those of `_ordinal_scanned_images`'s, and more:
+    the members have a different number of axes while the first ones agree."""
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    leading = [axis.copy() for axis in first.axes_metadata]
+    host = np.ones((3, 9, 6, 5, 6, 5), dtype=np.float32)
+    second = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=leading,
+    )
+    return first, (second.ensure_lazy() if lazy else second)
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_members_with_a_different_number_of_axes(lazy, device):
+    first, second = _images_with_axes_of_the_base_as_ensemble_axes(device, lazy)
+
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        stack((first, second), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_concatenate_raises_for_members_with_a_different_number_of_axes(lazy, device):
+    first, second = _images_with_axes_of_the_base_as_ensemble_axes(device, lazy)
+
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        concatenate((first, second), axis=0)
+
+
+@lazy_params
+@devices
 def test_stack_raises_for_the_two_halves_of_a_scan(lazy, device):
     images = _scanned_images(device, lazy)
 
