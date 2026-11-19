@@ -69,6 +69,17 @@ def test_linear_axis_getitem_rejects_unsupported_slices(bad_item):
         axis[bad_item]
 
 
+@pytest.mark.parametrize("axis_cls", [LinearAxis, RealSpaceAxis, ScanAxis])
+@pytest.mark.parametrize("bad_item", [-1, -3, np.int64(-2), (-1,)])
+def test_linear_axis_getitem_rejects_a_negative_integer(axis_cls, bad_item):
+    """The axis does not know its length, so a negative integer cannot be resolved
+    to a position."""
+    axis = axis_cls(offset=10.0, sampling=0.5)
+
+    with pytest.raises(TypeError, match="negative"):
+        axis[bad_item]
+
+
 def test_linear_axis_getitem_rejects_unsupported_types():
     axis = RealSpaceAxis(offset=10.0, sampling=0.5)
 

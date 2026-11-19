@@ -263,9 +263,9 @@ class LinearAxis(AxisMetadata):
 
         Only a non-negative integer or a non-empty slice with a step of one and a
         non-negative start -- which is all `iterate_chunk_ranges` chunk
-        partitioning ever produces -- is represented. Any other slice, and any
-        index that is neither an integer nor a slice, raises TypeError rather than
-        silently returning an axis with the wrong offset.
+        partitioning ever produces -- is represented. Any other slice, a negative
+        integer, and any index that is neither an integer nor a slice, raises
+        TypeError rather than silently returning an axis with the wrong offset.
         Indexing an array object goes through `_index_ensemble_axis`, which
         knows the length of the axis and so also handles strides, negative
         bounds, reversed slices and index arrays.
@@ -287,6 +287,11 @@ class LinearAxis(AxisMetadata):
             item = item[0]
 
         if isinstance(item, Number):
+            if item < 0:
+                raise TypeError(
+                    f"{type(self).__name__} does not support a negative "
+                    f"integer, got {item}"
+                )
             start = item
         elif isinstance(item, slice):
             if item.step not in (None, 1):
