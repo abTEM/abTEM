@@ -961,12 +961,14 @@ Bugfixes:
   (`numpy.moveaxis` is implemented)
 - `DiffractionPatterns.index_diffraction_spots` drops extra leading axes of length 1 of the orientation matrices
   beyond the ensemble axes of the patterns, for eager and lazy patterns alike. Lazy patterns failed with an error of
-  dask for any extra axis. Eager patterns were indexed with some of these matrices and raised an `AssertionError`
-  for others, and patterns of ensemble shape `(4, 3)` with matrices of ensemble shape `(1, 4, 1)` were indexed with
-  the wrong matrices (9 of 12 members); they now equal the `(4, 1)` call
+  dask for these, and eager patterns were indexed with some of these matrices and raised an `AssertionError` for
+  others. Patterns of ensemble shape `(4, 3)` with matrices of ensemble shape `(1, 4, 1)` were indexed with the wrong
+  matrices (9 of 12 members); they now equal the `(4, 1)` call
 - **Behaviour change:** `DiffractionPatterns.index_diffraction_spots` raises a `ValueError` for orientation matrices
-  with extra axes longer than 1, and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape
-  `(3,)` with matrices of ensemble shape `(3, 1)`, or `(4, 3)` with `(4, 1, 1)`, were indexed with the right matrices
+  with extra axes longer than 1 (an `AssertionError` for eager patterns and an error of dask for lazy ones before),
+  and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape `(3,)` with matrices of
+  ensemble shape `(3, 1)` or `(3, 1, 1)`, and `(4, 3)` with `(4, 1, 1)` or `(4, 1, 1, 1)`, for example, were indexed
+  with the right matrices
 
 Documentation:
 
