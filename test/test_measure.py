@@ -3,6 +3,7 @@ import functools
 import math
 import operator
 import pickle
+import re
 import sys
 import types
 import warnings
@@ -3844,6 +3845,45 @@ class TestDiffractionPatternsIndexOrientations:
             patterns.index_diffraction_spots(
                 cell=4.0, orientation_matrices=self._matrices(3, seed=1)
             )
+
+    @lazy_params
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape",
+        [
+            # one ensemble axis against two, the extra one leading
+            ((3,), (1, 3)),
+            ((3,), (2, 3)),
+            # two against three
+            ((4, 3), (1, 4, 3)),
+            # no ensemble axis against one of length 1
+            ((), (1,)),
+        ],
+    )
+    def test_more_matrix_axes_than_ensemble_axes_raises(
+        self, lazy, ensemble_shape, matrices_ensemble_shape
+    ):
+        """The leading axes of the matrices, beyond the ensemble axes of the
+        patterns, are not compared with any axis, whatever their length."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n))) for n in ensemble_shape
+            ],
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        matrices = self._matrices(int(np.prod(matrices_ensemble_shape)), seed=1)
+        matrices = matrices.reshape(matrices_ensemble_shape + (3, 3))
+
+        message = (
+            "more ensemble axes than the diffraction patterns: the ensemble shape of "
+            f"the matrices is {matrices_ensemble_shape}, that of the patterns is "
+            f"{ensemble_shape}"
+        )
+        with pytest.raises(ValueError, match=re.escape(message)):
+            patterns.index_diffraction_spots(cell=4.0, orientation_matrices=matrices)
 
 
 # ---------------------------------------------------------------------------
