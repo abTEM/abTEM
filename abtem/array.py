@@ -1195,7 +1195,7 @@ def _keep_dimension(item: ArrayItemType, lengths: Iterator[int]) -> ArrayItemTyp
         return item
 
     length = next(lengths)
-    if isinstance(item, int):
+    if isinstance(item, (int, np.integer)):
         i = range(length)[item]
         return slice(i, i + 1)
 

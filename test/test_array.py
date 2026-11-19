@@ -1255,6 +1255,40 @@ def test_get_items_with_keepdims_and_a_new_axis_resolves_against_the_indexed_axi
     np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[None, 2:3])
 
 
+@devices
+@pytest.mark.parametrize("item, start", [(0, 0), (2, 2), (-1, 2), (-3, 0)])
+def test_get_items_with_keepdims_keeps_a_numpy_integer_as_a_length_one_axis(
+    item, start, device
+):
+    host = np.arange(3 * 2 * 2.0).reshape(3, 2, 2)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="a", values=(10, 11, 12))],
+    )
+
+    kwargs = images.get_items((np.int64(item),), keepdims=True)
+
+    assert kwargs["array"].shape == (1, 2, 2)
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[start : start + 1])
+    assert kwargs["ensemble_axes_metadata"][0].values == (10 + start,)
+
+
+@pytest.mark.parametrize("item", [np.int64(3), np.int32(-4)])
+def test_get_items_with_keepdims_raises_for_a_numpy_integer_out_of_range(
+    item,
+):
+    # the error is raised before any array work, so the device does not matter
+    images = Images(
+        np.zeros((3, 2, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+
+    with pytest.raises(IndexError):
+        images.get_items((item,), keepdims=True)
+
+
 @pytest.mark.parametrize("item", [3, -4])
 def test_get_items_with_keepdims_raises_an_index_error_out_of_range(item):
     # the error is raised before any array work, so the device does not matter
