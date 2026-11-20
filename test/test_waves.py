@@ -1679,6 +1679,71 @@ def test_multislice_of_a_reversed_line_scan(mix, lazy, device):
 
 @lazy_params
 @devices
+def test_multislice_of_reversed_waves_returns_the_list_type_of_increasing_waves(
+    lazy, device
+):
+    potential, waves = _scan_setup(device, lazy)
+    detectors = _DETECTOR_MIXES["annular+pixelated"]()
+
+    outputs = waves[_REVERSED].multislice(potential, detectors=detectors)
+
+    assert type(outputs) is type(waves.multislice(potential, detectors=detectors))
+    if lazy:
+        outputs.compute()
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detectors, kept",
+    [
+        # without a potential, the scan shifts the waves and puts its own axes
+        # before those of the waves
+        (None, (_FULL, _FULL, _REVERSED)),
+        (lambda: abtem.PixelatedDetector(max_angle=60), (_FULL, _FULL, _REVERSED)),
+        # the detector reduces the axes of the scan, the first scan axes, and
+        # leaves those of the waves as ensemble axes
+        (lambda: abtem.AnnularDetector(30, 60), (_REVERSED,)),
+    ],
+    ids=["shifted", "pixelated", "annular"],
+)
+def test_a_scan_of_reversed_waves_keeps_their_order(detectors, kept, lazy, device):
+    potential, waves = _scan_setup(device, lazy)
+    scan = abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 3), endpoint=False)
+
+    def scanned(waves):
+        if detectors is None:
+            return waves.scan(scan)
+        return waves.scan(scan, potential=potential, detectors=detectors())
+
+    _assert_outputs_match([scanned(waves[_REVERSED])], [scanned(waves)[kept]])
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detector, expected",
+    [
+        (lambda: abtem.PixelatedDetector(max_angle=60), lambda m: m[_REVERSED]),
+        # the detector reduces the reversed scan, the first one, to images in
+        # increasing order and leaves the second scan as it is
+        (lambda: abtem.AnnularDetector(30, 60), lambda m: m),
+    ],
+    ids=["pixelated", "annular"],
+)
+def test_detecting_reversed_waves_of_two_nested_scans(detector, expected, lazy, device):
+    _, waves = _scan_setup(device, lazy)
+    nested = waves.scan(
+        abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 3), endpoint=False)
+    )
+
+    _assert_outputs_match(
+        [detector().detect(nested[_REVERSED])], [expected(detector().detect(nested))]
+    )
+
+
+@lazy_params
+@devices
 @pytest.mark.parametrize("item", [_FULL, slice(1, 4), slice(None, None, 2)])
 def test_multislice_of_waves_in_increasing_order_is_unchanged_by_the_reversal_hook(
     item, lazy, device, monkeypatch

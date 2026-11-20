@@ -206,29 +206,23 @@ def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, .
     )
 
 
-def _scan_flip_index(
-    scan_axes: tuple[int, ...], flip: list[bool]
-) -> tuple[slice, ...] | None:
-    """The index that reverses the scan axes at the positions `scan_axes` for which
-    `flip` is true, or None if it is true for none. Scan axes are ensemble axes,
-    which come first, so their positions index the array object directly."""
-    flipped = {i for i, f in zip(scan_axes, flip, strict=True) if f}
-    if not flipped:
-        return None
-    return tuple(
-        slice(None, None, -1) if i in flipped else slice(None)
-        for i in range(max(flipped) + 1)
-    )
-
-
 def _increasing_scan_index(
     array_object: BaseMeasurements | BaseWaves,
 ) -> tuple[slice, ...] | None:
     """The index that puts every reversed scan axis (negative sampling) of
-    `array_object` back in increasing order, or None if none is reversed."""
-    scan_axes = _scan_axes(array_object)
-    return _scan_flip_index(
-        scan_axes, [array_object.axes_metadata[i].sampling < 0 for i in scan_axes]
+    `array_object` back in increasing order, or None if none is reversed. Scan axes
+    are ensemble axes, which come first, so their positions index the array object
+    directly."""
+    reversed_axes = {
+        i
+        for i in _scan_axes(array_object)
+        if array_object.axes_metadata[i].sampling < 0
+    }
+    if not reversed_axes:
+        return None
+    return tuple(
+        slice(None, None, -1) if i in reversed_axes else slice(None)
+        for i in range(max(reversed_axes) + 1)
     )
 
 
