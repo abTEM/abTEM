@@ -927,10 +927,12 @@ Bugfixes:
       a positive sampling, so `dp[::-1]` and `dp` give the same images: `integrate_radial`, `center_of_mass`,
       `integrated_center_of_mass`, `PolarMeasurements.integrate`, `differentials` and `to_image_ensemble`, and the
       detectors that reduce the scan of waves (`AnnularDetector` and the spectral detectors), `multislice` included.
-      When several detectors share one `multislice` of reversed waves, the scan of every output is in increasing
-      order if one of them reduces it, and in the reversed order of the waves otherwise. Operations that keep the
-      scan as ensemble axes (a `PixelatedDetector` alone, the source-size filters, `poisson_noise`) keep the reversed
-      order, and the filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring positions.
+      Every other output keeps the scan in the order it was indexed, whatever else the transform returns: the
+      detectors that keep the scan as ensemble axes (`PixelatedDetector`, `FlexibleAnnularDetector`,
+      `SegmentedDetector`, `WavesDetector`), alone or next to a reducing detector in one `multislice`, the transforms
+      of waves (`apply_ctf`, `multislice` exit waves), and the operations on measurements (the source-size filters,
+      `poisson_noise`). The filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring
+      positions.
       A reversed slice of another linear axis, and an index array on one, give a `NonLinearAxis` with the selected
       coordinates, and so do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with
       `fftshift=False` that does not select every member. On a scan axis, an index array whose members are evenly
