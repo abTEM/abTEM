@@ -249,13 +249,6 @@ def _scan_area_per_pixel(measurements):
         raise RuntimeError("Cannot infer pixel area from axes metadata.")
 
 
-def _scan_extent(measurement):
-    extent = ()
-    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
-        extent += (metadata.sampling * n,)
-    return extent
-
-
 def _array_module_fn(array, xp: ModuleType, name: str):
     """Return the array-module function ``name`` (e.g. ``"concatenate"``),
     routed through dask's own implementation whenever ``array`` is still a
