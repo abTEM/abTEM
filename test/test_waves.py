@@ -1593,19 +1593,28 @@ def _assert_outputs_match(outputs, expected_outputs):
 
 
 def _assert_multislice_of_reversed_waves(setup, detectors, item, increasing):
-    """The outputs of a multislice of reversed waves are those of the waves in
-    increasing order when one detector reduces the scan to the axes of images, which
-    puts every output of the multislice in order. Without one, the outputs keep the
-    reversed order of the waves."""
+    """Each output of a multislice of reversed waves that reduces the scan to the
+    axes of images or line profiles is that of the waves in increasing order; every
+    other output keeps the order of the indexed waves, whatever else the detector
+    list holds."""
     potential, waves = setup
-    reduces = any(isinstance(d, abtem.AnnularDetector) for d in detectors)
 
     outputs = _multislice(waves[item], potential, detectors)
 
-    if reduces:
-        expected = _multislice(waves[increasing], potential, detectors)
-    else:
-        expected = [m[item] for m in _multislice(waves, potential, detectors)]
+    expected = [
+        (
+            reduced
+            if isinstance(d, abtem.AnnularDetector)
+            # the multislice puts its own ensemble axes before those of the waves
+            else kept[(_FULL,) * (len(kept.ensemble_shape) - len(waves.ensemble_shape)) + item]
+        )
+        for d, reduced, kept in zip(
+            detectors,
+            _multislice(waves[increasing], potential, detectors),
+            _multislice(waves, potential, detectors),
+            strict=True,
+        )
+    ]
     _assert_outputs_match(outputs, expected)
 
 

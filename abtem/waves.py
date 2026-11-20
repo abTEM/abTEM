@@ -24,7 +24,6 @@ from abtem.core.axes import (
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
-    ScanAxis,
     ThicknessAxis,
 )
 from abtem.core.backend import (
@@ -62,7 +61,8 @@ from abtem.measurements import (
     DiffractionPatterns,
     Images,
     RealSpaceLineProfiles,
-    _increasing_scan_index,
+    _scan_axes,
+    _scan_flip_index,
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
@@ -729,9 +729,10 @@ class Waves(BaseWaves, ArrayObject):
         return device_name_from_array_module(get_array_module(self.array))
 
     def apply_transform(self, transform, max_batch: int | str = "auto"):
-        """Apply a transform to the waves. Reversed scan axes are put in increasing
-        order before a transform that reduces the scan; any other transform sees the
-        waves unchanged.
+        """Apply a transform to the waves. A scan with reversed axes is put in
+        increasing order for the transform; outputs that reduce the scan to images or
+        line profiles keep that order, and every other output gets the reversed order
+        back.
 
         Parameters
         ----------
@@ -749,21 +750,28 @@ class Waves(BaseWaves, ArrayObject):
             The transformed waves, or the measurements or waves the transform
             produces.
         """
-        # A transform that reduces the scan to the base axes of its output (a
-        # detector giving images or line profiles) gets the scan in increasing
-        # order, as the reductions of measurements do. It is flipped once, here:
-        # a lazy block, and the per-block detection of a multislice, then see
-        # increasing axes.
-        index = _increasing_scan_index(self)
-        if index is not None and any(
-            isinstance(axis, ScanAxis)
-            for cls, axes in zip(
-                transform._out_type(self), transform._out_axes_metadata(self)
-            )
-            for axis in axes[len(axes) - cls._base_dims :]
-        ):
-            return self[index].apply_transform(transform, max_batch)
-        return super().apply_transform(transform, max_batch)
+        # The transform runs on the scan in increasing order, flipped once here, so
+        # a lazy block and the per-block detection of a multislice see increasing
+        # axes. An output that reduces the scan to its base axes (images, line
+        # profiles) keeps that order; every output that keeps the scan as ensemble
+        # axes gets the reversed order back.
+        scan_axes = _scan_axes(self)
+        reversed_scan = [self.axes_metadata[i].sampling < 0 for i in scan_axes]
+        index = _scan_flip_index(scan_axes, reversed_scan)
+        if index is None:
+            return super().apply_transform(transform, max_batch)
+
+        outputs = self[index].apply_transform(transform, max_batch)
+
+        def restore(output):
+            scan_axes = _scan_axes(output)
+            if not scan_axes:
+                return output
+            return output[_scan_flip_index(scan_axes, reversed_scan)]
+
+        if isinstance(outputs, list):
+            return [restore(output) for output in outputs]
+        return restore(outputs)
 
     @property
     def base_tilt(self) -> tuple[float, float]:
