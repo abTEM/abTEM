@@ -38,9 +38,7 @@
 #   ABTEM_CI_CUPY_PKG  cupy package for the managed venv (default: cupy-cuda12x;
 #                      irrelevant when ABTEM_CI_VENV is set)
 #   ABTEM_CI_MODULES   space-separated environment modules to load, e.g.
-#                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none);
-#                      the run fails when this is set and the node has no
-#                      `module` command
+#                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none)
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
 #   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests
@@ -152,15 +150,9 @@ send_failure_mail() {
 
 fail() { record FAIL "$1"; send_failure_mail "$1"; echo "FAILED: $1"; exit 1; }
 
-# environment modules; a node without a module system has the libraries on
-# the loader path already, so asking for modules there is a configuration error
-if command -v module >/dev/null 2>&1; then
-    for m in ${ABTEM_CI_MODULES:-}; do
-        module load "$m" || fail "module load $m failed"
-    done
-elif [ -n "${ABTEM_CI_MODULES:-}" ]; then
-    fail "ABTEM_CI_MODULES is set but there is no module command"
-fi
+for m in ${ABTEM_CI_MODULES:-}; do
+    module load "$m" || fail "module load $m failed"
+done
 
 # --- repo --------------------------------------------------------------------
 if [ "${MODE}" != "in-place" ] && [ "${ABTEM_CI_OFFLINE:-0}" = 1 ]; then
@@ -291,7 +283,7 @@ except Exception:
         [ "${rc}" -ne 0 ] && SWEEP_RC=${rc}
         [ "${rc}" -ge 128 ] && ABORTED="${ABORTED} ${test_file}"
     done
-    SWEEP_NOTE="$(grep -cE '^(FAILED|ERROR) ' "${SWEEP_TALLY}") failed or errored tests${SKIP_NOTE}"
+    SWEEP_NOTE="$(grep -cE '^(FAILED|ERROR) test/' "${SWEEP_TALLY}") failed or errored tests${SKIP_NOTE}"
     if [ -n "${ABORTED}" ]; then
         echo "ABORTED (killed by a signal) in:${ABORTED}"
         SWEEP_NOTE="aborted in:${ABORTED}; ${SWEEP_NOTE}"
