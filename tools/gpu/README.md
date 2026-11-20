@@ -24,7 +24,7 @@ The first force-compiles the raw GPU kernels and compares them against the scipy
 tools/gpu/run_gpu_tests.sh
 ```
 
-The test dependencies come from the `test` dependency group (`uv pip install -e . --group test` or `pip install --group test .` with pip ≥ 25.1) plus a cupy matching your platform (`cupy-cuda12x`, or a ROCm build).
+On ROCm the second invocation differs; see [ROCm](#rocm) below. The test dependencies come from the `test` dependency group (`uv pip install -e . --group test` or `pip install --group test .` with pip ≥ 25.1) plus a cupy matching your platform (`cupy-cuda12x`, or a ROCm build).
 
 **Unattended / cron** (`ABTEM_CI_ROOT` enables managed mode: the script maintains its own clone and venv there, hard-tracking `origin/dev`, and self-heals if a scratch purge deletes them):
 
@@ -50,11 +50,22 @@ Example: weekly on NERSC Perlmutter via `scrontab -e` (times are local; `-q shar
 0 6 * * 1 ABTEM_CI_ROOT=$SCRATCH/abtem-gpu-ci ABTEM_CI_MODULES=cudatoolkit/12.9 ABTEM_CI_MAILTO=<you@example.org> $SCRATCH/abtem-gpu-ci/run_gpu_tests.sh
 ```
 
+`ABTEM_CI_MODULES` loads environment modules only where a module system exists (the `module` command); elsewhere it is ignored.
+
 (Copy the script itself somewhere stable first — in managed mode it clones the repo, so it cannot run from inside the clone it manages. Managed mode clones anonymously over HTTPS by default, since compute nodes often cannot use the SSH key that works on login nodes; set `ABTEM_CI_REPO_URL` for a private fork. On Perlmutter, note that `/global/common` is read-only from compute nodes: keep `ABTEM_CI_ROOT` on `$SCRATCH`.)
 
 **Reusing an existing venv** (e.g. a dev machine where cupy is a custom ROCm build): `ABTEM_CI_VENV=<venv>` activates it and installs nothing; the checkout under test is put on `PYTHONPATH`, so an editable abtem install in that venv is never re-pointed.
 
-**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. **NVIDIA/CUDA only** — abTEM's multi-GPU path is built on `dask-cuda`, which has no ROCm equivalent, so this flag does not apply on a ROCm machine. Setting it is a contract: the run **fails unless at least one multigpu test passes**, so an environment that cannot actually test multi-GPU (fewer than 2 visible GPUs, or `import dask_cuda` failing even though the package is installed) produces a red run rather than a silent all-skip. It requires a ≥ 2-GPU allocation (e.g. `--gpus 2` in the scrontab resources); managed mode installs `dask-cuda` (and its `cuda-bindings` dependency, from NVIDIA's package index) into its venv when the flag is set, while `ABTEM_CI_VENV` / in-place mode must already provide it. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT`; runs that do share a root are serialized by a lock (a run that starts while another is still holding the same `ABTEM_CI_ROOT` skips that trigger rather than corrupting the shared clone).
+**Compute nodes without internet:** `ABTEM_CI_OFFLINE=1` (managed mode) tests the clone under `ABTEM_CI_ROOT` as it is: no clone, fetch or reset, and the branch tested is the one checked out there (the run fails if the clone does not exist). Update the clone from a node with internet access first. The dependency install still needs the network unless a populated package cache serves it or `ABTEM_CI_VENV` points at an existing environment, which skips all installs. In-place mode never touches git state, so the knob changes nothing there.
+
+**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. **NVIDIA/CUDA only** — abTEM's multi-GPU path is built on `dask-cuda`, which has no ROCm equivalent, so this flag does not apply on a ROCm machine. Setting it is a contract. A preflight first checks that `dask_cuda` imports and that at least 2 GPUs are visible; when it fails, the multi-GPU tests are not run and the run fails after the single-GPU sweep. The run then **fails** when pytest fails, when no multigpu test passes, or when any test of `test/test_multigpu.py` is skipped. One passing test is not enough: the multigpu test in `test/test_measure.py` needs only 2 GPUs, so with a broken `dask-cuda` import the run would otherwise end with one pass and six skips. Skips in other modules are ignored: they happen at collection time (for example the `gpaw` import skip in `test_gpaw_atom_solver_output.py`) and say nothing about the multi-GPU tests. The run needs a ≥ 2-GPU allocation (e.g. `--gpus 2` in the scrontab resources). Managed mode installs `dask-cuda` and `cuda-bindings>=12,<13` from PyPI into its venv when the flag is set (`dask-cuda` does not declare `cuda-bindings`, and fails at import without it; the 12.x line matches the default `cupy-cuda12x`), while `ABTEM_CI_VENV` / in-place mode must already provide them. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT`; runs that do share a root are serialized by a lock (a run that starts while another is still holding the same `ABTEM_CI_ROOT` skips that trigger rather than corrupting the shared clone).
+
+### ROCm
+
+On a ROCm GPU the script changes the second invocation:
+
+- **One pytest process per test file**, with `-rf` (failed tests are listed) and abort detection: a file whose process is killed by a signal (exit status ≥ 128, e.g. a GPU abort) is reported as aborted, costs only that file, and the other files still run and report their failures. `status.tsv` records the number of failed tests and the aborted files instead of one pytest tally.
+- **The GPU `ChargeDensityPotential` tests are skipped** (`-k "gpu and not (charge_density or chargedensity)"`). On a gfx1151 (Strix Halo) integrated GPU, building a `ChargeDensityPotential` on the GPU hangs the device until the driver resets it (MODE2 reset), which aborts the pytest process, so the rest of the sweep never runs, and can black out a display driven by the same GPU. Any GPU build triggers it, not only particular parameters; CUDA GPUs run these tests cleanly. `ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps the tests, for a ROCm GPU other than gfx1151.
 
 All knobs are documented in the header of `run_gpu_tests.sh`.
 
