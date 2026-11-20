@@ -10,8 +10,9 @@
 #      kernels and compare them against the scipy reference
 #   2. the full GPU-parameterized suite (excluding multi-GPU tests)
 #
-# On ROCm the second invocation runs one pytest process per test file and skips
-# the GPU ChargeDensityPotential tests (see ABTEM_CI_ROCM_CHARGE_DENSITY).
+# On ROCm the second invocation runs one pytest process per test file; on a
+# gfx1151 GPU it also skips the GPU ChargeDensityPotential tests (see
+# ABTEM_CI_ROCM_CHARGE_DENSITY).
 #
 # Modes
 # -----
@@ -38,8 +39,8 @@
 #                      irrelevant when ABTEM_CI_VENV is set)
 #   ABTEM_CI_MODULES   space-separated environment modules to load, e.g.
 #                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none);
-#                      loaded only where a module system exists (the `module`
-#                      command), ignored elsewhere
+#                      the run fails when this is set and the node has no
+#                      `module` command
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
 #   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests
@@ -48,11 +49,7 @@
 #                      this flag is not usable on a ROCm machine. This is a
 #                      contract: the run FAILS when pytest fails, when no
 #                      multigpu test passes, or when a test of
-#                      test/test_multigpu.py is skipped, so an environment that
-#                      cannot provide >= 2 GPUs plus a working dask-cuda import
-#                      gets a red run, not a silent all-skip (a multigpu test
-#                      in test/test_measure.py needs only 2 GPUs and passes
-#                      without dask-cuda, so one pass proves nothing). A
+#                      test/test_multigpu.py is skipped (see multigpu_gate). A
 #                      preflight checks that dask_cuda imports and that >= 2
 #                      GPUs are visible; when it fails, the multi-GPU tests are
 #                      not run and the run fails after the single-GPU sweep.
@@ -67,11 +64,14 @@
 #                      ABTEM_CI_ROOT as it is: no clone, fetch or reset, and the
 #                      branch tested is the one checked out there. For compute
 #                      nodes without internet access; the clone must already
-#                      exist, and the dependency install needs the network
-#                      unless ABTEM_CI_VENV is set. Ignored in in-place mode
+#                      exist, and uv installs from its cache only (UV_OFFLINE=1
+#                      unless set), so the install fails unless the cache holds
+#                      every package or ABTEM_CI_VENV is set. Ignored in
+#                      in-place mode
 #   ABTEM_CI_ROCM_CHARGE_DENSITY
-#                      set to 1 to keep the GPU ChargeDensityPotential tests on
-#                      ROCm (default: skipped there; see the sweep below)
+#                      set to 1 to keep the GPU ChargeDensityPotential tests on a
+#                      gfx1151 GPU or one of unknown architecture (default:
+#                      skipped there; see the sweep below)
 #
 # Exit status is non-zero when either test invocation fails. Each run appends
 # one line to status.tsv in the log directory:
@@ -152,18 +152,21 @@ send_failure_mail() {
 
 fail() { record FAIL "$1"; send_failure_mail "$1"; echo "FAILED: $1"; exit 1; }
 
-# environment modules only where a module system exists; elsewhere the
-# libraries are on the loader path already
+# environment modules; a node without a module system has the libraries on
+# the loader path already, so asking for modules there is a configuration error
 if command -v module >/dev/null 2>&1; then
     for m in ${ABTEM_CI_MODULES:-}; do
         module load "$m" || fail "module load $m failed"
     done
+elif [ -n "${ABTEM_CI_MODULES:-}" ]; then
+    fail "ABTEM_CI_MODULES is set but there is no module command"
 fi
 
 # --- repo --------------------------------------------------------------------
 if [ "${MODE}" != "in-place" ] && [ "${ABTEM_CI_OFFLINE:-0}" = 1 ]; then
     [ -d "${REPO}/.git" ] || fail "ABTEM_CI_OFFLINE=1 but ${REPO} is not a git checkout"
     cd "${REPO}" || fail "cd ${REPO} failed"
+    export UV_OFFLINE="${UV_OFFLINE:-1}"
     BRANCH="$(git rev-parse --abbrev-ref HEAD)"
     MODE="managed/${BRANCH}"
 elif [ "${MODE}" != "in-place" ]; then
@@ -195,11 +198,10 @@ elif [ "${MODE}" != "in-place" ]; then
     source "${VENV}/bin/activate"
     # One resolve pass over the union of all constraints, so a conflict fails
     # loudly here instead of being silently decided by whichever of two
-    # installs ran last. Multi-GPU adds dask-cuda and its cuda-bindings
-    # dependency (cuda-core does `from cuda import bindings`); dask-cuda does
-    # not pull cuda-bindings in, and dask-cuda 26.10.0 alone fails at import.
-    # The 12.x line matches the default cupy-cuda12x. The preflight below turns
-    # any remaining dask_cuda import failure into a red run.
+    # installs ran last. Multi-GPU adds dask-cuda and cuda-bindings (cuda-core
+    # does `from cuda import bindings`; dask-cuda does not declare it). The
+    # 12.x line matches the default cupy-cuda12x. The preflight below turns any
+    # remaining dask_cuda import failure into a red run.
     EXTRA_PKGS=()
     [ -n "${ABTEM_CI_MULTIGPU:-}" ] && EXTRA_PKGS=(dask-cuda "cuda-bindings>=12,<13")
     uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
@@ -233,7 +235,7 @@ fi
 # Each phase's pytest output is tee'd to its own tally file so status.tsv can
 # record a per-phase summary. Grepping the whole log for the last "N passed"
 # line instead would report only the small multi-GPU tally when
-# ABTEM_CI_MULTIGPU is set, hiding the ~540-test main sweep.
+# ABTEM_CI_MULTIGPU is set, hiding the main sweep.
 _tally() { grep -E '[0-9]+ (passed|failed|skipped|error)' "$1" 2>/dev/null | tail -1; }
 
 STENCIL_TALLY="${LOGS}/${STAMP}.stencil-tally"
@@ -249,33 +251,47 @@ echo "== full GPU sweep =="
 SWEEP_K="gpu"
 SWEEP_NOTE=""
 if python -c "import sys, cupy.cuda.runtime as r; sys.exit(0 if r.is_hip else 1)"; then
-    # On a gfx1151 (Strix Halo) integrated GPU, building a
-    # ChargeDensityPotential on the GPU hangs the device until the driver
+    # On a gfx1151 (Strix Halo) integrated GPU, building a repeated cell as a
+    # ChargeDensityPotential on the GPU has hung the device until the driver
     # resets it (MODE2 reset), which aborts the pytest process, so the rest of
     # the sweep never runs, and can black out a display driven by the same GPU.
-    # CUDA runs these cases cleanly. Any GPU build hangs, not only one case, so
-    # every test that builds one is skipped (by test name or by parametrisation
-    # id, hence both spellings). ABTEM_CI_ROCM_CHARGE_DENSITY=1 keeps them, for
-    # a ROCm GPU other than gfx1151.
-    if [ "${ABTEM_CI_ROCM_CHARGE_DENSITY:-0}" != 1 ]; then
-        SWEEP_K="gpu and not (charge_density or chargedensity)"
-        echo "ROCm: skipping the GPU ChargeDensityPotential tests"
-    fi
+    # Every test that builds one is skipped there (by test name or by
+    # parametrisation id, hence both spellings). An architecture that cannot be
+    # read counts as gfx1151, so a hang costs a skip rather than the sweep.
+    # ABTEM_CI_ROCM_CHARGE_DENSITY=1 keeps the tests.
+    ROCM_ARCH="$(python -c "
+import cupy.cuda.runtime as r
+try:
+    a = r.getDeviceProperties(0)['gcnArchName']
+    print(a.decode() if isinstance(a, bytes) else a)
+except Exception:
+    print('unknown')
+" 2>/dev/null)"
+    ROCM_ARCH="${ROCM_ARCH:-unknown}"
+    SKIP_NOTE=""
+    case "${ROCM_ARCH}" in
+        gfx1151* | unknown)
+            if [ "${ABTEM_CI_ROCM_CHARGE_DENSITY:-0}" != 1 ]; then
+                SWEEP_K="gpu and not (charge_density or chargedensity)"
+                SKIP_NOTE="; ChargeDensityPotential tests skipped"
+                echo "ROCm (${ROCM_ARCH}): skipping the GPU ChargeDensityPotential tests"
+            fi ;;
+    esac
     # One process per test file: a GPU abort (exit status >= 128, a signal)
     # then costs only its own file, and the other files still report their
-    # failures (-rf lists them).
+    # failures (-rfE lists failed and errored tests).
     SWEEP_RC=0
     ABORTED=""
     for test_file in test/test_*.py; do
         echo "== ${test_file} =="
-        python -m pytest "${test_file}" -q -rf -p no:cacheprovider \
+        python -m pytest "${test_file}" -q -rfE -p no:cacheprovider \
             -k "${SWEEP_K}" -m "not multigpu" | tee -a "${SWEEP_TALLY}"
         rc=${PIPESTATUS[0]}
         [ "${rc}" -eq 5 ] && continue  # no test selected in this file
         [ "${rc}" -ne 0 ] && SWEEP_RC=${rc}
         [ "${rc}" -ge 128 ] && ABORTED="${ABORTED} ${test_file}"
     done
-    SWEEP_NOTE="$(grep -c '^FAILED ' "${SWEEP_TALLY}") failed tests"
+    SWEEP_NOTE="$(grep -cE '^(FAILED|ERROR) ' "${SWEEP_TALLY}") failed or errored tests${SKIP_NOTE}"
     if [ -n "${ABORTED}" ]; then
         echo "ABORTED (killed by a signal) in:${ABORTED}"
         SWEEP_NOTE="aborted in:${ABORTED}; ${SWEEP_NOTE}"
@@ -289,9 +305,10 @@ fi
 # Gate for the multi-GPU run, from pytest's exit status and its output (-rs).
 # Exit status 0 also covers a run where requires_multigpu skipped everything
 # (no dask-cuda, too few GPUs), and the multigpu test of test/test_measure.py
-# needs only 2 GPUs, so a pass anywhere does not show that dask-cuda works:
-# require a pass and no skip in test/test_multigpu.py. Skips in other modules
-# are collection-time (a module that imports gpaw) and say nothing about the
+# needs only 2 GPUs, so a pass anywhere does not show that dask-cuda works: with
+# a broken dask-cuda import the run ends with one pass and six skips. Require a
+# pass and no skip in test/test_multigpu.py. Skips in other modules are
+# collection-time (a module that imports gpaw) and say nothing about the
 # multigpu tests. Prints the reason; returns pytest's status, or 1.
 multigpu_gate() {
     local rc="$1" out="$2"
