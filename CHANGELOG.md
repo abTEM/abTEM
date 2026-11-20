@@ -137,7 +137,7 @@ Features:
   without clone, fetch or reset, and installs from uv's cache only, for compute nodes without internet access. On ROCm
   it runs one pytest process per test file, reports the failed and errored tests and detects aborts. On a gfx1151
   integrated GPU, or one whose architecture cannot be read, it skips the GPU `ChargeDensityPotential` tests, whose
-  GPU build of a repeated cell has hung the device into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them)
+  GPU build of a repeated cell has hung the device into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them) ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Performance:
 
@@ -926,7 +926,7 @@ Bugfixes:
   `cuda-bindings>=12,<13` from PyPI, the line that matches `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from
   NVIDIA's package index.
   The multi-GPU run is enabled only by `ABTEM_CI_MULTIGPU=1`; other values, such as `0`, `yes` and `true`, which
-  enabled it before, no longer do
+  enabled it before, no longer do ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Documentation:
 
