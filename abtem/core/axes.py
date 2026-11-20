@@ -854,13 +854,15 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     # slice could express keeps a scan axis as the slice does
     if isinstance(axis, ScanAxis) and not isinstance(item, slice):
         indices = np.arange(n)[item]
-        if len(indices):
-            start = int(indices[0])
-            step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
-            stop = int(indices[-1]) + (1 if step > 0 else -1)
-            if step != 0 and np.array_equal(indices, np.arange(start, stop, step)):
-                # a stop of -1 would count from the end; None runs to the first member
-                item = slice(start, None if stop < 0 else stop, step)
+        step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
+        if len(indices) and step != 0:
+            run = range(int(indices[0]), int(indices[-1]) + step, step)
+            if np.array_equal(indices, run):
+                return dataclasses.replace(
+                    axis,
+                    offset=axis.offset + run.start * axis.sampling,
+                    sampling=axis.sampling * step,
+                )
 
     if isinstance(item, slice):
         indices = range(n)[item]
@@ -876,10 +878,12 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
             # the first member selected and its sampling is negative
             exact = indices.step > 0 or isinstance(axis, ScanAxis)
         if exact:
-            # an empty reversed range can start at -1
-            new_axis = axis[max(indices.start, 0) :]
-            new_axis.sampling = axis.sampling * indices.step
-            return new_axis
+            # an empty reversed range starts at the stop, which can be -1
+            return dataclasses.replace(
+                axis,
+                offset=axis.offset + max(indices.start, 0) * axis.sampling,
+                sampling=axis.sampling * indices.step,
+            )
 
     kwargs = {
         field.name: getattr(axis, field.name)
