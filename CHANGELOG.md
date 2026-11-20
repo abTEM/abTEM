@@ -134,10 +134,10 @@ Features:
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
 - The GPU test runner `tools/gpu/run_gpu_tests.sh` has `ABTEM_CI_OFFLINE=1`, which tests the managed clone as it is,
-  without clone, fetch or reset, for compute nodes without internet access. On ROCm it runs one pytest process per
-  test file, reports the failed tests and detects aborts, and skips the GPU `ChargeDensityPotential` tests, which hang
-  a gfx1151 integrated GPU into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them). Environment modules load
-  only where a module system exists
+  without clone, fetch or reset, and installs from uv's cache only, for compute nodes without internet access. On ROCm
+  it runs one pytest process per test file, reports the failed and errored tests and detects aborts. On a gfx1151
+  integrated GPU, or one whose architecture cannot be read, it skips the GPU `ChargeDensityPotential` tests, whose
+  construction has hung the device into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them)
 
 Performance:
 
@@ -919,11 +919,12 @@ Bugfixes:
   `AttributeError`
 - The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
   location), where it reported a convergence failure for any assertion
-- The multi-GPU run of `tools/gpu/run_gpu_tests.sh` (`ABTEM_CI_MULTIGPU`) fails when pytest fails, when no multigpu
-  test passes, or when a test of `test/test_multigpu.py` is skipped, where it passed on a single pass: the multigpu
-  test in `test/test_measure.py` needs only 2 GPUs, so a broken `dask-cuda` import ended green with one pass and six
-  skips. A preflight checks that `dask_cuda` imports and that 2 GPUs are visible, and the managed venv installs
-  `cuda-bindings>=12,<13` from PyPI, without which `dask-cuda` 26.10.0 fails at import
+- The multi-GPU run of `tools/gpu/run_gpu_tests.sh` (`ABTEM_CI_MULTIGPU`) also fails when a test of
+  `test/test_multigpu.py` is skipped, where a single pass anywhere was enough: the multigpu test in
+  `test/test_measure.py` needs only 2 GPUs, so a broken `dask-cuda` import ended green with one pass and six skips.
+  A preflight checks that `dask_cuda` imports and that 2 GPUs are visible, and the managed venv installs
+  `cuda-bindings>=12,<13` from PyPI, the line that matches `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from
+  NVIDIA's package index
 
 Documentation:
 
