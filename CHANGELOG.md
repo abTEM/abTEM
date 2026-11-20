@@ -927,7 +927,7 @@ Bugfixes:
   and that 2 GPUs are visible, and the managed venv installs `cuda-bindings>=12,<13` from PyPI, the line that matches
   `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
   `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
-  which enabled it before, fails the run at the start ([PR #708](https://github.com/abTEM/abTEM/pull/708))
+  fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Documentation:
 
