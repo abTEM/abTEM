@@ -1605,7 +1605,8 @@ def test_a_detector_applies_to_waves_in_increasing_order_as_to_any_array_object(
 )
 def test_apply_transform_of_reversed_waves_passes_max_batch_on(transform, monkeypatch):
     """A transform of reversed waves, whose output keeps the scan or reduces it,
-    reaches ArrayObject with the batch size given. The test is of the waves' own method, so it pins no device."""
+    reaches ArrayObject with the batch size given. The test is of the waves' own
+    method, so it pins no device."""
     calls = []
     apply_transform = ArrayObject.apply_transform
 

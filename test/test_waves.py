@@ -1606,7 +1606,9 @@ def _assert_multislice_of_reversed_waves(setup, detectors, item, increasing):
             reduced
             if isinstance(d, abtem.AnnularDetector)
             # the multislice puts its own ensemble axes before those of the waves
-            else kept[(_FULL,) * (len(kept.ensemble_shape) - len(waves.ensemble_shape)) + item]
+            else kept[
+                (_FULL,) * (len(kept.ensemble_shape) - len(waves.ensemble_shape)) + item
+            ]
         )
         for d, reduced, kept in zip(
             detectors,
