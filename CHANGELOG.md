@@ -932,7 +932,9 @@ Bugfixes:
       `SegmentedDetector`, `WavesDetector`), alone or next to a reducing detector in one `multislice`, the transforms
       of waves (`apply_ctf`, `multislice` exit waves), and the operations on measurements (the source-size filters,
       `poisson_noise`). The filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring
-      positions.
+      positions. A scan of waves that are already scanned (`Waves.scan`) puts its own positions in increasing order
+      and keeps the scan of the waves as it was indexed. A single position selected through a reversal
+      (`dp[::-1][:1]`, `dp[3:2:-1]`) has a positive sampling and is not a reversed scan.
       A reversed slice of another linear axis, and an index array on one, give a `NonLinearAxis` with the selected
       coordinates, and so do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with
       `fftshift=False` that does not select every member. On a scan axis, an index array whose members are evenly
