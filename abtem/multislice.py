@@ -771,6 +771,42 @@ class RealSpaceMultislice:
     tolerance: float = 1e-16
 
 
+def _uses_phase_scramble_mixing(potential) -> bool:
+    return getattr(potential, "mixing", None) == "phase_scramble"
+
+
+def _total_intensity(waves: Waves):
+    """The total intensity of every member of ``waves``, in double precision."""
+    xp = get_array_module(waves.device)
+    intensity = xp.abs(waves._array).astype(xp.float64) ** 2
+    return xp.sum(intensity, axis=(-2, -1), keepdims=True)
+
+
+def _rescale_total_intensity(waves: Waves, target) -> None:
+    """Rescale every member of ``waves`` in place to the total intensity ``target``.
+
+    The transmission functions of ``mixing="phase_scramble"`` are an average of
+    the pool's transmission functions with random phases, so they are not unitary,
+    and the intensity of the wave would grow or decay geometrically with depth.
+    Every step of the multislice is linear in the wave, so rescaling a member
+    after a slice changes only its overall intensity, which is held at the
+    incident one. The intensity a static potential loses beyond the antialiasing
+    aperture is therefore kept.
+    """
+    xp = get_array_module(waves.device)
+    total = xp.maximum(_total_intensity(waves), xp.finfo(xp.float64).tiny)
+    scale = xp.sqrt(target / total).astype(waves._array.dtype)
+    waves._array = waves._array * scale
+
+
+def _require_no_phase_scramble_mixing(potential, method: str) -> None:
+    if _uses_phase_scramble_mixing(potential):
+        raise NotImplementedError(
+            f"mixing='phase_scramble' is not supported by {method}; it is "
+            "supported by the multislice with FourierMultislice."
+        )
+
+
 def multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -847,6 +883,11 @@ def multislice_and_detect(
 
         # moved to MultisliceTransform
         # detectors = list(detectors) + [WavesDetector()]
+
+    if not isinstance(algorithm, FourierMultislice):
+        # the mixed slices are transmission functions, which only the Fourier
+        # step can apply
+        _require_no_phase_scramble_mixing(potential, "RealSpaceMultislice")
 
     if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
@@ -938,16 +979,25 @@ def multislice_and_detect(
         # back-propagation of its backscattered waves.
         forward_slices = []
 
-        # One stream of slices across the chunks: the last slice of a chunk
-        # looks ahead to the first slice of the next one, so only the exit
-        # face is stepped without a next slice.
-        potential_slices = (
-            potential_slice
-            for potential_chunk in potential_configuration.generate_chunked_slices(
-                chunk_size=potential_chunk_size
+        phase_scramble = _uses_phase_scramble_mixing(potential_configuration)
+        if phase_scramble:
+            # the mixed transmission functions depend on the energy, which the
+            # chunked slices are not given
+            incident_intensity = _total_intensity(waves)
+            potential_slices = potential_configuration.generate_slices(
+                energy=waves._valid_energy
             )
-            for potential_slice in potential_chunk.generate_slices()
-        )
+        else:
+            # One stream of slices across the chunks: the last slice of a chunk
+            # looks ahead to the first slice of the next one, so only the exit
+            # face is stepped without a next slice.
+            potential_slices = (
+                potential_slice
+                for potential_chunk in potential_configuration.generate_chunked_slices(
+                    chunk_size=potential_chunk_size
+                )
+                for potential_slice in potential_chunk.generate_slices()
+            )
 
         for potential_slice, next_slice in lookahead(potential_slices):
             if algorithm.expansion_scope == "full":
@@ -956,6 +1006,8 @@ def multislice_and_detect(
                 )
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
+            if phase_scramble:
+                _rescale_total_intensity(waves, incident_intensity)
             tqdm_pbar.update_if_exists(int(n_waves))
 
             if return_backscattered:
@@ -1117,6 +1169,8 @@ def transition_potential_multislice_and_detect(
 
     if _is_full_expansion_scope(algorithm):
         raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+
+    _require_no_phase_scramble_mixing(potential, "the core-loss multislice")
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
