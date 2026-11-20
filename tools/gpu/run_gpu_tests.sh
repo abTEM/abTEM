@@ -41,7 +41,7 @@
 #                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none)
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
-#   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests
+#   ABTEM_CI_MULTIGPU  set to 1 to also run the multigpu-marked tests
 #                      (default: off). NVIDIA/CUDA only: abTEM's multi-GPU path
 #                      is built on dask-cuda, which has no ROCm equivalent, so
 #                      this flag is not usable on a ROCm machine. This is a
@@ -195,7 +195,7 @@ elif [ "${MODE}" != "in-place" ]; then
     # 12.x line matches the default cupy-cuda12x. The preflight below turns any
     # remaining dask_cuda import failure into a red run.
     EXTRA_PKGS=()
-    [ -n "${ABTEM_CI_MULTIGPU:-}" ] && EXTRA_PKGS=(dask-cuda "cuda-bindings>=12,<13")
+    [ "${ABTEM_CI_MULTIGPU:-}" = 1 ] && EXTRA_PKGS=(dask-cuda "cuda-bindings>=12,<13")
     uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
         ${EXTRA_PKGS[@]+"${EXTRA_PKGS[@]}"} \
         || fail "dependency install failed"
@@ -214,8 +214,14 @@ EOF
 # A failed multi-GPU preflight fails the run at the end, after the single-GPU
 # sweep has run.
 MULTI_RC=0
-if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
-    python - <<'EOF' || { echo "ABTEM_CI_MULTIGPU needs dask-cuda and >= 2 GPUs"; MULTI_RC=1; }
+MULTI_NOTE=""
+preflight_failed() {
+    echo "ABTEM_CI_MULTIGPU needs dask-cuda and >= 2 GPUs"
+    MULTI_RC=1
+    MULTI_NOTE="preflight failed: needs dask-cuda and >= 2 GPUs"
+}
+if [ "${ABTEM_CI_MULTIGPU:-}" = 1 ]; then
+    python - <<'EOF' || preflight_failed
 import cupy, dask_cuda
 n = cupy.cuda.runtime.getDeviceCount()
 print("dask-cuda:", dask_cuda.__version__, "GPUs:", n)
@@ -227,7 +233,7 @@ fi
 # Each phase's pytest output is tee'd to its own tally file so status.tsv can
 # record a per-phase summary. Grepping the whole log for the last "N passed"
 # line instead would report only the small multi-GPU tally when
-# ABTEM_CI_MULTIGPU is set, hiding the main sweep.
+# ABTEM_CI_MULTIGPU=1, hiding the main sweep.
 _tally() { grep -E '[0-9]+ (passed|failed|skipped|error)' "$1" 2>/dev/null | tail -1; }
 
 STENCIL_TALLY="${LOGS}/${STAMP}.stencil-tally"
@@ -301,10 +307,11 @@ fi
 # a broken dask-cuda import the run ends with one pass and six skips. Require a
 # pass and no skip in test/test_multigpu.py. Skips in other modules are
 # collection-time (a module that imports gpaw) and say nothing about the
-# multigpu tests. Prints the reason; returns pytest's status, or 1.
+# multigpu tests. Prints the reason; returns pytest's status, or 1 (also for
+# status 5, nothing collected).
 multigpu_gate() {
     local rc="$1" out="$2"
-    [ "${rc}" -eq 0 ] || return "${rc}"
+    { [ "${rc}" -eq 0 ] || [ "${rc}" -eq 5 ]; } || return "${rc}"
     if ! grep -Eq '[0-9]+ passed' "${out}"; then
         echo "ERROR: no multigpu test passed (all skipped or none collected)"
         return 1
@@ -316,7 +323,7 @@ multigpu_gate() {
     fi
 }
 
-if [ -n "${ABTEM_CI_MULTIGPU:-}" ] && [ "${MULTI_RC}" -eq 0 ]; then
+if [ "${ABTEM_CI_MULTIGPU:-}" = 1 ] && [ "${MULTI_RC}" -eq 0 ]; then
     echo "== multi-GPU tests =="
     python -m pytest test/ -q -rfs -p no:cacheprovider -m multigpu \
         | tee "${MULTI_TALLY}"
@@ -327,8 +334,8 @@ fi
 
 SWEEP_SUMMARY="${SWEEP_NOTE:-$(_tally "${SWEEP_TALLY}")}"
 SUMMARY="stencil[$(_tally "${STENCIL_TALLY}")] sweep[${SWEEP_SUMMARY}]"
-[ -n "${ABTEM_CI_MULTIGPU:-}" ] \
-    && SUMMARY="${SUMMARY} multigpu[$(_tally "${MULTI_TALLY}")]"
+[ "${ABTEM_CI_MULTIGPU:-}" = 1 ] \
+    && SUMMARY="${SUMMARY} multigpu[${MULTI_NOTE:-$(_tally "${MULTI_TALLY}")}]"
 rm -f "${STENCIL_TALLY}" "${SWEEP_TALLY}" "${MULTI_TALLY}"
 RCS="stencil_rc=${STENCIL_RC} sweep_rc=${SWEEP_RC} multigpu_rc=${MULTI_RC}"
 if [ "${STENCIL_RC}" -eq 0 ] && [ "${SWEEP_RC}" -eq 0 ] && [ "${MULTI_RC}" -eq 0 ]; then
