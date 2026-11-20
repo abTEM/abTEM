@@ -69,7 +69,8 @@
 #                      every package or ABTEM_CI_VENV is set. Ignored in
 #                      in-place mode
 #   ABTEM_CI_DESELECT  pytest -k expression of tests to leave out of the full
-#                      sweep on every backend, e.g. "charge_density" for a
+#                      sweep on every backend, e.g.
+#                      "charge_density or chargedensity" for a
 #                      machine whose GPU hangs on those tests (default: none).
 #                      The summary in status.tsv names it, so a deselection is
 #                      never silent
@@ -333,6 +334,7 @@ if [ "${ABTEM_CI_MULTIGPU:-}" = 1 ] && [ "${MULTI_RC}" -eq 0 ]; then
     python -m pytest test/ -q -rfs -p no:cacheprovider -m multigpu \
         --ignore=test/test_multigpu.py | tee "${MULTI_TALLY_OTHER}"
     rc=${PIPESTATUS[0]}
+    [ "${rc}" -eq 5 ] && rc=0  # no multigpu test outside test_multigpu.py
     [ "${MULTI_RC}" -eq 0 ] && MULTI_RC=${rc}
 fi
 
