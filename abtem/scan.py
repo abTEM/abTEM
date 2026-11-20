@@ -98,7 +98,7 @@ def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
             "translation invariant, so a single position (`gpts=1`) gives the whole "
             "result.",
         )
-        scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe._valid_energy)
+        scan.sampling = nyquist_sampling(semiangle_cutoff, probe._valid_energy)
 
 
 class BaseScan(ReciprocalSpaceMultiplication):
