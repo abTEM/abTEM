@@ -1692,6 +1692,39 @@ def test_multislice_of_reversed_waves_returns_the_list_type_of_increasing_waves(
         outputs.compute()
 
 
+# (selection of a single scan position through a reversal, the same position
+# selected in increasing order)
+_SINGLE_POSITIONS = {
+    "reversed_then_first": (lambda w: w[::-1][:1], lambda w: w[-1:]),
+    "reversed_slice": (lambda w: w[3:2:-1], lambda w: w[3:4]),
+    "reversed_then_index_array": (lambda w: w[::-1][[0]], lambda w: w[-1:]),
+}
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda waves: abtem.PixelatedDetector(max_angle=60).detect(waves),
+        lambda waves: abtem.AnnularDetector(30, 60).detect(waves),
+        lambda waves: waves.apply_ctf(defocus=50, semiangle_cutoff=30),
+    ],
+    ids=["pixelated", "annular", "apply_ctf"],
+)
+@pytest.mark.parametrize("selection", _SINGLE_POSITIONS)
+def test_a_single_position_selected_through_a_reversal_is_not_reversed(
+    selection, transform, lazy, device
+):
+    select, increasing = _SINGLE_POSITIONS[selection]
+    waves = _scanned_waves(device, lazy)
+
+    selected = select(waves)
+
+    assert selected.ensemble_axes_metadata[0].sampling > 0
+    _assert_outputs_match([transform(selected)], [transform(increasing(waves))])
+
+
 @lazy_params
 @devices
 @pytest.mark.parametrize(

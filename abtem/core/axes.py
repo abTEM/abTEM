@@ -825,6 +825,19 @@ def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]
     return tuple(float(weight) for weight in weights)
 
 
+def _scan_run_axis(axis: ScanAxis, run: range) -> ScanAxis:
+    """The scan axis of the members `run` of `axis`, an evenly spaced run in either
+    direction. A run of fewer than two members has no direction, so its sampling is
+    positive and a single position is never a reversed scan."""
+    sampling = axis.sampling * run.step
+    if len(run) < 2:
+        sampling = abs(sampling)
+    # an empty reversed range starts at the stop, which can be -1
+    return dataclasses.replace(
+        axis, offset=axis.offset + max(run.start, 0) * axis.sampling, sampling=sampling
+    )
+
+
 def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     """The metadata of an ensemble axis of length `n` indexed by `item`, a slice or
     an integer or boolean index array. A linear axis raises `IndexError` for an index
@@ -858,11 +871,7 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
         if len(indices) and step != 0:
             run = range(int(indices[0]), int(indices[-1]) + step, step)
             if np.array_equal(indices, run):
-                return dataclasses.replace(
-                    axis,
-                    offset=axis.offset + run.start * axis.sampling,
-                    sampling=axis.sampling * step,
-                )
+                return _scan_run_axis(axis, run)
 
     if isinstance(item, slice):
         indices = range(n)[item]
@@ -878,10 +887,11 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
             # the first member selected and its sampling is negative
             exact = indices.step > 0 or isinstance(axis, ScanAxis)
         if exact:
-            # an empty reversed range starts at the stop, which can be -1
+            if isinstance(axis, ScanAxis):
+                return _scan_run_axis(axis, indices)
             return dataclasses.replace(
                 axis,
-                offset=axis.offset + max(indices.start, 0) * axis.sampling,
+                offset=axis.offset + indices.start * axis.sampling,
                 sampling=axis.sampling * indices.step,
             )
 

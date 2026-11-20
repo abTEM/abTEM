@@ -1168,7 +1168,8 @@ def test_an_empty_reversed_slice_of_a_scan_axis_gives_an_empty_scan_axis(item):
 
     assert indexed.shape == (0, 3, 2)
     assert type(indexed.ensemble_axes_metadata[0]) is ScanAxis
-    assert indexed.ensemble_axes_metadata[0].sampling == pytest.approx(-0.5)
+    # no positions have no direction, so the scan is not reversed
+    assert indexed.ensemble_axes_metadata[0].sampling == pytest.approx(0.5)
 
 
 @devices
