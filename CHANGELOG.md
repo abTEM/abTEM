@@ -133,6 +133,12 @@ Features:
   overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
+- The GPU test runner `tools/gpu/run_gpu_tests.sh` has `ABTEM_CI_OFFLINE=1`, which tests the managed clone as it is,
+  without clone, fetch or reset, and installs from uv's cache only, for compute nodes without internet access. On ROCm
+  it runs one pytest process per test file, reports the passed and the failed or errored tests, detects aborts and
+  fails when no test passed. `ABTEM_CI_DESELECT` takes a pytest `-k` expression of tests to leave out of the sweep, and
+  the `status.tsv` summary names it. The recorded commit gets a `-dirty` suffix when tracked files differ from `HEAD`
+  ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Performance:
 
@@ -914,6 +920,14 @@ Bugfixes:
   `AttributeError`
 - The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
   location), where it reported a convergence failure for any assertion
+- The multi-GPU run of `tools/gpu/run_gpu_tests.sh` (`ABTEM_CI_MULTIGPU`) runs `test/test_multigpu.py` as its own
+  pytest call, which fails when no test passes or any is skipped, where a single pass anywhere was enough: the multigpu
+  test in `test/test_measure.py` needs only 2 GPUs, so a broken `dask-cuda` import ended green with one pass and six
+  skips. The other multigpu tests run in a second call that must return 0. A preflight checks that `dask_cuda` imports
+  and that 2 GPUs are visible, and the managed venv installs `cuda-bindings>=12,<13` from PyPI, the line that matches
+  `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
+  `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
+  fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Documentation:
 
