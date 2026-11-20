@@ -925,6 +925,8 @@ Bugfixes:
   A preflight checks that `dask_cuda` imports and that 2 GPUs are visible, and the managed venv installs
   `cuda-bindings>=12,<13` from PyPI, the line that matches `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from
   NVIDIA's package index
+  The multi-GPU run is enabled only by `ABTEM_CI_MULTIGPU=1`; other values, such as `0`, `yes` and `true`, which
+  enabled it before, no longer do
 
 Documentation:
 
