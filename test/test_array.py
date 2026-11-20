@@ -1,4 +1,5 @@
 import os
+import re
 from numbers import Number
 
 import ase
@@ -17,9 +18,17 @@ import abtem
 import abtem.array
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
-from abtem.core.axes import EnergyAxis, OrdinalAxis
+from abtem.core.axes import (
+    EnergyAxis,
+    LinearAxis,
+    NonLinearAxis,
+    OrdinalAxis,
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+    ScanAxis,
+)
 from abtem.core.backend import asnumpy, copy_to_device, get_array_module
-from abtem.measurements import Images
+from abtem.measurements import DiffractionPatterns, Images
 
 # The full set of `has_array` strategies exercised by most array-object tests.
 ALL_HAS_ARRAY = [
@@ -480,6 +489,283 @@ def test_concatenate_matches_its_parts(data, has_array, lazy, device):
     np.testing.assert_array_equal(
         asnumpy(tail.array), asnumpy(second.compute().to_cpu().array)
     )
+
+
+def _scanned_images(device, lazy, x_offset=0.25, y_offset=-0.2, n=(8, 9)):
+    """Images over a scan whose axes have different lengths (8 and 9)."""
+    host = np.arange(np.prod(n) * 6 * 5, dtype=np.float32).reshape(n + (6, 5))
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5, offset=x_offset),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "other_kwargs, differing_axis",
+    [
+        ({"x_offset": 2.25}, 0),
+        ({"y_offset": 0.2}, 1),
+    ],
+)
+def test_stack_raises_for_members_with_different_axes(
+    other_kwargs, differing_axis, lazy, device
+):
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, **other_kwargs)
+
+    with pytest.raises(ValueError, match=f"axis {differing_axis}"):
+        stack((first, second), ("a", "b"))
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "other_kwargs, fields",
+    [
+        ({"x_offset": 2.25}, ["offset 0.25 vs 2.25"]),
+        ({"y_offset": 0.2}, ["offset -0.2 vs 0.2"]),
+    ],
+)
+def test_the_error_of_a_stack_names_the_differing_field_and_both_values(
+    other_kwargs, fields, lazy, device
+):
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, **other_kwargs)
+
+    with pytest.raises(ValueError) as error:
+        stack((first, second), ("a", "b"))
+
+    for field in fields:
+        assert field in str(error.value)
+    assert "sampling" not in str(error.value)
+
+
+@lazy_params
+@devices
+def test_the_error_of_a_stack_names_the_sampling_of_a_reversed_scan(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError) as error:
+        stack((images[::-1], images), ("a", "b"))
+
+    message = str(error.value)
+    assert "sampling -0.5 vs 0.5" in message
+    assert "offset 3.75 vs 0.25" in message
+
+
+def test_the_error_of_a_stack_names_the_types_of_axes_of_different_classes():
+    images = _scanned_images("cpu", False)
+    other = images.copy()
+    other._ensemble_axes_metadata[0] = RealSpaceAxis(
+        label="x", sampling=0.5, offset=0.25
+    )
+
+    with pytest.raises(ValueError, match="type ScanAxis vs RealSpaceAxis"):
+        stack((images, other), ("a", "b"))
+
+
+_NUMBERS = tuple(np.linspace(0, 4.9, 50))
+_LETTERS = tuple("ab" * 24) + ("c", "c")
+
+
+@pytest.mark.parametrize(
+    "values, other_values, field",
+    [
+        # differing only at the last of many elements, which a shortened printout of
+        # the whole tuple would cut off
+        (_NUMBERS, _NUMBERS[:-1] + (5.0,), "values[49] 4.9 vs 5.0"),
+        (_NUMBERS, _NUMBERS[:-1] + (5.0, 6.0), "values of length 50 vs 51"),
+        # elements that are not numbers
+        (_LETTERS, _LETTERS[:-1] + ("d",), "values[49] c vs d"),
+    ],
+)
+def test_the_error_of_a_stack_names_the_differing_element_of_a_long_axis(
+    values, other_values, field
+):
+    images = Images(
+        np.ones((50, 6, 5), dtype=np.float32),
+        sampling=0.2,
+        ensemble_axes_metadata=[OrdinalAxis(label="t", values=values)],
+    )
+    other = Images(
+        np.ones((len(other_values), 6, 5), dtype=np.float32),
+        sampling=0.2,
+        ensemble_axes_metadata=[OrdinalAxis(label="t", values=other_values)],
+    )
+
+    with pytest.raises(ValueError, match=re.escape(field)):
+        stack((images, other), ("a", "b"))
+
+
+def test_the_error_of_a_stack_names_the_values_of_zero_dimensional_array_fields():
+    first, second = (
+        Images(
+            np.ones((3, 6, 5), dtype=np.float32),
+            sampling=0.2,
+            ensemble_axes_metadata=[
+                ScanAxis(label="x", sampling=np.array(sampling), offset=0.0)
+            ],
+        )
+        for sampling in (0.5, 0.6)
+    )
+
+    with pytest.raises(ValueError, match=re.escape("sampling 0.5 vs 0.6")):
+        stack((first, second), ("a", "b"))
+
+
+def test_the_error_of_a_stack_of_probes_names_the_differing_defocus():
+    first, second = (
+        abtem.Probe(
+            energy=100e3, semiangle_cutoff=20, gpts=32, extent=10, defocus=defocus
+        ).build()
+        for defocus in (np.linspace(0, 100, 3), np.linspace(0, 200, 3))
+    )
+
+    with pytest.raises(ValueError, match=re.escape("values[1] -50.0 vs -100.0")):
+        stack((first, second))
+
+
+def _images_with_axes_of_the_base_as_ensemble_axes(device, lazy):
+    """Images whose leading axes are those of `_ordinal_scanned_images`'s, and more:
+    the members have a different number of axes while the first ones agree."""
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    leading = [axis.copy() for axis in first.axes_metadata]
+    host = np.ones((3, 9, 6, 5, 6, 5), dtype=np.float32)
+    second = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=leading,
+    )
+    return first, (second.ensure_lazy() if lazy else second)
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_members_with_a_different_number_of_axes(lazy, device):
+    first, second = _images_with_axes_of_the_base_as_ensemble_axes(device, lazy)
+
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        stack((first, second), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_concatenate_raises_for_members_with_a_different_number_of_axes(lazy, device):
+    first, second = _images_with_axes_of_the_base_as_ensemble_axes(device, lazy)
+
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        concatenate((first, second), axis=0)
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_the_two_halves_of_a_scan(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((images[:4], images[4:]), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_stack_raises_for_a_reversed_scan_and_its_original(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((images[::-1], images), ("a", "b"))
+
+
+@lazy_params
+@devices
+def test_stack_of_members_with_identical_axes_keeps_them(lazy, device):
+    first = _scanned_images(device, lazy)
+    second = _distinct_twin(first)
+
+    stacked = stack((first, second), ("a", "b"))
+
+    assert stacked.ensemble_axes_metadata[1:] == first.ensemble_axes_metadata
+    for i, member in enumerate((first, second)):
+        np.testing.assert_array_equal(
+            asnumpy(stacked[i].compute().array), asnumpy(member.compute().array)
+        )
+
+
+@lazy_params
+def test_stack_of_indexed_diffraction_patterns_raises_for_members_with_different_axes(
+    lazy,
+):
+    """`IndexedDiffractionPatterns` has a `_stack` of its own."""
+    # only the axes metadata is compared, so the device does not matter
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((4, 17, 21)).astype(np.float32),
+        sampling=0.5,
+        metadata={"energy": 100e3},
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5, offset=0.25)],
+    )
+    if lazy:
+        patterns = patterns.ensure_lazy()
+    indexed = patterns.index_diffraction_spots(cell=4.0)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((indexed[:2], indexed[2:]), ("a", "b"))
+
+    stacked = stack((indexed[:2], indexed[:2].copy()), ("a", "b"))
+    assert stacked.shape[:2] == (2, 2)
+
+
+def _ordinal_scanned_images(device, lazy, n_a, y_offset=-0.2):
+    host = np.ones((n_a, 9, 6, 5), dtype=np.float32)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=tuple(range(n_a))),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+@lazy_params
+@devices
+def test_concatenate_raises_for_members_with_different_axes_besides_the_joined_one(
+    lazy, device
+):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2, y_offset=0.2)
+
+    with pytest.raises(ValueError, match="axis 1 'y'"):
+        concatenate((first, second), axis=0)
+
+
+@lazy_params
+@devices
+def test_concatenate_of_members_with_identical_other_axes_joins_them(lazy, device):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2)
+
+    joined = concatenate((first, second), axis=0)
+
+    assert joined.shape == (5, 9, 6, 5)
+    assert joined.ensemble_axes_metadata[0].values == (0, 1, 2, 0, 1)
+
+
+@pytest.mark.parametrize("axis", [0, -4])
+def test_concatenate_raises_with_a_message_for_a_joined_axis_that_cannot_be_joined(
+    axis,
+):
+    # the error is raised before any array work, so the device does not matter
+    images = _scanned_images("cpu", False)
+
+    with pytest.raises(RuntimeError, match="along the ScanAxis 'x'"):
+        concatenate((images[:4], images[4:]), axis=axis)
 
 
 # @given(data=st.data())
@@ -975,3 +1261,345 @@ def test_set_ensemble_axes_metadata_refuses_an_energy_axis_contradicting_the_ene
     with pytest.raises(ValueError, match="contradicts"):
         waves.set_ensemble_axes_metadata(EnergyAxis(values=(100e3, 200e3)), 0)
     assert waves.ensemble_axes_metadata[0] == old_axis
+
+
+def _linear_axes():
+    return [
+        LinearAxis(label="z", sampling=0.7, offset=-1.3),
+        RealSpaceAxis(label="z", sampling=0.7, offset=-1.3),
+        ScanAxis(label="z", sampling=0.7, offset=-1.3),
+        ReciprocalSpaceAxis(label="z", sampling=0.7, offset=-(9 // 2) * 0.7),
+        ReciprocalSpaceAxis(
+            label="z", sampling=0.7, offset=-(9 // 2) * 0.7, fftshift=False
+        ),
+    ]
+
+
+def _linear_axis_id(axis):
+    if isinstance(axis, ReciprocalSpaceAxis) and not axis.fftshift:
+        return "ReciprocalSpaceAxis-unshifted"
+    return type(axis).__name__
+
+
+# (item, step of the slice or None for an index array, signed spacing of the members
+# when they are evenly spaced), over 9 members
+_LINEAR_AXIS_ITEMS = [
+    (slice(None), 1, 1),
+    (slice(1, 8, 2), 2, 2),
+    (slice(None, None, 3), 3, 3),
+    (slice(-4, None), 1, 1),
+    (slice(1, -2), 1, 1),
+    (slice(-7, -1, 2), 2, 2),
+    (slice(None, None, -1), -1, -1),
+    (slice(7, 1, -2), -2, -2),
+    ([0, 3, 4, 8], None, None),
+    (np.array([True, False, False, True, True, False, False, False, True]), None, None),
+    ([1, 3, 5, 7], None, 2),
+    (np.array([-8, -5, -2]), None, 3),
+    ([4], None, 1),
+    (np.arange(9) % 4 == 1, None, 4),
+    (np.arange(9)[::-1], None, -1),
+    ([8, 5, 2], None, -3),
+]
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("axis", _linear_axes(), ids=_linear_axis_id)
+@pytest.mark.parametrize("item, step, spacing", _LINEAR_AXIS_ITEMS)
+def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
+    axis, item, step, spacing, lazy, device
+):
+    host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+
+    indexed = images[item]
+    new_axis = indexed.ensemble_axes_metadata[0]
+    expected = np.asarray(axis.coordinates(9))[item]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12 * 9 * 0.7
+    )
+    np.testing.assert_array_equal(asnumpy(indexed.compute().array), host[item])
+
+    # a positive step keeps the class, except that a ReciprocalSpaceAxis rounds
+    # its offset to a whole multiple of its sampling, which a step breaks, and an
+    # unshifted one is not linear in storage order; selecting every member keeps it.
+    # A scan axis also keeps it for a reversed slice and for an index array of evenly
+    # spaced members, its sampling being negative where the positions decrease.
+    keeps_class = step is not None and step > 0
+    if isinstance(axis, ScanAxis):
+        keeps_class = spacing is not None
+    if isinstance(axis, ReciprocalSpaceAxis):
+        keeps_class = step == 1 and (axis.fftshift or item == slice(None))
+    if keeps_class:
+        assert type(new_axis) is type(axis)
+        assert new_axis.sampling == pytest.approx(0.7 * spacing)
+    else:
+        assert type(new_axis) is NonLinearAxis
+        assert (new_axis.label, new_axis.units) == (axis.label, axis.units)
+
+
+@devices
+@pytest.mark.parametrize(
+    "items, expected",
+    [
+        ((-1, -2), (slice(2, 3), slice(3, 4))),
+        ((2, 3), (slice(2, 3), slice(3, 4))),
+        ((-1, -1), (slice(2, 3), slice(4, 5))),
+        ((-1, slice(None)), (slice(2, 3), slice(None))),
+    ],
+)
+def test_get_items_with_keepdims_keeps_a_negative_integer_as_a_length_one_axis(
+    items, expected, device
+):
+    """A negative integer selects the member counted from the end, and the axes have
+    different lengths so that an index resolved against the wrong one differs."""
+    host = np.arange(3 * 5 * 2 * 2.0).reshape(3, 5, 2, 2)
+    axes = [
+        OrdinalAxis(label="a", values=(10, 11, 12)),
+        OrdinalAxis(label="b", values=(0, 1, 2, 3, 4)),
+    ]
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=axes
+    )
+
+    kwargs = images.get_items(items, keepdims=True)
+
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[expected])
+    for new_axis, axis, item in zip(kwargs["ensemble_axes_metadata"], axes, expected):
+        assert new_axis.values == axis.values[item]
+
+
+@devices
+def test_get_items_with_keepdims_and_a_new_axis_resolves_against_the_indexed_axis(
+    device,
+):
+    """`None` adds an axis of the array without consuming an ensemble axis, so the
+    integer after it is counted against the first ensemble axis."""
+    host = np.arange(3 * 5 * 2 * 2.0).reshape(3, 5, 2, 2)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=(10, 11, 12)),
+            OrdinalAxis(label="b", values=(0, 1, 2, 3, 4)),
+        ],
+    )
+
+    kwargs = images.get_items((None, -1), keepdims=True)
+
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[None, 2:3])
+
+
+@devices
+@pytest.mark.parametrize("item, start", [(0, 0), (2, 2), (-1, 2), (-3, 0)])
+def test_get_items_with_keepdims_keeps_a_numpy_integer_as_a_length_one_axis(
+    item, start, device
+):
+    host = np.arange(3 * 2 * 2.0).reshape(3, 2, 2)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="a", values=(10, 11, 12))],
+    )
+
+    kwargs = images.get_items((np.int64(item),), keepdims=True)
+
+    assert kwargs["array"].shape == (1, 2, 2)
+    np.testing.assert_array_equal(asnumpy(kwargs["array"]), host[start : start + 1])
+    assert kwargs["ensemble_axes_metadata"][0].values == (10 + start,)
+
+
+@pytest.mark.parametrize("item", [np.int64(3), np.int32(-4)])
+def test_get_items_with_keepdims_raises_for_a_numpy_integer_out_of_range(
+    item,
+):
+    # the error is raised before any array work, so the device does not matter
+    images = Images(
+        np.zeros((3, 2, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+
+    with pytest.raises(IndexError):
+        images.get_items((item,), keepdims=True)
+
+
+@pytest.mark.parametrize("item", [3, -4])
+def test_get_items_with_keepdims_raises_an_index_error_out_of_range(item):
+    # the error is raised before any array work, so the device does not matter
+    images = Images(
+        np.zeros((3, 5, 2, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1, 2)),
+            OrdinalAxis(values=(0, 1, 2, 3, 4)),
+        ],
+    )
+
+    with pytest.raises(IndexError):
+        images.get_items(item, keepdims=True)
+
+
+@devices
+def test_a_decreasing_index_array_on_a_scan_axis_reverses_it(device):
+    """Evenly spaced decreasing members keep a scan axis, with the first selected
+    position as offset and a negative sampling; uneven ones list their coordinates."""
+    axis = ScanAxis(label="x", sampling=0.5, offset=0.25)
+    images = Images(
+        copy_to_device(np.zeros((6, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    reversed_axis = images[np.arange(6)[::-1]].ensemble_axes_metadata[0]
+    uneven_axis = images[[5, 2, 1]].ensemble_axes_metadata[0]
+
+    assert type(reversed_axis) is ScanAxis
+    assert reversed_axis.offset == pytest.approx(2.75)
+    assert reversed_axis.sampling == pytest.approx(-0.5)
+    assert type(uneven_axis) is NonLinearAxis
+    assert uneven_axis.values == pytest.approx((2.75, 1.25, 0.75))
+
+
+def test_an_outer_index_of_scan_axes_raises_an_index_error():
+    """The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((6, 6, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5, offset=0.0),
+            ScanAxis(label="y", sampling=0.5, offset=0.0),
+        ],
+    )
+
+    with pytest.raises(IndexError, match="one axis at a time"):
+        images[np.ix_([0, 1], [2, 3])]
+
+
+def test_a_reversed_scan_axis_indexed_again_lists_the_positions_it_selects():
+    """The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((9, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5, offset=0.25)],
+    )
+
+    positions = 0.25 + 0.5 * np.arange(9)
+    for steps in [
+        (slice(None, None, -1), slice(None, None, -1)),
+        (slice(None, None, -1), slice(1, 8, 3)),
+        (slice(None, None, -2), slice(None, None, -1)),
+    ]:
+        indexed, expected = images, positions
+        for step in steps:
+            indexed, expected = indexed[step], expected[step]
+        axis = indexed.ensemble_axes_metadata[0]
+        assert type(axis) is ScanAxis
+        np.testing.assert_allclose(
+            axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12
+        )
+
+
+def test_evenly_spaced_scan_positions_from_an_index_array_still_give_images():
+    """Scan reductions find their scan axes by class, so patterns at evenly spaced
+    scan positions listed by an index array still integrate to images. The test
+    reduces host arrays only, so it pins no device."""
+    scan_axes = [ScanAxis(label=label, sampling=0.5, offset=0.25) for label in "xy"]
+    patterns = DiffractionPatterns(
+        np.ones((5, 6, 8, 8)),
+        sampling=0.1,
+        ensemble_axes_metadata=scan_axes,
+        metadata={"energy": 100e3},
+    )
+
+    images = patterns[[0, 2, 4]].integrate_radial(0, 10)
+
+    assert type(images) is Images
+    assert images.sampling == pytest.approx((1.0, 0.5))
+
+
+@pytest.mark.parametrize("item", [slice(2, 5, -1), slice(-20, None, -1)])
+def test_an_empty_reversed_slice_of_a_scan_axis_gives_an_empty_scan_axis(item):
+    """The test indexes metadata only, so it pins no device."""
+    images = Images(
+        np.zeros((8, 3, 2)),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5)],
+    )
+
+    indexed = images[item]
+
+    assert indexed.shape == (0, 3, 2)
+    assert type(indexed.ensemble_axes_metadata[0]) is ScanAxis
+    # no positions have no direction, so the scan is not reversed
+    assert indexed.ensemble_axes_metadata[0].sampling == pytest.approx(0.5)
+
+
+@devices
+def test_a_new_axis_before_a_stepped_linear_ensemble_axis(device):
+    axis = LinearAxis(label="z", sampling=0.7, offset=-1.3)
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    new_axis = images[None, 1::2].ensemble_axes_metadata[1]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(4), np.asarray(axis.coordinates(9))[1::2], atol=1e-12
+    )
+
+
+def test_a_type_error_inside_an_axis_getitem_propagates(monkeypatch):
+    """A `TypeError` raised by an axis's own `__getitem__` is a bug in the axis,
+    not a request for a plain copy of it. The test indexes metadata only, so it
+    pins no device."""
+
+    def broken(self, item):
+        raise TypeError("a bug inside __getitem__")
+
+    monkeypatch.setattr(OrdinalAxis, "__getitem__", broken)
+    images = Images(
+        np.zeros((3, 4, 4)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(1, 2, 3))],
+    )
+
+    with pytest.raises(TypeError, match="a bug inside __getitem__"):
+        images[1:]
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "item, chunks", [(slice(1, None, 2), (2, 2)), (slice(None, None, -2), (3, 2))]
+)
+def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinates(
+    item, chunks, lazy, device
+):
+    """The partition path indexes the already indexed axis with contiguous
+    forward slices; each block's coordinates are those of its members, also where
+    the sampling is negative."""
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.5, offset=1.0)],
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+    indexed = images[item]
+    expected = indexed.ensemble_axes_metadata[0].coordinates(sum(chunks))
+
+    blocks = indexed._partition_ensemble_axes_metadata(chunks=(chunks,), lazy=False)
+
+    for block, start, n in zip(blocks, np.cumsum((0,) + chunks), chunks):
+        np.testing.assert_allclose(
+            block[0].coordinates(n), expected[start : start + n], atol=1e-12
+        )

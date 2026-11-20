@@ -135,6 +135,11 @@ def _reduced_scanned_images_or_line_profiles(
         if i not in source
     ]
 
+    # a reduced scan is in increasing order, whatever order the positions were in
+    index = _increasing_scan_index(old_measurement)
+    if index is not None:
+        new_array = new_array[index]
+
     if source != destination:
         xp = get_array_module(new_array)
         if old_measurement.is_lazy:
@@ -194,8 +199,30 @@ def _scan_axes(measurement):
 
 
 def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, ...]:
+    """The distance between neighbouring scan positions along each scan axis; a
+    reversed scan axis has a negative sampling and the same distance."""
     return tuple(
-        measurements.axes_metadata[i].sampling for i in _scan_axes(measurements)
+        abs(measurements.axes_metadata[i].sampling) for i in _scan_axes(measurements)
+    )
+
+
+def _increasing_scan_index(
+    array_object: BaseMeasurements | BaseWaves,
+) -> tuple[slice, ...] | None:
+    """The index that puts every reversed scan axis (negative sampling) of
+    `array_object` back in increasing order, or None if none is reversed. Scan axes
+    are ensemble axes, which come first, so their positions index the array object
+    directly."""
+    reversed_axes = {
+        i
+        for i in _scan_axes(array_object)
+        if array_object.axes_metadata[i].sampling < 0
+    }
+    if not reversed_axes:
+        return None
+    return tuple(
+        slice(None, None, -1) if i in reversed_axes else slice(None)
+        for i in range(max(reversed_axes) + 1)
     )
 
 
@@ -214,13 +241,6 @@ def _scan_area_per_pixel(measurements):
         return np.prod(_scan_sampling(measurements))
     else:
         raise RuntimeError("Cannot infer pixel area from axes metadata.")
-
-
-def _scan_extent(measurement):
-    extent = ()
-    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
-        extent += (metadata.sampling * n,)
-    return extent
 
 
 def _array_module_fn(array, xp: ModuleType, name: str):
@@ -4363,7 +4383,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Orientation matrices used for indexing the diffraction spots. The shape of
             the orientation matrices, without the last two axes, must broadcast to the
             ensemble shape of the diffraction patterns: each axis has length 1 or the
-            length of that ensemble axis. Each pattern is indexed with its own matrix.
+            length of that ensemble axis. Extra leading axes of length 1 beyond the
+            ensemble axes are dropped; longer ones raise an error. Each pattern is
+            indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -4392,18 +4414,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        # each pattern is indexed with one matrix: an axis of the matrices is
+        # each pattern is indexed with one matrix: leading axes of length 1 beyond
+        # the ensemble are dropped, and an axis of the remaining ensemble shape is
         # either 1 or as long as the matching ensemble axis
-        if orientation_matrices is not None and any(
-            m not in (1, n)
-            for n, m in zip(
-                self.ensemble_shape[::-1], orientation_matrices.shape[:-2][::-1]
-            )
-        ):
-            raise ValueError(
-                "Every axis of the orientation matrices' ensemble shape must have"
-                " length 1 or the length of the matching ensemble axis."
-            )
+        if orientation_matrices is not None:
+            n_extra = orientation_matrices.ndim - 2 - len(self.ensemble_shape)
+            if n_extra > 0:
+                if any(n != 1 for n in orientation_matrices.shape[:n_extra]):
+                    raise ValueError(
+                        "The orientation matrices have more ensemble axes than the "
+                        "diffraction patterns, and the extra leading axes are not of "
+                        "length 1: the ensemble shape of the matrices is "
+                        f"{orientation_matrices.shape[:-2]}, that of the patterns is "
+                        f"{self.ensemble_shape}."
+                    )
+                orientation_matrices = orientation_matrices[(0,) * n_extra]
+            if any(
+                m not in (1, n)
+                for n, m in zip(
+                    self.ensemble_shape[::-1], orientation_matrices.shape[-3::-1]
+                )
+            ):
+                raise ValueError(
+                    "Every axis of the orientation matrices' ensemble shape must have"
+                    " length 1 or the length of the matching ensemble axis."
+                )
 
         ensemble_ndim = len(self.array.shape[:-2])
 
@@ -6681,7 +6716,11 @@ class PolarMeasurements(BaseMeasurements):
 
         # np.moveaxis dispatches to da.moveaxis or cupy.moveaxis; cupy.moveaxis
         # rejects a dask array
-        array = np.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        array = self.array
+        index = _increasing_scan_index(self)
+        if index is not None:
+            array = array[index]
+        array = np.moveaxis(array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()

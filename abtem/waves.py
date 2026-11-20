@@ -61,6 +61,7 @@ from abtem.measurements import (
     DiffractionPatterns,
     Images,
     RealSpaceLineProfiles,
+    _increasing_scan_index,
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
@@ -773,6 +774,55 @@ class Waves(BaseWaves, ArrayObject):
         if hasattr(self, "_device"):
             return self._device
         return device_name_from_array_module(get_array_module(self.array))
+
+    def apply_transform(self, transform, max_batch: int | str = "auto"):
+        """Apply a transform to the waves. A scan with reversed axes is put in
+        increasing order for the transform; outputs that reduce the scan to images or
+        line profiles keep that order, and every output that keeps the scan gets the
+        reversed order back.
+
+        Parameters
+        ----------
+        transform : ArrayObjectTransform
+            The transformation to apply to the waves.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+
+        Returns
+        -------
+        transformed_array_object : ArrayObject or list of ArrayObject
+            The transformed waves, or the measurements or waves the transform
+            produces.
+        """
+        # The transform runs on the scan in increasing order, flipped once here, so
+        # a lazy block and the per-block detection of a multislice see increasing
+        # axes. An output that still carries the ensemble axes of the waves,
+        # unchanged, after those of the transform keeps the scan and gets the
+        # reversed order back; any other output (one that reduces the scan to
+        # images or line profiles) keeps the increasing order.
+        index = _increasing_scan_index(self)
+        if index is None:
+            return super().apply_transform(transform, max_batch)
+
+        waves = self[index]
+        outputs = waves.apply_transform(transform, max_batch)
+        num_ensemble_axes = len(waves.ensemble_axes_metadata)
+
+        def restore(output):
+            lead = len(output.ensemble_axes_metadata) - num_ensemble_axes
+            if (
+                lead < 0
+                or output.ensemble_axes_metadata[lead:] != waves.ensemble_axes_metadata
+            ):
+                return output
+            return output[(slice(None),) * lead + index]
+
+        if isinstance(outputs, list):
+            return type(outputs)(restore(output) for output in outputs)
+        return restore(outputs)
 
     @property
     def base_tilt(self) -> tuple[float, float]:

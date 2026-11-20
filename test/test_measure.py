@@ -3,6 +3,7 @@ import functools
 import math
 import operator
 import pickle
+import re
 import sys
 import types
 import warnings
@@ -93,6 +94,174 @@ def test_scanned_measurement_type():
     assert isinstance(images, Images)
     assert images.shape == (10, 10, 10)
     assert isinstance(images.ensemble_axes_metadata[0], OrdinalAxis)
+
+
+@lazy_params
+@devices
+def test_subsampled_scan_images_have_the_subsampled_scan_sampling(lazy, device):
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ]
+    array = np.random.default_rng(0).random((8, 9, 6, 6), dtype=np.float32)
+    dp = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=0.2,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 100e3},
+    )
+    if lazy:
+        dp = dp.ensure_lazy(chunks=(3, 4, -1, -1))
+    full = dp.integrate_radial(0, 10)
+    items = (slice(None, None, 2), slice(1, None, 3))
+
+    subsampled = dp[items]
+    sub = subsampled.integrate_radial(0, 10)
+
+    assert isinstance(sub, Images)
+    assert sub.shape == (4, 3)
+    assert sub.sampling == pytest.approx((1.0, 1.2))
+    np.testing.assert_allclose(
+        asnumpy(sub.compute().array), asnumpy(full.compute().array)[items], rtol=1e-6
+    )
+    for new_axis, axis, item, n, n_full in zip(
+        subsampled.ensemble_axes_metadata, axes, items, (4, 3), (8, 9)
+    ):
+        np.testing.assert_allclose(
+            new_axis.coordinates(n), np.asarray(axis.coordinates(n_full))[item]
+        )
+
+
+def _scanned_patterns(device, lazy):
+    """Diffraction patterns of a scan of 8 by 9 positions (unequal, so a swapped
+    axis fails), whose lazy chunks of 3 and 4 positions are crossed by a reversed
+    axis."""
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ]
+    array = np.random.default_rng(0).random((8, 9, 6, 6), dtype=np.float32)
+    dp = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=0.2,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 100e3},
+    )
+    if lazy:
+        dp = dp.ensure_lazy(chunks=(3, 4, -1, -1))
+    return dp
+
+
+_FULL = slice(None)
+_REVERSED = slice(None, None, -1)
+
+# (index of a reversed scan, index of the same positions in increasing order)
+_REVERSED_SCANS = [
+    ((_REVERSED,), (_FULL,)),
+    ((_FULL, _REVERSED), (_FULL, _FULL)),
+    ((_REVERSED, _REVERSED), (_FULL, _FULL)),
+    ((np.arange(8)[::-1],), (_FULL,)),
+    # every other position from the last: those of dp[:, 0::2] in reverse
+    ((_FULL, slice(None, None, -2)), (_FULL, slice(0, None, 2))),
+    ((_FULL, [7, 4, 1]), (_FULL, slice(1, 8, 3))),
+]
+
+_REDUCTIONS = {
+    "integrate_radial": lambda dp: dp.integrate_radial(0, 20),
+    "center_of_mass": lambda dp: dp.center_of_mass(),
+    "integrated_center_of_mass": lambda dp: dp.integrated_center_of_mass(),
+    "polar_integrate": lambda dp: dp.polar_binning(2, 4, 0, 20).integrate(
+        radial_limits=(0, 20)
+    ),
+    "differentials": lambda dp: dp.polar_binning(1, 4, 0, 20).differentials(
+        (0, 2), (1, 3)
+    ),
+    "to_image_ensemble": lambda dp: dp.polar_binning(2, 4, 0, 20).to_image_ensemble(),
+}
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("reduction", _REDUCTIONS.values(), ids=_REDUCTIONS.keys())
+@pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
+def test_a_reversed_scan_reduces_to_the_images_of_the_same_positions_in_order(
+    item, increasing, reduction, lazy, device
+):
+    dp = _scanned_patterns(device, lazy)
+
+    reversed_images = reduction(dp[item])
+    images = reduction(dp[increasing])
+
+    assert type(reversed_images) is Images
+    assert reversed_images.sampling == pytest.approx(images.sampling)
+    expected = asnumpy(images.compute().array)
+    np.testing.assert_allclose(
+        asnumpy(reversed_images.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-6 * np.ptp(np.abs(expected)),
+    )
+
+
+@lazy_params
+@devices
+def test_a_reversed_line_scan_reduces_to_the_line_profile_in_order(lazy, device):
+    dp = _scanned_patterns(device, lazy)[:, 3]
+
+    profiles = dp[::-1].integrate_radial(0, 20)
+    expected = asnumpy(dp.integrate_radial(0, 20).compute().array)
+
+    assert type(profiles) is RealSpaceLineProfiles
+    assert profiles.sampling == pytest.approx(0.5)
+    np.testing.assert_allclose(
+        asnumpy(profiles.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-6 * np.ptp(expected),
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "filtered",
+    [
+        lambda dp: dp.gaussian_source_size((0.6, 0.9)),
+        lambda dp: dp.lorentzian_source_size((0.6, 0.9)),
+        lambda dp: dp.polar_binning(2, 4, 0, 20).gaussian_source_size((0.6, 0.9)),
+    ],
+    ids=["gaussian", "lorentzian", "polar_gaussian"],
+)
+def test_a_source_size_filters_a_reversed_scan_in_its_own_order(filtered, lazy, device):
+    dp = _scanned_patterns(device, lazy)
+    item = (_REVERSED, _REVERSED)
+
+    reversed_result = filtered(dp[item])
+    expected = asnumpy(filtered(dp).compute().array)[item]
+
+    assert reversed_result.ensemble_axes_metadata[0].sampling == pytest.approx(-0.5)
+    # a convolution sums the same terms in the reverse order, which float32
+    # rounding shows at a few 1e-7 of the range
+    np.testing.assert_allclose(
+        asnumpy(reversed_result.compute().array),
+        expected,
+        rtol=0,
+        atol=1e-5 * np.ptp(expected),
+    )
+
+
+@devices
+@pytest.mark.parametrize("item", [(_REVERSED,), (_FULL, _REVERSED)])
+def test_poisson_noise_per_area_of_a_reversed_scan_has_the_dose_of_the_scan(
+    item, device
+):
+    dp = _scanned_patterns(device, lazy=False)
+    dose_per_area = 1e6
+
+    counts = asnumpy(dp[item].poisson_noise(dose_per_area=dose_per_area, seed=0).array)
+    expected = float(asnumpy(dp.array).sum()) * dose_per_area * 0.5 * 0.4
+
+    assert counts.sum() == pytest.approx(expected, rel=10 / np.sqrt(expected))
 
 
 @settings(max_examples=5)
@@ -3676,6 +3845,94 @@ class TestDiffractionPatternsIndexOrientations:
         with pytest.raises(ValueError, match="length 1 or the length"):
             patterns.index_diffraction_spots(
                 cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
+
+    @staticmethod
+    def _patterns(ensemble_shape, lazy):
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n))) for n in ensemble_shape
+            ],
+        )
+        return patterns.lazy() if lazy else patterns
+
+    @lazy_params
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape, squeezed_shape",
+        [
+            # the shape of the patterns' ensemble: nothing to drop
+            ((), (), ()),
+            ((3,), (3,), (3,)),
+            ((4, 3), (4, 3), (4, 3)),
+            # one extra leading axis of length 1, and several
+            ((), (1,), ()),
+            ((), (1, 1), ()),
+            ((3,), (1, 3), (3,)),
+            ((3,), (1, 1, 3), (3,)),
+            ((4, 3), (1, 4, 3), (4, 3)),
+            # a length-1 axis within the ensemble axes is broadcast, not dropped
+            ((4, 3), (4, 1), (4, 1)),
+            ((4, 3), (1, 3), (1, 3)),
+            # an extra leading axis of length 1 before a broadcast axis
+            ((4, 3), (1, 4, 1), (4, 1)),
+        ],
+    )
+    def test_extra_leading_axes_of_length_one_are_dropped(
+        self, lazy, ensemble_shape, matrices_ensemble_shape, squeezed_shape
+    ):
+        """Matrices with extra leading axes of length 1 index the patterns as
+        the matrices without them."""
+        n = int(np.prod(matrices_ensemble_shape))
+        matrices = self._matrices(n, seed=1).reshape(matrices_ensemble_shape + (3, 3))
+        squeezed = matrices.reshape(squeezed_shape + (3, 3))
+
+        indexed, expected = (
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=m
+            )
+            for m in (matrices, squeezed)
+        )
+        if lazy:
+            indexed, expected = indexed.compute(), expected.compute()
+
+        assert indexed.ensemble_shape == ensemble_shape
+        assert indexed.array.shape == expected.array.shape
+        assert indexed.array.shape[:-1] == ensemble_shape
+        np.testing.assert_array_equal(indexed.array, expected.array)
+        np.testing.assert_array_equal(indexed.miller_indices, expected.miller_indices)
+
+    @lazy_params
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape",
+        [
+            # an extra leading axis longer than 1, alone and before a matching one
+            ((), (2,)),
+            ((3,), (2, 3)),
+            ((4, 3), (2, 4, 3)),
+            # the leading axis is the one that is compared with the ensemble
+            # axis: a length-1 axis after it is not dropped in its place
+            ((3,), (3, 1)),
+            ((4, 3), (4, 1, 1)),
+        ],
+    )
+    def test_extra_leading_axes_longer_than_one_raise(
+        self, lazy, ensemble_shape, matrices_ensemble_shape
+    ):
+        """Only leading axes of length 1 beyond the ensemble axes are dropped."""
+        matrices = self._matrices(int(np.prod(matrices_ensemble_shape)), seed=1)
+        matrices = matrices.reshape(matrices_ensemble_shape + (3, 3))
+
+        message = (
+            "extra leading axes are not of length 1: the ensemble shape of the "
+            f"matrices is {matrices_ensemble_shape}, that of the patterns is "
+            f"{ensemble_shape}"
+        )
+        with pytest.raises(ValueError, match=re.escape(message)):
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=matrices
             )
 
 

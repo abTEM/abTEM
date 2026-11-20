@@ -987,6 +987,61 @@ Bugfixes:
   `AttributeError`
 - The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
   location), where it reported a convergence failure for any assertion
+- Indexing an ensemble axis with a step, a negative start or stop, a reversed slice or an index array keeps the
+  coordinates of the selected members. The axis kept the unsliced offset and sampling, so `dp[::2, ::2]` of a
+  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size. A
+  partial slice of a `ReciprocalSpaceAxis` with `fftshift=False` kept the class, whose coordinates for the
+  shorter length are not those of the selected members of an axis stored in `ifftshift` order
+  ([PR #696](https://github.com/abTEM/abTEM/pull/696))
+    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`), or an index array whose members decrease
+      evenly, lists the same positions from the last. The axis stays a scan axis, with the first selected position as
+      its offset and a negative sampling. Before, `dp[::-1]` reversed the data and kept the axes, so its reductions
+      were mirrored. Reductions of a scan to images or line profiles return the positions in increasing order, with
+      a positive sampling, so `dp[::-1]` and `dp` give the same images: `integrate_radial`, `center_of_mass`,
+      `integrated_center_of_mass`, `PolarMeasurements.integrate`, `differentials` and `to_image_ensemble`, and the
+      detectors that reduce the scan of waves (`AnnularDetector` and the spectral detectors), `multislice` included.
+      Every other output keeps the scan in the order it was indexed, whatever else the transform returns: the
+      detectors that keep the scan as ensemble axes (`PixelatedDetector`, `FlexibleAnnularDetector`,
+      `SegmentedDetector`, `WavesDetector`), alone or next to a reducing detector in one `multislice`, the transforms
+      of waves (`apply_ctf`, `multislice` exit waves), and the operations on measurements (the source-size filters,
+      `poisson_noise`). The filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring
+      positions. A scan of waves that are already scanned (`Waves.scan`) puts its own positions in increasing order
+      and keeps the scan of the waves as it was indexed. A single position selected through a reversal
+      (`dp[::-1][:1]`, `dp[3:2:-1]`) has a positive sampling and is not a reversed scan.
+      A reversed slice of another linear axis, and an index array on one, give a `NonLinearAxis` with the selected
+      coordinates, and so do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with
+      `fftshift=False` that does not select every member. On a scan axis, an index array whose members are evenly
+      spaced is the equivalent slice (`dp[[0, 2, 4]]` is `dp[0:5:2]`) and keeps the scan axis. Any other index array
+      gives a `NonLinearAxis` there too, so the axis is no longer a scan axis: reductions over it return line
+      profiles instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D
+      scan; `integrated_center_of_mass`, the source-size filters (`gaussian_source_size`, `lorentzian_source_size`,
+      `voigtian_source_size` and `pseudo_voigtian_source_size`, of diffraction patterns and of polar measurements)
+      and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
+      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes
+      (`np.ix_`), or any index array of more than one dimension on one, raises `IndexError`.
+- **Behaviour change:** `abtem.stack` and `abtem.concatenate` raise a `ValueError` when the members have a different
+  number of axes (naming both numbers) or different axes (another part of a scan, a different offset or sampling, a
+  reversed scan), except the axis `concatenate` joins. The message names the first differing axis, the fields that
+  differ and both values (for example `offset 0.25 vs 2.25`). They gave every member the axes of the first one, so
+  the others silently got its coordinates. The `RuntimeError` of `concatenate` for an axis that cannot be joined now
+  carries a message
+- `get_items(index, keepdims=True)` with a negative integer index returns the member counted from the end of the axis,
+  and an index out of range raises `IndexError`. It returned an empty array and an empty axis. A numpy integer index
+  (`np.int64(2)`) keeps a length-1 axis like an `int`; it returned an array without the ensemble axis
+- `LinearAxis[i]` raises `TypeError` for a negative integer instead of returning an axis with the wrong offset
+- Lazy arrays on the Metal (torch) backend can be indexed with a list or a boolean mask along a chunked axis
+  (`numpy.take` is implemented), and `PolarMeasurements.to_image_ensemble` works on an eager measurement
+  (`numpy.moveaxis` is implemented)
+- `DiffractionPatterns.index_diffraction_spots` drops extra leading axes of length 1 of the orientation matrices
+  beyond the ensemble axes of the patterns, for eager and lazy patterns alike. Lazy patterns failed with an error of
+  dask for these, and eager patterns were indexed with some of these matrices and raised an `AssertionError` for
+  others. Patterns of ensemble shape `(4, 3)` with matrices of ensemble shape `(1, 4, 1)` were indexed with the wrong
+  matrices (9 of 12 members); they now equal the `(4, 1)` call
+- **Behaviour change:** `DiffractionPatterns.index_diffraction_spots` raises a `ValueError` for orientation matrices
+  with extra axes longer than 1 (an `AssertionError` for eager patterns and an error of dask for lazy ones before),
+  and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape `(3,)` with matrices of
+  ensemble shape `(3, 1)` or `(3, 1, 1)`, and `(4, 3)` with `(4, 1, 1)` or `(4, 1, 1, 1)`, for example, were indexed
+  with the right matrices
 
 Documentation:
 
