@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import angle_convention, energy2wavelength
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 __all__ = ["BackscatterDetector", "small_angle_error"]
@@ -54,7 +54,9 @@ class BackscatterDetector(CopyMixin, EqualityMixin):
         Half-width of the detector grid along each axis [mrad], measured as a
         scattering angle from the beam direction. The corner of the grid
         reaches a larger angle than this by up to a factor ``sqrt(2)``.
-        Give together with `gpts`.
+        Give together with `gpts`. Always a scattering angle, whatever the
+        ``angles`` configuration: the grid is uniform in its sine,
+        ``wavelength * k``, as diffraction patterns are.
     gpts : int, optional
         Number of detector pixels along each axis of the grid. Give together
         with `max_angle`.
@@ -108,15 +110,17 @@ class BackscatterDetector(CopyMixin, EqualityMixin):
         else:
             raise ValueError("give either 'directions' or 'max_angle' and 'gpts'")
 
-        # only a grid's angular calibration assumes small angles
-        if self.is_grid:
+        # only a grid's angular calibration assumes small angles, and only with the
+        # paraxial angles configuration
+        if self.is_grid and angle_convention() == "paraxial":
             error = small_angle_error(self.max_scattering_angle * 1e3)
             if error > 0.05:
                 warnings.warn(
                     f"the largest collected angle is "
                     f"{self.max_scattering_angle * 1e3:.0f} mrad, where the "
                     f"small-angle approximation is in error by {error:.1%}; "
-                    f"the angular axis calibration assumes it holds"
+                    f"the angular axis calibration assumes it holds unless the "
+                    f"'angles' configuration is 'exact'"
                 )
 
     @staticmethod

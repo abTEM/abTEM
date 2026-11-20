@@ -1574,6 +1574,7 @@ class _TorchNumpyNamespace:
     sin = staticmethod(_elementwise("sin"))
     cos = staticmethod(_elementwise("cos"))
     tan = staticmethod(_elementwise("tan"))
+    arcsin = staticmethod(_elementwise("arcsin"))
     sinc = staticmethod(_elementwise("sinc"))
     sign = staticmethod(_elementwise("sign"))
     isfinite = staticmethod(_elementwise("isfinite"))
@@ -1622,6 +1623,7 @@ class _TorchNumpyNamespace:
     bool_ = np.bool_
     pi = np.pi
     inf = np.inf
+    nan = np.nan
 
     # device control
     synchronize = staticmethod(synchronize)

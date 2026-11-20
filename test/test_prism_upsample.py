@@ -1759,30 +1759,39 @@ def test_upsample_blend_snapping():
     # snapping the blend angle onto a detector boundary is pure angular
     # arithmetic: device-independent. Only a band that straddles the blend
     # angle is snapped, to its own inner boundary; a band wholly below or
-    # above keeps the blend angle
+    # above keeps the blend angle. The cut is on the angular grid, so a
+    # boundary snapped to is its grid angle
+    from abtem.core.energy import to_grid_angle as g
     from abtem.prism.s_matrix import CompressedSMatrixArray as C
 
     bright = abtem.AnnularDetector(inner=0, outer=15)
     middle = abtem.AnnularDetector(inner=21, outer=50)
     outer = abtem.AnnularDetector(inner=50, outer=90)
-    assert C._snapped_blend_angle(37.5, middle) == 21.0  # straddles
-    assert C._snapped_blend_angle(60.0, outer) == 50.0  # straddles
+    assert C._snapped_blend_angle(37.5, middle) == pytest.approx(g(21.0))  # straddles
+    assert C._snapped_blend_angle(60.0, outer) == pytest.approx(g(50.0))  # straddles
     assert C._snapped_blend_angle(37.5, bright) == 37.5  # wholly below
     assert C._snapped_blend_angle(60.0, middle) == 60.0  # wholly below
     assert C._snapped_blend_angle(37.5, outer) == 37.5  # wholly above
     assert C._snapped_blend_angle(50.0, middle) == 50.0  # outer edge at the cut
     assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=0)) == 10.0
-    assert C._snapped_blend_angle(10.0, abtem.AnnularDetector(inner=5)) == 5.0
+    detector = abtem.AnnularDetector(inner=5)
+    assert C._snapped_blend_angle(10.0, detector) == pytest.approx(g(5.0))
     assert C._snapped_blend_angle("aperture", middle) == "aperture"
     assert C._snapped_blend_angle(None, middle) is None
 
     # an offset detector's boundaries are the bounds of the angles it covers,
-    # widened by |offset| plus the rounding margin: here [15, 56]
+    # widened by |offset| plus the rounding margin on the grid: here [15, 56]
+    # paraxially
     offset_detector = abtem.SegmentedDetector(
         nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
     )
-    assert C._snapped_blend_angle(30.0, offset_detector, margin=1.0) == 15.0
-    assert C._snapped_blend_angle(53.0, offset_detector, margin=1.0) == 15.0
+    low = g(16.0) - 1.0
+    assert C._snapped_blend_angle(30.0, offset_detector, margin=1.0) == (
+        pytest.approx(low)
+    )
+    assert C._snapped_blend_angle(53.0, offset_detector, margin=1.0) == (
+        pytest.approx(low)
+    )
     assert C._snapped_blend_angle(60.0, offset_detector, margin=1.0) == 60.0
 
 
@@ -1816,6 +1825,39 @@ def test_upsample_blend_snaps_to_detector_boundary(device):
     # the bright field is below it and is the interpolated reduction
     assert not np.allclose(
         to_host_array(composite[0]), to_host_array(reference[0]), rtol=1e-4
+    )
+
+
+def test_upsample_blend_snaps_to_the_grid_angle_of_an_exact_boundary():
+    # with exact angles a band starts at 1e3 * sin(inner / 1e3) on the grid, below
+    # inner: snapping the cut to inner itself leaves the grid ring between the two
+    # in the interpolated branch. The ring at r is in the band for inner = r + 0.06
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    )
+    prism = SMatrix(**kwargs).build(lazy=False)
+    compressed = SMatrix(
+        **kwargs,
+        upsample=True,
+        tolerance=1e-3,
+        window_gpts=int(prism.window_gpts[0]) * 2,
+    ).build(lazy=False)
+
+    window = prism.window_gpts
+    q = [np.fft.fftfreq(n, d) for n, d in zip(window, prism.sampling)]
+    radii = np.hypot(q[0][:, None], q[1][None]).ravel() * prism.wavelength * 1e3
+    ring = radii[np.argmin(np.abs(radii - 90.0))]
+    detectors = [abtem.AnnularDetector(inner=ring + 0.06, outer=100)]
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    with abtem.config.set({"angles": "exact"}):
+        composite = compressed.scan(
+            scan=scan, detectors=detectors, blend_angle=95.0, blend_window_gpts="period"
+        )
+        reference = prism.scan(scan=scan, detectors=detectors)
+    assert np.allclose(
+        to_host_array(composite), to_host_array(reference), rtol=1e-4, atol=1e-9
     )
 
 
@@ -2102,9 +2144,14 @@ def test_upsample_offset_detectors_route_on_the_angles_they_cover():
     # snapping puts the cut on the covered bounds of an offset detector: a
     # blend angle inside them moves to the covered inner bound, one beyond
     # them stays
+    # (on the angular grid, where the cut is)
+    from abtem.core.energy import to_grid_angle
+
     detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
     margin = built._offset_rounding_margin
-    assert built._snapped_blend_angle(40, detector, margin) == pytest.approx(20 - r)
+    assert built._snapped_blend_angle(40, detector, margin) == pytest.approx(
+        to_grid_angle(20 - 5.0) - margin
+    )
     assert built._snapped_blend_angle(40 + r + 1, detector, margin) == 40 + r + 1
 
 
