@@ -29,6 +29,11 @@ def _atoms():
     return bulk("Si", "diamond", a=5.43, cubic=True) * (2, 2, 3)
 
 
+# With 2 blocks per worker, 3 of the 4 workers of a cluster ran tasks in every compute after
+# the first on a new cluster; with 8 blocks per worker all 4 did in every compute measured.
+_BLOCKS_PER_WORKER = 8
+
+
 def _exit_waves(n_configs):
     """Exit waves keep the frozen-phonon axis: n_configs independent dask blocks."""
     frozen_phonons = abtem.FrozenPhonons(_atoms(), num_configs=n_configs, sigmas=0.1, seed=1)
@@ -101,12 +106,12 @@ def test_gpu_compute_distributes_over_all_workers(cuda_client):
 
     n = len(cuda_client.nthreads())
     with abtem.config.set({"device": "gpu"}):
-        waves = _exit_waves(n_configs=2 * n)
+        waves = _exit_waves(n_configs=_BLOCKS_PER_WORKER * n)
         with get_task_stream(cuda_client) as ts:
             result = waves.compute(progress_bar=False)
 
     arr = asnumpy(result.array)
-    assert arr.shape[0] == 2 * n
+    assert arr.shape[0] == _BLOCKS_PER_WORKER * n
     assert np.all(np.isfinite(arr.real)) and np.all(np.isfinite(arr.imag))
 
     workers = {r.get("worker") for r in ts.data if isinstance(r, dict) and r.get("worker")}
@@ -135,7 +140,7 @@ def test_automatic_multigpu_config_distributes(cuda_client):
 
     n = len(cuda_client.nthreads())
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        waves = _exit_waves(n_configs=2 * n)
+        waves = _exit_waves(n_configs=_BLOCKS_PER_WORKER * n)
         with get_task_stream(cuda_client) as ts:
             waves.compute(progress_bar=False)
 
