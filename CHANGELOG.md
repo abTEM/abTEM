@@ -137,7 +137,7 @@ Features:
   without clone, fetch or reset, and installs from uv's cache only, for compute nodes without internet access. On ROCm
   it runs one pytest process per test file, reports the failed and errored tests and detects aborts. On a gfx1151
   integrated GPU, or one whose architecture cannot be read, it skips the GPU `ChargeDensityPotential` tests, whose
-  construction has hung the device into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them)
+  GPU build of a repeated cell has hung the device into a GPU reset (`ABTEM_CI_ROCM_CHARGE_DENSITY=1` keeps them)
 
 Performance:
 
