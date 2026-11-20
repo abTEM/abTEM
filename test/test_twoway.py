@@ -9,7 +9,7 @@ from utils import _ACCELERATOR, to_host_array
 import abtem
 from abtem.core.energy import energy2wavelength
 from abtem.multislice import FourierMultislice
-from abtem.twoway import TwoWaySolver, structure_symmetry
+from abtem.twoway import TwoWaySolver, structure_glides, structure_symmetry
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
@@ -456,6 +456,70 @@ def test_an_ensemble_of_tilts_is_the_tilts_one_by_one():
                 np.testing.assert_allclose(
                     reflected.array[i, j], single_r.array, atol=1e-9
                 )
+
+
+def glide_slab():
+    """A slab of the plane group pmg: two atoms, related by a mirror along y with a
+    translation of half the cell along y (a glide), placed on the grid of the potential
+    so that the sampled potential has the symmetry exactly."""
+    a, b, nx, ny = 5.0, 6.0, 48, 64
+    x0, y0 = 9 * a / nx, 13 * b / ny
+    atoms = ase.Atoms(
+        "Si2",
+        positions=[[x0, y0, 4.0], [(-x0) % a, y0 + b / 2, 4.0]],
+        cell=[a, b, 8.0],
+        pbc=[True, True, False],
+    )
+    return atoms, (nx, ny)
+
+
+def test_structure_glides_finds_the_glide_that_the_point_operations_miss():
+    atoms, _ = glide_slab()
+    origin, operations, translations = structure_symmetry(atoms)
+    glides = structure_glides(atoms, origin, operations, translations)
+    assert {name for name, _, _ in glides} == {"mir90", "rot180"}
+    for _, matrix, translation in glides:
+        # a half period along y, whatever the origin: the translation, taken in the
+        # frame of the glide, moves the atoms by (0, b / 2) modulo the lattice
+        moved = (atoms.positions[:, :2] - origin) @ matrix.T + origin + translation
+        difference = moved[:, None, :] - atoms.positions[None, :, :2]
+        difference -= np.round(difference / [5.0, 6.0]) * [5.0, 6.0]
+        assert (np.linalg.norm(difference, axis=-1).min(axis=1) < 1e-6).all()
+
+
+def test_symmorphic_structures_have_no_glides():
+    # Oracle: graphene and SrTiO3 (symmorphic): every operation of the point group is
+    # found about the origin.
+    for atoms in (graphene_atoms(), strontium_titanate(2)):
+        origin, operations, translations = structure_symmetry(atoms)
+        assert structure_glides(atoms, origin, operations, translations) == []
+
+
+@pytest.mark.parametrize("tilt", [(0.0, 0.0), (0.0, 60.0), (45.0, 0.0)])
+def test_the_glide_gives_the_waves_of_the_full_basis_and_the_systematic_absences(tilt):
+    # Oracle: the full beam basis. The reduced basis (a glide gives orbits with fixed
+    # phases, and none at all where the beams are absent) reproduces the amplitudes
+    # and phases of the full one, with and without a tilt along the mirror, and the
+    # beams (0, odd) that the glide extinguishes are zero in the full solution.
+    atoms, gpts = glide_slab()
+    potential = abtem.Potential(
+        atoms, gpts=gpts, slice_thickness=0.02, projection="finite", periodic=True
+    )
+    amplitudes = {}
+    for symmetry in (True, False):
+        with abtem.config.set({"precision": "float64"}):
+            transmitted, reflected = TwoWaySolver(
+                cutoff=2.0, symmetry=symmetry
+            ).scatter(abtem.PlaneWave(energy=1000.0, tilt=tilt), potential)
+        amplitudes[symmetry] = (
+            beam_amplitudes(transmitted),
+            beam_amplitudes(reflected),
+        )
+    for reduced, full in zip(amplitudes[True], amplitudes[False]):
+        np.testing.assert_allclose(reduced, full, atol=1e-10)
+    if tilt[0] == 0.0:
+        absent = amplitudes[False][0][0, 1::2]
+        assert np.abs(absent[: gpts[1] // 2 // 2]).max() < 1e-10
 
 
 def test_symmetry_reduction_gives_the_same_waves_as_the_full_basis():
