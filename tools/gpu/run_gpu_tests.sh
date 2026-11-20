@@ -274,7 +274,7 @@ except Exception:
             if [ "${ABTEM_CI_ROCM_CHARGE_DENSITY:-0}" != 1 ]; then
                 SWEEP_K="gpu and not (charge_density or chargedensity)"
                 SKIP_NOTE="; ChargeDensityPotential tests skipped"
-                echo "ROCm (${ROCM_ARCH}): skipping the GPU ChargeDensityPotential tests"
+                echo "ROCm (arch ${ROCM_ARCH}): skipping the GPU ChargeDensityPotential tests"
             fi ;;
     esac
     # One process per test file: a GPU abort (exit status >= 128, a signal)
