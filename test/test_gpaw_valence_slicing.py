@@ -14,6 +14,7 @@ from ase import Atoms
 from utils import rotated_by_hand
 
 import abtem
+from abtem.core.utils import safe_ceiling_int
 from abtem.potentials.gpaw import integrate_slice
 from abtem.potentials.iam import Potential
 
@@ -46,9 +47,11 @@ SLICE_THICKNESSES = [
 
 
 def _slice_limits(slice_thickness):
-    """The slice limits and the depth GPAWPotential passes to integrate_slice."""
+    """The slice limits and the depth GPAWPotential passes to integrate_slice, for
+    the fewest equal slices no thicker than `slice_thickness`."""
     atoms = Atoms("C", positions=[(1.0, 1.0, 1.0)], cell=CELL, pbc=True)
-    potential = Potential(atoms, sampling=0.5, slice_thickness=slice_thickness)
+    num_slices = max(safe_ceiling_int(CELL[2] / slice_thickness), 1)
+    potential = Potential(atoms, sampling=0.5, num_slices=num_slices)
     return potential.get_sliced_atoms().slice_limits, potential.thickness
 
 

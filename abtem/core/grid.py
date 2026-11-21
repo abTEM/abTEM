@@ -43,8 +43,8 @@ def round_auto_derived_gpts() -> bool:
     """
     Whether grids abTEM derives on its own are rounded to fast FFT lengths.
 
-    This covers grids abTEM chooses without a user-supplied sampling, such as
-    ``Potential(..., sampling='auto')``. Grids derived from a numeric sampling
+    This covers grids abTEM chooses itself, such as the grid of a ``Potential``
+    commensurate with its atoms. Grids that `Grid` derives from a numeric sampling
     are governed separately (they are only rounded in the ``'always'`` mode),
     because rounding those changes the result of an existing script.
     """
@@ -147,15 +147,10 @@ class Grid(CopyMixin, EqualityMixin):
         that is matched to this one and has an explicit `gpts` or `sampling` of its
         own overrides them, instead of the other way around. Setting the `gpts` or
         `sampling` clears this. Default is False.
-    gpts_are_auto : bool
-        If true the gpts were requested as 'auto'. Unlike a default, an explicit
-        `gpts` or `sampling` of a grid that is matched to this one does not override
-        them, but it is warned about. Setting the `gpts` or `sampling` clears this.
-        Default is False.
     """
 
     # Where the gpts came from is bookkeeping, not part of the grid.
-    _eq_exclude = ("_gpts_is_default", "_gpts_are_auto", "_gpts_adopted")
+    _eq_exclude = ("_gpts_is_default", "_gpts_adopted")
 
     def __init__(
         self,
@@ -169,7 +164,6 @@ class Grid(CopyMixin, EqualityMixin):
         lock_sampling: bool = False,
         fft_grid: bool = True,
         gpts_is_default: bool = False,
-        gpts_are_auto: bool = False,
     ):
         self._dimensions = dimensions
         # Only a grid that is Fourier transformed benefits from a fast FFT
@@ -199,7 +193,6 @@ class Grid(CopyMixin, EqualityMixin):
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
         self._gpts_is_default = gpts_is_default
-        self._gpts_are_auto = gpts_are_auto
         # Whether the gpts were taken from another grid in `match`, in which case
         # they are not something this grid asked for.
         self._gpts_adopted = False
@@ -276,14 +269,8 @@ class Grid(CopyMixin, EqualityMixin):
         """Whether the gpts were chosen automatically and yield to an explicit grid."""
         return self._gpts_is_default
 
-    @property
-    def gpts_are_auto(self) -> bool:
-        """Whether the gpts were requested as 'auto'."""
-        return self._gpts_are_auto
-
     def _clear_gpts_origin(self):
         self._gpts_is_default = False
-        self._gpts_are_auto = False
         self._gpts_adopted = False
 
     @property
@@ -462,16 +449,6 @@ class Grid(CopyMixin, EqualityMixin):
             if np.any(self.gpts != other.gpts):
                 other.gpts = self.gpts
         elif np.any(self.gpts != other.gpts):
-            if explicit and self._has_auto_gpts(other):
-                warnings.warn(
-                    f"The grid requested for the waves (gpts={self.gpts}) is "
-                    f"overridden by the potential, which was given sampling='auto' "
-                    f"(gpts={other.gpts}). Leave the `sampling` and `gpts` of the "
-                    f"potential unset to let the waves choose the grid, or give the "
-                    f"potential the grid explicitly.",
-                    UserWarning,
-                    stacklevel=3,
-                )
             self.gpts = other.gpts
 
         if other.sampling is None:
@@ -487,10 +464,6 @@ class Grid(CopyMixin, EqualityMixin):
 
         if not explicit and self.gpts is not None:
             self._gpts_adopted = True
-
-    @staticmethod
-    def _has_auto_gpts(other: Grid | HasGrid2DMixin) -> bool:
-        return bool(getattr(getattr(other, "grid", other), "gpts_are_auto", False))
 
     @staticmethod
     def _has_default_gpts(other: Grid | HasGrid2DMixin) -> bool:
@@ -586,7 +559,7 @@ class Grid(CopyMixin, EqualityMixin):
 
         Automatic rounding is governed by the configuration option
         ``grid.round-to-fast-fft``: ``'auto'`` (the default) rounds the grids
-        abTEM derives on its own, such as ``Potential(sampling='auto')``;
+        abTEM derives on its own, such as the commensurate grid of a ``Potential``;
         ``True`` additionally rounds gpts derived from a numeric sampling;
         ``False`` disables it everywhere.
 

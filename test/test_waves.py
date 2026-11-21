@@ -1060,7 +1060,7 @@ def _build_exit_plane_waves(device="cpu", exit_planes=1):
 
     potential = abtem.Potential(
         atoms,
-        slice_thickness=2.0,
+        num_slices=14,
         gpts=(32, 32),
         exit_planes=exit_planes,
         device=device,
@@ -1256,7 +1256,7 @@ _BATCH_ATOMS = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
 
 def _batch_probe_and_potential(exit_planes):
     potential = abtem.Potential(
-        _BATCH_ATOMS, gpts=48, slice_thickness=2, exit_planes=exit_planes
+        _BATCH_ATOMS, gpts=48, num_slices=6, exit_planes=exit_planes
     )
     probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
     probe.grid.match(potential)
@@ -1497,7 +1497,7 @@ def _scan_setup(device, lazy, frozen_phonons=False, exit_planes=None, line=False
     potential = abtem.Potential(
         atoms,
         gpts=(48, 40),
-        slice_thickness=2.7,
+        num_slices=5,
         exit_planes=exit_planes,
         device=device,
     )

@@ -84,7 +84,8 @@ grid:
   # Bluestein FFT fallback on GPU and speed up CPU FFTs as well. Rounding is
   # upward only, so a grid derived from a numeric sampling never comes out
   # coarser than requested. gpts given explicitly are never altered.
-  #   'auto'  round only grids abTEM derives on its own (sampling='auto')
+  #   'auto'  round only grids abTEM derives on its own (the commensurate grid
+  #           of a Potential)
   #   true    additionally round gpts derived from a numeric sampling
   #   false   never round
   round-to-fast-fft: auto
@@ -96,6 +97,14 @@ warnings:
 potential:
   # Number of slices to build at once during multislice. "auto" = memory-budget-aware.
   slice-chunk-size: "auto"
+  # The largest sampling [Å] of a Potential (and of the other fields built from
+  # atoms) that is given neither `sampling` nor `gpts`; its grid is chosen
+  # commensurate with the atoms and no coarser than this.
+  sampling: 0.05
+  # The largest slice thickness [Å] of a Potential given neither `slice_thickness`
+  # nor `num_slices`; its slices are aligned with the atomic planes and no thicker
+  # than this.
+  slice-thickness: 1.0
 bloch:
   # How Bloch waves compute the beam amplitudes from the structure matrix.
   #   'eigh'  its eigendecomposition

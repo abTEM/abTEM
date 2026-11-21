@@ -90,6 +90,9 @@ def _detector_patch(
                 _displaced(slab, rotation, builder._frozen_phonons),
                 gpts=gpts,
                 slice_thickness=builder._slice_thickness,
+                # Uniform slices: the slab is displaced per configuration, and
+                # slices that followed its atoms would differ between them.
+                commensurate=False,
                 projection="finite",
                 device=builder._device,
             ),
@@ -365,6 +368,8 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
             _displaced(slab, rotation, self._frozen_phonons),
             gpts=fft_friendly_gpts(self.incident_cell[:2], self._sampling),
             slice_thickness=self._slice_thickness,
+            # uniform slices, as for the slabs of the patches
+            commensurate=False,
             projection="finite",
             device=self._device,
         )

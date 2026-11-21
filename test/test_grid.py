@@ -310,48 +310,20 @@ def test_whether_gpts_are_a_default_does_not_affect_equality():
     assert default == explicit
 
 
-# ── auto gpts are kept, but an explicit grid meeting them is warned about ────
-def _auto_grid():
-    return Grid(
-        extent=(8.0, 8.0), gpts=(160, 160), lock_extent=True, gpts_are_auto=True
-    )
-
-
-def test_explicit_gpts_do_not_override_auto_gpts_but_warn():
-    waves = Grid(gpts=(100, 100))
-    auto = _auto_grid()
-
-    with pytest.warns(UserWarning, match="sampling='auto'"):
-        waves.match(auto)
-
-    assert waves.gpts == (160, 160)
-    assert auto.gpts == (160, 160)
-
-
-def test_a_grid_without_explicit_gpts_adopts_auto_gpts_quietly(recwarn):
-    waves = Grid()
-
-    waves.match(_auto_grid())
-
-    assert waves.gpts == (160, 160)
-    assert len(recwarn) == 0
-
-
+# ── adopted gpts are not explicit ────────────────────────────────────────────
 def test_a_grid_that_adopted_its_gpts_is_not_explicit_when_matched_again(recwarn):
     waves = Grid()
     waves.match(Grid(extent=(8.0, 8.0), gpts=(100, 100), lock_extent=True))
 
-    waves.match(_auto_grid())
+    default = _default_grid()
+    waves.match(default)
 
     assert waves.gpts == (160, 160)
+    assert default.gpts_is_default
     assert len(recwarn) == 0
 
 
-def test_setting_gpts_clears_the_auto_flag_and_the_adoption():
-    grid = _auto_grid()
-    grid.gpts = (100, 100)
-    assert not grid.gpts_are_auto
-
+def test_setting_gpts_clears_the_adoption():
     waves = Grid()
     waves.match(Grid(extent=(8.0, 8.0), gpts=(100, 100), lock_extent=True))
     waves.gpts = (50, 50)

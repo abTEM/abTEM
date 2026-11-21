@@ -44,10 +44,10 @@ def _frozen_phonons(ensemble_mean: bool = True):
 
 
 def _potential(atoms, device):
-    # Si (5.431 A) in 1.36 A slices is four slices; exit_planes=2 gives the
-    # entrance plane and two exit planes.
+    # Si (5.431 A) in four slices; exit_planes=2 gives the entrance plane and
+    # two exit planes.
     potential = abtem.Potential(
-        atoms, gpts=GPTS, slice_thickness=1.36, exit_planes=2, device=device
+        atoms, gpts=GPTS, num_slices=4, exit_planes=2, device=device
     )
     assert len(potential.exit_planes) == NUM_EXIT_PLANES
     return potential
@@ -137,7 +137,7 @@ def test_without_ensemble_mean_each_configuration_matches_its_static_run(device)
 @devices
 def test_crystal_potential_frozen_phonons_lazy_matches_eager(device):
     def scan(lazy):
-        unit = abtem.Potential(_atoms(), gpts=GPTS, slice_thickness=1.36, device=device)
+        unit = abtem.Potential(_atoms(), gpts=GPTS, num_slices=4, device=device)
         potential = abtem.CrystalPotential(
             unit,
             repetitions=(1, 1, 2),

@@ -165,10 +165,17 @@ def test_rotated_potential_equals_displacing_the_input_atoms(plane):
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    # Pinned: the default slicing follows the atoms, which differ between the two.
-    kwargs = dict(sampling=0.05, plane=plane, slice_thickness=1.0)
-    actual = abtem.Potential(fp, **kwargs).build().compute()
-    expected = abtem.Potential(displaced, **kwargs).build().compute()
+    potential = abtem.Potential(fp, sampling=0.05, plane=plane, slice_thickness=1.0)
+    actual = potential.build().compute()
+    # The grid and the slicing follow the atoms, which differ between the two, so
+    # the displaced atoms are given those of the potential.
+    expected = abtem.Potential(
+        displaced,
+        plane=plane,
+        gpts=potential.gpts,
+        slice_thickness=potential.slice_thickness,
+    )
+    expected = expected.build().compute()
 
     np.testing.assert_allclose(actual.array[0], expected.array, rtol=1e-6, atol=1e-6)
 
@@ -197,9 +204,16 @@ def test_rotated_magnetic_field_equals_displacing_the_input_atoms(field):
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    kwargs = dict(sampling=0.2, slice_thickness=1.5, plane="xz")
-    actual = field(fp, **kwargs).build(lazy=False).array[0]
-    expected = field(displaced, **kwargs).build(lazy=False).array
+    built = field(fp, sampling=0.2, slice_thickness=1.5, plane="xz")
+    actual = built.build(lazy=False).array[0]
+    # The grid and the slicing follow the atoms, which differ between the two.
+    expected = field(
+        displaced,
+        plane="xz",
+        gpts=built.gpts,
+        slice_thickness=built.slice_thickness,
+    )
+    expected = expected.build(lazy=False).array
 
     scale = np.abs(expected).max()
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * scale)
@@ -323,10 +337,13 @@ def test_anisotropic_sigmas_follow_the_strain_of_an_orthogonalization():
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    # Pinned: the default slicing follows the atoms, which differ between the two.
-    kwargs = dict(sampling=0.05, slice_thickness=1.0)
-    actual = abtem.Potential(fp, **kwargs).build().compute().array[0]
-    expected = abtem.Potential(displaced, **kwargs).build().compute().array
+    potential = abtem.Potential(fp, sampling=0.05, slice_thickness=1.0)
+    actual = potential.build().compute().array[0]
+    # The grid and the slicing follow the atoms, which differ between the two.
+    expected = abtem.Potential(
+        displaced, gpts=potential.gpts, slice_thickness=potential.slice_thickness
+    )
+    expected = expected.build().compute().array
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * expected.max())
 
 
@@ -485,10 +502,12 @@ def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(
     for i, configuration in enumerate(configurations):
         assert SOURCE_INDEX not in configuration.arrays
         assert len(configuration) == len(potential.get_transformed_atoms())
+        # The grid and the slicing follow the atoms, which differ between the
+        # configurations and the atoms of the ensemble.
         single = abtem.Potential(
             configuration,
-            sampling=0.05,
-            slice_thickness=2,
+            gpts=potential.gpts,
+            slice_thickness=potential.slice_thickness,
             projection=projection,
             periodic=periodic,
         )
@@ -545,7 +564,9 @@ def test_potential_to_atoms_ensemble_keeps_an_energy_resolved_ensemble():
     assert [type(axis) for axis in configurations.ensemble_axes_metadata] == [
         type(axis) for axis in ensemble.ensemble_axes_metadata
     ]
-    rebuilt = abtem.Potential(configurations, sampling=0.1, slice_thickness=2)
+    rebuilt = abtem.Potential(
+        configurations, gpts=potential.gpts, slice_thickness=potential.slice_thickness
+    )
     np.testing.assert_array_equal(
         rebuilt.build().compute().array, potential.build().compute().array
     )

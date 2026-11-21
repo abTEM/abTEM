@@ -749,10 +749,10 @@ def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     ids=["BN x (1, 2, 1)", "monoclinic c = (4, 0, 5)"],
 )
 def test_automatic_sampling_of_a_sheared_cell(atoms):
-    potential = abtem.Potential(atoms, sampling="auto")
+    potential = abtem.Potential(atoms)
     oracle = _by_hand(atoms, potential.box)
     # The grid that fits the atoms as the orthogonal cell holds them.
-    assert potential.gpts == abtem.Potential(oracle, sampling="auto").gpts
+    assert potential.gpts == abtem.Potential(oracle).gpts
 
 
 def test_noise_in_the_off_diagonal_components_is_still_removed():

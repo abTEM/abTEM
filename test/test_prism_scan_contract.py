@@ -44,7 +44,7 @@ def _potential(
             ensemble_mean=frozen_phonons,
         )
     return abtem.Potential(
-        atoms, gpts=gpts, slice_thickness=2, exit_planes=exit_planes, device=device
+        atoms, gpts=gpts, num_slices=6, exit_planes=exit_planes, device=device
     )
 
 
@@ -64,7 +64,7 @@ def _energy_resolved_potential(ensemble_mean, device="cpu", exit_planes=None):
         snapshots, energies=[10.0, 20.0], ensemble_mean=ensemble_mean
     )
     return abtem.Potential(
-        ensemble, gpts=64, slice_thickness=2, exit_planes=exit_planes, device=device
+        ensemble, gpts=64, num_slices=6, exit_planes=exit_planes, device=device
     )
 
 

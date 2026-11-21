@@ -258,6 +258,39 @@ def interpolate(array_out, array_in, position, sampling_out, sampling_in):
 
 
 @jit(nopython=True, fastmath=True, nogil=True, cache=True)
+def _table_position(integral_limits, limit):
+    """The node below `limit` on the uniform grid `integral_limits` of a cumulative
+    integral table, and the fraction of the way to the next node, clamped to the
+    table."""
+    n = len(integral_limits)
+    step = (integral_limits[n - 1] - integral_limits[0]) / (n - 1)
+    x = (limit - integral_limits[0]) / step
+    if x <= 0.0:
+        return 0, 0.0
+    if x >= n - 1:
+        return n - 2, 1.0
+    k = min(int(np.floor(x)), n - 2)
+    return k, x - k
+
+
+@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+def _table_difference(table, i, wi, j, wj):
+    """The cumulative integral `table` (nodes along its first axis) from the
+    position (i, wi) to the position (j, wj), linearly interpolated between nodes.
+
+    Snapping a limit to the nearest node instead moved a whole node interval of
+    the integral between neighbouring slices when a limit lay halfway between two
+    nodes, which a slice limit on an atomic plane often does (0.55 Å from an atom
+    on 0.1 Å nodes): one ulp decided which, and the field near the atom changed
+    by half of its maximum. Interpolated, the integral is continuous in the
+    limits, and the slices of a cell still add up to the integral through it.
+    """
+    upper = table[j] * (1.0 - wj) + table[j + 1] * wj
+    lower = table[i] * (1.0 - wi) + table[i + 1] * wi
+    return upper - lower
+
+
+@jit(nopython=True, fastmath=True, nogil=True, cache=True)
 def interpolate_quasi_dipole_field_projections(
     magnetic_field,
     sampling,
@@ -274,18 +307,16 @@ def interpolate_quasi_dipole_field_projections(
     # pairings fail to type numba's internal np.zeros -> np.empty lowering
     # inside @njit, so it can't be allocated in here.
     for position, magnetic_moment in zip(positions, magnetic_moments):
-        shifted_limits = slice_limits - position[2]
-        i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
-        j = np.argmin(np.abs(integral_limits - shifted_limits[1]))
-        j = min(tables.shape[1] - 1, j)
+        i, wi = _table_position(integral_limits, slice_limits[0] - position[2])
+        j, wj = _table_position(integral_limits, slice_limits[1] - position[2])
 
-        b1xxi = tables[0, j] - tables[0, i]
+        b1xxi = _table_difference(tables[0], i, wi, j, wj)
         b1yyi = b1xxi.T
-        b1xyi = tables[1, j] - tables[1, i]
-        b1xzi = tables[2, j] - tables[2, i]
+        b1xyi = _table_difference(tables[1], i, wi, j, wj)
+        b1xzi = _table_difference(tables[2], i, wi, j, wj)
         b1yzi = b1xzi.T
-        b1zzi = tables[3, j] - tables[3, i]
-        b2i = tables[4, j] - tables[4, i]
+        b1zzi = _table_difference(tables[3], i, wi, j, wj)
+        b2i = _table_difference(tables[4], i, wi, j, wj)
 
         B[0] = (
             (b1xxi + b2i) * magnetic_moment[0]
@@ -327,14 +358,12 @@ def interpolate_quasi_dipole_vector_field_projections(
     # pairings fail to type numba's internal np.zeros -> np.empty lowering
     # inside @njit, so it can't be allocated in here.
     for position, magnetic_moment in zip(positions, magnetic_moments):
-        shifted_limits = slice_limits - position[2]
-        i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
-        j = np.argmin(np.abs(integral_limits - shifted_limits[1]))
-        j = min(tables.shape[1] - 1, j)
+        i, wi = _table_position(integral_limits, slice_limits[0] - position[2])
+        j, wj = _table_position(integral_limits, slice_limits[1] - position[2])
 
-        Ix = tables[0, j] - tables[0, i]
+        Ix = _table_difference(tables[0], i, wi, j, wj)
         Iy = Ix.T
-        Iz = tables[1, j] - tables[1, i]
+        Iz = _table_difference(tables[1], i, wi, j, wj)
 
         A[0] = magnetic_moment[1] * Iz - magnetic_moment[2] * Iy
         A[1] = magnetic_moment[2] * Ix - magnetic_moment[0] * Iz
@@ -718,6 +747,14 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
 
 
 class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
+    """
+    The magnetic field of a set of atoms in the independent atom model.
+
+    `gpts`, `sampling`, `slice_thickness`, `num_slices` and `commensurate` choose
+    the grid and the slices as for `abtem.Potential`, so a `Potential` given the
+    same atoms and the same arguments has the same grid and slices.
+    """
+
     _exclude_from_copy = ("parametrization",)
 
     def __init__(
@@ -725,7 +762,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
         atoms: Atoms | BaseFrozenPhonons,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
         parametrization: str = "lyon",
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str
@@ -735,6 +772,8 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
         periodic: bool = True,
         integrator=None,
         device: Optional[str] = None,
+        num_slices: Optional[int] = None,
+        commensurate: bool = True,
     ):
         if integrator is None:
             integrator = QuasiDipoleMagneticFieldProjections(
@@ -754,10 +793,20 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
             box=box,
             periodic=periodic,
             integrator=integrator,
+            num_slices=num_slices,
+            commensurate=commensurate,
         )
 
 
 class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
+    """
+    The magnetic vector potential of a set of atoms in the independent atom model.
+
+    `gpts`, `sampling`, `slice_thickness`, `num_slices` and `commensurate` choose
+    the grid and the slices as for `abtem.Potential`, so a `Potential` given the
+    same atoms and the same arguments has the same grid and slices.
+    """
+
     _exclude_from_copy = ("parametrization",)
 
     def __init__(
@@ -765,7 +814,7 @@ class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
         atoms: Atoms | BaseFrozenPhonons,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
         parametrization: str = "lyon",
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str
@@ -775,6 +824,8 @@ class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
         periodic: bool = True,
         integrator=None,
         device: Optional[str] = None,
+        num_slices: Optional[int] = None,
+        commensurate: bool = True,
     ):
         if integrator is None:
             integrator = QuasiDipoleVectorPotentialProjections(
@@ -794,4 +845,6 @@ class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
             box=box,
             periodic=periodic,
             integrator=integrator,
+            num_slices=num_slices,
+            commensurate=commensurate,
         )

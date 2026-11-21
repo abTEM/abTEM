@@ -156,7 +156,7 @@ def test_finite_projection_matches_a_slab(silicon, repetitions, device):
 
 @devices
 def test_nonuniform_auto_slicing_matches_a_slab(zinc_oxide, device):
-    unit = _unit(zinc_oxide, slice_thickness="auto", device=device)
+    unit = _unit(zinc_oxide, device=device)
     unit_slices = np.array(unit.slice_thickness)
     assert not np.allclose(unit_slices, unit_slices[0]), "needs a nonuniform pattern"
 

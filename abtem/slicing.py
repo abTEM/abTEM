@@ -62,22 +62,24 @@ def commensurate_slice_thickness(
     tolerance: float = 0.2,
 ) -> tuple[float, ...]:
     """
-    Find slice thicknesses commensurate with the crystal planes, closest to a target
-    thickness.
+    Find slice thicknesses commensurate with the crystal planes, no thicker than a
+    target thickness.
 
     Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
-    and the cell height.  Adjacent plane-level slices are merged so that each resulting
-    slice thickness is as close as possible to `target_thickness` while keeping
-    boundaries aligned with atomic planes.  A gap between planes that is at least
-    1.5 times the target thickness (e.g. cubic fcc, with planes 0.5 a apart) is split
-    into equal slices, which leaves the boundaries aligned with the planes too.
+    and the cell height. Adjacent plane-level slices are merged as long as the merged
+    slice stays within `target_thickness`, so every slice boundary lies on an atomic
+    plane (or on the cell faces). A gap between planes that is thicker than the target
+    is split into the fewest equal slices that are no thicker than it; no atoms lie
+    inside the gap, so the new boundaries are as commensurate as the plane
+    boundaries. No slice is therefore thicker than `target_thickness`, as for a
+    uniform slicing with that thickness.
 
     Parameters
     ----------
     atoms : Atoms
         The atoms to be sliced. Must have an orthogonal cell.
     target_thickness : float
-        Target slice thickness [Å].
+        Largest slice thickness [Å].
     tolerance : float
         Tolerance for identifying distinct crystal planes [Å].
 
@@ -105,35 +107,34 @@ def commensurate_slice_thickness(
     boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
     plane_thicknesses = np.diff(boundaries)
 
-    # A gap between planes that is much thicker than the target cannot be brought
-    # closer to it by merging, so divide it evenly; no atoms lie inside the gap, so
-    # the new boundaries are as commensurate as the plane boundaries.
+    # A gap between planes that is thicker than the target cannot be brought
+    # within it by merging, so divide it evenly into the fewest slices that fit;
+    # no atoms lie inside the gap, so the new boundaries are as commensurate as
+    # the plane boundaries.
     plane_thicknesses = np.concatenate(
         [
             np.full(n, t / n)
             for t in plane_thicknesses
-            for n in [max(1, int(round(t / target_thickness)))]
+            for n in [max(1, safe_ceiling_int(t / target_thickness))]
         ]
     )
 
+    # Merge neighbouring plane slices while the merged slice fits the target.
+    # Greedy merging in order gives the fewest slices of any partition of the
+    # planes into contiguous slices no thicker than the target. The relative
+    # tolerance keeps planes that tile the target exactly (up to rounding) in one
+    # slice.
+    limit = target_thickness * (1.0 + 1e-9)
     merged = []
     acc = 0.0
     for t in plane_thicknesses:
-        if acc > 0 and acc + t > target_thickness and acc >= target_thickness * 0.5:
+        if acc > 0 and acc + t > limit:
             merged.append(acc)
             acc = t
         else:
             acc += t
     if acc > 0:
-        # z is periodic, so the last slice and the first slice are also
-        # adjacent through the wrap at cell_z ≡ 0. Without this, a trailing
-        # remainder that is real (spacing ≥ tolerance) but well below half
-        # the target thickness would end up as its own near-degenerate final
-        # slice, since nothing follows it to trigger the merge guard above.
-        if merged and acc < target_thickness * 0.5:
-            merged[-1] += acc
-        else:
-            merged.append(acc)
+        merged.append(acc)
 
     result = tuple(float(t) for t in merged)
     assert np.isclose(sum(result), cell_z)
@@ -149,6 +150,15 @@ def commensurate_slice_thickness(
 # period, which every candidate here satisfies. So the window stays tight;
 # chasing the best-aligned candidate without one costs up to 38 % extra pixels.
 _FALLBACK_MAX_OVERSHOOT = 1.12
+
+# How many more grid points than the plain grid (the fewest that meet the target
+# sampling) a commensurate grid may have along an axis. A commensurate grid is a
+# whole multiple of the number of atom-plane periods along the axis, rounded up so
+# that it is never coarser than the target; when the periods are about as fine as
+# the target (dense projections of large, high-index cells) the next multiple can
+# be up to twice the plain grid. Commensurability buys little when the planes are
+# a pixel or two apart, so beyond this bound the plain grid is used instead.
+_COMMENSURATE_MAX_OVERSHOOT = 1.15
 
 
 def _plane_set_invariant_under(
@@ -221,38 +231,42 @@ def _translational_period_count(
 def commensurate_gpts(
     extent: tuple[float, float],
     positions: np.ndarray,
-    target_sampling: float = 0.05,
+    target_sampling: float | tuple[float, float] = 0.05,
     tolerance: float = 1e-3,
     round_to_fast_fft: bool = True,
 ) -> tuple[int, int]:
     """
     Find grid points such that the sampling grid is commensurate with the atom
-    positions in x and y, closest to a target sampling.
+    positions in x and y, no coarser than a target sampling.
 
     For each axis the function identifies the unique atom planes and computes the
     GCD of the spacings between them.  This gives the primitive lattice spacing
-    and therefore the required grid period p (= number of grid points per unit
-    cell of the primitive lattice).  The result is invariant under rigid
-    translations of the structure: a crystal that has been centered or otherwise
-    shifted within the cell always yields the same p as the unshifted version.
+    and therefore the required grid period p (= number of primitive periods along
+    the extent).  The result is invariant under rigid translations of the
+    structure: a crystal that has been centered or otherwise shifted within the
+    cell always yields the same p as the unshifted version.
+
+    The grid is the smallest multiple of p whose sampling is no coarser than
+    `target_sampling`, just as a plain grid has the fewest points that meet it.
+    When that multiple has more than 15 % more points than the plain grid -- which
+    happens only when the primitive spacing is about as fine as the target -- the
+    plain grid is used for that axis instead.
 
     When `round_to_fast_fft` is enabled the number of grid points additionally
     factorizes completely into the primes 2, 3, 5 and 7 whenever that is
     compatible with commensurability, so FFTs run on fast radix kernels instead
-    of the slow, memory-hungry Bluestein fallback.  The multiple of p nearest
-    the target sampling is kept when it is already such a length, and otherwise
-    the next one up -- so enabling this never coarsens the grid.  If p itself
-    contains a prime factor larger than 7 no multiple of it can be fast, and
-    commensurability takes precedence.
+    of the slow, memory-hungry Bluestein fallback.  The multiplier of p is then
+    rounded up to the next fast length, so this never coarsens the grid.  If p
+    itself contains a prime factor larger than 7 no multiple of it can be fast,
+    and commensurability takes precedence.
 
     Structures whose internal parameters are irrational (rutile, brookite) have
     no commensurate grid at all.  For those, `round_to_fast_fft` additionally
-    selects among fast sizes within a few percent of the target the one whose
-    grid the atom planes come closest to sitting on, subject to keeping the
+    selects among fast sizes within a few percent above the plain grid the one
+    whose grid the atom planes come closest to sitting on, subject to keeping the
     grid a multiple of the plane set's translational period -- without which
     symmetry-equivalent atoms in different unit cells would discretise
-    differently.  This is the only case in which the returned grid is not the
-    one closest to `target_sampling`.
+    differently.
 
     Parameters
     ----------
@@ -260,18 +274,17 @@ def commensurate_gpts(
         Grid extent in x and y [Å].
     positions : numpy.ndarray
         Atom positions with shape (N, 3) or (N, 2).
-    target_sampling : float
-        Target grid sampling [Å].
+    target_sampling : float or tuple of float
+        Largest grid sampling in x and y [Å].
     tolerance : float
         Tolerance for identifying distinct atom planes [Å].
     round_to_fast_fft : bool
         If True (default), prefer grids that are also fast FFT sizes (all prime
         factors in {2, 3, 5, 7}). The realized sampling is then never coarser
         than commensurability alone would give, and at most a few percent
-        finer. Setting
-        this to False reproduces the plain commensurate grid exactly, including
-        for the incommensurate structures above, which then simply take the
-        target size.
+        finer. Setting this to False gives the plain commensurate grid,
+        including for the incommensurate structures above, which then simply
+        take the plain grid.
 
     Returns
     -------
@@ -280,16 +293,28 @@ def commensurate_gpts(
     """
     from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 
+    target_sampling = tuple(np.broadcast_to(np.asarray(target_sampling, float), 2))
+
+    def plain_gpts(n_target: int) -> int:
+        # The grid with no commensurability: the fewest points meeting the target.
+        return next_fast_fft_size(n_target) if round_to_fast_fft else n_target
+
+    def period_multiple(n_target: int, period: int) -> int | None:
+        # The smallest multiple of the period meeting the target, or None when it
+        # has too many points more than the plain grid to be worth it.
+        n = -(-n_target // period) * period
+        if n > n_target * _COMMENSURATE_MAX_OVERSHOOT:
+            return None
+        return n
+
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
         # The GCD search found no commensurate period. With fast-FFT rounding
-        # off this is simply the target size (the base branch's behaviour).
-        # With it on, pick the fast size that (a) keeps gpts a multiple of the
-        # translational period count m of the plane set and (b) best aligns
-        # the planes with grid points: structures with an irrational internal
-        # parameter (e.g. rutile u = 0.306, brookite) have no exactly
-        # commensurate grid, but some fast sizes come much closer than others.
-        # Note this ties the period constraint in (a) to the rounding flag, so
-        # that `round_to_fast_fft=False` reproduces the base branch exactly.
+        # off this is simply the plain grid. With it on, pick the fast size that
+        # (a) keeps gpts a multiple of the translational period count m of the
+        # plane set and (b) best aligns the planes with grid points: structures
+        # with an irrational internal parameter (e.g. rutile u = 0.306,
+        # brookite) have no exactly commensurate grid, but some fast sizes come
+        # much closer than others.
         if not round_to_fast_fft:
             return n_target
         if unique_x is None or L is None or len(unique_x) <= 1:
@@ -299,7 +324,8 @@ def commensurate_gpts(
         if not is_fast_fft_size(m):
             # No multiple of m can be a fast FFT size; translational
             # commensurability takes precedence, as in the main path.
-            return max(round(n_target / m), 1) * m
+            n = period_multiple(n_target, m)
+            return plain_gpts(n_target) if n is None else n
 
         best = None
         multiplier = -(-n_target // m)
@@ -346,13 +372,14 @@ def commensurate_gpts(
             # its own -- exactly what the branch above does when m itself is
             # not a fast size. Without this the window is not a bound at all
             # (m = 64 against a target of 72 lands on 128, +78 %).
-            return max(round(n_target / m), 1) * m
+            n = period_multiple(n_target, m)
+            return plain_gpts(n_target) if n is None else n
         return best[1]
 
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = safe_ceiling_int(L / target_sampling)
+        n_target = max(safe_ceiling_int(L / target_sampling[i]), 1)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
@@ -391,28 +418,25 @@ def commensurate_gpts(
         # Using L / sum(k) is more accurate than min_spacing alone because it
         # averages out any floating-point scatter in the individual spacings.
         n_periods = int(np.sum(k))
-        # The commensurate grid nearest the target, i.e. the grid chosen when
-        # fast-FFT rounding is off.
-        nearest = max(round(n_target / n_periods), 1)
+        # The coarsest commensurate grid meeting the target, i.e. the grid chosen
+        # when fast-FFT rounding is off.
+        commensurate = period_multiple(n_target, n_periods)
+        if commensurate is None:
+            gpts.append(plain_gpts(n_target))
+            continue
 
+        multiplier = commensurate // n_periods
         if round_to_fast_fft and is_fast_fft_size(n_periods):
             # A multiple q * n_periods is a fast FFT size exactly when both
             # factors are, so only the multiplier has to be moved -- and only
-            # when the nearest commensurate grid is not already fast. Enlarging
-            # an already-fast grid buys nothing: both are exactly commensurate,
-            # so the extra pixels improve no measurable quantity. When n_periods
-            # itself has a prime factor larger than 7 no multiple can be fast
-            # and commensurability takes precedence (handled below).
-            # Rounding the multiplier up rather than to the nearer fast value
-            # keeps the grid from ever coming out coarser than it would with
-            # rounding off, so enabling this can only refine the sampling.
-            multiplier = nearest if is_fast_fft_size(nearest) else (
-                next_fast_fft_size(nearest)
-            )
-            n_multiple = multiplier * n_periods
-        else:
-            n_multiple = nearest * n_periods
-        gpts.append(n_multiple)
+            # when it is not already fast. Enlarging an already-fast grid buys
+            # nothing: both are exactly commensurate, so the extra pixels
+            # improve no measurable quantity. When n_periods itself has a prime
+            # factor larger than 7 no multiple can be fast and commensurability
+            # takes precedence. The multiplier is rounded up, so the grid never
+            # comes out coarser than it would with rounding off.
+            multiplier = next_fast_fft_size(multiplier)
+        gpts.append(multiplier * n_periods)
 
     return tuple(gpts)
 

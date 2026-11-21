@@ -1088,7 +1088,7 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
         return Atoms("Si2", positions=scaled @ cell, cell=cell, pbc=True)
 
     def test_a_non_orthogonal_cell_does_not_rewrite_the_callers_atoms(self):
-        """Through a build, and through `sampling="auto"`: `orthogonalize_cell`
+        """Through a build, and through the default commensurate grid: `orthogonalize_cell`
         has a second call site, `Potential.__init__` itself, reached when the
         cell needs a transform (iam.py, `_require_cell_transform`). That call
         runs in the constructor, before `build()` is ever called -- an
@@ -1104,7 +1104,7 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
             ),
         }
         for name, construct in constructions.items():
-            for sampling in (None, "auto"):
+            for sampling in (None, "default"):
                 atoms = self._atoms()
                 before = atoms.positions.copy()
                 if sampling is None:
@@ -1112,7 +1112,7 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
                         Potential(construct(atoms), gpts=(32, 32), slice_thickness=1.0)
                     )
                 else:
-                    Potential(construct(atoms), sampling="auto", slice_thickness=1.0)
+                    Potential(construct(atoms), slice_thickness=1.0)
                 assert np.array_equal(atoms.positions, before), (name, sampling)
 
 
@@ -1179,7 +1179,7 @@ class TestSliceIndexedAtomsWrapping:
         from abtem.inelastic.core_loss import _extract_scattering_sites
 
         atoms = self._atoms(pbc)
-        potential = Potential(atoms, gpts=(32, 32), slice_thickness=self.DZ)
+        potential = Potential(atoms, gpts=(32, 32), num_slices=self.N_SLICES)
         from_potential = self._per_slice(_extract_scattering_sites(potential, None))
         from_caller = self._per_slice(_extract_scattering_sites(potential, atoms))
         assert from_caller == from_potential == self._expected(atoms)
@@ -1383,9 +1383,7 @@ class TestSliceIndexedAtomsWrapping:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            potential = Potential(
-                trajectory, gpts=8, slice_thickness=1.0, periodic=False
-            )
+            potential = Potential(trajectory, gpts=8, num_slices=4, periodic=False)
 
         with warnings.catch_warnings(record=True) as records:
             warnings.simplefilter("always")
@@ -1532,7 +1530,7 @@ class TestSliceIndexedAtomsWrapping:
         potential = Potential(
             phonons,
             gpts=(64, 64),
-            slice_thickness=1.0,
+            num_slices=4,
             periodic=False,
             projection="finite",
             device=device,
@@ -1559,7 +1557,7 @@ class TestSliceIndexedAtomsWrapping:
             Potential(
                 raised,
                 gpts=(64, 64),
-                slice_thickness=1.0,
+                num_slices=4 + 2 * shift,
                 projection="finite",
                 device=device,
             )
@@ -1848,7 +1846,7 @@ class TestSliceIndexedAtomsWrapping:
             potential = Potential(
                 self._given_along_z(z),
                 sampling=0.2,
-                slice_thickness=1.0,
+                num_slices=4,
                 periodic=False,
                 projection="infinite",
             )
@@ -1946,7 +1944,10 @@ class TestSliceIndexedAtomsWrapping:
         assert np.any((scaled[:, :2] < 0.0) | (scaled[:, :2] >= 1.0))
 
         kwargs = dict(
-            gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+            gpts=(32, 32),
+            num_slices=4,
+            periodic=False,
+            device=device,
         )
         ensemble = asnumpy(Potential(phonons, **kwargs).build().compute().array)
         for i, configuration in enumerate(iterated):
@@ -2417,9 +2418,9 @@ def test_auto_sampling_and_slice_thickness_follow_the_box():
     atoms = _two_atoms()
     repeated = atoms * (2, 3, 2)
     in_box = abtem.Potential(
-        atoms, box=(8.0, 9.0, 10.0), sampling="auto", slice_thickness="auto"
+        atoms, box=(8.0, 9.0, 10.0)
     )
-    reference = abtem.Potential(repeated, sampling="auto", slice_thickness="auto")
+    reference = abtem.Potential(repeated)
     assert in_box.extent == pytest.approx((8.0, 9.0))
     assert in_box.gpts == reference.gpts
     assert in_box.slice_thickness == pytest.approx(reference.slice_thickness)
@@ -2429,9 +2430,9 @@ def test_auto_sampling_and_slice_thickness_follow_the_box():
 def test_auto_sampling_follows_the_box_of_a_strained_cell():
     atoms = _two_atoms()
     box = (9.0, 9.0, 10.0)
-    in_box = abtem.Potential(atoms, box=box, sampling="auto", slice_thickness="auto")
+    in_box = abtem.Potential(atoms, box=box)
     reference = abtem.Potential(
-        orthogonalize_cell(atoms, box=box), sampling="auto", slice_thickness="auto"
+        orthogonalize_cell(atoms, box=box)
     )
     assert in_box.gpts == reference.gpts
     assert in_box.slice_thickness == pytest.approx(reference.slice_thickness)
@@ -2441,9 +2442,9 @@ def test_auto_sampling_follows_the_box_of_a_strained_cell():
 @ignore_strain_warning
 def test_auto_slice_thickness_follows_the_plane():
     atoms = _two_atoms()
-    potential = abtem.Potential(atoms, plane="xz", sampling=0.1, slice_thickness="auto")
+    potential = abtem.Potential(atoms, plane="xz", sampling=0.1)
     reference = abtem.Potential(
-        _permuted_two_atoms(), sampling=0.1, slice_thickness="auto"
+        _permuted_two_atoms(), sampling=0.1
     )
     assert potential.slice_thickness == pytest.approx(reference.slice_thickness)
 
@@ -2453,7 +2454,7 @@ def test_auto_slice_thickness_of_a_primitive_fcc_cell_fills_its_box():
     # The primitive cell is non-orthogonal; the slices fill the best orthogonal
     # cell the potential is built in.
     atoms = bulk("Si", "diamond", a=5.431)
-    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness="auto")
+    potential = abtem.Potential(atoms, sampling=0.1)
     assert sum(potential.slice_thickness) == pytest.approx(potential.box[2])
 
 
@@ -2472,7 +2473,7 @@ def test_invalid_box_raises():
 
 
 @ignore_strain_warning
-@pytest.mark.parametrize("sampling", [0.1, "auto"])
+@pytest.mark.parametrize("sampling", [0.1, None])
 def test_periodic_box_with_no_whole_period_raises_at_construction(sampling):
     with pytest.raises(ValueError, match="no whole repetition"):
         abtem.Potential(_two_atoms(), box=(1.5, 3.0, 5.0), sampling=sampling)
@@ -2495,10 +2496,11 @@ def test_whole_period_of_a_box_is_counted_in_the_frame_of_the_plane():
 def test_non_periodic_box_with_no_whole_period_is_cut_out():
     atoms = _two_atoms()
     box = (1.5, 3.0, 5.0)
-    potential = abtem.Potential(atoms, box=box, periodic=False, **GRID)
+    grid = dict(gpts=(15, 30), num_slices=5)
+    potential = abtem.Potential(atoms, box=box, periodic=False, **grid)
     array = potential.build(lazy=False).array
     assert array.shape == (5, 15, 30)
-    _assert_same(array, _array(cut_cell(atoms, cell=box), **GRID))
+    _assert_same(array, _array(cut_cell(atoms, cell=box), **grid))
 
 
 @ignore_strain_warning
@@ -2508,10 +2510,10 @@ def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_box(box):
     # the one of the atoms cut out of the repeated structure.
     atoms = _two_atoms()
     potential = abtem.Potential(
-        atoms, box=box, periodic=False, sampling="auto", slice_thickness="auto"
+        atoms, box=box, periodic=False
     )
     reference = abtem.Potential(
-        cut_cell(atoms, cell=box), sampling="auto", slice_thickness="auto"
+        cut_cell(atoms, cell=box)
     )
     assert potential.gpts == reference.gpts
     assert potential.sampling == pytest.approx(reference.sampling)
@@ -2544,12 +2546,10 @@ def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_default_box(
     # With no box, a non-periodic potential cuts its default box out of the
     # repeated structure, as it cuts a box it is given.
     potential = abtem.Potential(
-        atoms, periodic=False, origin=origin, sampling="auto", slice_thickness="auto"
+        atoms, periodic=False, origin=origin
     )
     reference = abtem.Potential(
         cut_cell(atoms, cell=potential.box, origin=origin),
-        sampling="auto",
-        slice_thickness="auto",
     )
     assert (potential.gpts, len(potential.slice_thickness)) == (
         reference.gpts,
@@ -2593,7 +2593,9 @@ def test_plane_box_and_origin_together():
 def test_frozen_phonons_through_a_box():
     atoms = _two_atoms()
     frozen_phonons = FrozenPhonons(atoms, 3, sigmas=0.1, seed=1)
-    potential = abtem.Potential(frozen_phonons, box=(8.0, 9.0, 10.0), **GRID)
+    potential = abtem.Potential(
+        frozen_phonons, box=(8.0, 9.0, 10.0), gpts=(80, 90), num_slices=10
+    )
 
     eager = asnumpy(potential.build(lazy=False).array)
     lazy = potential.build(lazy=True).compute().array
@@ -2603,7 +2605,7 @@ def test_frozen_phonons_through_a_box():
     assert not np.allclose(eager[0], eager[1])
 
     # Each configuration holds the 12 cells of the box, displaced.
-    cell = abtem.Potential(atoms, **GRID)
+    cell = abtem.Potential(atoms, gpts=(40, 30), num_slices=5)
     for configuration in eager:
         integral = configuration.sum() * np.prod(potential.sampling)
         assert integral / _integral(cell) == pytest.approx(12, rel=1e-9)
@@ -2819,7 +2821,7 @@ def test_strain_warning_is_given_once_per_construction(builder, device):
 def test_strain_warning_is_not_repeated_by_frozen_phonons_or_lazy_blocks():
     si = bulk("Si", "diamond", a=5.431, cubic=True)
     frozen_phonons = FrozenPhonons(si, 3, sigmas=0.05, seed=1)
-    kwargs = dict(box=(20.0, 5.431, 5.431), sampling=0.2, slice_thickness=2.0)
+    kwargs = dict(box=(20.0, 5.431, 5.431), gpts=(100, 28), num_slices=3)
 
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
@@ -3122,7 +3124,7 @@ def test_gpaw_family_does_not_report_its_default_box_when_it_is_given(build):
     assert records == []
 
 
-# sampling="auto" targets 0.05 A on the extent the potential really has.
+# The default sampling targets 0.05 A on the extent the potential really has.
 
 
 NON_PERIODIC_XY = (False, False, True)
@@ -3169,7 +3171,7 @@ AUTO_GRID_CASES = [
 @pytest.mark.parametrize("case", AUTO_GRID_CASES, ids=lambda c: c[0])
 def test_auto_grid_of_non_periodic_atoms_follows_the_extent(case):
     name, make_atoms, kwargs = case
-    potential = abtem.Potential(make_atoms(), sampling="auto", **kwargs)
+    potential = abtem.Potential(make_atoms(), **kwargs)
 
     # The grid the target gives for the extent of the potential, which is the
     # box, or the cell rotated to the plane and made orthogonal.
@@ -3183,7 +3185,7 @@ def test_auto_grid_of_non_periodic_atoms_follows_the_extent(case):
 def test_auto_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
     # The box was already the extent of this branch.
     potential = abtem.Potential(
-        _co(NON_PERIODIC_XY), sampling="auto", box=(8.0, 9.0, 10.0), periodic=False
+        _co(NON_PERIODIC_XY), box=(8.0, 9.0, 10.0), periodic=False
     )
     assert potential.gpts == (160, 180)
 
@@ -3201,7 +3203,7 @@ def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
         pbc=NON_PERIODIC_XY,
     )
     with abtem.config.set({"grid.round-to-fast-fft": rounding}):
-        auto = abtem.Potential(atoms, sampling="auto")
+        auto = abtem.Potential(atoms)
         numeric = abtem.Potential(atoms, sampling=0.05)
     assert numeric.gpts == (points, points)
     assert auto.gpts == numeric.gpts
@@ -3212,7 +3214,7 @@ def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
     [(NON_PERIODIC_XY, "xy", (80, 60)), (True, "xy", (80, 60)), (True, "xz", (80, 100))],
 )
 def test_auto_grid_that_was_right_is_unchanged(pbc, plane, gpts):
-    potential = abtem.Potential(_co(pbc), sampling="auto", plane=plane)
+    potential = abtem.Potential(_co(pbc), plane=plane)
     assert potential.gpts == gpts
 
 
@@ -3237,15 +3239,22 @@ def test_slice_count_of_a_thickness_far_below_the_slice_thickness_is_one():
 
 
 def test_potential_slice_count_of_an_exactly_dividing_thickness():
-    potential = Potential(_carbon_cell(10.8), gpts=(40, 30), slice_thickness=0.3)
+    potential = Potential(
+        _carbon_cell(10.8), gpts=(40, 30), slice_thickness=0.3, commensurate=False
+    )
     assert potential.num_slices == 36
     assert np.allclose(potential.slice_thickness, 0.3)
 
 
 def test_repeated_atoms_and_crystal_potential_have_the_same_slice_count():
-    unit = Potential(_carbon_cell(3.6), gpts=(40, 30), slice_thickness=0.3)
+    unit = Potential(
+        _carbon_cell(3.6), gpts=(40, 30), slice_thickness=0.3, commensurate=False
+    )
     repeated = Potential(
-        _carbon_cell(3.6) * (1, 1, 3), gpts=(40, 30), slice_thickness=0.3
+        _carbon_cell(3.6) * (1, 1, 3),
+        gpts=(40, 30),
+        slice_thickness=0.3,
+        commensurate=False,
     )
     crystal = CrystalPotential(unit, repetitions=(1, 1, 3))
     assert unit.num_slices == 12

@@ -10,6 +10,7 @@ import abtem
 import abtem.ebsd.reciprocity as reciprocity
 import abtem.ebsd.reference as reference_module
 from abtem.core.axes import BackscatterEnergyAxis, OrdinalAxis
+from abtem.core.utils import safe_ceiling_int
 from abtem.core.energy import energy2wavelength
 from abtem.ebsd import (
     EBSD,
@@ -84,10 +85,21 @@ def silicon_slab(thickness=8.0, zone_axis=(0.0, 0.0, 1.0)):
     return rotated_slab(SILICON, np.array(zone_axis), (10.0, 10.0, thickness))[0]
 
 
+def plain_grid(atoms, sampling, slice_thickness):
+    """The fewest grid points and equal slices of the box of the potential of
+    `atoms` meeting `sampling` and `slice_thickness`, whatever its atoms:
+    configurations compared with each other must share them."""
+    lengths = abtem.Potential(atoms, gpts=1, num_slices=1).box
+    return dict(
+        gpts=tuple(max(safe_ceiling_int(length / sampling), 1) for length in lengths[:2]),
+        num_slices=max(safe_ceiling_int(lengths[2] / slice_thickness), 1),
+    )
+
+
 def make_ebsd(atoms, detector, sampling=0.15, slice_thickness=1.0, **kwargs):
-    """EBSD of `atoms` at 30 keV."""
+    """EBSD of `atoms` at 30 keV, on the plain grid and equal slices."""
     potential = abtem.Potential(
-        atoms, sampling=sampling, slice_thickness=slice_thickness, projection="finite"
+        atoms, projection="finite", **plain_grid(atoms, sampling, slice_thickness)
     )
     return EBSD(potential, detector, 30e3, **kwargs)
 
@@ -142,6 +154,7 @@ def direct_patch(builder, directions, atoms=None):
             slab if atoms is None else atoms(slab),
             gpts=builder.potential_gpts,
             slice_thickness=1.0,
+            commensurate=False,  # as the builder slices its slabs
             projection="finite",
         ),
         BackscatterDetector(directions=-directions @ rotation.T),
@@ -1016,7 +1029,7 @@ class TestEmission:
     SAMPLING = 0.1
 
     def emission(self, atoms, **kwargs):
-        potential = abtem.Potential(atoms, sampling=self.SAMPLING, slice_thickness=1.0)
+        potential = abtem.Potential(atoms, **plain_grid(atoms, self.SAMPLING, 1.0))
         return EmissionSlices(
             atoms,
             potential.slice_thickness,
@@ -2149,6 +2162,7 @@ class TestEBSDDetectorPattern:
                     slab,
                     gpts=builder.potential_gpts,
                     slice_thickness=1.0,
+                    commensurate=False,  # as the builder slices its slabs
                     projection="finite",
                 ),
                 BackscatterDetector(directions=(rotation @ -directions[i])[None]),

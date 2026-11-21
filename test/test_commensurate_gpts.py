@@ -108,19 +108,19 @@ def test_potential_auto_sampling_is_commensurate_and_fast(name, crystalstructure
     atoms = bulk(name, crystalstructure, a=a, cubic=True) * (2, 2, 1)
 
     with config.set({"grid.round-to-fast-fft": "auto"}):
-        potential = Potential(atoms, sampling="auto", projection="infinite")
+        potential = Potential(atoms, projection="infinite")
 
-    # Derived independently: the plain commensurate grid is 216 = 2**3 * 27 for
-    # Si (already fast, so kept) and 164 = 2**2 * 41 for Au (not fast, so the
-    # multiplier moves up: 41 -> 42, giving 168).
-    assert potential.gpts == {"Si": (216, 216), "Au": (168, 168)}[name]
+    # Derived independently: the plain grids are 218 (Si) and 164 (Au) points;
+    # the smallest multiples of the 8 (Si) and 4 (Au) plane periods that are no
+    # coarser are 224 = 8 * 28 (multiplier already fast, so kept) and
+    # 164 = 4 * 41 (not fast, so the multiplier moves up: 41 -> 42, giving 168).
+    assert potential.gpts == {"Si": (224, 224), "Au": (168, 168)}[name]
 
     for axis, (n, extent) in enumerate(zip(potential.gpts, potential.extent)):
         assert is_fast_fft_size(n)
-        # Close to the target sampling. Not necessarily finer than it: the
-        # commensurate grid nearest the target wins whenever it is already
-        # fast, exactly as with rounding switched off.
-        assert abs(extent / n - 0.05) / 0.05 < 0.12
+        # Never coarser than the target, and close to it.
+        assert extent / n <= 0.05
+        assert (0.05 - extent / n) / 0.05 < 0.12
         # Commensurate: every atom plane falls on a grid point.
         fractional = atoms.positions[:, axis] / (extent / n)
         offsets = np.abs(fractional - np.round(fractional))
@@ -209,12 +209,12 @@ def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
     rutile = _rutile()
 
     for plane in ("xy", "xz", "yz"):
-        reference = Potential(rutile, sampling="auto", plane=plane).gpts
+        reference = Potential(rutile, plane=plane).gpts
         for shift in (1e-6, 0.001, 0.25, 1.3):
             shifted = rutile.copy()
             shifted.positions[:, 0] += shift
             shifted.wrap()
-            assert Potential(shifted, sampling="auto", plane=plane).gpts == reference
+            assert Potential(shifted, plane=plane).gpts == reference
 
 
 def test_period_search_is_not_abandoned_on_dense_plane_sets():
@@ -244,9 +244,9 @@ def test_auto_sampling_respects_the_fast_fft_config():
     atoms = bulk("Au", "fcc", a=4.078, cubic=True) * (2, 2, 1)
 
     with config.set({"grid.round-to-fast-fft": "auto"}):
-        rounded = Potential(atoms, sampling="auto").gpts
+        rounded = Potential(atoms).gpts
     with config.set({"grid.round-to-fast-fft": False}):
-        plain = Potential(atoms, sampling="auto").gpts
+        plain = Potential(atoms).gpts
 
     assert all(is_fast_fft_size(n) for n in rounded)
     assert not any(is_fast_fft_size(n) for n in plain)
@@ -265,9 +265,9 @@ def test_ensemble_auto_sampling_respects_the_fast_fft_config():
     trajectory = [atoms, atoms.copy()]
 
     with config.set({"grid.round-to-fast-fft": "auto"}):
-        rounded = Potential(trajectory, sampling="auto").gpts
+        rounded = Potential(trajectory).gpts
     with config.set({"grid.round-to-fast-fft": False}):
-        plain = Potential(trajectory, sampling="auto").gpts
+        plain = Potential(trajectory).gpts
 
     assert all(is_fast_fft_size(n) for n in rounded)
     assert plain == tuple(
@@ -288,21 +288,21 @@ def test_invalid_fast_fft_config_raises():
 
 
 def test_already_fast_commensurate_grids_are_not_enlarged():
-    # Both the nearest commensurate grid and any larger fast multiple are
+    # Both the coarsest commensurate grid and any larger fast multiple are
     # exactly commensurate, so enlarging one that is already fast buys no
     # accuracy -- it only costs memory and FFT time (up to +23 % pixels).
     from abtem.core import config
 
     for atoms in (
         bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1),
-        bulk("Cu", "fcc", a=3.61, cubic=True) * (6, 6, 1),
+        bulk("Si", "diamond", a=5.431, cubic=True) * (5, 5, 1),
     ):
         with config.set({"grid.round-to-fast-fft": False}):
-            plain = Potential(atoms, sampling="auto").gpts
+            plain = Potential(atoms).gpts
         assert all(is_fast_fft_size(n) for n in plain)  # guard the premise
 
         with config.set({"grid.round-to-fast-fft": "auto"}):
-            assert Potential(atoms, sampling="auto").gpts == plain
+            assert Potential(atoms).gpts == plain
 
 
 def test_incommensurate_fallback_respects_its_overshoot_window():
@@ -312,7 +312,7 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
     # (38 % more pixels) win from outside it.
     rutile = _rutile() * (6, 6, 1)
 
-    potential = Potential(rutile, sampling="auto")
+    potential = Potential(rutile)
 
     for n, extent in zip(potential.gpts, potential.extent):
         n_target = int(np.ceil(extent / 0.05))
@@ -326,8 +326,9 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     # smallest fast multiple of m can overshoot the window badly and there is
     # no in-window candidate to find -- every fast multiple is that far above
     # the target or further (m = 64 against a target of 72 lands on 128, +78 %).
-    # Being a fast size is not worth that; the period constraint is kept on its
-    # own instead, exactly as when m itself is not a fast size.
+    # Being a fast size is not worth that, and neither is the period here: its
+    # smallest multiple no coarser than the target is that same 128, beyond the
+    # 15 % that commensurability may cost, so the plain grid is used.
     cell = 3.6
     m = 64
     planes = np.sort(
@@ -338,9 +339,14 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     gpts = commensurate_gpts((cell, cell), positions, target_sampling=0.05)
 
     n_target = int(np.ceil(cell / 0.05))
-    assert gpts[0] <= n_target * 1.12
-    # The period is what the fallback exists to preserve, so it survives.
-    assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0
+    assert _translational_period_count(np.unique(planes), cell) == m
+    assert gpts == (next_fast_fft_size(n_target),) * 2
+
+    # With a target the period fits within that cost, it survives.
+    gpts = commensurate_gpts((cell, cell), positions, target_sampling=0.03)
+
+    assert gpts[0] % m == 0
+    assert cell / gpts[0] <= 0.03
 
 
 @pytest.mark.parametrize("round_to_fast_fft", [False, True])

@@ -29,7 +29,7 @@ def _potential(frozen_phonons=None, device="cpu"):
         )
     # 6 slices, exit planes at the entrance and after every second slice
     potential = abtem.Potential(
-        atoms, gpts=64, slice_thickness=2, exit_planes=2, device=device
+        atoms, gpts=64, num_slices=6, exit_planes=2, device=device
     )
     assert len(potential.exit_planes) == 4
     return potential
@@ -155,7 +155,7 @@ def test_prism_exit_planes_match_truncated_potentials(lazy, frozen_phonons):
         if frozen_phonons is not None
         else ATOMS
     )
-    whole = abtem.Potential(configurations, gpts=64, slice_thickness=2).build(
+    whole = abtem.Potential(configurations, gpts=64, num_slices=6).build(
         lazy=False
     )
     slices = np.asarray(whole.array)

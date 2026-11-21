@@ -22,6 +22,7 @@ from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
     _box_strain_warning_suppressed,
+    _NoWholeRepetitionError,
     _cell_in_plane_frame,
     _rotate_atoms_to_plane,
     _stacklevel_outside_package,
@@ -46,6 +47,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core import config
 from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import (
     CopyMixin,
@@ -604,6 +606,210 @@ def _default_box(cell, plane) -> tuple[float, float, float]:
     return tuple(best_orthogonal_cell(cell))
 
 
+def _target_sampling(sampling) -> tuple[float, float]:
+    """A target sampling as two positive floats [Å]."""
+    if isinstance(sampling, str):
+        raise ValueError(
+            f"sampling must be one or two numbers [Å], got {sampling!r}. The grid is "
+            "commensurate with the atoms by default: leave `sampling` unset for the "
+            "default target, or give the largest sampling to accept."
+        )
+    values = np.asarray(sampling, dtype=float).ravel()
+    if values.size == 1:
+        values = np.repeat(values, 2)
+    if values.size != 2 or not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(
+            f"sampling must be one or two positive numbers [Å], got {sampling!r}"
+        )
+    return float(values[0]), float(values[1])
+
+
+def _target_slice_thickness(slice_thickness) -> float | None:
+    """A single target slice thickness [Å], or None for a sequence of them."""
+    if isinstance(slice_thickness, str):
+        raise ValueError(
+            f"slice_thickness must be a number or a sequence of numbers [Å], got "
+            f"{slice_thickness!r}. Slices are commensurate with the atomic planes by "
+            "default: leave `slice_thickness` unset for the default target, give the "
+            "largest slice thickness to accept, or give `num_slices`."
+        )
+    values = np.asarray(slice_thickness, dtype=float)
+    if values.size == 1 and values.ndim <= 1 and not isinstance(
+        slice_thickness, (tuple, list)
+    ):
+        value = float(values.item())
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(
+                f"slice_thickness must be positive, got {slice_thickness!r}"
+            )
+        return value
+    return None
+
+
+def _pbc_in_plane_frame(pbc, plane) -> tuple[bool, bool, bool]:
+    """The periodicity of the atoms along the x, y and z axes of the potential."""
+    pbc = tuple(bool(p) for p in pbc)
+    if not isinstance(plane, str):
+        return pbc
+    axes = {"x": 0, "y": 1, "z": 2}
+    first, second = (axes[a] for a in plane)
+    (third,) = {0, 1, 2} - {first, second}
+    return pbc[first], pbc[second], pbc[third]
+
+
+def _resolve_grid_and_slicing(
+    frozen_phonons: BaseFrozenPhonons,
+    gpts,
+    sampling,
+    slice_thickness,
+    num_slices: Optional[int],
+    commensurate: bool,
+    box,
+    plane,
+    origin,
+    periodic: bool,
+):
+    """
+    The `gpts`, `sampling` and `slice_thickness` a field built from atoms is given,
+    and whether its gpts are a default that yields to the grid of the waves.
+
+    A numeric `sampling` or `slice_thickness`, or the configured default when none
+    is given, is the largest one to accept. With `commensurate` the grid and the
+    slices are then chosen commensurate with the atoms (see `commensurate_gpts`
+    and `commensurate_slice_thickness`); without it they are the plain grid and
+    uniform slices. `gpts`, `num_slices` and a sequence of slice thicknesses are
+    used exactly as given.
+    """
+    if num_slices is not None:
+        if slice_thickness is not None:
+            raise ValueError("Give either slice_thickness or num_slices, not both.")
+        if (
+            isinstance(num_slices, bool)
+            or not isinstance(num_slices, (int, np.integer))
+            or num_slices < 1
+        ):
+            raise ValueError(
+                f"num_slices must be a positive integer, got {num_slices!r}"
+            )
+
+    gpts_is_default = gpts is None and sampling is None
+
+    if box is not None:
+        box = _validate_box(box)
+    origin = _validate_origin(origin)
+
+    cell = np.array(frozen_phonons.cell)
+    needs_transform = _require_cell_transform(cell, box=box, plane=plane, origin=origin)
+    if needs_transform:
+        # Raises for a cell that cannot be rotated to the plane, as the builder
+        # would, before the atoms are placed in a given box.
+        default_box = _default_box(cell, plane)
+    else:
+        default_box = tuple(float(length) for length in np.diag(cell))
+    placed_box = box if box is not None else default_box
+
+    # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no shared
+    # reference lattice: each configuration is an independent, generally
+    # non-commensurate snapshot, and `atoms` here is only the first frame, so
+    # commensurability is not searched for. A single configuration is the
+    # structure itself, just as it would be if passed as plain `Atoms`.
+    # The members of a lazily read trajectory are not known here either.
+    has_multiple_configs = (
+        isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
+    )
+    atoms = frozen_phonons.atoms
+    search = commensurate and not has_multiple_configs and isinstance(atoms, Atoms)
+    # Atoms that are not periodic along an axis of the potential (e.g. a
+    # nanoparticle, or a slab along its vacuum) are not translationally repeated
+    # along it, so commensurability has no meaning there.
+    pbc = _pbc_in_plane_frame(atoms.pbc, plane) if search else (False,) * 3
+
+    placed = []
+
+    def get_placed_atoms() -> Atoms | None:
+        # The atoms as the potential places them in its box: strained into a
+        # periodic box, or cut out of the repeated structure for a non-periodic
+        # potential. None for a periodic box that holds no whole repetition of
+        # the cell: the builder raises for one that was given, and one abTEM
+        # chose is only a problem once the potential is built, so the
+        # construction is left to proceed without commensurability, as before.
+        if not placed:
+            if not needs_transform:
+                placed.append(atoms)
+            elif periodic:
+                try:
+                    placed.append(
+                        orthogonalize_cell(
+                            atoms,
+                            box=placed_box,
+                            plane=plane,
+                            origin=origin,
+                            return_transform=False,
+                            allow_transform=True,
+                        )
+                    )
+                except _NoWholeRepetitionError:
+                    placed.append(None)
+            else:
+                placed.append(
+                    cut_cell(atoms, cell=placed_box, plane=plane, origin=origin)
+                )
+        return placed[0]
+
+    if gpts is None:
+        if sampling is None:
+            target = _target_sampling(config.get("potential.sampling", 0.05))
+        else:
+            target = _target_sampling(sampling)
+
+        if not commensurate:
+            # The plain grid, as `Grid` derives it from the sampling.
+            sampling = target
+        else:
+            extent = placed_box[:2]
+            plain = tuple(
+                max(safe_ceiling_int(extent[i] / target[i]), 1) for i in range(2)
+            )
+            if round_auto_derived_gpts():
+                from abtem.core.fft import next_fast_fft_size
+
+                plain = tuple(next_fast_fft_size(n) for n in plain)
+
+            placed_atoms = get_placed_atoms() if search and any(pbc[:2]) else None
+            if placed_atoms is not None:
+                found = commensurate_gpts(
+                    extent,
+                    placed_atoms.positions,
+                    target_sampling=target,
+                    round_to_fast_fft=round_auto_derived_gpts(),
+                )
+                gpts = tuple(found[i] if pbc[i] else plain[i] for i in range(2))
+            else:
+                gpts = plain
+            sampling = None
+
+    if num_slices is not None:
+        slice_thickness = (placed_box[2] / num_slices,) * num_slices
+    else:
+        if slice_thickness is None:
+            target_thickness = _target_slice_thickness(
+                config.get("potential.slice-thickness", 1.0)
+            )
+        else:
+            target_thickness = _target_slice_thickness(slice_thickness)
+
+        if target_thickness is not None:
+            placed_atoms = get_placed_atoms() if search and pbc[2] else None
+            if placed_atoms is not None:
+                slice_thickness = commensurate_slice_thickness(
+                    placed_atoms, target_thickness=target_thickness
+                )
+            else:
+                slice_thickness = target_thickness
+
+    return gpts, sampling, slice_thickness, gpts_is_default
+
+
 class _FieldBuilder(BaseField):
     # False for builders whose slices are interpolated from a calculator's grid of
     # the atoms' own cell rather than computed from transformed atoms: they place
@@ -1054,7 +1260,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         array_object: Type[FieldArray],
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: (
             str | tuple[tuple[float, float, float], tuple[float, float, float]]
@@ -1064,11 +1270,26 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         periodic: bool = True,
         integrator=None,
         device: Optional[str] = None,
+        num_slices: Optional[int] = None,
+        commensurate: bool = True,
     ):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._array_object = array_object
+
+        gpts, sampling, slice_thickness, gpts_is_default = _resolve_grid_and_slicing(
+            self._frozen_phonons,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            num_slices=num_slices,
+            commensurate=commensurate,
+            box=box,
+            plane=plane,
+            origin=origin,
+            periodic=periodic,
+        )
 
         super().__init__(
             array_object=array_object,
@@ -1083,6 +1304,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             box=box,
             periodic=periodic,
         )
+        # Without a `gpts` or `sampling` the grid is a default: waves that have a
+        # `gpts` or `sampling` of their own override it, see `Grid.match`.
+        self.grid._gpts_is_default = gpts_is_default
 
         # Every build folds atoms given far outside along z into the cell; this
         # says so where the potential is made, which names the caller's line for
@@ -1093,6 +1317,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             _warn_if_given_atoms_far_outside_along_z(
                 _given_configurations(self._frozen_phonons), self.plane
             )
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # A copy is given the grid and the slicing as they were resolved, i.e. its
+        # gpts and slice thicknesses, which it uses exactly as given.
+        return super()._copy_kwargs(
+            exclude=tuple(exclude) + ("num_slices", "commensurate"), cls=cls
+        )
 
     def _chunk_builder(self):
         # Each build of an ensemble makes its members again, and with them the
@@ -1651,36 +1882,42 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the
         independent atom model for calculating the electrostatic potential(s).
     gpts : one or two int, optional
-        Number of grid points in `x` and `y` describing each slice of the potential.
-        Provide either "sampling" (spacing between consecutive grid points) or "gpts"
-        (total number of grid points).
-    sampling : one or two float or 'auto', optional
-        Sampling of the potential in `x` and `y` [Å].
-        Provide either "sampling" or "gpts". If neither is given, the sampling is
-        'auto' as a default: waves that are matched to the potential adopt it, unless
-        they have a `gpts` or `sampling` of their own, which then takes precedence.
-        If 'auto' is given explicitly, a `gpts` or `sampling` of the waves is not
-        used (with a warning), and the grid points are chosen
-        to be commensurate with the atom positions (closest to a default of 0.05 Å)
-        and, whenever compatible with commensurability, a fast FFT size (all prime
-        factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
-        when it is already such a size. Set the configuration option
-        'grid.round-to-fast-fft' to False for the plain commensurate grid.
-        For an `AtomsEnsemble` with more than one configuration (e.g. an MD
-        trajectory), each configuration is an independent, generally
-        non-commensurate snapshot, so commensurability is not attempted and the
-        target sampling is used directly (rounded up to a fast FFT size).
-    slice_thickness : float or sequence of float or 'auto', optional
-        Thickness of the potential slices in the propagation direction in [Å]
-        (default is 'auto').
-        If given as a float, the number of slices is calculated by dividing the slice
-        thickness into the `z`-height of supercell. The slice thickness may be given as
-        a sequence of values for each slice, in which case an error will be thrown if
-        the sum of slice thicknesses is not equal to the height of the atoms.
-        If 'auto', slice boundaries are aligned with the crystal planes, with slices
-        merged to stay close to a default of 1.0 Å. As with `sampling`, this
-        commensurability search is skipped for an `AtomsEnsemble` with more than
-        one configuration, which uses a uniform 1.0 Å target thickness instead.
+        Number of grid points in `x` and `y` describing each slice of the potential,
+        used exactly as given. Provide either `sampling` or `gpts`.
+    sampling : one or two float, optional
+        Largest accepted sampling of the potential in `x` and `y` [Å]. Provide
+        either `sampling` or `gpts`. The number of grid points is chosen to be
+        commensurate with the atom positions, so that translation-equivalent
+        atoms are discretized identically: it is the smallest multiple of the
+        number of atom-plane periods along each axis that meets the sampling, and
+        a fast FFT size (all prime factors in {2, 3, 5, 7}) whenever that is
+        compatible with commensurability (see `abtem.slicing.commensurate_gpts`;
+        set the configuration option 'grid.round-to-fast-fft' to False for the
+        plain commensurate grid). The realized sampling is never coarser than
+        requested. Where the commensurate grid would need more than 15 % more grid
+        points than the plain grid, or along an axis on which the atoms are not
+        periodic (`pbc`), or for an `AtomsEnsemble` of several independent
+        configurations (e.g. an MD trajectory), the plain grid is used, rounded up to
+        a fast FFT size. With `commensurate=False` the sampling gives the plain grid,
+        as for the waves.
+        If neither `sampling` nor `gpts` is given, the configured default
+        ('potential.sampling', 0.05 Å) is used, but only as a default: waves that
+        are matched to the potential adopt it, unless they have a `gpts` or
+        `sampling` of their own, which then takes precedence.
+    slice_thickness : float or sequence of float, optional
+        Largest accepted thickness of the potential slices in the propagation
+        direction [Å]. If not given, the configured default
+        ('potential.slice-thickness', 1.0 Å) is used. Slice boundaries are aligned
+        with the crystal planes, with neighbouring planes merged into one slice as
+        long as it stays within the thickness, and gaps between planes that are
+        thicker split evenly (see `abtem.slicing.commensurate_slice_thickness`). For
+        atoms that are not periodic along the propagation direction, an
+        `AtomsEnsemble` of several configurations, or with `commensurate=False`,
+        the height of the potential is instead divided into the fewest equal
+        slices that are no thicker than the thickness.
+        The slice thickness may also be given as a sequence of values for each slice,
+        which is used exactly as given; an error is raised if the sum of slice
+        thicknesses is not equal to the height of the potential.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential
         for each element. Two of the most accurate parametrizations are available
@@ -1758,6 +1995,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
+    num_slices : int, optional
+        Number of slices of equal thickness that the height of the potential is
+        divided into, used exactly as given. Provide either `slice_thickness` or
+        `num_slices`.
+    commensurate : bool, optional
+        If True (default), the grid and the slices derived from `sampling` and
+        `slice_thickness` (or their defaults) are commensurate with the atoms, as
+        described above. If False, they are the plain grid and uniform slices.
+        `gpts`, `num_slices` and a sequence of slice thicknesses are not affected.
     """
 
     _exclude_from_copy = ("parametrization", "projection")
@@ -1766,8 +2012,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         self,
         atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
-        sampling: float | tuple[float, float] | str | None = None,
-        slice_thickness: float | tuple[float, ...] | str = "auto",
+        sampling: float | tuple[float, float] | None = None,
+        slice_thickness: float | tuple[float, ...] | None = None,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] | None = None,
@@ -1779,134 +2025,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         periodic: bool = True,
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
+        num_slices: int | None = None,
+        commensurate: bool = True,
     ):
-        origin = _validate_origin(origin)
-        if box is not None:
-            box = _validate_box(box)
-
-        # With neither `gpts` nor `sampling`, the grid is chosen as for
-        # `sampling="auto"`, but only as a default: waves that have a `gpts` or
-        # `sampling` of their own override it, see `Grid.match`.
-        default_grid = gpts is None and sampling is None
-        if default_grid:
-            sampling = "auto"
-        auto_grid = isinstance(sampling, str) and sampling == "auto"
-
-        frozen_phonons = _validate_frozen_phonons(atoms)
-        atoms_obj = frozen_phonons.atoms
-        # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no
-        # shared reference lattice: each configuration is an independent,
-        # generally non-commensurate snapshot, and `atoms_obj` here is only the
-        # first frame. A single-configuration `AtomsEnsemble` has no such
-        # ambiguity — that one frame *is* the configuration, just as it would be
-        # if passed as plain `Atoms` — so only skip commensurability search when
-        # there is genuinely more than one configuration to be ambiguous about.
-        has_multiple_configs = (
-            isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
-        )
-
-        def _placed_atoms(placed_box):
-            # The atoms as the potential places them in its box: strained into a
-            # periodic box, or cut out of the repeated structure for a
-            # non-periodic potential.
-            if periodic:
-                return orthogonalize_cell(
-                    atoms_obj,
-                    box=placed_box,
-                    plane=plane,
-                    origin=origin,
-                    return_transform=False,
-                    allow_transform=True,
-                )
-            return cut_cell(atoms_obj, cell=placed_box, plane=plane, origin=origin)
-
-        if sampling == "auto":
-            if gpts is not None:
-                raise ValueError(
-                    "Cannot specify both gpts and sampling='auto'"
-                )
-            cell = np.array(atoms_obj.cell)
-            if not atoms_obj.pbc[:2].all() or has_multiple_configs:
-                # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
-                # translationally repeated, so commensurability has no meaning and
-                # the period-search algorithm may produce spurious results for
-                # arbitrary rotations. A multi-configuration `AtomsEnsemble` has
-                # the same problem: the chosen grid is applied to every frame
-                # regardless, and searching for commensurate planes in one
-                # arbitrary frame is meaningless. Just use the target sampling
-                # directly, rounded up to a fast FFT size (no commensurability
-                # constrains the grid here, so rounding is free).
-                from abtem.core.fft import next_fast_fft_size
-
-                # The extent the builder gives the potential: the box, else the
-                # cell rotated to the plane and made orthogonal when it needs a
-                # transform, else the cell itself.
-                if box is not None:
-                    extent = box[:2]
-                elif _require_cell_transform(
-                    cell, box=None, plane=plane, origin=origin
-                ):
-                    extent = _default_box(cell, plane)[:2]
-                else:
-                    extent = (float(cell[0, 0]), float(cell[1, 1]))
-                gpts = tuple(safe_ceiling_int(extent[i] / 0.05) for i in range(2))
-                if round_auto_derived_gpts():
-                    gpts = tuple(next_fast_fft_size(n) for n in gpts)
-            elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
-                if not isinstance(plane, str):
-                    raise NotImplementedError
-                if box is not None:
-                    auto_box = box
-                else:
-                    auto_box = _default_box(cell, plane)
-                extent = auto_box[:2]
-                # Place the atoms in the box so positions match the extent
-                _auto_atoms = _placed_atoms(auto_box)
-                gpts = commensurate_gpts(
-                    extent,
-                    _auto_atoms.positions,
-                    target_sampling=0.05,
-                    round_to_fast_fft=round_auto_derived_gpts(),
-                )
-            else:
-                if box is not None:
-                    extent = box[:2]
-                    _auto_atoms = atoms_obj
-                else:
-                    extent = (float(cell[0, 0]), float(cell[1, 1]))
-                    _auto_atoms = atoms_obj
-                gpts = commensurate_gpts(
-                    extent,
-                    _auto_atoms.positions,
-                    target_sampling=0.05,
-                    round_to_fast_fft=round_auto_derived_gpts(),
-                )
-            sampling = None
-
-        if slice_thickness == "auto":
-            if atoms_obj.pbc[2] and not has_multiple_configs:
-                # Periodic in z: align slice boundaries with the crystal planes
-                # of the atoms as they are placed in the potential's box.
-                plane_atoms = atoms_obj
-                if _require_cell_transform(
-                    atoms_obj.cell, box=box, plane=plane, origin=origin
-                ):
-                    if box is not None:
-                        st_box = box
-                    else:
-                        st_box = _default_box(atoms_obj.cell, plane)
-                    plane_atoms = _placed_atoms(st_box)
-                slice_thickness = commensurate_slice_thickness(
-                    plane_atoms, target_thickness=1.0
-                )
-            else:
-                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or a
-                # multi-configuration `AtomsEnsemble` (independent snapshots with
-                # no shared commensurate lattice, see the sampling branch above):
-                # crystal-plane commensurability is not applicable; use a uniform
-                # target thickness and let _validate_slice_thickness divide evenly.
-                slice_thickness = 1.0
-
         if integrator is None:
             if projection == "finite":
                 integrator = QuadratureProjectionIntegrals(
@@ -1932,10 +2053,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             box=box,
             periodic=periodic,
             integrator=integrator,
+            num_slices=num_slices,
+            commensurate=commensurate,
         )
-        self.grid._gpts_is_default = default_grid
-        # A default is overridden quietly; an explicit 'auto' is warned about.
-        self.grid._gpts_are_auto = auto_grid and not default_grid
 
 
 class FieldArray(BaseField, ArrayObject):

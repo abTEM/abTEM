@@ -322,9 +322,7 @@ def test_upsample_window_normalization(device):
 def test_upsample_frozen_phonons(lazy, device):
     atoms = bulk("Si", cubic=True) * (2, 2, 3)
     frozen_phonons = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=13)
-    potential = Potential(
-        frozen_phonons, gpts=96, slice_thickness=2, device=device
-    )
+    potential = Potential(frozen_phonons, gpts=96, num_slices=9, device=device)
 
     detector = abtem.AnnularDetector(inner=40, outer=100)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3))
@@ -354,9 +352,7 @@ def test_upsample_frozen_phonons(lazy, device):
     per_configuration = [
         to_host_array(
             SMatrix(
-                potential=Potential(
-                    atoms, gpts=96, slice_thickness=2, device=device
-                ),
+                potential=Potential(atoms, gpts=96, num_slices=9, device=device),
                 energy=100e3,
                 semiangle_cutoff=20,
                 interpolation=2,
@@ -529,7 +525,7 @@ _WINDOW_FROZEN_PHONONS = dict(num_configs=2, sigmas=0.05, seed=1)
 
 
 def _window_potential(atoms, device):
-    return Potential(atoms, gpts=(56, 64), slice_thickness=2, device=device)
+    return Potential(atoms, gpts=(56, 64), num_slices=6, device=device)
 
 
 def _window_scan(potential):

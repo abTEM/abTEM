@@ -57,7 +57,7 @@ def _scattering_power(number: int) -> tuple[np.ndarray, np.ndarray]:
         Potential(
             atoms,
             gpts=gpts,
-            slice_thickness=thickness,
+            num_slices=1,
             projection="finite",
             device="cpu",
         )

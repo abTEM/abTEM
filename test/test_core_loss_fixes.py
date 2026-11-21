@@ -1127,7 +1127,7 @@ class TestPotentialEnsembleAccumulation:
                 atoms, num_configs=num_configs, sigmas=0.05, seed=seed
             )
         potential = abtem.Potential(
-            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
+            ensemble, gpts=(64, 64), num_slices=2, exit_planes=exit_planes
         )
         probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
         probe.grid.match(potential)
@@ -1216,16 +1216,14 @@ class TestPotentialEnsembleAccumulation:
         phonons = abtem.FrozenPhonons(
             atoms, num_configs=3, sigmas=0.05, seed=7, ensemble_mean=False
         )
-        potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
+        potential = abtem.Potential(phonons, gpts=(64, 64), num_slices=4)
         probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
         probe.grid.match(potential)
         got = self._run(potential, probe, atoms, lazy=False)
         assert got.shape[0] == 3
 
         for index, configuration in enumerate(phonons):
-            single = abtem.Potential(
-                configuration, gpts=(64, 64), slice_thickness=2.0
-            )
+            single = abtem.Potential(configuration, gpts=(64, 64), num_slices=4)
             reference = self._run(single, probe, atoms, lazy=False)
             assert np.array_equal(got[index], reference), (
                 f"slot {index} does not hold configuration {index}"
@@ -1261,7 +1259,7 @@ class TestPrismPotentialEnsembleAccumulation:
             )
         )
         potential = abtem.Potential(
-            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
+            ensemble, gpts=(64, 64), num_slices=4, exit_planes=exit_planes
         )
         return atoms, potential
 

@@ -262,13 +262,13 @@ def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
 
     # The slicing is pinned: by default it follows the atoms, which differ between
     # the ensemble members and the reference configurations compared against.
-    potential = Potential(ensemble, slice_thickness=1.0)
+    potential = Potential(ensemble, num_slices=2)
     result_eager = waves.multislice(potential, lazy=False)
     result_lazy = waves.multislice(potential, lazy=True).compute()
 
     for index in np.ndindex(shape):
         reference = PlaneWave(energy=100e3, gpts=(32, 32), device=device).multislice(
-            Potential(trajectory[index], slice_thickness=1.0), lazy=False
+            Potential(trajectory[index], num_slices=2), lazy=False
         )
 
         reference_array = to_host_array(reference.array)
