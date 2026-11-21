@@ -1595,7 +1595,12 @@ def test_a_detector_applies_to_waves_in_increasing_order_as_to_any_array_object(
     result = detector.detect(waves)
     expected = ArrayObject.apply_transform(waves, detector)
 
-    np.testing.assert_array_equal(_host(result), _host(expected))
+    if device == "cpu":
+        np.testing.assert_array_equal(_host(result), _host(expected))
+    else:
+        # The two routes sum on the GPU in a different order, which float32
+        # does not reproduce bit for bit (Metal differs by ~3e-7 relative).
+        np.testing.assert_allclose(_host(result), _host(expected), rtol=1e-5)
     assert result.axes_metadata == expected.axes_metadata
 
 
