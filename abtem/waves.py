@@ -61,6 +61,7 @@ from abtem.measurements import (
     DiffractionPatterns,
     Images,
     RealSpaceLineProfiles,
+    _increasing_scan_index,
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
@@ -499,6 +500,46 @@ def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     return ensemble
 
 
+def _deprecated_normalization(
+    normalization, function: str, hint: str, stacklevel: int = 3
+):
+    """Warn that the ``normalization`` keyword of ``function`` is deprecated, and
+    return it validated; None when it was not given. The warning points ``stacklevel``
+    frames up from here, the default being the caller of ``function``."""
+    if normalization is None:
+        return None
+    warnings.warn(
+        f"The `normalization` argument of `{function}` is deprecated and will be "
+        f"removed in a future release. {hint}",
+        FutureWarning,
+        stacklevel=stacklevel,
+    )
+    if normalization not in ("values", "amplitude", "intensity"):
+        raise ValueError(
+            f"normalization {normalization!r} not recognized; use 'values' or "
+            "'amplitude'"
+        )
+    return normalization
+
+
+def _normalize_with_deprecated_normalization(normalize, normalization, function: str):
+    """The ``normalize`` flag of an exit-wave calculation. The ``normalization``
+    argument it replaced ('values' or 'amplitude', also still accepted in the
+    position of ``normalize``) only wrote a label to the metadata and never changed
+    the array, so it is validated and otherwise ignored."""
+    if isinstance(normalize, str):
+        normalize, normalization = False, normalize
+    _deprecated_normalization(
+        normalization,
+        function,
+        "It only set a metadata label and did not change the exit waves, which have "
+        "a value of one in the incident wave: use `normalize=True` for waves with "
+        "a reciprocal space intensity that sums to one.",
+        stacklevel=4,
+    )
+    return bool(normalize)
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -577,6 +618,14 @@ class _WavesNormalization(WavesToWavesTransform):
     @property
     def in_place(self) -> bool:
         return self._in_place
+
+    @property
+    def metadata(self) -> dict:
+        # the wave functions are now normalized as those of a builder with
+        # `normalize=True` are, which `diffraction_patterns` must not divide again
+        if self._space == "reciprocal":
+            return {"normalization": "reciprocal_space"}
+        return {}
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -725,6 +774,55 @@ class Waves(BaseWaves, ArrayObject):
         if hasattr(self, "_device"):
             return self._device
         return device_name_from_array_module(get_array_module(self.array))
+
+    def apply_transform(self, transform, max_batch: int | str = "auto"):
+        """Apply a transform to the waves. A scan with reversed axes is put in
+        increasing order for the transform; outputs that reduce the scan to images or
+        line profiles keep that order, and every output that keeps the scan gets the
+        reversed order back.
+
+        Parameters
+        ----------
+        transform : ArrayObjectTransform
+            The transformation to apply to the waves.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+
+        Returns
+        -------
+        transformed_array_object : ArrayObject or list of ArrayObject
+            The transformed waves, or the measurements or waves the transform
+            produces.
+        """
+        # The transform runs on the scan in increasing order, flipped once here, so
+        # a lazy block and the per-block detection of a multislice see increasing
+        # axes. An output that still carries the ensemble axes of the waves,
+        # unchanged, after those of the transform keeps the scan and gets the
+        # reversed order back; any other output (one that reduces the scan to
+        # images or line profiles) keeps the increasing order.
+        index = _increasing_scan_index(self)
+        if index is None:
+            return super().apply_transform(transform, max_batch)
+
+        waves = self[index]
+        outputs = waves.apply_transform(transform, max_batch)
+        num_ensemble_axes = len(waves.ensemble_axes_metadata)
+
+        def restore(output):
+            lead = len(output.ensemble_axes_metadata) - num_ensemble_axes
+            if (
+                lead < 0
+                or output.ensemble_axes_metadata[lead:] != waves.ensemble_axes_metadata
+            ):
+                return output
+            return output[(slice(None),) * lead + index]
+
+        if isinstance(outputs, list):
+            return type(outputs)(restore(output) for output in outputs)
+        return restore(outputs)
 
     @property
     def base_tilt(self) -> tuple[float, float]:
@@ -1621,9 +1719,14 @@ class Waves(BaseWaves, ArrayObject):
         self,
         max_angle: str | float = "cutoff",
         gpts: Optional[tuple[int, int]] = None,
-        normalization: str = "values",
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Downsample the wave functions to a lower maximum scattering angle.
+
+        The normalization of the wave functions is kept: with the normalization of
+        ``PlaneWave()``, where the wave function takes a value of one everywhere, the
+        pixel values are preserved; with that of ``PlaneWave(normalize=True)``, which
+        ``Probe`` waves have, the reciprocal space intensity keeps its sum.
 
         Parameters
         ----------
@@ -1645,15 +1748,10 @@ class Waves(BaseWaves, ArrayObject):
             Number of grid points of the wave functions after downsampling.
             If given, `max_angle` is not used.
 
-        normalization : {'values', 'amplitude'}
-            The normalization parameter determines the preserved quantity after
-            normalization.
-
-                ``values`` :
-                    The pixel-wise values of the wave function are preserved (default).
-
-                ``amplitude`` :
-                    The total amplitude of the wave function is preserved.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated. Overrides what is preserved: ``values`` the pixel values,
+            ``amplitude`` the total amplitude. By default the normalization of the
+            waves is kept, as described above.
 
         Returns
         -------
@@ -1667,6 +1765,11 @@ class Waves(BaseWaves, ArrayObject):
         if gpts is None:
             gpts = waves._gpts_within_angle(max_angle)
 
+        normalization = _deprecated_normalization(
+            normalization,
+            "Waves.downsample",
+            "The normalization of the waves is kept by default.",
+        ) or Waves._fft_resampling_normalization(waves.metadata)
         if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
@@ -1741,6 +1844,15 @@ class Waves(BaseWaves, ArrayObject):
         return Waves._diffraction_pattern_from_fft(
             fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
         )
+
+    @staticmethod
+    def _fft_resampling_normalization(metadata) -> str:
+        """What `fft_interpolate` preserves when resampling waves with this metadata:
+        the pixel values of waves with the normalization of ``PlaneWave()``, otherwise
+        the reciprocal space intensity, as `diffraction_patterns` takes the waves."""
+        if Waves._diffraction_pattern_should_normalize(metadata):
+            return "values"
+        return "amplitude"
 
     @staticmethod
     def _diffraction_pattern_should_normalize(metadata, renormalize=True):

@@ -80,7 +80,7 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Probe, Waves
+from abtem.waves import Probe, Waves, _normalize_with_deprecated_normalization
 
 if TYPE_CHECKING:
     from abtem.scan import BaseScan
@@ -642,6 +642,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             parametrization=self._parametrization,
             g_max=self.g_max,
             thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
 
@@ -1761,8 +1762,17 @@ class BlochWaves:
 
         cell = structure_factor.cell
 
-        if orientation_matrix is not None:
+        if orientation_matrix is None:
+            orientation_matrix = np.eye(3)
+        else:
+            orientation_matrix = np.array(orientation_matrix, dtype=float)
+            if orientation_matrix.shape != (3, 3):
+                raise ValueError(
+                    "orientation_matrix must have shape (3, 3), "
+                    f"got {orientation_matrix.shape}"
+                )
             cell = Cell(np.dot(cell, orientation_matrix.T))
+        self._orientation_matrix = orientation_matrix
 
         g_max = validate_g_max(g_max, structure_factor)
 
@@ -1906,6 +1916,12 @@ class BlochWaves:
     @property
     def cell(self) -> Cell:
         return self._cell
+
+    @property
+    def orientation_matrix(self) -> np.ndarray:
+        """The (3, 3) orientation matrix of the unit cell relative to the structure
+        factor's; the identity if not rotated."""
+        return self._orientation_matrix
 
     @property
     def g_max(self) -> float:
@@ -2331,9 +2347,10 @@ class BlochWaves:
         thicknesses: float | Iterable[float],
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for a given set of thicknesses.
 
@@ -2345,17 +2362,27 @@ class BlochWaves:
             The grid points of the exit waves.
         extent : tuple of floats
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves. If 'values', the exit waves are
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochWaves.calculate_exit_waves"
+        )
 
         # --- Multi-energy ensemble path ---
         if len(self._energies) > 1:
@@ -2365,7 +2392,7 @@ class BlochWaves:
                     thicknesses,
                     gpts=gpts,
                     extent=extent,
-                    normalization=normalization,
+                    normalize=normalize,
                     g_max=g_max,
                     lazy=lazy,
                 )
@@ -2452,6 +2479,11 @@ class BlochWaves:
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
 
+        if normalize:
+            # the incident wave is one in every pixel; normalized, its raw Fourier
+            # transform has a unit intensity
+            array = array / float(np.prod(gpts))
+
         ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
@@ -2464,7 +2496,7 @@ class BlochWaves:
             extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata={"normalization": normalization},
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
@@ -2501,6 +2533,11 @@ class BlochWaves:
     ) -> BlochWaves | BlochwaveEnsemble:
         """Rotate the unit cell by a given set of Euler angles.
 
+        The rotations are about axes fixed in space, applied in the order given, and
+        on top of the orientation the Bloch waves already have: rotating the result of
+        a rotation continues it, so ``bloch_waves.rotate(a).rotate(b)`` is
+        ``bloch_waves.rotate(a, b)``.
+
         Parameters
         ----------
         args : sequence of (str, float)
@@ -2536,9 +2573,10 @@ class BlochWaves:
                 use_wave_eq=self.use_wave_eq,
                 device=self._device,
                 use_degrees=degrees,
+                orientation_matrix=self._orientation_matrix,
             )
         else:
-            orientation_matrix = np.eye(3)
+            orientation_matrix = self._orientation_matrix
 
             for axes, rotation in zip(all_axes, all_rotations):
                 R = Rotation.from_euler(axes, rotation, degrees=degrees).as_matrix()
@@ -2723,14 +2761,22 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         # per-energy union mask -- each energy admits a different set of
         # beams, and every energy in the ensemble must share the same
         # reciprocal-space basis for the results to stack.
+        #
+        # The ensemble takes the excitation errors from the unrotated cell and each
+        # member from its rotated cell, which differ in the last bits. A beam on
+        # the boundary of a member could then fall outside the ensemble's, which
+        # every member must be a subset of, so the ensemble selects the beams within
+        # a band far wider than that rounding (~1e-15 1/A) and far narrower than any
+        # spacing of beams: it can only add a beam to the union that no member has.
+        boundary_tolerance = 1e-9
         mask = np.zeros(len(hkl), dtype=bool)
         for energy in self._energies:
             mask |= filter_reciprocal_space_vectors(
                 hkl=hkl,
                 cell=self._structure_factor.cell,
                 energy=float(energy),
-                sg_max=self.sg_max,
-                g_max=self.g_max,
+                sg_max=self.sg_max + boundary_tolerance,
+                g_max=self.g_max + boundary_tolerance,
                 centering=self.centering,
                 orientation_matrices=orientation_matrices,
             )
@@ -3178,7 +3224,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3218,7 +3264,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 lazy=False,
             )
@@ -3235,7 +3281,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3244,7 +3290,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
         )
@@ -3254,7 +3300,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> da.core.Array:
@@ -3278,7 +3324,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
             concatenate=True,
@@ -3291,10 +3337,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: float | Sequence[float] | np.ndarray,
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
         pbar: Optional[bool] = None,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for the ensemble for a given set of
         thicknesses.
@@ -3307,8 +3354,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             The grid points of the exit waves.
         extent : tuple of floats, optional
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves.
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         g_max : float, optional
             Maximum scattering vector length for the plane wave
             expansion [1/Å].
@@ -3318,12 +3368,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         pbar : bool, optional
             If True, a progress bar is shown. Default is None, which means
             the value is taken from the configuration.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochwaveEnsemble.calculate_exit_waves"
+        )
 
         if pbar is None:
             pbar = config.get("diagnostics.task_progress", False)
@@ -3370,7 +3427,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3379,7 +3436,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3397,7 +3454,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
-            metadata={"normalization": normalization},
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
