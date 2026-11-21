@@ -327,13 +327,6 @@ def skip_float64_on_single_precision_arrays(device, reason="float64 arrays"):
         pytest.skip(f"the float32 arrays of the Metal backend cannot be {reason}")
 
 
-def skip_float64_without_metal_kernels(device):
-    """Skip a test that sets double precision in its body for the case of the
-    Metal backend (`gpu`) where the emulation's kernels cannot run."""
-    if device == gpu.values[0] and _ACCELERATOR == "mps" and not _METAL_KERNELS:
-        pytest.skip(_NO_KERNELS_REASON)
-
-
 def float64_devices(function):
     """Parametrize a test over `device` and run it in double precision with the
     numpy FFT, which the comparisons at 1e-10 of the maximum need (the

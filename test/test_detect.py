@@ -11,7 +11,6 @@ from utils import (
     gpu,
     lazy_params,
     skip_float64_on_single_precision_arrays,
-    skip_float64_without_metal_kernels,
     to_host_array,
 )
 
@@ -1095,13 +1094,13 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_wa
         assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
 
 
+@pytest.mark.float64  # sets double precision in its body; Metal cannot hold it
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
     """Without resampling the detected waves are the waves themselves, so a
     lazy detection must declare their dtype, not the configured precision.
     `gpts=()` declared complex128 for complex64 waves under float64 precision
     (it tested `gpts is not None`) and then computed complex64."""
-    skip_float64_without_metal_kernels(device)
     rng = np.random.default_rng(0)
     array = (rng.standard_normal((2, 8, 8)) + 1j * rng.standard_normal((2, 8, 8)))
     waves = abtem.Waves(
