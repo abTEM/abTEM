@@ -552,3 +552,124 @@ def test_prism_reduce_averages_a_ctf_ensemble_eagerly_as_lazily():
     assert eager.shape == lazy.shape == (3, 3)
     scale = np.abs(lazy.array).max()
     np.testing.assert_allclose(eager.array, lazy.array, rtol=0, atol=1e-5 * scale)
+
+
+def _cutoff_cells():
+    # a square cell sampled differently along x and y, and a rectangular cell
+    from ase.build import bulk
+
+    return {
+        "square-cell": (bulk("Si", cubic=True) * (1, 1, 2), (56, 64)),
+        "rectangular-cell": (bulk("Si", cubic=True) * (1, 2, 1), (48, 100)),
+    }
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("cell", ["square-cell", "rectangular-cell"])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_downsampled_prism_detects_to_the_antialias_cutoff_of_multislice(
+    cell, lazy, device
+):
+    # downsample="cutoff" keeps everything the full grid's antialias aperture
+    # passes, so at interpolation 1 the patterns, the radial bins and the
+    # automatic outer angle are those of multislice on the full grid; 1.0.11 gave
+    # (26, 22) patterns where multislice gives (38, 38) on the square cell
+    import abtem
+
+    atoms, gpts = _cutoff_cells()[cell]
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(3, 5),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample="cutoff",
+        device=device,
+    )
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+
+    def detectors():
+        return [
+            abtem.PixelatedDetector(max_angle="cutoff"),
+            abtem.FlexibleAnnularDetector(),
+            abtem.AnnularDetector(50),
+        ]
+
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), lazy=lazy)
+    if lazy:
+        measured = measured.compute()
+    expected = probe.scan(potential, scan=scan, detectors=detectors(), lazy=False)
+
+    probe.grid.match(potential)
+    assert s_matrix.dummy_probes().cutoff_angles == pytest.approx(probe.cutoff_angles)
+    assert measured[0].max_angles == pytest.approx(probe.cutoff_angles)
+    scale = max(float(np.abs(m.to_cpu().array).max()) for m in expected)
+    for measured_i, expected_i in zip(measured, expected):
+        # PRISM results carry the band limit of the built S-matrix in their
+        # metadata, which multislice results have no reason to; the rest agrees
+        assert measured_i.shape == expected_i.shape
+        assert measured_i.axes_metadata == expected_i.axes_metadata
+        np.testing.assert_allclose(
+            measured_i.to_cpu().array,
+            expected_i.to_cpu().array,
+            rtol=1e-5,
+            atol=1e-5 * scale,
+        )
+
+
+@pytest.mark.filterwarnings("ignore:The interpolation factor does not exactly divide")
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_prism_cutoff_angles_are_equal_along_x_and_y_on_an_odd_grid(device):
+    # a cubic cell on a (57, 63) grid, interpolated by 2: the extent of the
+    # waves in units of the full sampling is 28.5 along x and 31.5 along y, which
+    # floating point rounds to either neighbour, so the angles within the antialias
+    # cutoff must not follow that rounding
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(57, 63), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        device=device,
+    )
+
+    cutoff_angles = s_matrix.dummy_probes().cutoff_angles
+    built_cutoff_angles = s_matrix.build(lazy=True).dummy_probes().cutoff_angles
+
+    assert cutoff_angles[0] == pytest.approx(cutoff_angles[1])
+    assert built_cutoff_angles == pytest.approx(cutoff_angles)
+
+
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_dummy_probes_keep_the_built_band_limit_with_supplied_metadata(device):
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+    potential = abtem.Potential(atoms, gpts=(56, 64), slice_thickness=2, device=device)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, device=device
+    )
+    assert s_matrix.downsampled_gpts != s_matrix.gpts
+
+    probes = s_matrix.dummy_probes(metadata={"label": "supplied"})
+
+    assert probes.metadata["label"] == "supplied"
+    assert probes.metadata["antialias_sampling"] == s_matrix.sampling
+    assert probes.cutoff_angles == pytest.approx(
+        s_matrix.build(lazy=True).dummy_probes().cutoff_angles
+    )

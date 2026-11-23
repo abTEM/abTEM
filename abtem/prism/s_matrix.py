@@ -58,7 +58,7 @@ from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
-from abtem.waves import BaseWaves, Probe, Waves, _antialias_cutoff_gpts
+from abtem.waves import BaseWaves, Probe, Waves
 
 
 def _extract_measurement(array, index):
@@ -1624,6 +1624,22 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
         return chunks
 
+    def dummy_probes(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        plane: str = "entrance",
+        downsample: bool = True,
+        **kwargs,
+    ) -> Probe:
+        # the probes of the unbuilt S-matrix carry the band limit that build
+        # records, also when the caller supplies the rest of the metadata
+        metadata = {**kwargs.get("metadata", self.metadata)}
+        if self.downsampled_gpts != self.gpts:
+            metadata["antialias_sampling"] = self.sampling
+        kwargs["metadata"] = metadata
+        return super().dummy_probes(scan, ctf, plane, downsample, **kwargs)
+
     @property
     def downsampled_gpts(self) -> tuple[int, int]:
         """The gpts of the SMatrix after downsampling."""
@@ -1760,10 +1776,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = (
-                waves.antialias_cutoff_gpts
-            )
-
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
                 normalization="intensity",
@@ -1890,9 +1902,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
         if self.downsampled_gpts != self.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
-                self.window_gpts, self.sampling
-            )
+            # the sampling of the full grid, whose antialias cutoff band-limits the
+            # downsampled waves on every grid the reduction detects on
+            waves.metadata["antialias_sampling"] = self.sampling
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,
