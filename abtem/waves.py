@@ -449,6 +449,14 @@ class _WavesNormalization(WavesToWavesTransform):
     def in_place(self) -> bool:
         return self._in_place
 
+    @property
+    def metadata(self) -> dict:
+        # the wave functions are now normalized as those of a builder with
+        # `normalize=True` are, which `diffraction_patterns` must not divide again
+        if self._space == "reciprocal":
+            return {"normalization": "reciprocal_space"}
+        return {}
+
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
 

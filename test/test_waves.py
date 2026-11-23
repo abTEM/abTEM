@@ -1072,3 +1072,22 @@ def test_auto_multislice_batch_of_an_integrating_detector_ignores_the_exit_plane
 
     assert measurement.array.shape[0] == 4
     assert measurement.array.chunks[1:3] == probes.array.chunks[:2]
+
+
+def test_normalize_labels_the_waves_as_a_normalized_builder_does():
+    # normalize() left the label 'values', so diffraction_patterns() divided by the
+    # number of pixels once more and its intensity summed to 1 / N^2
+    import abtem
+
+    waves = abtem.PlaneWave(energy=100e3, gpts=32, extent=10.0).build(lazy=False)
+    assert waves.metadata["normalization"] == "values"
+
+    normalized = waves.normalize()
+
+    assert normalized.metadata["normalization"] == "reciprocal_space"
+    assert_is_normalized(normalized)
+    np.testing.assert_allclose(
+        normalized.diffraction_patterns(max_angle=None).array,
+        waves.diffraction_patterns(max_angle=None).array,
+        atol=1e-6,
+    )
