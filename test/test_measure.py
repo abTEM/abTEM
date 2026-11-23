@@ -2169,3 +2169,26 @@ def test_diffraction_patterns_interpolate_in_float64_is_linear_interpolation(
         found = values[member][inside]
         expected *= found.sum() / expected.sum()
         np.testing.assert_allclose(found, expected, rtol=0, atol=1e-12 * found.max())
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
+    lazy, device
+):
+    array = np.ones((2, 32, 32), dtype=np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.polar_binning(2, 4)
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.radial_binning(step_size=1.0)
+    assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
