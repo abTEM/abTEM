@@ -14,6 +14,7 @@ from utils import (assert_array_matches_device, assert_array_matches_laziness,
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
+from abtem.measurements import Images
 
 
 @given(data=st.data())
@@ -788,3 +789,40 @@ def test_to_data_array_does_not_share_nested_metadata_values(fake_xarray):
     waves.to_data_array().attrs["components"].append("diffuse")
 
     assert waves.metadata["components"] == ["total", "elastic"]
+
+
+def test_set_ensemble_axes_metadata_refuses_an_axis_that_does_not_fit():
+    """The axis is checked against the array: a mismatch raises and leaves the
+    old axis in place. The test sets metadata only, so it pins no device."""
+    old_axis = OrdinalAxis(label="a", values=(1, 2, 3))
+    images = Images(
+        np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=[old_axis]
+    )
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        images.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert images.ensemble_axes_metadata[0] == old_axis
+
+    new_axis = OrdinalAxis(label="b", values=(10, 20, 30))
+    assert images.set_ensemble_axes_metadata(new_axis, 0) is images
+    assert images.ensemble_axes_metadata[0] == new_axis
+
+
+def test_set_ensemble_axes_metadata_leaves_a_list_shared_with_another_object_alone():
+    """A refused axis is never written into the list the caller passed, and an
+    accepted one is installed in a list of the object's own, so another object
+    built from the same list keeps its axes. The test sets metadata only, so it
+    pins no device."""
+    axes = [OrdinalAxis(label="a", values=(1, 2, 3))]
+    first = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+    second = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"
+
+    first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20, 30)), 0)
+    assert first.ensemble_axes_metadata[0].label == "b"
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"

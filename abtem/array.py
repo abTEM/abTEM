@@ -1966,7 +1966,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def set_ensemble_axes_metadata(
         self, axes_metadata: AxisMetadata, axis: int
     ) -> Self:
-        """Sets the axes metadata of an ensemble axis.
+        """Sets the axes metadata of an ensemble axis. The axes metadata are left
+        unchanged when the new axis is refused.
 
         Parameters
         ----------
@@ -1974,16 +1975,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The new axis metadata.
         axis : int
             The axis to set.
+
+        Raises
+        ------
+        RuntimeError
+            If the axis metadata does not fit the dimension, for example an ordinal
+            axis with a different number of values.
         """
 
-        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-
-        self.ensemble_axes_metadata[axis] = axes_metadata
+        old_axes_metadata = self._ensemble_axes_metadata
+        self._ensemble_axes_metadata = list(old_axes_metadata)
+        self._ensemble_axes_metadata[axis] = axes_metadata
 
         try:
             self._check_axes_metadata()
         except RuntimeError:
             self._ensemble_axes_metadata = old_axes_metadata
+            raise
 
         return self
 
