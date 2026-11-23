@@ -2528,3 +2528,47 @@ def test_interpolate_line_matches_float64_reference(device):
     np.testing.assert_allclose(
         result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
     )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize(
+    "items",
+    [(slice(None, None, 2), slice(1, None, 3)), ([0, 2, 4, 6], [1, 4, 7])],
+    ids=["slices", "index_arrays"],
+)
+def test_subsampled_scan_images_have_the_subsampled_scan_sampling(
+    items, lazy, device
+):
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ]
+    array = np.random.default_rng(0).random((8, 9, 6, 6), dtype=np.float32)
+    dp = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=0.2,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 100e3},
+    )
+    if lazy:
+        dp = dp.ensure_lazy(chunks=(3, 4, -1, -1))
+    full = dp.integrate_radial(0, 10)
+
+    subsampled = dp[items[0]][:, items[1]]
+    sub = subsampled.integrate_radial(0, 10)
+
+    assert isinstance(sub, Images)
+    assert sub.shape == (4, 3)
+    assert sub.sampling == pytest.approx((1.0, 1.2))
+    np.testing.assert_allclose(
+        asnumpy(sub.compute().array),
+        asnumpy(full.compute().array)[items[0]][:, items[1]],
+        rtol=1e-6,
+    )
+    for new_axis, axis, item, n, n_full in zip(
+        subsampled.ensemble_axes_metadata, axes, items, (4, 3), (8, 9)
+    ):
+        np.testing.assert_allclose(
+            new_axis.coordinates(n), np.asarray(axis.coordinates(n_full))[item]
+        )

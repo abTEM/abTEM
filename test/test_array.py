@@ -914,3 +914,111 @@ def test_s_matrix_and_indexed_patterns_still_read_from_their_kwargs(tmp_path):
     read = abtem.from_zarr(str(tmp_path / "indexed.zarr")).compute()
     assert type(read) is type(indexed)
     np.testing.assert_allclose(np.asarray(read.array), np.asarray(indexed.array))
+
+
+def _linear_axes():
+    from abtem.core.axes import LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis, ScanAxis
+
+    return [
+        LinearAxis(label="z", sampling=0.7, offset=-1.3),
+        RealSpaceAxis(label="z", sampling=0.7, offset=-1.3),
+        ScanAxis(label="z", sampling=0.7, offset=-1.3),
+        ReciprocalSpaceAxis(label="z", sampling=0.7, offset=-(9 // 2) * 0.7),
+    ]
+
+
+# (item, step of the members it selects), over 9 members: slices with a positive
+# step, negative bounds included, and index arrays of evenly increasing members
+_LINEAR_AXIS_ITEMS = [
+    (slice(1, 8, 2), 2),
+    (slice(None, None, 3), 3),
+    (slice(-4, None), 1),
+    (slice(1, -2), 1),
+    (slice(-7, -1, 2), 2),
+    ([0, 3, 6], 3),
+    ([2, 3, 4], 1),
+    ([5], 1),
+    (np.array([False, True, False, True, False, True, False, False, False]), 2),
+]
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("axis", _linear_axes(), ids=lambda axis: type(axis).__name__)
+@pytest.mark.parametrize("item, step", _LINEAR_AXIS_ITEMS)
+def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
+    axis, item, step, lazy, device
+):
+    from abtem.core.axes import ReciprocalSpaceAxis
+    from abtem.core.backend import asnumpy, copy_to_device
+    from abtem.measurements import Images
+
+    if isinstance(axis, ReciprocalSpaceAxis) and step != 1:
+        pytest.skip("a ReciprocalSpaceAxis keeps its class only for a step of one")
+
+    host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+
+    indexed = images[item]
+    new_axis = indexed.ensemble_axes_metadata[0]
+    expected = np.asarray(axis.coordinates(9))[item]
+
+    assert type(new_axis) is type(axis)
+    assert new_axis.sampling == pytest.approx(0.7 * step)
+    np.testing.assert_allclose(
+        new_axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12 * 9 * 0.7
+    )
+    np.testing.assert_array_equal(asnumpy(indexed.compute().array), host[item])
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_a_new_axis_before_a_stepped_linear_ensemble_axis(device):
+    from abtem.core.axes import LinearAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    axis = LinearAxis(label="z", sampling=0.7, offset=-1.3)
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    new_axis = images[None, 1::2].ensemble_axes_metadata[1]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(4), np.asarray(axis.coordinates(9))[1::2], atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinates(
+    lazy, device
+):
+    """The partition path indexes the already indexed axis with contiguous
+    forward slices; each block's coordinates are those of its members."""
+    from abtem.core.axes import ScanAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.5, offset=1.0)],
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+    indexed = images[1::2]
+    expected = indexed.ensemble_axes_metadata[0].coordinates(4)
+
+    blocks = indexed._partition_ensemble_axes_metadata(chunks=((2, 2),), lazy=False)
+
+    for block, start in zip(blocks, (0, 2)):
+        np.testing.assert_allclose(
+            block[0].coordinates(2), expected[start : start + 2], atol=1e-12
+        )

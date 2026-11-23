@@ -688,6 +688,59 @@ def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]
     return tuple(float(weight) for weight in weights)
 
 
+def _increasing_run(item: Any, n: int) -> Optional[range]:
+    """The members of an axis of length `n` that `item` selects, as a range with a
+    positive step, if `item` is a slice with a positive step or a one-dimensional
+    index array selecting evenly increasing members; otherwise None."""
+    if isinstance(item, slice):
+        run = range(n)[item]
+        return run if run.step > 0 else None
+
+    if not isinstance(item, (list, np.ndarray)) or np.ndim(item) != 1:
+        return None
+
+    indices = np.arange(n)[np.asarray(item)]
+    if len(indices) == 0:
+        return None
+
+    step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
+    if step <= 0:
+        return None
+
+    run = range(int(indices[0]), int(indices[-1]) + 1, step)
+    return run if np.array_equal(indices, run) else None
+
+
+def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
+    """The metadata of an ensemble axis of length `n` indexed by `item`.
+
+    On a linear axis, a slice with a positive step (negative bounds included) and a
+    one-dimensional index array selecting evenly increasing members are represented
+    exactly by an axis of the same class: the first member selected gives the offset
+    and the step scales the sampling. A `ReciprocalSpaceAxis` keeps its class this
+    way only for a step of one and with ``fftshift=True``, since it rounds its offset
+    to a whole multiple of its sampling. Any other item is passed to the axis's own
+    ``__getitem__``, and the axis is copied whole where that raises TypeError.
+    """
+    if isinstance(axis, LinearAxis):
+        run = _increasing_run(item, n)
+        if isinstance(axis, ReciprocalSpaceAxis) and run is not None:
+            if run.step != 1 or not axis.fftshift:
+                run = None
+
+        if run is not None:
+            return dataclasses.replace(
+                axis,
+                offset=axis.offset + run.start * axis.sampling,
+                sampling=axis.sampling * run.step,
+            )
+
+    try:
+        return axis[item].copy()
+    except TypeError:
+        return axis.copy()
+
+
 def axis_to_dict(axis: AxisMetadata):
     d = dataclasses.asdict(axis)
     for key, value in d.items():
