@@ -1825,3 +1825,110 @@ def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
     ]
     np.testing.assert_allclose(lines[0].get_ydata(), array[0].real)
     np.testing.assert_allclose(lines[3].get_ydata(), array[1].imag)
+
+
+class TestDiffractionPatternsIndexOrientations:
+    """index_diffraction_spots with one orientation matrix per member indexes
+    each member with its own matrix, eagerly and with any number of members
+    per dask chunk: each member equals that member indexed on its own."""
+
+    # 4 x 3 patterns, so no two ensemble axes have the same length
+    SHAPE = (4, 3)
+
+    @staticmethod
+    def _matrices(n, seed):
+        from scipy.spatial.transform import Rotation
+
+        return Rotation.random(n, random_state=seed).as_matrix()
+
+    @staticmethod
+    def _array():
+        # indexing without a radius only picks and masks pixels, so the values
+        # compare exactly
+        return np.random.default_rng(0).random(
+            TestDiffractionPatternsIndexOrientations.SHAPE + (17, 21), np.float32
+        )
+
+    @classmethod
+    def _members_alone(cls, matrices):
+        """Each member indexed on its own, per index: (miller indices, array)."""
+        array = cls._array()
+        shape = (1,) * (len(cls.SHAPE) + 2 - matrices.ndim) + matrices.shape[:-2]
+        matrices = matrices.reshape(shape + (3, 3))
+        alone = {}
+        for index in np.ndindex(cls.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": 100e3}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, shape))
+                ],
+            )
+            alone[index] = ([tuple(h) for h in single.miller_indices], single.array)
+        return alone
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize(
+        "matrices_shape",
+        [
+            # varying on one axis, broadcast on the other
+            (4, 1),
+            (1, 3),
+            # without the leading axis
+            (3,),
+            # varying on both axes
+            (4, 3),
+        ],
+    )
+    # eager; one member per chunk; every member in one chunk; uneven on both axes
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 3), (3, 2)])
+    def test_members_match_each_member_indexed_alone(
+        self, device, matrices_shape, chunks
+    ):
+        matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
+        data = copy_to_device(self._array(), device)
+        if chunks is not None:
+            data = da.from_array(data, chunks=chunks + (-1, -1))
+        patterns = DiffractionPatterns(
+            data,
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=axes,
+        )
+
+        indexed = patterns.index_diffraction_spots(
+            cell=4.0, orientation_matrices=matrices
+        )
+        assert indexed.is_lazy == (chunks is not None)
+        values = asnumpy(indexed.compute().array)
+
+        column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        alone = self._members_alone(matrices)
+        for index in np.ndindex(self.SHAPE):
+            millers, expected = alone[index]
+            columns = [column[h] for h in millers]
+            others = np.setdiff1d(np.arange(len(column)), columns)
+            np.testing.assert_array_equal(values[index][columns], expected)
+            assert np.all(values[index][others] == 0)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("ensemble_shape", [(1,), ()])
+    def test_more_matrices_than_patterns_raises(self, lazy, ensemble_shape):
+        """One pattern cannot be indexed with three matrices: the result has
+        one member per pattern."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0,))] * len(ensemble_shape),
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        with pytest.raises(ValueError, match="length 1 or the length"):
+            patterns.index_diffraction_spots(
+                cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
