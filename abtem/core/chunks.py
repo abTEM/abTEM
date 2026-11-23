@@ -209,6 +209,16 @@ def validate_chunks(
     return validated_chunks
 
 
+def _chunk_bytes(device: str) -> int:
+    """The size in bytes that an automatically sized chunk on the device may reach."""
+    if device == "gpu":
+        return parse_bytes(config.get("dask.chunk-size-gpu"))
+    elif device == "cpu":
+        return parse_bytes(config.get("dask.chunk-size"))
+    else:
+        raise RuntimeError(f"Unknown device: {device}")
+
+
 def _auto_chunks(
     shape: tuple[int, ...],
     chunks: ChunksTuple,
@@ -246,12 +256,7 @@ def _auto_chunks(
     check_chunks_match_shape_length(shape, chunks)
 
     if max_elements == "auto":
-        if device == "gpu":
-            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu"))
-        elif device == "cpu":
-            chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
-        else:
-            raise RuntimeError(f"Unknown device: {device}")
+        chunk_bytes = _chunk_bytes(device)
 
         if dtype is None:
             raise ValueError("auto selecting chunk sizes requires dtype")

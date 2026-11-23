@@ -132,6 +132,42 @@ def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
         raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 
+def _max_batch_with_exit_planes(
+    waves_builder: WavesBuilder,
+    potential: Optional[BasePotential],
+    detectors: Optional[BaseDetector | list[BaseDetector]],
+    max_batch: int | str,
+) -> int | str:
+    """An automatic ``max_batch`` divided so that a block of detector output fits
+    the chunk size.
+
+    A block returns one output per exit plane and detector for each of its waves, all
+    in one chunk. The automatic batch of waves is divided by the output of the
+    block, in units of one wave, when that exceeds one wave; an integer
+    ``max_batch`` is returned as it is.
+    """
+    if max_batch != "auto" or potential is None:
+        return max_batch
+
+    from abtem.core.chunks import _chunk_bytes
+    from abtem.detectors import validate_detectors
+
+    wave_bytes = (
+        int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
+    )
+    output_bytes = sum(
+        int(np.prod(detector._out_base_shape(waves_builder)[0]))
+        * np.dtype(detector._out_dtype(waves_builder)[0]).itemsize
+        for detector in validate_detectors(detectors, waves_builder)
+    )
+    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+
+    if ratio <= 1:
+        return max_batch
+
+    return max(1, _chunk_bytes(waves_builder.device) // wave_bytes // ratio)
+
+
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
     """Base class of all wave functions.
 
@@ -1964,7 +2000,8 @@ class PlaneWave(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -1982,6 +2019,8 @@ class PlaneWave(WavesBuilder):
         potential = validate_potential(potential)
 
         self.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(self, potential, detectors, max_batch)
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
@@ -2262,7 +2301,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2280,6 +2320,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2323,7 +2365,9 @@ class Probe(WavesBuilder):
         max_batch : int or str, optional
             The number of probe wave functions in each chunk of the Dask array. If
             'auto' (default), the batch size is chosen from the abtem configuration
-            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``), and divided so that the
+            output of a block, one for every exit plane of the potential, fits the
+            chunk size.
         lazy : bool, optional
             If True, build measurements lazily; otherwise compute eagerly. Defaults to
             the value set in the user configuration file.
@@ -2351,6 +2395,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2392,7 +2438,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
