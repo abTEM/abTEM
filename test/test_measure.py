@@ -1976,3 +1976,38 @@ def test_indexed_patterns_cannot_infer_a_pixel_area():
     # a missing @property made this a TypeError (method * float)
     with pytest.raises(RuntimeError, match="Cannot infer pixel area"):
         _indexed_patterns().poisson_noise(dose_per_area=1.0)
+
+
+def test_miller_index_labels_have_only_the_attributes_of_an_annotation():
+    """The labels pass `Annotation` methods on to each label and have no others.
+
+    Plotting runs on the CPU whatever the device of the measurement, so no device is
+    parametrised.
+    """
+    import copy
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ase.build import bulk
+
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((48, 40)),
+        sampling=(0.2, 0.25),
+        metadata={"energy": 100e3},
+        fftshift=True,
+    )
+    indexed = patterns.index_diffraction_spots(cell=bulk("Si", cubic=True).cell)
+    try:
+        labels = indexed.show(annotations=True).artists[0, 0].annotations
+        assert not hasattr(labels, "no_such_attribute")
+        assert getattr(labels, "_no_such_attribute", None) is None
+        with pytest.raises(AttributeError):
+            labels.stale  # a non-callable attribute of Annotation is not delegated
+        assert len(copy.deepcopy(labels)._annotations) == len(labels._annotations)
+
+        labels.set_fontsize(12)
+        assert {label.get_fontsize() for label in labels._annotations} == {12.0}
+    finally:
+        plt.close("all")
