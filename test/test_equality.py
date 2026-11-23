@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 from ase.build import bulk
+from utils import gpu
 
 import abtem
 from abtem.core.utils import EqualityMixin
@@ -137,3 +138,95 @@ def test_integers_compare_by_value_whatever_the_container():
     assert Holder((1_000_000, 2)) != Holder((1_000_001, 2))
     assert Holder(np.array([1_000_000, 2])) != Holder(np.array([1_000_001, 2]))
     assert Holder(True) != Holder(False)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ((), (1,)),
+        ([], [5]),
+        (7, (7, 7)),
+        (7, (7,)),
+        ((5,), (5, 5)),
+        ((1.0,), (1.0, 1.0)),
+        (np.arange(7), np.tile(np.arange(7), (7, 1))),
+        (np.zeros(3), np.zeros((2, 3))),
+        (np.array(["a"]), np.array(["a", "a"])),
+    ],
+    ids=[
+        "empty-vs-one",
+        "empty-list-vs-one",
+        "number-vs-pair",
+        "number-vs-one",
+        "one-vs-two",
+        "float-one-vs-two",
+        "int-array-vs-tile",
+        "float-array-vs-stack",
+        "string-array",
+    ],
+)
+def test_values_of_different_shapes_are_different(a, b):
+    """`np.equal` and `np.allclose` broadcast, so `(5,)` equalled `(5, 5)` and an
+    empty sequence equalled anything. The array pairs differ in size along both
+    axes. Device-independent."""
+    assert Holder(a) != Holder(b)
+    assert Holder(b) != Holder(a)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ([7], (7,)),
+        (np.arange(3), [0, 1, 2]),
+        (((1, 2), (3,)), ((1, 2), (3,))),
+        ((1.0,), (1.0 + 1e-9,)),
+        (np.zeros((2, 3)), np.zeros((2, 3))),
+    ],
+    ids=["list-vs-tuple", "array-vs-list", "ragged", "float-tolerance", "array"],
+)
+def test_values_of_the_same_shape_still_compare_equal(a, b):
+    """The shape check adds no difference between values of one shape: a list and a
+    tuple, an array and a list, identical ragged tuples and floats within
+    `np.allclose`'s tolerance stay equal, and different ragged tuples stay
+    different. Device-independent."""
+    assert Holder(a) == Holder(b)
+    assert Holder(((1, 2), (3,))) != Holder(((1, 2), (4,)))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("dtype", [np.float32, np.int64])
+def test_arrays_of_different_shapes_are_different_on_any_device(device, dtype):
+    """`(3, 4)` broadcasts against `(1, 4)`, so the values alone cannot tell them
+    apart, and `(5, 4)` does not broadcast at all; the shapes decide, whichever
+    side the host array is on."""
+    from abtem.measurements import Images
+
+    def images(shape, on_device=True):
+        images = Images(np.zeros(shape, dtype=dtype), sampling=0.1)
+        return images.copy_to_device(device) if on_device else images
+
+    for shape in ((1, 4), (5, 4)):
+        a, b = images((3, 4)), images(shape)
+        host = images(shape, on_device=False)
+        assert a != b
+        assert b != a
+        assert host != a
+        assert a != host
+    assert images((3, 4)) == images((3, 4))
+
+
+@pytest.mark.parametrize("kind", ["FrozenPhonons", "NoiseTransform"])
+def test_one_seed_against_two_equal_seeds_is_different(kind):
+    """A `FrozenPhonons` of one configuration and one of two with the same seed, and
+    noise transforms with seeds `(5,)` and `(5, 5)`, draw different numbers of
+    random streams. Device-independent."""
+    from abtem.noise import NoiseTransform
+
+    def make(seeds):
+        if kind == "NoiseTransform":
+            return NoiseTransform(dose=1e3, seeds=seeds)
+        return abtem.FrozenPhonons(_atoms(), len(seeds), sigmas=0.1, seed=seeds)
+
+    assert make((5,)) != make((5, 5))
+    assert make((5, 5)) != make((5,))
+    assert make((5, 5)) == make((5, 5))

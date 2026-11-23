@@ -117,12 +117,18 @@ def _is_integral(value) -> bool:
     return isinstance(dtype, np.dtype) and dtype.kind in ("b", "i", "u")
 
 
+def _shape(value) -> tuple[int, ...]:
+    """The `.shape` of `value`, else `np.shape`."""
+    shape = getattr(value, "shape", None)
+    return np.shape(value) if shape is None else tuple(shape)
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     """Whether two objects have the same attributes, except those in `exclude`.
 
-    Numbers, and tuples, lists and arrays of numbers, are equal when their values
-    are: integers exactly, any other number to the default tolerance of
-    `np.allclose`.
+    Numbers, and tuples, lists and arrays of numbers, are equal when their shapes
+    and their values are: integers exactly, any other number to the default
+    tolerance of `np.allclose`. A list equals a tuple of the same values.
     """
     if not isinstance(b, a.__class__):
         return False
@@ -132,16 +138,26 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if key in exclude:
             continue
 
+        if key not in b.__dict__:
+            return False
+        other = b.__dict__[key]
+
+        if not isinstance(value, EqualityMixin):
+            # Arrays of different shapes differ, decided before the values are
+            # compared: a backend can raise its own error for operands that do not
+            # broadcast, and ones that do broadcast would compare equal.
+            shapes = getattr(value, "shape", None), getattr(other, "shape", None)
+            if all(isinstance(s, tuple) for s in shapes) and shapes[0] != shapes[1]:
+                return False
+
         try:
-            equal = value == b.__dict__[key]
+            equal = value == other
         except (KeyError, TypeError, ValueError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
 
-        if isinstance(value, EmptyEnsemble) and isinstance(
-            b.__dict__[key], EmptyEnsemble
-        ):
+        if isinstance(value, EmptyEnsemble) and isinstance(other, EmptyEnsemble):
             return True
 
         # with warnings.catch_warnings():
@@ -152,13 +168,14 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # subclass of the other operand's class is compared as at the top level.
         if not isinstance(value, EqualityMixin):
             # A tolerance is for floating-point round-off; integers (seeds,
-            # counts, indices) compare without one.
-            other = b.__dict__[key]
+            # counts, indices) compare without one. Both comparisons broadcast,
+            # so the shapes must match as well: (5,) is not (5, 5).
             compare = (
                 np.equal if _is_integral(value) and _is_integral(other) else np.allclose
             )
             try:
                 equal = bool(np.all(compare(value, other)))
+                equal = equal and _shape(value) == _shape(other)
             except (ValueError, TypeError):
                 pass
         # else:
