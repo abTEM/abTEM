@@ -4722,6 +4722,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         self._intensities = array
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
+    def _replace_array(self, array):
+        super()._replace_array(array)
+        # an alias of the array, kept in step with it
+        self._intensities = array
+
     @classmethod
     def from_array_and_metadata(
         cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict

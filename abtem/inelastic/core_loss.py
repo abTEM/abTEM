@@ -960,8 +960,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             metadata=metadata,
         )
 
-        self._local_potential = self.local_potential(space="real").sum(0)
+        self._derive_from_array()
         self._threshold = None
+
+    def _derive_from_array(self):
+        """Derive the state that depends on the array's content; `__init__` and
+        `_replace_array` call it."""
+        self._local_potential = self.local_potential(space="real").sum(0)
+
+    def _replace_array(self, array):
+        super()._replace_array(array)
+        self._derive_from_array()
 
     @classmethod
     def from_array_and_metadata(cls, array, axes_metadata, metadata):

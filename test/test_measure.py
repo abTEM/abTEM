@@ -2299,3 +2299,19 @@ def test_show_complex_measurements_with_masked_pixels(cls, special, limits):
     for e, f in zip(expected, found):
         assert f[5, 2] == 0.0
         np.testing.assert_array_equal(f[keep], e[keep])
+
+
+def test_compute_of_indexed_diffraction_patterns_leaves_no_lazy_attribute():
+    from dask import is_dask_collection
+
+    probe = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=(4.0, 3.0), gpts=(40, 30)
+    )
+    patterns = probe.build(lazy=False).diffraction_patterns(max_angle=None)
+    cell = np.diag([4.0, 3.0, 4.0])
+    eager = patterns.index_diffraction_spots(cell=cell)
+    computed = patterns.ensure_lazy().index_diffraction_spots(cell=cell).compute()
+
+    lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
+    assert lazy == []
+    np.testing.assert_array_equal(computed.array, eager.array)
