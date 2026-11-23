@@ -324,6 +324,23 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
+def _cupy_double_precision(array):
+    """Return a CuPy map_coordinates input in double precision.
+
+    cupyx's map_coordinates computes in the precision of its input. For a
+    single-precision input, CuPy 14.1 and later take the starting index from
+    floor((float)c) but the weights from floor(c) on the coordinate's own
+    dtype, so a float64 coordinate just below an integer, k - 1e-12, gives the
+    value at node k + 1. A double-precision input makes the prefilter, the index
+    and the weights float64; the output keeps the caller's dtype. SciPy computes
+    in float64 throughout and is left alone.
+    """
+    xp = get_array_module(array)
+    if cp is None or xp is not cp:
+        return array
+    return array.astype(xp.promote_types(array.dtype, xp.float64), copy=False)
+
+
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
@@ -355,7 +372,8 @@ def _interpolate_stack(
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        member = _cupy_double_precision(array[i])
+        map_coordinates(member, positions.T, output=output[i], order=order, **kwargs)
 
     output = output.reshape(old_shape[:-2] + positions_shape[:-1])
     return output
@@ -2020,7 +2038,8 @@ class _BaseMeasurement1D(BaseMeasurements):
         # ("output must have complex dtype").
         new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
-            map_coordinates(array[i], new_points, new_array[i], order=order)
+            member = _cupy_double_precision(array[i])
+            map_coordinates(member, new_points, new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 

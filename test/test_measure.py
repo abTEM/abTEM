@@ -18,7 +18,7 @@ from utils import (
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype
 from abtem.measurements import (
@@ -2315,3 +2315,133 @@ def test_compute_of_indexed_diffraction_patterns_leaves_no_lazy_attribute():
     lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
     assert lazy == []
     np.testing.assert_array_equal(computed.array, eager.array)
+
+
+_EPS32 = np.finfo(np.float32).eps
+
+
+def _spline_interpolate(array, entry):
+    """Spline-interpolate a 2D array (possibly on the GPU) by one of the three
+    public entry points that reach map_coordinates: to 1.31 times the points
+    for the images, to twice the number of rows along the diagonal for the
+    line, and to 1.31 times the points of the first two rows, joined into one
+    profile, for the profile."""
+    if entry == "profile":
+        profiles = RealSpaceLineProfiles(array[:2].reshape(-1), sampling=0.1)
+        return profiles.interpolate(gpts=int(profiles.shape[-1] * 1.31)).array
+    images = Images(array, sampling=(0.1, 0.1))
+    if entry == "line":
+        return images.interpolate_line(
+            start=(0.0, 0.0), end=images.extent, gpts=2 * array.shape[0]
+        ).array
+    gpts = (int(array.shape[0] * 1.31), int(array.shape[1] * 1.31))
+    return images.interpolate(gpts=gpts, method="spline").array
+
+
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_branch_hands_map_coordinates_double_precision(entry, monkeypatch):
+    """The CuPy branch gives map_coordinates a double-precision input and
+    coordinates. cupyx's kernel computes in the precision of its input, so a
+    single-precision one takes the starting index from the float32-rounded
+    coordinate and the weights from the float64 one. Pinned to the CPU: the test
+    is about what reaches cupyx, which does not depend on the device, with
+    SciPy's map_coordinates in place of cupyx's."""
+    import types
+
+    import scipy.ndimage
+
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    expected = _spline_interpolate(array, entry)
+
+    seen = []
+
+    def spy(input, coordinates, *args, **kwargs):
+        seen.append((input.dtype, coordinates.dtype))
+        return scipy.ndimage.map_coordinates(input, coordinates, *args, **kwargs)
+
+    monkeypatch.setattr(abtem.measurements, "cp", np)
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    result = _spline_interpolate(array, entry)
+
+    assert seen
+    assert set(seen) == {(np.dtype(np.float64),) * 2}
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("order", [1, 3])
+def test_interpolate_stack_just_below_grid_nodes(device, order):
+    """Coordinates a hair below a grid node must give that node's value. With
+    float64 coordinates on a float32 image, cupyx's spline kernel (CuPy 14.1 and
+    later) took the index from the float32-rounded coordinate and the weights
+    from the float64 one, and returned the value at the next node instead."""
+    from abtem.measurements import _interpolate_stack
+
+    rng = np.random.default_rng(11)
+    array = rng.random((16, 24)).astype(np.float32)
+    k = np.arange(1, 15)
+    positions = np.stack([k - 1e-12, np.full(k.shape, 5.0)], axis=-1)
+    values = _interpolate_stack(
+        copy_to_device(array, device),
+        copy_to_device(positions, device),
+        mode="wrap",
+        order=order,
+    )
+    np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_spline_interpolation_of_single_precision_data_matches_numpy(entry, dtype):
+    """On the GPU, single-precision data interpolate to within a few float32
+    roundings of the NumPy result, which SciPy computes in float64."""
+    rng = np.random.default_rng(5)
+    array = rng.random((1024, 768))
+    if dtype == np.complex64:
+        array = array + 1j * rng.random(array.shape)
+    array = array.astype(dtype)
+
+    expected = _spline_interpolate(array, entry)
+    result = asnumpy(_spline_interpolate(copy_to_device(array, "gpu"), entry))
+
+    assert result.dtype == dtype
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+@pytest.mark.parametrize("order", [1, 3])
+@pytest.mark.parametrize("delta", [1e-12, 2e-5])
+def test_cupy_interpolation_just_below_far_grid_nodes(delta, order):
+    """Far from the origin a coordinate k - delta rounds to k in float32. The
+    result must still be the NumPy one, not the value at node k + 1. The y
+    positions are multiples of 1/64, exact in float32, so that only the x
+    coordinate carries the offset."""
+    from abtem.measurements import _interpolate_stack
+
+    array = np.random.default_rng(7).random((1024, 768)).astype(np.float32)
+    k = np.arange(900, 1000)
+    y = np.round(np.linspace(700.0, 760.0, len(k)) * 64) / 64
+    positions = np.stack([k - delta, y], axis=-1)
+
+    expected = _interpolate_stack(array, positions, mode="wrap", order=order)
+    result = _interpolate_stack(
+        copy_to_device(array, "gpu"),
+        copy_to_device(positions, "gpu"),
+        mode="wrap",
+        order=order,
+    )
+
+    np.testing.assert_allclose(
+        asnumpy(result), expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
