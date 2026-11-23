@@ -332,7 +332,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         Sampling of the potential in `x` and `y` [1 / Å] calculated by specifying either
         `sampling` or `gpts`.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices [Å] (default is 0.5 Å). If given as a float,
+        Thickness of the potential slices [Å] (default is 1.0 Å). If given as a float,
         the number of slices are calculated by dividing the slice thickness into the
         `z`-height of the cell. The slice thickness may be given as a sequence of values
         for each slice, in which case an error will be thrown if the sum of slice

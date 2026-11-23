@@ -297,3 +297,16 @@ def test_build_from_frozen_phonons(
         np.testing.assert_allclose(
             built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
         )
+
+
+@pytest.mark.parametrize("cls", ["ChargeDensityPotential", "GPAWPotential"])
+def test_documented_slice_thickness_default_is_the_default(cls):
+    # the docstrings said 0.5 Å where the default is 1.0 Å
+    import inspect
+
+    from abtem.potentials import charge_density, gpaw
+
+    builder = getattr(charge_density, cls, None) or getattr(gpaw, cls)
+    default = inspect.signature(builder).parameters["slice_thickness"].default
+
+    assert f"(default is {default} Å)" in builder.__doc__
