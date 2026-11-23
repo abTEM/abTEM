@@ -1030,3 +1030,102 @@ def test_ensemble_beams_contain_those_of_every_rotated_member_on_the_boundary():
     for sg_max in boundary[:3]:
         patterns = ensemble(sg_max).calculate_diffraction_patterns([50.0], lazy=False)
         assert np.isfinite(patterns.array).all()
+
+
+def _silicon_bloch_waves():
+    structure_factor = StructureFactor(
+        bulk("Si", "diamond", a=5.43, cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        thermal_sigma=0.0,
+    )
+    return BlochWaves(structure_factor=structure_factor, energy=200e3, sg_max=0.1)
+
+
+def _exit_wave_calculators():
+    bloch_waves = _silicon_bloch_waves()
+    ensemble = bloch_waves.rotate(
+        "x", abtem.distributions.from_values(np.array([0.0, 0.2])), degrees=True
+    )
+    return {"BlochWaves": bloch_waves, "BlochwaveEnsemble": ensemble}
+
+
+@pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_exit_waves_are_normalized_as_the_builders_of_waves_are(calculator, lazy):
+    # the argument only wrote a label to the metadata, and the exit waves did not
+    # change: normalize=False is the incident wave of PlaneWave() (one in every pixel),
+    # normalize=True that of PlaneWave(normalize=True)
+    source = _exit_wave_calculators()[calculator]
+    gpts = (16, 20)
+
+    def exit_waves(normalize, thickness=(50.0, 200.0)):
+        waves = source.calculate_exit_waves(
+            thickness, gpts=gpts, extent=(5.43, 5.43), normalize=normalize, lazy=lazy
+        )
+        return waves.compute() if lazy else waves
+
+    plain, normalized = exit_waves(False), exit_waves(True)
+
+    assert plain.metadata["normalization"] == "values"
+    assert normalized.metadata["normalization"] == "reciprocal_space"
+    np.testing.assert_allclose(
+        np.asarray(normalized.array), np.asarray(plain.array) / np.prod(gpts)
+    )
+    # a thin crystal leaves the incident wave: one in every pixel, or one over N
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(False, thickness=0.001).array)), 1.0, atol=1e-3
+    )
+    np.testing.assert_allclose(
+        np.abs(np.asarray(exit_waves(True, thickness=0.001).array)),
+        1.0 / np.prod(gpts),
+        atol=1e-3 / np.prod(gpts),
+    )
+    # either way the diffraction patterns are those of the same wave
+    np.testing.assert_allclose(
+        plain.diffraction_patterns(max_angle=None).array,
+        normalized.diffraction_patterns(max_angle=None).array,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("calculator", ["BlochWaves", "BlochwaveEnsemble"])
+@pytest.mark.parametrize("label", ["values", "amplitude", "intensity"])
+@pytest.mark.parametrize("positional", [False, True], ids=["keyword", "positional"])
+def test_exit_waves_normalization_label_is_deprecated(calculator, label, positional):
+    # the label only wrote metadata and left the exit waves as they are: it warns,
+    # still works as a keyword and in the old fourth position, and changes nothing
+    source = _exit_wave_calculators()[calculator]
+    kwargs = dict(gpts=(16, 16), extent=(5.43, 5.43), lazy=False)
+    reference = source.calculate_exit_waves([50.0], **kwargs)
+
+    with pytest.warns(FutureWarning, match="normalization.*deprecated") as record:
+        if positional:
+            waves = source.calculate_exit_waves(
+                [50.0], (16, 16), (5.43, 5.43), label, lazy=False
+            )
+        else:
+            waves = source.calculate_exit_waves([50.0], normalization=label, **kwargs)
+
+    # the warning points at the call above, not into abtem
+    assert [w.filename for w in record] == [__file__]
+
+    np.testing.assert_array_equal(np.asarray(waves.array), np.asarray(reference.array))
+    assert waves.metadata["normalization"] == "values"
+    # with the label 'amplitude' this raised RuntimeError
+    waves.diffraction_patterns()
+
+
+def test_exit_waves_unknown_normalization_label_raises():
+    with pytest.warns(FutureWarning), pytest.raises(ValueError, match="not recognized"):
+        _silicon_bloch_waves().calculate_exit_waves(
+            [50.0], gpts=(16, 16), normalization="nonsense"
+        )
+
+
+def test_exit_waves_without_the_label_do_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        _silicon_bloch_waves().calculate_exit_waves(
+            [50.0], gpts=(16, 16), normalize=True, lazy=False
+        )

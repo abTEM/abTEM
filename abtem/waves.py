@@ -457,6 +457,24 @@ def _deprecated_normalization(
     return normalization
 
 
+def _normalize_with_deprecated_normalization(normalize, normalization, function: str):
+    """The ``normalize`` flag of an exit-wave calculation. The ``normalization``
+    argument it replaced ('values' or 'amplitude', also still accepted in the
+    position of ``normalize``) only wrote a label to the metadata and never changed
+    the array, so it is validated and otherwise ignored."""
+    if isinstance(normalize, str):
+        normalize, normalization = False, normalize
+    _deprecated_normalization(
+        normalization,
+        function,
+        "It only set a metadata label and did not change the exit waves, which have "
+        "a value of one in the incident wave: use `normalize=True` for waves with "
+        "a reciprocal space intensity that sums to one.",
+        stacklevel=4,
+    )
+    return bool(normalize)
+
+
 class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
