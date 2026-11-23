@@ -22,7 +22,8 @@ except (ModuleNotFoundError, ImportError):
 
 try:
     import mkl_fft  # type: ignore
-except ModuleNotFoundError:
+except ImportError:
+    # also a broken installation, e.g. a missing shared library
     mkl_fft = None
 
 try:
