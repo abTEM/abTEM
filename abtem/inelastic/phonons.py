@@ -7,7 +7,6 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Optional,
     Sequence,
     Union,
@@ -31,16 +30,12 @@ if TYPE_CHECKING:
     pass
 
 
-Reader: Optional[Callable] = None
-try:
-    from gpaw.io import Reader  # noqa
-except ImportError:
-    Reader = None
-
-
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
-        assert Reader is not None
+        # imported here, so that a missing or broken GPAW fails only when a GPAW
+        # file is read, with its own error, and never at `import abtem`
+        from gpaw.io import Reader
+
         with Reader(calculator) as reader:
             atoms = read_atoms(reader.atoms)
     else:

@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 
 def _import_abtem_with_packages(tmp_path, packages: dict[str, str]) -> str:
     """Import abtem in a fresh process in which each package of `packages` is
@@ -31,3 +33,22 @@ def test_a_broken_mkl_fft_does_not_stop_import_abtem(tmp_path):
         {"mkl_fft": 'raise ImportError("libx.so: cannot open shared object file")\n'},
     )
     assert out == "None"
+
+
+def test_a_gpaw_failing_at_import_does_not_stop_import_abtem(tmp_path):
+    # GPAW was imported with abtem, and only an ImportError was caught: a GPAW
+    # failing otherwise (here as one built against another NumPy) broke `import abtem`
+    _import_abtem_with_packages(
+        tmp_path,
+        {"gpaw": 'raise AttributeError("module numpy has no attribute float_")\n'},
+    )
+
+
+def test_reading_a_gpaw_file_without_gpaw_raises_its_import_error(monkeypatch):
+    # a bare AssertionError said nothing about GPAW
+    from abtem.inelastic.phonons import _safe_read_atoms
+
+    monkeypatch.setitem(sys.modules, "gpaw.io", None)
+
+    with pytest.raises(ImportError, match="gpaw.io"):
+        _safe_read_atoms("calculation.gpw")
