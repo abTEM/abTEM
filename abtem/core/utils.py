@@ -129,15 +129,14 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if isinstance(value, EqualityMixin):
-            equal = safe_equality(value, b.__dict__[key])
-
-        else:  # if isinstance(value, (tuple, list, np.ndarray)):
+        # A held EqualityMixin keeps the verdict of `==` above, its own __eq__ with
+        # Python's operator dispatch, so a check its class adds runs and a
+        # subclass of the other operand's class is compared as at the top level.
+        if not isinstance(value, EqualityMixin):
             try:
                 equal = np.allclose(value, b.__dict__[key])
             except (ValueError, TypeError):
-                if isinstance(value, EqualityMixin):
-                    equal = safe_equality(value, b.__dict__[key])
+                pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
         if equal is False:
