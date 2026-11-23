@@ -59,3 +59,19 @@ def test_depth_profile_of_a_vector_field_keeps_its_components(
     np.testing.assert_allclose(profile.array, np.moveaxis(summed, 0, -1))
     assert profile.ensemble_axes_metadata[-1].values == labels
     assert profile.base_shape == (summed.shape[-1], array.shape[0])
+
+
+@pytest.mark.parametrize("cls", ["GPAWMagneticField", "GPAWVectorPotential"])
+def test_gpaw_fields_keep_the_labelled_component_axis_of_their_base_class(cls):
+    # `_GPAWMagnetics` defined a base_axes_metadata that returned None and came first
+    # in the method resolution order
+    import inspect
+
+    from abtem.magnetism import gpaw
+
+    builder = getattr(gpaw, cls)
+    base = next(b for b in builder.__mro__ if b.__name__.startswith("Base"))
+
+    assert inspect.getattr_static(builder, "base_axes_metadata") is (
+        base.__dict__["base_axes_metadata"]
+    )
