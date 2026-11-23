@@ -826,3 +826,101 @@ def test_set_ensemble_axes_metadata_leaves_a_list_shared_with_another_object_alo
     assert first.ensemble_axes_metadata[0].label == "b"
     assert second.ensemble_axes_metadata[0].label == "a"
     assert axes[0].label == "a"
+
+
+def _images_file(tmp_path):
+    import abtem
+
+    images = abtem.Images(
+        np.zeros((2, 4, 3)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="a", values=(1, 2))],
+    )
+    url = str(tmp_path / "images.zarr")
+    images.to_zarr(url)
+    return url
+
+
+def test_a_file_whose_stored_axes_do_not_fit_its_array_is_refused(tmp_path):
+    """An object is rebuilt from the axes the file stores, so a file whose axes do
+    not fit its array raises instead of loading the axes of its constructor
+    kwargs. CPU only: zarr is written and read on the host."""
+    import zarr
+
+    import abtem
+
+    url = _images_file(tmp_path)
+    root = zarr.open(url, mode="r+")
+    metadata = root.attrs["metadata0"]
+    metadata["axes"]["axis_0"]["values"] = {"_type": "tuple", "_value": [7, 8, 9]}
+    root.attrs["metadata0"] = metadata
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        abtem.from_zarr(url)
+
+
+def test_an_error_in_from_array_and_metadata_escapes_from_zarr(tmp_path, monkeypatch):
+    """Only the `NotImplementedError` of a class that cannot rebuild from axes
+    and metadata sends `from_zarr` to its constructor kwargs; any other error
+    escapes. CPU only: zarr is written and read on the host."""
+    import abtem
+
+    url = _images_file(tmp_path)
+
+    def broken(cls, array, axes_metadata, metadata):
+        raise TypeError("broken from_array_and_metadata")
+
+    monkeypatch.setattr(abtem.Images, "from_array_and_metadata", classmethod(broken))
+
+    with pytest.raises(TypeError, match="broken from_array_and_metadata"):
+        abtem.from_zarr(url)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        "abtem.measurements.IndexedDiffractionPatterns",
+        "abtem.prism.s_matrix.SMatrixArray",
+        "abtem.inelastic.core_loss.TransitionPotentialArray",
+    ],
+)
+def test_classes_that_cannot_rebuild_from_axes_say_so(cls):
+    """The stubs that send `from_zarr` to the stored constructor kwargs raise
+    `NotImplementedError` when called on the class; as instance methods or plain
+    functions they raised a `TypeError` first."""
+    import importlib
+
+    module, name = cls.rsplit(".", 1)
+    cls = getattr(importlib.import_module(module), name)
+
+    with pytest.raises(NotImplementedError):
+        cls.from_array_and_metadata(np.zeros((2, 2)), axes_metadata=[], metadata={})
+
+
+def test_s_matrix_and_indexed_patterns_still_read_from_their_kwargs(tmp_path):
+    """The classes without `from_array_and_metadata` load from their stored
+    constructor kwargs. CPU only: zarr is written and read on the host."""
+    from ase.build import bulk
+
+    import abtem
+
+    potential = abtem.Potential(bulk("Si", cubic=True), sampling=0.2)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=10
+    ).build(lazy=False)
+    s_matrix.to_zarr(str(tmp_path / "s_matrix.zarr"))
+    read = abtem.from_zarr(str(tmp_path / "s_matrix.zarr")).compute()
+    assert type(read) is type(s_matrix)
+    np.testing.assert_allclose(read.array, s_matrix.array)
+
+    patterns = abtem.DiffractionPatterns(
+        np.random.default_rng(0).random((48, 40)),
+        sampling=(0.2, 0.25),
+        metadata={"energy": 100e3},
+        fftshift=True,
+    )
+    indexed = patterns.index_diffraction_spots(cell=bulk("Si", cubic=True).cell)
+    indexed.to_zarr(str(tmp_path / "indexed.zarr"))
+    read = abtem.from_zarr(str(tmp_path / "indexed.zarr")).compute()
+    assert type(read) is type(indexed)
+    np.testing.assert_allclose(np.asarray(read.array), np.asarray(indexed.array))

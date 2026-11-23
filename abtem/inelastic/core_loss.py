@@ -963,7 +963,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         self._local_potential = self.local_potential(space="real").sum(0)
         self._threshold = None
 
-    def from_array_and_metadata(self, array, metadata):
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     def set_threshold(self, wave, threshold):

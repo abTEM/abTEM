@@ -4686,8 +4686,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         self._intensities = array
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
+    @classmethod
     def from_array_and_metadata(
-        self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
     ) -> BaseMeasurements:
         raise NotImplementedError
 
