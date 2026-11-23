@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
+import ipywidgets as widgets
 import numpy as np
 from traitlets.traitlets import link
 
@@ -14,17 +15,6 @@ from abtem.visualize.visualizations import default_ensemble_index  # noqa: F401
 
 if TYPE_CHECKING:
     pass
-
-
-try:
-    import ipywidgets as widgets
-except ImportError:
-    widgets = None
-
-ipywidgets_not_installed = RuntimeError(
-    "This functionality of abTEM requires ipywidgets, see "
-    "https://ipywidgets.readthedocs.io/en/stable/user_install.html."
-)
 
 
 def _format_options(options):
@@ -40,6 +30,20 @@ def _format_options(options):
             formatted_options.append(option)
 
     return formatted_options
+
+
+def _nearest_index(values, value) -> int:
+    """The index of the coordinate in `values` nearest to `value`.
+
+    Raises a TypeError or ValueError for coordinates that are not numbers, such as
+    names or tilt angle pairs, and for a value that is not a single number.
+    """
+    coordinates = np.asarray(values, dtype=float)
+    if coordinates.ndim != 1:
+        raise TypeError("the coordinates of the axis are not numbers")
+    if np.ndim(value) != 0:
+        raise TypeError("the value is not a single number")
+    return int(np.argmin(np.abs(coordinates - value)))
 
 
 def slider_from_axes_metadata(
@@ -66,8 +70,8 @@ def slider_from_axes_metadata(
             default_value = (values[0], values[-1])
 
         index = (
-            int(np.argmin(np.abs(values - default_value[0]))),
-            int(np.argmin(np.abs(values - default_value[1]))),
+            _nearest_index(values, default_value[0]),
+            _nearest_index(values, default_value[1]),
         )
 
         slider = widgets.SelectionRangeSlider(
@@ -81,8 +85,8 @@ def slider_from_axes_metadata(
             index = default_ensemble_index(axis_metadata, length)
         else:
             try:
-                index = int(np.argmin(np.abs(values - default_value)))
-            except Exception:
+                index = _nearest_index(values, default_value)
+            except (TypeError, ValueError):
                 index = 0
 
         slider = widgets.SelectionSlider(

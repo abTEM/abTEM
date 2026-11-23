@@ -661,25 +661,27 @@ def shrink_cell(
     atoms : ase.Atoms
         Smallest non-repeating cell for the given atoms.
     """
+
+    if len(atoms) == 0:
+        raise ValueError("shrink_cell needs at least one atom")
+
     atoms = wrap_with_tolerance(atoms, tol=tol)
 
     for repetition in repetitions:
         for i in range(3):
             while True:
-                try:
-                    atoms_copy = atoms.copy()
-                    atoms_copy.cell[i] = atoms_copy.cell[i] / repetition
+                atoms_copy = atoms.copy()
+                atoms_copy.cell[i] = atoms_copy.cell[i] / repetition
 
-                    atoms_copy = wrap_with_tolerance(atoms_copy)
+                atoms_copy = wrap_with_tolerance(atoms_copy)
 
-                    old_len = len(atoms_copy)
-                    atoms_copy = merge_close_atoms(atoms_copy, tol=1e-5)
+                old_len = len(atoms_copy)
+                atoms_copy = merge_close_atoms(atoms_copy, tol=1e-5)
 
-                    assert len(atoms_copy) == old_len // repetition
-
-                    atoms = atoms_copy
-                except AssertionError:
+                if len(atoms_copy) != old_len // repetition:
                     break
+
+                atoms = atoms_copy
 
     return atoms
 
@@ -955,6 +957,10 @@ def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> N
     atoms.set_scaled_positions(scaled % 1.0)
 
 
+class _NoWholeRepetitionError(ValueError):
+    """The box holds no whole repetition of the cell along some direction."""
+
+
 def _box_repetitions(cell, box) -> np.ndarray:
     """
     The lattice vectors of the repetition of `cell` that fills `box`, as an integer
@@ -962,15 +968,15 @@ def _box_repetitions(cell, box) -> np.ndarray:
 
     Raises
     ------
-    ValueError
-        If the box holds no whole repetition of the cell along some direction, i.e.
-        the integer matrix is singular. A direction shorter than about half a period
-        rounds to no repetition.
+    _NoWholeRepetitionError
+        A ValueError, if the box holds no whole repetition of the cell along some
+        direction, i.e. the integer matrix is singular. A direction shorter than
+        about half a period rounds to no repetition.
     """
     vectors = np.round(np.dot(np.diag(box), np.linalg.inv(cell)))
 
     if np.round(abs(np.linalg.det(vectors))) == 0:
-        raise ValueError(
+        raise _NoWholeRepetitionError(
             f"The box {tuple(float(b) for b in box)} holds no whole repetition of "
             "the atoms' cell along at least one direction (it is shorter than "
             "about half a period), so the periodicity cannot be preserved. Use a "
@@ -1153,12 +1159,12 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
 
     If `default` is true, `box` is the one abTEM chose because none was given: the
     warning says so, names the ways to avoid the strain, and a box that holds no
-    whole repetition is not an error here but silent: the potential reports it when
-    it places the atoms, if it does.
+    whole repetition, or a singular cell, is not an error here but silent: the
+    potential reports it when it places the atoms, if it does.
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except ValueError:
+    except (_NoWholeRepetitionError, np.linalg.LinAlgError):
         if default:
             return
         raise

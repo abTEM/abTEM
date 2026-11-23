@@ -79,3 +79,96 @@ def test_import_does_not_load_cublas():
     )
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout.decode().strip() == "[]"
+
+
+_MISSING = "_abtem_test_missing_dependency"
+
+# What raises once a backend's package could not be imported, keyed by package.
+_USE = {
+    "cupy": "from abtem.core.backend import get_array_module; get_array_module('gpu')",
+    "pyfftw": "abtem.config.set({'fft': 'fftw'}); "
+    "from abtem.core.fft import fft2; fft2(np.ones((4, 4), np.complex64))",
+    "mkl_fft": "abtem.config.set({'fft': 'mkl'}); "
+    "from abtem.core.fft import fft2; fft2(np.ones((4, 4), np.complex64))",
+    "torch": "from abtem.core.backend import get_array_module; "
+    "get_array_module('mps')",
+}
+
+# Every backend is used in turn; each prints the error raised and its cause.
+_PROBE = """
+import warnings
+warnings.simplefilter("always")
+with warnings.catch_warnings(record=True) as caught:
+    import numpy as np
+    import abtem
+print("WARNED", any("could not be imported" in str(w.message) for w in caught))
+for package, use in {use!r}.items():
+    try:
+        exec(use)
+    except RuntimeError as error:
+        cause = error.__cause__
+        print(package, type(error).__name__, type(cause).__name__,
+              getattr(cause, "name", None))
+"""
+
+# Makes the packages not installed: a finder ahead of the others that answers "No
+# module named ...". (sys.modules[package] = None would do, but scipy then finds
+# None where it looks for torch.)
+_HIDE = """
+import sys
+class _NotInstalled:
+    def find_spec(self, name, path=None, target=None):
+        if name in {packages!r}:
+            raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
+sys.meta_path.insert(0, _NotInstalled())
+"""
+
+
+def _run_with_every_backend(tmp_path, init=None):
+    """Run _PROBE in a fresh process where every backend package either is not
+    installed (`init` is None) or is installed but its import runs `init`."""
+    code = _PROBE.format(use=_USE)
+    if init is None:
+        code = _HIDE.format(packages=tuple(_USE)) + code
+    else:
+        for package in _USE:
+            (tmp_path / package).mkdir()
+            (tmp_path / package / "__init__.py").write_text(init)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(tmp_path)] + [p for p in [env.get("PYTHONPATH")] if p]
+    )
+    env["ABTEM_DEVICE"] = "gpu"
+    env["ABTEM_TORCH__DEVICE"] = "cpu"
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    return result.stdout.decode().split("\n")
+
+
+def test_a_broken_optional_backend_reports_its_import_error(tmp_path):
+    lines = _run_with_every_backend(tmp_path, init=f"import {_MISSING}\n")
+    for package in _USE:
+        assert f"{package} RuntimeError ModuleNotFoundError {_MISSING}" in lines
+    # CuPy is the configured device
+    assert "WARNED True" in lines
+
+
+def test_a_plain_import_error_of_an_optional_backend_is_reported(tmp_path):
+    # as raised by a missing shared library; a broken mkl_fft must not stop
+    # `import abtem` either
+    lines = _run_with_every_backend(
+        tmp_path, init='raise ImportError("libx.so: cannot open shared object file")\n'
+    )
+    for package in _USE:
+        assert f"{package} RuntimeError ImportError None" in lines
+    assert "WARNED True" in lines
+
+
+def test_a_missing_optional_backend_raises_a_runtime_error_when_used(tmp_path):
+    lines = _run_with_every_backend(tmp_path)
+    for package in _USE:
+        assert f"{package} RuntimeError ModuleNotFoundError {package}" in lines
+    # a package that is not installed is not a warning at import
+    assert "WARNED False" in lines

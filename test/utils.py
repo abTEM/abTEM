@@ -1,3 +1,4 @@
+import types
 from fractions import Fraction
 from typing import Iterable
 
@@ -143,6 +144,47 @@ def _gpu_count() -> int:
         return 0
 
 
+class CUDARuntimeErrorStandIn(RuntimeError):
+    """Stand-in for CuPy's ``CUDARuntimeError``, which carries the CUDA status code
+    as ``status``."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+NO_DEVICE_ERROR = (100, "cudaErrorNoDevice: no CUDA-capable device is detected")
+INSUFFICIENT_DRIVER_ERROR = (
+    35,
+    "cudaErrorInsufficientDriver: CUDA driver version is insufficient",
+)
+
+
+def cupy_cuda_stand_in(get_device_count):
+    """A stand-in for ``cupy.cuda`` whose device count comes from
+    ``get_device_count``, which may raise ``CUDARuntimeErrorStandIn``.
+
+    ``is_available`` follows CuPy 13.5.1: it queries once, treats only the no-device
+    error as "no device", and keeps a failed query cached as False.
+    """
+    cache = []
+
+    def is_available():
+        if not cache:
+            cache.append(False)
+            try:
+                cache[0] = get_device_count() > 0
+            except Exception as e:
+                if "NoDevice" not in e.args[0]:
+                    raise
+        return cache[0]
+
+    runtime = types.SimpleNamespace(
+        getDeviceCount=get_device_count, CUDARuntimeError=CUDARuntimeErrorStandIn
+    )
+    return types.SimpleNamespace(is_available=is_available, runtime=runtime)
+
+
 # Gated on a usable DEVICE, not on cupy being importable. cupy imports fine with
 # no GPU present -- a hidden device (HIP_VISIBLE_DEVICES=""), a container without
 # /dev/kfd, a CI image that pip-installs cupy on a CPU runner -- and the failure
@@ -283,13 +325,6 @@ def skip_float64_on_single_precision_arrays(device, reason="float64 arrays"):
     only the emulation of `float64_devices` (float64 on the host) gets around."""
     if device == gpu.values[0] and _ACCELERATOR == "mps":
         pytest.skip(f"the float32 arrays of the Metal backend cannot be {reason}")
-
-
-def skip_float64_without_metal_kernels(device):
-    """Skip a test that sets double precision in its body for the case of the
-    Metal backend (`gpu`) where the emulation's kernels cannot run."""
-    if device == gpu.values[0] and _ACCELERATOR == "mps" and not _METAL_KERNELS:
-        pytest.skip(_NO_KERNELS_REASON)
 
 
 def float64_devices(function):

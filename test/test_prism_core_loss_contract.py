@@ -280,3 +280,34 @@ def test_core_loss_of_an_energy_resolved_ensemble_matches_multislice(
     assert measured.shape == expected.shape
     assert measured.shape == ((2, 3, 5) if ensemble_mean else (2, 4, 3, 5))
     _assert_close(measured, expected)
+
+
+@devices
+def test_transition_potential_scan_with_no_scan_uses_the_default_grid_scan(device):
+    # The default scan of the S-matrix routes is the GridScan() of the probe's
+    # Nyquist sampling over the whole extent, as that of SMatrix.scan
+    potential = _potential(device)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, device=device
+    )
+    detector = abtem.AnnularDetector(5, 40)
+
+    def transition_potential_scan(scan):
+        return s_matrix.transition_potential_scan(
+            _tp(potential),
+            scan=scan,
+            detectors=detector,
+            sites=ATOMS,
+            lazy=False,
+            double_channel=False,
+        )
+
+    default = transition_potential_scan(None)
+    explicit = transition_potential_scan(abtem.GridScan())
+
+    assert default.shape == explicit.shape
+    _assert_close(default.array, explicit.array)
+    # the same grid of positions as the default scan of SMatrix.scan
+    scanned = s_matrix.scan(detectors=detector, lazy=False)
+    assert default.shape[-2:] == scanned.shape[-2:]
+    assert default.shape[-2:] != (1, 1)

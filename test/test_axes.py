@@ -60,15 +60,23 @@ def test_linear_axis_getitem_with_length_one_tuple():
 )
 def test_linear_axis_getitem_rejects_unsupported_slices(bad_item):
     """Strided, negative, or empty slices cannot be represented by shifting
-    `offset` alone. This must raise TypeError specifically (not e.g.
-    NotImplementedError): `ArrayObject._get_ensemble_axes_metadata_items`
-    catches TypeError to fall back to a plain copy for whatever an axis
-    can't represent exactly -- the same fallback this axis relied on before
-    it had a `__getitem__` at all. Any other exception type would break
-    general indexing instead of falling back gracefully."""
+    `offset` alone, and `__getitem__` raises TypeError for them: it is the
+    contract of the chunk partitioning, which never constructs such a slice.
+    Indexing an array object goes through `_index_ensemble_axis` instead."""
     axis = RealSpaceAxis(offset=10.0, sampling=0.5)
 
     with pytest.raises(TypeError):
+        axis[bad_item]
+
+
+@pytest.mark.parametrize("axis_cls", [LinearAxis, RealSpaceAxis, ScanAxis])
+@pytest.mark.parametrize("bad_item", [-1, -3, np.int64(-2), (-1,)])
+def test_linear_axis_getitem_rejects_a_negative_integer(axis_cls, bad_item):
+    """The axis does not know its length, so a negative integer cannot be resolved
+    to a position."""
+    axis = axis_cls(offset=10.0, sampling=0.5)
+
+    with pytest.raises(TypeError, match="negative"):
         axis[bad_item]
 
 
@@ -77,6 +85,21 @@ def test_linear_axis_getitem_rejects_unsupported_types():
 
     with pytest.raises(TypeError):
         axis[np.array([0, 2, 3])]
+
+
+def test_concatenating_an_axis_that_cannot_be_joined_names_it():
+    axis = LinearAxis(label="a", _concatenate=False)
+
+    with pytest.raises(RuntimeError, match="along the LinearAxis 'a'"):
+        axis.concatenate(axis.copy())
+
+
+def test_concatenating_axes_with_other_parameters_names_them():
+    axis = OrdinalAxis(label="a", values=(1, 2))
+    other = OrdinalAxis(label="b", values=(3, 4))
+
+    with pytest.raises(RuntimeError, match="OrdinalAxis 'a' with the OrdinalAxis 'b'"):
+        axis.concatenate(other)
 
 
 def test_linear_axis_to_blocks_partitions_offset_per_chunk():
