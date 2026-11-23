@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
+from utils import gpu
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy
 from abtem.core.energy import energy2wavelength
 from abtem.transfer import (
     CTF,
@@ -79,6 +81,24 @@ def test_apply_ctf_with_fixed_energy_still_checks_the_energy_of_the_waves():
 
     with pytest.raises(RuntimeError, match="Inconsistent energies"):
         waves.apply_ctf(CTF(energy=300e3, defocus=50))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_hard_aperture_semiangle_ensemble_matches_single_apertures(device):
+    # Each member of a semiangle-cutoff ensemble gets its own hard cutoff: the
+    # probe built from the ensemble equals, member by member, a probe built from
+    # a single-semiangle aperture.
+    cutoffs = (15.0, 20.0)
+    kwargs = dict(energy=200e3, gpts=32, extent=10, device=device)
+    ensemble = abtem.Probe(aperture=Aperture(cutoffs, soft=False), **kwargs).build()
+    ensemble = asnumpy(ensemble.compute().array)
+    assert ensemble.shape == (len(cutoffs), 32, 32)
+
+    for member, cutoff in zip(ensemble, cutoffs):
+        single = abtem.Probe(aperture=Aperture(cutoff, soft=False), **kwargs).build()
+        single = asnumpy(single.compute().array)
+        atol = 10 * np.finfo(single.dtype).eps * np.abs(single).max()
+        np.testing.assert_allclose(member, single, rtol=0, atol=atol)
 
 
 def test_scherzer_string_via_C10_symbol():
