@@ -72,3 +72,68 @@ def test_a_held_object_whose_own_comparison_raises_is_a_difference(error):
             raise error("not comparable")
 
     assert Holder(Inner()) != Holder(Inner())
+
+
+@pytest.mark.parametrize(
+    "kind", ["FrozenPhonons", "Potential", "CrystalPotential", "NoiseTransform"]
+)
+def test_seeds_a_few_parts_per_million_apart_are_different(kind):
+    """Integers compare exactly. `np.allclose` takes seeds that differ by one in a
+    million as equal, so objects that draw different random numbers compared
+    equal. Device-independent."""
+    from abtem.noise import NoiseTransform
+
+    seeds = (1_000_000, 2_000_000)
+    near = (1_000_001, 2_000_000)
+
+    def make(seeds):
+        atoms = _atoms()
+        if kind == "NoiseTransform":
+            return NoiseTransform(dose=1e3, seeds=seeds)
+        frozen_phonons = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=seeds)
+        if kind == "FrozenPhonons":
+            return frozen_phonons
+        if kind == "Potential":
+            return abtem.Potential(
+                frozen_phonons, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 4
+            )
+        unit = abtem.Potential(
+            abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+            gpts=(16, 16),
+            slice_thickness=atoms.cell[2, 2] / 4,
+        )
+        return abtem.CrystalPotential(unit, (2, 2, 1), seeds=seeds)
+
+    assert make(seeds) != make(near)
+    assert make(seeds) == make(seeds)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ({"energy": 100_000}, {"energy": 100e3}),
+        ({"sampling": 1, "gpts": None}, {"sampling": 1.0, "gpts": None}),
+        ({"semiangle_cutoff": 20}, {"semiangle_cutoff": 20.0}),
+    ],
+    ids=["energy", "sampling", "semiangle_cutoff"],
+)
+def test_an_integer_and_the_same_float_still_compare_equal(a, b):
+    """Only a pair of integers compares exactly; an integer against a float keeps
+    the tolerance of `np.allclose`. Device-independent."""
+
+    def probe(**kwargs):
+        kwargs = {"semiangle_cutoff": 20, "gpts": 64, "extent": 10, **kwargs}
+        return abtem.Probe(**{k: v for k, v in kwargs.items() if v is not None})
+
+    assert probe(**a) == probe(**b)
+
+
+def test_integers_compare_by_value_whatever_the_container():
+    """A list and a tuple of the same integers are equal, as are an array and a
+    list, and differing integers are not. Device-independent."""
+    assert Holder([7]) == Holder((7,))
+    assert Holder(np.array([7, 8])) == Holder([7, 8])
+    assert Holder(1_000_000) != Holder(1_000_001)
+    assert Holder((1_000_000, 2)) != Holder((1_000_001, 2))
+    assert Holder(np.array([1_000_000, 2])) != Holder(np.array([1_000_001, 2]))
+    assert Holder(True) != Holder(False)

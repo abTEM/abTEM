@@ -105,7 +105,25 @@ class CopyMixin:
         return copy.deepcopy(self)
 
 
+def _is_integral(value) -> bool:
+    """Whether `value` is an integer, or a tuple, list or array of integers."""
+    if isinstance(value, (int, np.integer)):
+        return True
+    if isinstance(value, (tuple, list)):
+        return all(_is_integral(item) for item in value)
+    # A NumPy dtype only: the `dtype` of a `dask.delayed` value is delayed too,
+    # and comparing it raises.
+    dtype = getattr(value, "dtype", None)
+    return isinstance(dtype, np.dtype) and dtype.kind in ("b", "i", "u")
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
+    """Whether two objects have the same attributes, except those in `exclude`.
+
+    Numbers, and tuples, lists and arrays of numbers, are equal when their values
+    are: integers exactly, any other number to the default tolerance of
+    `np.allclose`.
+    """
     if not isinstance(b, a.__class__):
         return False
 
@@ -133,8 +151,14 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # Python's operator dispatch, so a check its class adds runs and a
         # subclass of the other operand's class is compared as at the top level.
         if not isinstance(value, EqualityMixin):
+            # A tolerance is for floating-point round-off; integers (seeds,
+            # counts, indices) compare without one.
+            other = b.__dict__[key]
+            compare = (
+                np.equal if _is_integral(value) and _is_integral(other) else np.allclose
+            )
             try:
-                equal = np.allclose(value, b.__dict__[key])
+                equal = bool(np.all(compare(value, other)))
             except (ValueError, TypeError):
                 pass
         # else:
