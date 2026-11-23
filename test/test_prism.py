@@ -775,3 +775,183 @@ def test_auto_reduction_batch_holds_the_crop_box_of_the_device(monkeypatch):
         gpu = s_matrix_array._validate_max_batch_reduction(scan, "auto")
 
     assert gpu == cpu
+
+
+@pytest.fixture
+def multislice_blocks(monkeypatch):
+    """The (start, stop) plane-wave ranges of the multislice runs of an S-matrix
+    build, appended in the order they run."""
+    from abtem.prism.s_matrix import SMatrix
+
+    blocks = []
+    build_s_matrix = SMatrix._build_s_matrix
+
+    def recording(s_matrix, wave_vector_range=slice(None), pbar=False):
+        if isinstance(wave_vector_range, slice):
+            blocks.append((wave_vector_range.start, wave_vector_range.stop))
+        else:
+            blocks.append(tuple(wave_vector_range.item()))
+        return build_s_matrix(s_matrix, wave_vector_range, pbar)
+
+    monkeypatch.setattr(SMatrix, "_build_s_matrix", staticmethod(recording))
+    return blocks
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, "auto"), (True, True)],
+    ids=["eager", "lazy", "lazy, one task per S-matrix"],
+)
+def test_reduce_multislices_max_batch_multislice_plane_waves_at_a_time(
+    device, lazy, disable_s_matrix_chunks, multislice_blocks
+):
+    # 9 plane waves, which a batch of 4 does not divide. The oracle is the
+    # multislice of the same probe, to which PRISM at interpolation 1 is equal.
+    import ase.build
+
+    import abtem
+
+    potential = abtem.Potential(
+        ase.build.bulk("Si", cubic=True),
+        gpts=(16, 20),
+        slice_thickness=2,
+        device=device,
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 9
+    scan = abtem.GridScan(gpts=(2, 3))
+    detector = abtem.AnnularDetector(0, 20)
+
+    def reduce(**kwargs):
+        multislice_blocks.clear()
+        measurement = s_matrix.reduce(
+            scan=scan,
+            detectors=detector,
+            lazy=lazy,
+            disable_s_matrix_chunks=disable_s_matrix_chunks,
+            **kwargs,
+        )
+        if lazy:
+            measurement = measurement.compute(progress_bar=False)
+        return np.asarray(measurement.to_cpu().array), sorted(multislice_blocks)
+
+    default, default_blocks = reduce()
+    batched, batched_blocks = reduce(max_batch_multislice=4)
+
+    assert default_blocks == [(0, 9)]
+    assert batched_blocks == [(0, 4), (4, 8), (8, 9)]
+    np.testing.assert_allclose(batched, default, rtol=1e-5)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=10, device=device)
+    expected = probe.scan(potential, scan, detector, lazy=False)
+    np.testing.assert_allclose(batched, np.asarray(expected.to_cpu().array), atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, True)],
+    ids=["eager", "lazy, one task per S-matrix"],
+)
+def test_the_plane_wave_batches_of_an_unseeded_crystal_see_one_potential(
+    lazy, disable_s_matrix_chunks
+):
+    """Every batch of max_batch_multislice plane waves is propagated through the
+    same frozen-phonon crystal, so the result is that of one batch."""
+    import ase.build
+
+    import abtem
+    from abtem.potentials.iam import CrystalPotential
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=None),
+        gpts=(16, 20),
+        slice_thickness=atoms.cell[2, 2] / 2,
+    )
+    crystal = CrystalPotential(unit, (1, 2, 2))
+    s_matrix = abtem.SMatrix(
+        potential=crystal, energy=100e3, semiangle_cutoff=10, interpolation=1
+    )
+
+    first_slices = []
+    generate_slices = CrystalPotential.generate_slices
+
+    def recording(self, *args, **kwargs):
+        for i, slic in enumerate(generate_slices(self, *args, **kwargs)):
+            if i == 0:
+                first_slices.append(np.asarray(slic.array).copy())
+            yield slic
+
+    def reduce(**kwargs):
+        first_slices.clear()
+        measurement = s_matrix.reduce(
+            scan=abtem.GridScan(gpts=(2, 3)),
+            detectors=abtem.AnnularDetector(0, 20),
+            lazy=lazy,
+            disable_s_matrix_chunks=disable_s_matrix_chunks,
+            **kwargs,
+        )
+        if lazy:
+            measurement = measurement.compute(scheduler="synchronous")
+        return np.asarray(measurement.array)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(CrystalPotential, "generate_slices", recording)
+        default = reduce()
+        batched = reduce(max_batch_multislice=4)
+
+    assert len(first_slices) == -(-len(s_matrix) // 4) > 1
+    for first_slice in first_slices[1:]:
+        np.testing.assert_array_equal(first_slice, first_slices[0])
+    np.testing.assert_allclose(
+        batched, default, rtol=0, atol=1e-5 * np.abs(default).max()
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_a_small_max_batch_multislice_keeps_the_seeded_crystal(device):
+    """An eager reduction in plane-wave batches of 4 of a seeded frozen-phonon
+    crystal with 3 members gives the result of the default batch."""
+    import ase.build
+
+    import abtem
+    from abtem.potentials.iam import CrystalPotential
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
+        gpts=(16, 20),
+        slice_thickness=atoms.cell[2, 2] / 2,
+        device=device,
+    )
+    crystal = CrystalPotential(unit, (1, 2, 2), seeds=(1, 2, 3))
+    s_matrix = abtem.SMatrix(
+        potential=crystal,
+        energy=100e3,
+        semiangle_cutoff=10,
+        interpolation=1,
+        device=device,
+    )
+    assert len(s_matrix) == 21
+
+    def reduce(**kwargs):
+        measurement = s_matrix.reduce(
+            scan=abtem.GridScan(gpts=(2, 3)),
+            detectors=abtem.AnnularDetector(0, 20),
+            lazy=False,
+            **kwargs,
+        )
+        return np.asarray(measurement.to_cpu().array)
+
+    default = reduce()
+    batched = reduce(max_batch_multislice=4)
+    np.testing.assert_allclose(
+        batched, default, rtol=0, atol=1e-5 * np.abs(default).max()
+    )
