@@ -3919,19 +3919,19 @@ def _complex_from_real_and_imag(real, imag):
     return array
 
 
-def _polar_bins_to_grid(array, regions):
+def _polar_bins_to_grid(array, regions, real_dtype):
     """Place polar-bin values (..., nbins_radial, nbins_azimuthal) on a regular grid.
 
     ``regions`` labels each grid pixel with its flat bin index (radial major, as
     from ``_polar_detector_bins``), or a negative value outside every bin, which
-    becomes NaN. Gathers with the array's own module, so it works for NumPy and
-    CuPy, and per block of a dask array.
+    becomes NaN. The result has the real dtype ``real_dtype``. Gathers with the
+    array's own module, so it works for NumPy and CuPy, and per block of a dask array.
     """
     xp = get_array_module(array)
     flat = array.reshape(array.shape[:-2] + (-1,))
     labels = xp.asarray(regions)
-    gathered = flat[..., xp.maximum(labels, 0)].astype(np.float32)
-    return xp.where(labels < 0, np.float32(np.nan), gathered)
+    gathered = flat[..., xp.maximum(labels, 0)].astype(real_dtype)
+    return xp.where(labels < 0, real_dtype.type(np.nan), gathered)
 
 
 class PolarMeasurements(BaseMeasurements):
@@ -4294,7 +4294,9 @@ class PolarMeasurements(BaseMeasurements):
         Returns
         -------
         diffraction_patterns : DiffractionPatterns
-            The diffraction patterns discretized from the polar measurements.
+            The diffraction patterns discretized from the polar measurements, in the
+            real precision of the polar bins (the configured precision for integer
+            counts). Pixels outside every bin are NaN.
         """
 
         if np.isscalar(gpts):
@@ -4323,6 +4325,13 @@ class PolarMeasurements(BaseMeasurements):
             return_indices=False,
         )
 
+        # The real precision of the bins; counts get the configured precision, which
+        # holds the NaN outside the bins.
+        if np.issubdtype(self.array.dtype, np.integer):
+            dtype = np.dtype(get_dtype(complex=False))
+        else:
+            dtype = np.finfo(self.array.dtype).dtype
+
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
@@ -4331,11 +4340,12 @@ class PolarMeasurements(BaseMeasurements):
             new_array = array.map_blocks(
                 _polar_bins_to_grid,
                 regions=regions,
+                real_dtype=dtype,
                 chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=dtype),
             )
         else:
-            new_array = _polar_bins_to_grid(self.array, regions)
+            new_array = _polar_bins_to_grid(self.array, regions, dtype)
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
         sampling = (
