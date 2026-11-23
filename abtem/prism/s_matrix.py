@@ -79,6 +79,25 @@ def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
+def _squeezed(measurements):
+    # The public reductions remove the position axis of a bare position (x, y),
+    # which validate_scan flags for squeezing, as multislice does
+    # (reduce_ensemble); the private _reduce keeps it for the code that
+    # assembles several reductions.
+    return _wrap_measurements(
+        [
+            measurement.squeeze(
+                tuple(
+                    i
+                    for i, axis in enumerate(measurement.ensemble_axes_metadata)
+                    if axis._squeeze
+                )
+            )
+            for measurement in ensure_list(measurements)
+        ]
+    )
+
+
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
@@ -1316,7 +1335,20 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
         """
+        return _squeezed(
+            self._reduce(scan, ctf, detectors, max_batch_reduction, reduction_scheme)
+        )
 
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        reduction_scheme: str = "auto",
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # reduce, keeping the position axis of a bare position for the caller
+        # that assembles the results of several reductions
         self.accelerator.check_is_defined()
 
         if ctf is None:
@@ -1327,11 +1359,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        if not isinstance(scan, BaseScan):
-            squeeze = (-3,)
-        else:
-            squeeze = ()
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -1383,9 +1410,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 for measurement in measurements
             ]
 
-        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
-        out = _wrap_measurements(measurements)
-        return out
+        return _wrap_measurements(measurements)
 
     def scan(
         self,
@@ -2107,7 +2132,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             s_matrix = s_matrix.item()
             s_matrix_array = s_matrix.build(lazy=False)
 
-            new_measurements = s_matrix_array.reduce(
+            new_measurements = s_matrix_array._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
@@ -2239,7 +2264,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 else measurement
                 for measurement in ensure_list(measurements)
             ]
-            return _wrap_measurements(measurements)
+            return _squeezed(measurements)
 
         if disable_s_matrix_chunks:
             scan = validate_scan(scan, self)
@@ -2295,13 +2320,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 arrays, waves, detectors, extra_axes_metadata
             )
 
-            return _wrap_measurements(measurements)
+            return _squeezed(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-        return s_matrix_array.reduce(
+        measurements = s_matrix_array._reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
+        return _squeezed(measurements)
