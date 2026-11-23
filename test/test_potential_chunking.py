@@ -576,7 +576,7 @@ def _frozen_phonon_crystal(
     unit = Potential(
         abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=unit_seed),
         gpts=(16, 16),
-        slice_thickness=atoms.cell[2, 2] / 4,  # 4 slices per unit
+        num_slices=4,  # 4 slices per unit
         projection=projection,
         device=device,
     )
@@ -695,11 +695,11 @@ class TestCrystalPotentialChunking:
     def test_crystal_matches_explicit_supercell(self):
         """CrystalPotential multislice result must match an explicit supercell Potential."""
         atoms_unit = si_cubic_atoms()
-        unit = Potential(atoms_unit, gpts=(32, 32), slice_thickness=2.0)
+        unit = Potential(atoms_unit, gpts=(32, 32), num_slices=3)
         crys = CrystalPotential(unit, repetitions=(2, 2, 3))
 
         atoms_full = si_cubic_atoms() * (2, 2, 3)
-        full = Potential(atoms_full, gpts=(64, 64), slice_thickness=2.0)
+        full = Potential(atoms_full, gpts=(64, 64), num_slices=9)
 
         waves = PlaneWave(energy=200e3, gpts=crys.gpts)
         waves.grid.match(crys)
@@ -2081,7 +2081,7 @@ class TestAutoChunkSizeCountsTheComponentAxis:
     @pytest.mark.parametrize("builder", [MagneticField, VectorPotential])
     def test_field_builder_and_array(self, builder, monkeypatch):
         shapes = self._record_estimates(monkeypatch)
-        field = builder(_fe_atoms_with_moments(), gpts=(16, 20), slice_thickness=1.5)
+        field = builder(_fe_atoms_with_moments(), gpts=(16, 20), num_slices=4)
         built = field.build()
 
         assert field.base_shape[1:] == built.base_shape[1:] == (3, 16, 20)
@@ -2148,7 +2148,7 @@ class TestAutoChunkSizeCountsTheEnsembleAxis:
             phonons = FrozenPhonons(
                 bulk("Si", cubic=True), num_configurations, sigmas=0.05, seed=3
             )
-            builder = Potential(phonons, gpts=(16, 20), slice_thickness=0.34)
+            builder = Potential(phonons, gpts=(16, 20), num_slices=16)
             return [len(c) for c in builder.generate_chunked_slices()]
 
         assert max(chunk_lengths(1)) == 8
@@ -2239,7 +2239,7 @@ class TestAtomBasedFieldsWithFrozenPhonons:
         phonons = FrozenPhonons(
             _fe_atoms_with_moments(), 2, sigmas=0.05, seed=3
         )
-        return cls(phonons, gpts=(16, 20), slice_thickness=1.5, exit_planes=2)
+        return cls(phonons, gpts=(16, 20), num_slices=4, exit_planes=2)
 
     def test_built_array_iterates_and_chunks_its_first_member(self, cls):
         full = self._field(cls).build()

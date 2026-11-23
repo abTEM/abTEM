@@ -102,7 +102,7 @@ def test_smallest_fast_commensurate_multiple():
 
 
 @pytest.mark.parametrize("name,crystalstructure,a", [("Si", "diamond", 5.431), ("Au", "fcc", 4.078)])
-def test_potential_auto_sampling_is_commensurate_and_fast(name, crystalstructure, a):
+def test_potential_default_sampling_is_commensurate_and_fast(name, crystalstructure, a):
     from abtem.core import config
 
     atoms = bulk(name, crystalstructure, a=a, cubic=True) * (2, 2, 1)
@@ -199,7 +199,7 @@ def test_plane_set_invariance_sees_across_the_periodic_wrap():
     assert _translational_period_count(planes, L) == 2
 
 
-def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
+def test_default_gpts_is_translation_invariant_for_incommensurate_structures():
     # Rutile has no exactly commensurate grid, so it takes the fallback path.
     # Its grid must not depend on where the structure sits in the cell -- the
     # property commensurate_gpts exists to guarantee, and the one the fallback
@@ -233,7 +233,7 @@ def test_period_search_is_not_abandoned_on_dense_plane_sets():
     assert _translational_period_count(planes, 2 * cell) == 2
 
 
-def test_auto_sampling_respects_the_fast_fft_config():
+def test_default_sampling_respects_the_fast_fft_config():
     # The config option governs every automatically derived grid, so a user who
     # turns it off gets no rounding anywhere -- previously sampling='auto'
     # rounded unconditionally and could not be switched off.
@@ -258,7 +258,7 @@ def test_auto_sampling_respects_the_fast_fft_config():
     )
 
 
-def test_ensemble_auto_sampling_respects_the_fast_fft_config():
+def test_ensemble_default_sampling_respects_the_fast_fft_config():
     from abtem.core import config
 
     atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1)

@@ -216,8 +216,7 @@ def si_atoms():
 
 
 def _make_potential(atoms, device, gpts=48, num_slices=3):
-    slice_thickness = atoms.cell[2, 2] / num_slices
-    return Potential(atoms, gpts=gpts, slice_thickness=slice_thickness, device=device)
+    return Potential(atoms, gpts=gpts, num_slices=num_slices, device=device)
 
 
 def _make_transition_potential(potential, device, n_transitions=4, seed=0):

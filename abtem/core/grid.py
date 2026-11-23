@@ -559,8 +559,9 @@ class Grid(CopyMixin, EqualityMixin):
 
         Automatic rounding is governed by the configuration option
         ``grid.round-to-fast-fft``: ``'auto'`` (the default) rounds the grids
-        abTEM derives on its own, such as the commensurate grid of a ``Potential``;
-        ``True`` additionally rounds gpts derived from a numeric sampling;
+        abTEM derives on its own, such as the grid of a ``Potential`` of atoms (also
+        when a numeric sampling is its target);
+        ``True`` additionally rounds gpts ``Grid`` derives from a numeric sampling;
         ``False`` disables it everywhere.
 
         Grids that are never Fourier transformed (``fft_grid=False``, e.g. the

@@ -375,7 +375,7 @@ def test_entrance_exit_plane_carries_no_core_loss_signal(device):
     """
     atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 3)
     potential = abtem.Potential(
-        atoms, gpts=(64, 64), slice_thickness=1.4, exit_planes=3, device=device
+        atoms, gpts=(64, 64), num_slices=12, exit_planes=3, device=device
     )
     assert potential.exit_planes[0] == -1
 

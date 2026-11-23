@@ -447,15 +447,15 @@ def _atoms_at_z(z, cell_z, cell_xy=5.0):
 
 
 def test_slice_thickness_never_exceeds_the_target_at_the_periodic_boundary():
-    """The remainder between the last plane and the top of the cell is merged
-    with the slice before it only when the merged slice fits the target; the
-    plane at 3.0 lies within the tolerance of the top face, so it is the plane at
-    0 of the next cell, and the 1.15 Å remainder is split in two."""
+    """The plane at 3.0 lies within the tolerance of the top face, so it is the plane
+    at 0 of the next cell. Each plane gets the part of the cell closest to it, so the
+    slice limits are the midpoints (0.5, 1.5, 2.5) and the last slice is the 0.65 Å
+    from the last midpoint to the top face; no slice exceeds the target."""
     atoms = _atoms_at_z([0.0, 1.0, 2.0, 3.0], cell_z=3.15)
 
     result = commensurate_slice_thickness(atoms, target_thickness=1.0)
 
-    assert result == pytest.approx((1.0, 1.0, 0.575, 0.575))
+    assert result == pytest.approx((0.5, 1.0, 1.0, 0.65))
 
 
 def test_slice_thickness_splits_gaps_thicker_than_target():
@@ -466,7 +466,14 @@ def test_slice_thickness_splits_gaps_thicker_than_target():
 
     result = commensurate_slice_thickness(atoms, target_thickness=1.0)
 
-    assert result == pytest.approx((atoms.cell[2, 2] / 6,) * 6)
+    # Each plane gets a slice of the target thickness centered on it (so that no slice
+    # limit cuts an atom), and the empty gaps between those are split in two; the
+    # plane at the cell face is cut in two by it.
+    a = atoms.cell[2, 2]
+    assert result == pytest.approx(
+        (0.5, a / 4 - 0.5, a / 4 - 0.5, 1.0, a / 4 - 0.5, a / 4 - 0.5, 0.5)
+    )
+    assert max(result) <= 1.0 + 1e-9
     potential = abtem.Potential(atoms)
     assert potential.slice_thickness == pytest.approx(result)
 
@@ -481,8 +488,37 @@ def test_slice_thickness_merges_planes_closer_than_tolerance():
 
     # A spurious boundary at 0.2 (from rounding 0.099 and 0.101 into
     # different tolerance-wide bins) would split the first slice into two.
-    assert len(result) == 3
-    assert result == pytest.approx((1.1, 1.0, 0.9))
+    assert len(result) == 4
+    assert result == pytest.approx((0.6, 1.0, 1.0, 0.4))
+
+
+@pytest.mark.parametrize("target", [0.5, 1.0, 1.7, 3.0])
+@pytest.mark.parametrize(
+    "atoms",
+    [
+        bulk("Si", cubic=True) * (1, 1, 3),
+        bulk("Au", cubic=True) * (1, 1, 2),
+        bulk("Cu", cubic=True) * (2, 2, 3),
+        bulk("Mg", "hcp", orthorhombic=True) * (1, 1, 2),
+    ],
+    ids=["Si", "Au", "Cu", "Mg"],
+)
+def test_slice_limits_never_cut_an_atom(atoms, target):
+    """A limit on an atom splits it between two slices, which smears its potential
+    along the beam when the projection is finite and, under frozen phonons, hands
+    a random part of the plane to either side."""
+    result = commensurate_slice_thickness(atoms, target_thickness=target)
+
+    cell_z = atoms.cell[2, 2]
+    limits = np.cumsum(result)[:-1]
+    z = atoms.positions[:, 2] % cell_z
+    distance = np.abs(z[None] - limits[:, None])
+    distance = np.minimum(distance, cell_z - distance)
+    assert distance.min() > 0.05
+    assert max(result) <= target * (1 + 1e-9)
+    assert sum(result) == pytest.approx(cell_z)
+    # equal slices are bit-identical, so that the propagator is computed once
+    assert len(set(result)) <= len(result) // 2 + 2
 
 
 # ── AtomsEnsemble: commensurability search must be skipped ──────────────────
@@ -563,7 +599,9 @@ def test_default_slice_thickness_and_sampling_are_the_configured_targets():
     explicit = abtem.Potential(_gold(), sampling=0.05, slice_thickness=1.0)
 
     assert default.slice_thickness == pytest.approx(explicit.slice_thickness)
-    assert default.slice_thickness == pytest.approx((_gold().cell[2, 2] / 12,) * 12)
+    assert default.slice_thickness == pytest.approx(
+        commensurate_slice_thickness(_gold(), 1.0)
+    )
     assert default.gpts == explicit.gpts == (168, 168)
     assert default.grid.gpts_is_default
     assert not explicit.grid.gpts_is_default
@@ -790,8 +828,10 @@ def test_array_sampling_and_slice_thickness_are_accepted():
 @pytest.mark.parametrize(
     "kwargs, match",
     [
-        ({"sampling": "auto"}, "leave `sampling` unset"),
-        ({"slice_thickness": "auto"}, "leave `slice_thickness` unset"),
+        ({"sampling": "auto"}, "sampling must be one or two positive"),
+        ({"slice_thickness": "auto"}, "slice_thickness must be a positive number"),
+        ({"sampling": True}, "sampling must be one or two positive"),
+        ({"slice_thickness": True}, "slice_thickness must be a positive number"),
         ({"sampling": -0.05}, "positive"),
         ({"sampling": (0.05, 0.05, 0.05)}, "one or two"),
         ({"slice_thickness": 0.0}, "positive"),
@@ -800,6 +840,22 @@ def test_array_sampling_and_slice_thickness_are_accepted():
 def test_invalid_targets_raise(kwargs, match):
     with pytest.raises(ValueError, match=match):
         abtem.Potential(_si(), **kwargs)
+
+
+@pytest.mark.parametrize(
+    "key, value, match",
+    [
+        ("potential.slice-thickness", [0.05, 0.05], "potential.slice-thickness"),
+        ("potential.slice-thickness", True, "potential.slice-thickness"),
+        ("potential.slice-thickness", "auto", "potential.slice-thickness"),
+        ("potential.sampling", True, "potential.sampling"),
+        ("potential.sampling", -1.0, "potential.sampling"),
+    ],
+)
+def test_invalid_configured_targets_name_the_configuration_key(key, value, match):
+    with abtem.config.set({key: value}):
+        with pytest.raises(ValueError, match=match):
+            abtem.Potential(_si())
 
 
 # ── periodicity is that of the potential's axes ──────────────────────────────
@@ -813,14 +869,18 @@ def _si_wire():
 
 def test_slices_are_commensurate_along_a_periodic_beam_direction_of_a_plane():
     # Viewed along the wire ("yz"), the beam runs along the periodic x of the
-    # atoms: the slices are commensurate with its planes, a / 4 apart and split
-    # in two at the default target.
+    # atoms: the slices are commensurate with its planes (a / 4 apart), which they
+    # enclose rather than end on, and no thicker than the default target.
     wire = _si_wire()
 
     potential = abtem.Potential(wire, plane="yz")
 
     a = _si().cell[0, 0]
-    assert potential.slice_thickness == pytest.approx((a / 8,) * 24)
+    assert sum(potential.slice_thickness) == pytest.approx(3 * a)
+    assert max(potential.slice_thickness) <= 1.0 + 1e-9
+    limits = np.cumsum((0.0,) + potential.slice_thickness)
+    planes = a / 4 * np.arange(12)
+    assert np.min(np.abs(limits[1:-1, None] - planes[None])) > 0.1
 
 
 def test_grid_is_commensurate_only_along_periodic_axes():

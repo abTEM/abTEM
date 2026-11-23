@@ -257,7 +257,7 @@ def interpolate(array_out, array_in, position, sampling_out, sampling_in):
             )
 
 
-@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+@jit(nopython=True, nogil=True, cache=True)
 def _table_position(integral_limits, limit):
     """The node below `limit` on the uniform grid `integral_limits` of a cumulative
     integral table, and the fraction of the way to the next node, clamped to the
@@ -273,7 +273,7 @@ def _table_position(integral_limits, limit):
     return k, x - k
 
 
-@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+@jit(nopython=True, nogil=True, cache=True)
 def _table_difference(table, i, wi, j, wj):
     """The cumulative integral `table` (nodes along its first axis) from the
     position (i, wi) to the position (j, wj), linearly interpolated between nodes.
@@ -281,9 +281,10 @@ def _table_difference(table, i, wi, j, wj):
     Snapping a limit to the nearest node instead moved a whole node interval of
     the integral between neighbouring slices when a limit lay halfway between two
     nodes, which a slice limit on an atomic plane often does (0.55 Å from an atom
-    on 0.1 Å nodes): one ulp decided which, and the field near the atom changed
-    by half of its maximum. Interpolated, the integral is continuous in the
-    limits, and the slices of a cell still add up to the integral through it.
+    on 0.1 Å nodes): one ulp decided which, and the field near the atom jumped
+    (by 60 % of the first slice's transverse components, 5 % of the field's
+    maximum). Interpolated, the integral is continuous in the limits, and the
+    slices of a cell still add up to the integral through it.
     """
     upper = table[j] * (1.0 - wj) + table[j + 1] * wj
     lower = table[i] * (1.0 - wi) + table[i + 1] * wi

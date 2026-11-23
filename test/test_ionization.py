@@ -407,16 +407,15 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
 
     unit_atoms = ase.build.bulk("Si", cubic=True)  # 5.43 Å cubic
     reps = (2, 2, 3)
-    # Use slice_thickness equal to one unit-cell thickness so the manual
-    # tile and the CrystalPotential land on bit-identical slice boundaries.
-    slice_thickness = float(unit_atoms.cell[2, 2])
+    # One slice per unit cell, so the manual tile and the CrystalPotential land on
+    # bit-identical slice boundaries.
 
     manual_pot = abtem.Potential(
-        unit_atoms * reps, gpts=(64, 64), slice_thickness=slice_thickness,
+        unit_atoms * reps, gpts=(64, 64), num_slices=reps[2],
         device=device,
     )
     unit_pot = abtem.Potential(
-        unit_atoms, gpts=(32, 32), slice_thickness=slice_thickness,
+        unit_atoms, gpts=(32, 32), num_slices=1,
         device=device,
     )
     cryst_pot = abtem.CrystalPotential(unit_pot, repetitions=reps)
@@ -1155,14 +1154,14 @@ def test_transition_potential_scan_crystal_double_channel_matches_manual(device)
 
     unit_atoms = ase.build.bulk("Si", cubic=True)
     reps = (2, 2, 3)
-    slice_thickness = float(unit_atoms.cell[2, 2])
+    # one slice per unit cell, as above
 
     manual_pot = abtem.Potential(
-        unit_atoms * reps, gpts=(64, 64), slice_thickness=slice_thickness,
+        unit_atoms * reps, gpts=(64, 64), num_slices=reps[2],
         device=device,
     )
     unit_pot = abtem.Potential(
-        unit_atoms, gpts=(32, 32), slice_thickness=slice_thickness,
+        unit_atoms, gpts=(32, 32), num_slices=1,
         device=device,
     )
     cryst_pot = abtem.CrystalPotential(unit_pot, repetitions=reps)
@@ -1338,7 +1337,7 @@ def test_double_channel_shares_the_transmissions_of_shared_slices(monkeypatch):
     from abtem.potentials.iam import PotentialArray
 
     atoms = ase.build.bulk("Si", cubic=True)
-    unit = abtem.Potential(atoms, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 2)
+    unit = abtem.Potential(atoms, gpts=(16, 16), num_slices=2)
     crystal = abtem.CrystalPotential(unit, repetitions=(2, 2, 5))
 
     calls = []

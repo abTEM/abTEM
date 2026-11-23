@@ -65,14 +65,21 @@ def commensurate_slice_thickness(
     Find slice thicknesses commensurate with the crystal planes, no thicker than a
     target thickness.
 
-    Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
-    and the cell height. Adjacent plane-level slices are merged as long as the merged
-    slice stays within `target_thickness`, so every slice boundary lies on an atomic
-    plane (or on the cell faces). A gap between planes that is thicker than the target
-    is split into the fewest equal slices that are no thicker than it; no atoms lie
-    inside the gap, so the new boundaries are as commensurate as the plane
-    boundaries. No slice is therefore thicker than `target_thickness`, as for a
-    uniform slicing with that thickness.
+    Atoms whose z-positions agree within `tolerance` form a plane. Each plane gets
+    the part of the cell closest to it, bounded by the midpoints to the neighbouring
+    planes (the cell is periodic along z), so a plane lies inside its slice and never
+    on a slice limit. A slice limit on an atom splits the atom between two slices,
+    which smears its potential along z when the projection is finite and, under
+    frozen phonons, hands a random part of each plane to either neighbour. Adjacent
+    slices are then merged as long as the merged slice stays within
+    `target_thickness`, so the slice limits are the planes' midpoints (or the cell
+    faces) and no slice is thicker than the target, as for a uniform slicing with that
+    thickness. Where the planes are further apart than the target, each plane gets a
+    slice centered on it, and the empty gaps are split into the fewest equal slices
+    that fit.
+
+    Translation-equivalent atoms sit identically in their slices, which is what
+    makes the slicing commensurate.
 
     Parameters
     ----------
@@ -93,41 +100,27 @@ def commensurate_slice_thickness(
 
     # Snap values at z ≈ cell_z back to 0 before deduplicating, so planes near
     # the periodic boundary merge with planes near 0 instead of being treated
-    # as distinct. Identify unique planes by sorted-neighbor distance (as in
+    # as distinct. Identify planes by sorted-neighbor distance (as in
     # commensurate_gpts) rather than rounding to a fixed tolerance-wide grid
     # anchored at 0: fixed-grid rounding can split two atoms much closer
     # together than `tolerance` into different bins when they straddle a bin
     # edge, or merge genuinely distinct planes that land in the same bin.
     z[z > cell_z - tolerance] = 0.0
     z = np.sort(z)
-    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
-    unique_z = z[unique_mask]
-    unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
+    new_plane = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
+    labels = np.cumsum(new_plane) - 1
+    planes = np.bincount(labels, weights=z) / np.bincount(labels)
 
-    boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
-    plane_thicknesses = np.diff(boundaries)
+    pieces = _plane_pieces(planes, cell_z, target_thickness)
 
-    # A gap between planes that is thicker than the target cannot be brought
-    # within it by merging, so divide it evenly into the fewest slices that fit;
-    # no atoms lie inside the gap, so the new boundaries are as commensurate as
-    # the plane boundaries.
-    plane_thicknesses = np.concatenate(
-        [
-            np.full(n, t / n)
-            for t in plane_thicknesses
-            for n in [max(1, safe_ceiling_int(t / target_thickness))]
-        ]
-    )
-
-    # Merge neighbouring plane slices while the merged slice fits the target.
-    # Greedy merging in order gives the fewest slices of any partition of the
-    # planes into contiguous slices no thicker than the target. The relative
-    # tolerance keeps planes that tile the target exactly (up to rounding) in one
-    # slice.
+    # Merge neighbouring pieces while the merged slice fits the target. Greedy
+    # merging in order gives the fewest slices of any partition into contiguous
+    # slices no thicker than the target. The relative tolerance keeps pieces that
+    # tile the target exactly (up to rounding) in one slice.
     limit = target_thickness * (1.0 + 1e-9)
     merged = []
     acc = 0.0
-    for t in plane_thicknesses:
+    for t in pieces:
         if acc > 0 and acc + t > limit:
             merged.append(acc)
             acc = t
@@ -136,9 +129,63 @@ def commensurate_slice_thickness(
     if acc > 0:
         merged.append(acc)
 
-    result = tuple(float(t) for t in merged)
+    # Equal slices must be bit-identical: the Fresnel propagator is cached on the
+    # slice thickness, and thicknesses that differ in the last bit recompute it.
+    result = tuple(round(float(t), 12) for t in merged)
     assert np.isclose(sum(result), cell_z)
     return result
+
+
+def _plane_pieces(
+    planes: np.ndarray, cell_z: float, target_thickness: float
+) -> list[float]:
+    """
+    Thicknesses of the pieces the cell [0, cell_z] is cut into around atomic planes.
+
+    The ends of the pieces are never on a plane (except at the cell faces), and no
+    piece is thicker than `target_thickness`.
+    """
+    if len(planes) == 0:
+        n = max(1, safe_ceiling_int(cell_z / target_thickness))
+        return [cell_z / n] * n
+
+    # Gaps to the previous and next plane, with the cell periodic along z.
+    before = planes - np.roll(planes, 1)
+    before[0] += cell_z
+    after = np.roll(before, -1)
+
+    spans = []
+    for p, g_before, g_after in zip(planes, before, after):
+        lo, hi = p - g_before / 2, p + g_after / 2
+        if hi - lo <= target_thickness * (1.0 + 1e-9):
+            spans.append((lo, hi))
+            continue
+        # Planes further apart than the target: a slice centered on the plane, with
+        # the empty rest of the segment on either side.
+        w = min(target_thickness, g_before, g_after)
+        spans += [(lo, p - w / 2), (p - w / 2, p + w / 2), (p + w / 2, hi)]
+
+    # Cut spans that cross a cell face (the cell is periodic along z).
+    cut = []
+    for lo, hi in spans:
+        if hi <= 0:
+            cut.append((lo + cell_z, hi + cell_z))
+        elif lo < 0:
+            cut += [(lo + cell_z, cell_z), (0.0, hi)]
+        elif lo >= cell_z:
+            cut.append((lo - cell_z, hi - cell_z))
+        elif hi > cell_z:
+            cut += [(lo, cell_z), (0.0, hi - cell_z)]
+        else:
+            cut.append((lo, hi))
+
+    pieces = []
+    for lo, hi in sorted(cut):
+        if hi - lo <= 1e-12:
+            continue
+        n = max(1, safe_ceiling_int((hi - lo) / target_thickness))
+        pieces += [(hi - lo) / n] * n
+    return pieces
 
 
 # How far above the target grid size the incommensurate fallback may look for a
@@ -248,9 +295,11 @@ def commensurate_gpts(
 
     The grid is the smallest multiple of p whose sampling is no coarser than
     `target_sampling`, just as a plain grid has the fewest points that meet it.
-    When that multiple has more than 15 % more points than the plain grid -- which
-    happens only when the primitive spacing is about as fine as the target -- the
-    plain grid is used for that axis instead.
+    When the grid has more than 15 % more points than the plain grid (the fewest that
+    meet the target, before any fast-FFT rounding) -- which happens only when the
+    primitive spacing is about as fine as the target, or when rounding a multiple of
+    the period to a fast size needs it -- the plain grid is used for that axis
+    instead.
 
     When `round_to_fast_fft` is enabled the number of grid points additionally
     factorizes completely into the primes 2, 3, 5 and 7 whenever that is
@@ -436,6 +485,10 @@ def commensurate_gpts(
             # takes precedence. The multiplier is rounded up, so the grid never
             # comes out coarser than it would with rounding off.
             multiplier = next_fast_fft_size(multiplier)
+        # The bound is on the grid that results, after any rounding to a fast size.
+        if multiplier * n_periods > n_target * _COMMENSURATE_MAX_OVERSHOOT:
+            gpts.append(plain_gpts(n_target))
+            continue
         gpts.append(multiplier * n_periods)
 
     return tuple(gpts)

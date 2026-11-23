@@ -186,8 +186,7 @@ def _synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=1, seed=0):
 def _prism_eels_setup(gpts=(24, 24), reps=(1, 1, 2), device="cpu"):
     unit = ase.build.bulk("Si", cubic=True)
     atoms = unit * reps
-    st = float(unit.cell[2, 2])
-    pot = abtem.Potential(atoms, gpts=gpts, slice_thickness=st, device=device)
+    pot = abtem.Potential(atoms, gpts=gpts, num_slices=reps[2], device=device)
     tp = _synthetic_tp(14, gpts, pot.extent, energy=100e3)
     scan = abtem.GridScan(
         start=(0, 0), end=(unit.cell[0, 0], unit.cell[1, 1]),

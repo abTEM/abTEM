@@ -291,14 +291,10 @@ def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
     unit_atoms.positions[5] += unit_atoms.cell[0]
     reps = (2, 2, 3)
     # a third of the cell, so that no atom sits on a slice boundary
-    slice_thickness = float(unit_atoms.cell[2, 2]) / 3
-
-    unit_pot = Potential(unit_atoms, gpts=(32, 32), slice_thickness=slice_thickness)
+    unit_pot = Potential(unit_atoms, gpts=(32, 32), num_slices=3)
     cryst = CrystalPotential(unit_pot, repetitions=reps)
 
-    manual = Potential(
-        unit_atoms * reps, gpts=(64, 64), slice_thickness=slice_thickness
-    )
+    manual = Potential(unit_atoms * reps, gpts=(64, 64), num_slices=3 * reps[2])
 
     cryst_sa = cryst.get_sliced_atoms()
     manual_sa = manual.get_sliced_atoms()
@@ -349,7 +345,7 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
         unit_atoms, num_configs=num_configs, sigmas=0.1, seed=7
     )
     potential = Potential(
-        fp, gpts=(32, 32), slice_thickness=5.43 / 4, device=device
+        fp, gpts=(32, 32), num_slices=4, device=device
     )
 
     eager = potential.build(lazy=False).array
@@ -389,7 +385,7 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     reps = (2, 3, 2)  # asymmetric to catch tile-axis-order mistakes
     ug = 32
     fp = abtem.FrozenPhonons(si, num_configs=20, sigmas=0.1, seed=2)
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit = Potential(fp, gpts=(ug, ug), num_slices=4, device=device)
     if lazy:
         unit = unit.build(lazy=True)
 
@@ -407,7 +403,7 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     # copies (up to float rounding), which fixes the disorder floor to compare
     # against
     fp1 = abtem.FrozenPhonons(si, num_configs=1, sigmas=0.1, seed=2)
-    unit1 = Potential(fp1, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit1 = Potential(fp1, gpts=(ug, ug), num_slices=4, device=device)
     if lazy:
         unit1 = unit1.build(lazy=True)
     slic1 = next(CrystalPotential(unit1, repetitions=reps).generate_slices())
@@ -437,7 +433,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     n_tiles = reps[0] * reps[1]
 
     fp = abtem.FrozenPhonons(si, num_configs=6, sigmas=0.1, seed=0)  # pool < tiles
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit = Potential(fp, gpts=(ug, ug), num_slices=4, device=device)
     cryst = CrystalPotential(unit, repetitions=reps)
 
     with pytest.warns(UserWarning, match="smaller than the number of lateral"):
@@ -452,7 +448,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
 
     # a pool already >= n_tiles is left untouched (no warning)
     fp_big = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=0)
-    unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit_big = Potential(fp_big, gpts=(ug, ug), num_slices=4, device=device)
     with warnings.catch_warnings():
         warnings.filterwarnings("error", category=UserWarning)  # any pool warning would fail here
         big = next(
@@ -483,7 +479,7 @@ def test_crystal_potential_balanced_pool_drawing(device):
     # z-only pool (full-lateral pattern): pool == nz -> every z-rep distinct
     nz = 6
     fp = abtem.FrozenPhonons(si, num_configs=nz, sigmas=0.1, seed=1)
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit = Potential(fp, gpts=(ug, ug), num_slices=4, device=device)
     cryst = CrystalPotential(unit, repetitions=(1, 1, nz), seeds=(3,))
     slices = [asnumpy(s.array)[0] for s in cryst.generate_slices()]
     n_sub = len(slices) // nz
@@ -495,7 +491,7 @@ def test_crystal_potential_balanced_pool_drawing(device):
     n_tiles = tile_reps[0] * tile_reps[1]
     total_slots = n_tiles * tile_reps[2]
     fp2 = abtem.FrozenPhonons(si, num_configs=total_slots, sigmas=0.1, seed=1)
-    unit2 = Potential(fp2, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit2 = Potential(fp2, gpts=(ug, ug), num_slices=4, device=device)
     cryst2 = CrystalPotential(unit2, repetitions=tile_reps, seeds=(3,))
     slices2 = [asnumpy(s.array)[0] for s in cryst2.generate_slices()]
     slots = set()
@@ -508,7 +504,7 @@ def test_crystal_potential_balanced_pool_drawing(device):
     # pool == n_tiles: usage perfectly balanced (each config used exactly nz
     # times over the crystal) and still distinct within every layer
     fp3 = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=1)
-    unit3 = Potential(fp3, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit3 = Potential(fp3, gpts=(ug, ug), num_slices=4, device=device)
     cryst3 = CrystalPotential(unit3, repetitions=tile_reps, seeds=(3,))
     slices3 = [asnumpy(s.array)[0] for s in cryst3.generate_slices()]
     counts = Counter()
@@ -539,7 +535,7 @@ def test_crystal_potential_ensemble_members_have_independent_pools(device):
     nz = 6  # pool == nz: already exact for one member (see test above)
 
     fp = abtem.FrozenPhonons(si, num_configs=nz, sigmas=0.1, seed=1)
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    unit = Potential(fp, gpts=(ug, ug), num_slices=4, device=device)
     cryst = CrystalPotential(unit, repetitions=(1, 1, nz), num_frozen_phonons=3)
     built = cryst.build(lazy=False)
     members = [asnumpy(built.array[i]) for i in range(3)]
@@ -1281,7 +1277,7 @@ class TestSliceIndexedAtomsWrapping:
         atoms = self._edge_atoms()
         phonons = FrozenPhonons(atoms, num_configs=1, sigmas=0.25, seed=1)
         potential = Potential(
-            phonons, gpts=(32, 32), slice_thickness=1.0, periodic=periodic
+            phonons, gpts=(32, 32), num_slices=4, periodic=periodic
         )
         sliced = potential.get_sliced_atoms()
         z = sliced.atoms.positions[:, 2]
@@ -2414,7 +2410,7 @@ def test_box_equal_to_the_cell_changes_nothing():
 
 
 @ignore_strain_warning
-def test_auto_sampling_and_slice_thickness_follow_the_box():
+def test_default_sampling_and_slice_thickness_follow_the_box():
     atoms = _two_atoms()
     repeated = atoms * (2, 3, 2)
     in_box = abtem.Potential(
@@ -2427,7 +2423,7 @@ def test_auto_sampling_and_slice_thickness_follow_the_box():
 
 
 @ignore_strain_warning
-def test_auto_sampling_follows_the_box_of_a_strained_cell():
+def test_default_sampling_follows_the_box_of_a_strained_cell():
     atoms = _two_atoms()
     box = (9.0, 9.0, 10.0)
     in_box = abtem.Potential(atoms, box=box)
@@ -2440,7 +2436,7 @@ def test_auto_sampling_follows_the_box_of_a_strained_cell():
 
 
 @ignore_strain_warning
-def test_auto_slice_thickness_follows_the_plane():
+def test_default_slice_thickness_follows_the_plane():
     atoms = _two_atoms()
     potential = abtem.Potential(atoms, plane="xz", sampling=0.1)
     reference = abtem.Potential(
@@ -2450,7 +2446,7 @@ def test_auto_slice_thickness_follows_the_plane():
 
 
 @ignore_strain_warning
-def test_auto_slice_thickness_of_a_primitive_fcc_cell_fills_its_box():
+def test_default_slice_thickness_of_a_primitive_fcc_cell_fills_its_box():
     # The primitive cell is non-orthogonal; the slices fill the best orthogonal
     # cell the potential is built in.
     atoms = bulk("Si", "diamond", a=5.431)
@@ -2505,7 +2501,7 @@ def test_non_periodic_box_with_no_whole_period_is_cut_out():
 
 @ignore_strain_warning
 @pytest.mark.parametrize("box", [(1.5, 3.0, 5.0), (9.0, 9.0, 10.0), (8.0, 9.0, 10.0)])
-def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_box(box):
+def test_non_periodic_default_grid_follows_the_atoms_cut_out_of_the_box(box):
     # The cut-out atoms are not strained, so the grid commensurate with them is
     # the one of the atoms cut out of the repeated structure.
     atoms = _two_atoms()
@@ -2540,7 +2536,7 @@ def _triclinic():
     ],
     ids=["hBN-3x1x1", "hBN-3x1x1-origin", "triclinic"],
 )
-def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_default_box(
+def test_non_periodic_default_grid_follows_the_atoms_cut_out_of_the_default_box(
     atoms, origin
 ):
     # With no box, a non-periodic potential cuts its default box out of the
@@ -3169,7 +3165,7 @@ AUTO_GRID_CASES = [
 
 
 @pytest.mark.parametrize("case", AUTO_GRID_CASES, ids=lambda c: c[0])
-def test_auto_grid_of_non_periodic_atoms_follows_the_extent(case):
+def test_default_grid_of_non_periodic_atoms_follows_the_extent(case):
     name, make_atoms, kwargs = case
     potential = abtem.Potential(make_atoms(), **kwargs)
 
@@ -3182,7 +3178,7 @@ def test_auto_grid_of_non_periodic_atoms_follows_the_extent(case):
     assert max(potential.sampling) <= 0.05 + 1e-12
 
 
-def test_auto_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
+def test_default_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
     # The box was already the extent of this branch.
     potential = abtem.Potential(
         _co(NON_PERIODIC_XY), box=(8.0, 9.0, 10.0), periodic=False
@@ -3192,7 +3188,7 @@ def test_auto_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
 
 @pytest.mark.parametrize("rounding", [False, "auto"])
 @pytest.mark.parametrize("points", [48, 96])
-def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
+def test_default_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
     # 48 * 0.05 is 2.4000000000000004, so the extent over 0.05 is 48.00000000000001
     # in floats; the grid still has 48 points, as the numeric sampling 0.05 gives.
     extent = points * 0.05
@@ -3213,7 +3209,7 @@ def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
     "pbc, plane, gpts",
     [(NON_PERIODIC_XY, "xy", (80, 60)), (True, "xy", (80, 60)), (True, "xz", (80, 100))],
 )
-def test_auto_grid_that_was_right_is_unchanged(pbc, plane, gpts):
+def test_default_grid_that_was_right_is_unchanged(pbc, plane, gpts):
     potential = abtem.Potential(_co(pbc), plane=plane)
     assert potential.gpts == gpts
 

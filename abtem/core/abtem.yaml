@@ -84,9 +84,11 @@ grid:
   # Bluestein FFT fallback on GPU and speed up CPU FFTs as well. Rounding is
   # upward only, so a grid derived from a numeric sampling never comes out
   # coarser than requested. gpts given explicitly are never altered.
-  #   'auto'  round only grids abTEM derives on its own (the commensurate grid
-  #           of a Potential)
-  #   true    additionally round gpts derived from a numeric sampling
+  #   'auto'  round only grids abTEM derives on its own (the grid of a Potential
+  #           from atoms, also when a numeric sampling is its target; not with
+  #           commensurate=False)
+  #   true    additionally round gpts that Grid derives from a numeric sampling
+  #           elsewhere
   #   false   never round
   round-to-fast-fft: auto
 warnings:

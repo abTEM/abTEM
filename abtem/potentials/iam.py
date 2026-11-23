@@ -34,6 +34,7 @@ from abtem.atoms import (
     is_cell_orthogonal,
     orthogonalize_cell,
     pad_atoms,
+    plane_to_axes,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -606,55 +607,49 @@ def _default_box(cell, plane) -> tuple[float, float, float]:
     return tuple(best_orthogonal_cell(cell))
 
 
-def _target_sampling(sampling) -> tuple[float, float]:
+def _target_sampling(sampling, source: str = "sampling") -> tuple[float, float]:
     """A target sampling as two positive floats [Å]."""
-    if isinstance(sampling, str):
-        raise ValueError(
-            f"sampling must be one or two numbers [Å], got {sampling!r}. The grid is "
-            "commensurate with the atoms by default: leave `sampling` unset for the "
-            "default target, or give the largest sampling to accept."
-        )
-    values = np.asarray(sampling, dtype=float).ravel()
+    try:
+        if isinstance(sampling, (str, bool)):
+            raise ValueError
+        values = np.asarray(sampling, dtype=float).ravel()
+    except (TypeError, ValueError):
+        values = np.array([])
     if values.size == 1:
         values = np.repeat(values, 2)
     if values.size != 2 or not np.all(np.isfinite(values)) or np.any(values <= 0):
         raise ValueError(
-            f"sampling must be one or two positive numbers [Å], got {sampling!r}"
+            f"{source} must be one or two positive numbers [Å], got {sampling!r}"
         )
     return float(values[0]), float(values[1])
 
 
-def _target_slice_thickness(slice_thickness) -> float | None:
+def _target_slice_thickness(
+    slice_thickness, source: str = "slice_thickness"
+) -> float | None:
     """A single target slice thickness [Å], or None for a sequence of them."""
-    if isinstance(slice_thickness, str):
+    try:
+        if isinstance(slice_thickness, (str, bool)):
+            raise ValueError
+        values = np.asarray(slice_thickness, dtype=float)
+    except (TypeError, ValueError):
         raise ValueError(
-            f"slice_thickness must be a number or a sequence of numbers [Å], got "
-            f"{slice_thickness!r}. Slices are commensurate with the atomic planes by "
-            "default: leave `slice_thickness` unset for the default target, give the "
-            "largest slice thickness to accept, or give `num_slices`."
-        )
-    values = np.asarray(slice_thickness, dtype=float)
+            f"{source} must be a positive number or a sequence of them [Å], got "
+            f"{slice_thickness!r}"
+        ) from None
     if values.size == 1 and values.ndim <= 1 and not isinstance(
         slice_thickness, (tuple, list)
     ):
         value = float(values.item())
         if not np.isfinite(value) or value <= 0:
-            raise ValueError(
-                f"slice_thickness must be positive, got {slice_thickness!r}"
-            )
+            raise ValueError(f"{source} must be positive, got {slice_thickness!r}")
         return value
     return None
 
 
-def _pbc_in_plane_frame(pbc, plane) -> tuple[bool, bool, bool]:
+def _pbc_in_plane_frame(pbc, plane: str) -> tuple[bool, bool, bool]:
     """The periodicity of the atoms along the x, y and z axes of the potential."""
-    pbc = tuple(bool(p) for p in pbc)
-    if not isinstance(plane, str):
-        return pbc
-    axes = {"x": 0, "y": 1, "z": 2}
-    first, second = (axes[a] for a in plane)
-    (third,) = {0, 1, 2} - {first, second}
-    return pbc[first], pbc[second], pbc[third]
+    return tuple(bool(pbc[axis]) for axis in plane_to_axes(plane))
 
 
 def _resolve_grid_and_slicing(
@@ -758,7 +753,10 @@ def _resolve_grid_and_slicing(
 
     if gpts is None:
         if sampling is None:
-            target = _target_sampling(config.get("potential.sampling", 0.05))
+            target = _target_sampling(
+                config.get("potential.sampling", 0.05),
+                source="the configuration 'potential.sampling'",
+            )
         else:
             target = _target_sampling(sampling)
 
@@ -792,9 +790,12 @@ def _resolve_grid_and_slicing(
         slice_thickness = (placed_box[2] / num_slices,) * num_slices
     else:
         if slice_thickness is None:
+            source = "the configuration 'potential.slice-thickness'"
             target_thickness = _target_slice_thickness(
-                config.get("potential.slice-thickness", 1.0)
+                config.get("potential.slice-thickness", 1.0), source=source
             )
+            if target_thickness is None:
+                raise ValueError(f"{source} must be a single number [Å]")
         else:
             target_thickness = _target_slice_thickness(slice_thickness)
 
