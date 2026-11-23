@@ -538,6 +538,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             parametrization=self._parametrization,
             g_max=self.g_max,
             thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
 
@@ -1978,12 +1979,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             The mask selecting the reciprocal space vectors.
         """
         hkl = self._structure_factor.hkl
+        # The ensemble takes the excitation errors from the unrotated cell and each
+        # member from its rotated cell, which differ in the last bits. A beam on
+        # the boundary of a member could then fall outside the ensemble's, which
+        # every member must be a subset of, so the ensemble selects the beams within
+        # a band far wider than that rounding (~1e-15 1/A) and far narrower than any
+        # spacing of beams: it can only add a beam to the union that no member has.
+        boundary_tolerance = 1e-9
         mask = filter_reciprocal_space_vectors(
             hkl=hkl,
             cell=self._structure_factor.cell,
             energy=self.energy,
-            sg_max=self.sg_max,
-            g_max=self.g_max,
+            sg_max=self.sg_max + boundary_tolerance,
+            g_max=self.g_max + boundary_tolerance,
             centering=self.centering,
             orientation_matrices=self.get_orientation_matrices().reshape(-1, 3, 3),
         )
