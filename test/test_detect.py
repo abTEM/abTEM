@@ -650,3 +650,24 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
     assert result.shape == waves.shape
     assert np.array_equal(result.sampling, waves.sampling)
     assert np.array_equal(result.array, waves.array)
+
+
+@devices
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_pixelated_detector_downsamples_to_two_samplings(device, pair):
+    # both samplings are coarser than the waves' (0.1 and 0.077 1 / Å)
+    probe = abtem.Probe(
+        energy=100e3,
+        semiangle_cutoff=20,
+        extent=(10, 13),
+        gpts=(64, 80),
+        device=device,
+    )
+    waves = probe.build()
+    detector = abtem.PixelatedDetector(resample=pair((0.137, 0.15)))
+
+    detected = detector.detect(waves)
+
+    assert detected.sampling == (0.137, 0.15)
+    # the pre-allocated output shape is the computed one
+    assert detected.base_shape == detector._out_base_shape(waves)[0] == (22, 20)

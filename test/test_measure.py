@@ -2192,3 +2192,53 @@ def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
     with pytest.raises(TypeError, match=r"\.intensity\(\)"):
         patterns.radial_binning(step_size=1.0)
     assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
+
+
+def _random_patterns(shape, sampling, dtype, lazy, device):
+    array = np.random.default_rng(1).random(shape).astype(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    return DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(shape[0])))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize("gpts", [(32, 30), 32])
+def test_diffraction_patterns_interpolate_to_gpts_keeps_the_angular_extent(
+    gpts, lazy, device
+):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(gpts=gpts)
+
+    new_gpts = (gpts,) * 2 if np.isscalar(gpts) else gpts
+    assert interpolated.base_shape == new_gpts
+    np.testing.assert_allclose(
+        interpolated.sampling,
+        (0.01 * 64 / new_gpts[0], 0.0093 * 67 / new_gpts[1]),
+        rtol=1e-12,
+    )
+    computed = asnumpy(interpolated.copy().compute().array)
+    assert computed.shape == (2,) + new_gpts
+    # the grid of a requested sampling that has the same extent
+    by_sampling = patterns.interpolate(sampling=interpolated.sampling)
+    np.testing.assert_array_equal(computed, asnumpy(by_sampling.copy().compute().array))
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device, pair):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(sampling=pair((0.0131, 0.012)))
+
+    assert interpolated.sampling == (0.0131, 0.012)
+    assert interpolated.base_shape == (49, 52)
+    assert interpolated.copy().compute().array.shape == (2, 49, 52)

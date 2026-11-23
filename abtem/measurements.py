@@ -2490,6 +2490,8 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
+        elif isinstance(sampling, (tuple, list)) and len(sampling) == 2:
+            validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")
 
@@ -2506,7 +2508,7 @@ def _diffraction_pattern_resampling_gpts(
             gpts = (gpts,) * 2
 
         validated_sampling = tuple(
-            d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
+            d * old_n / new_n for d, old_n, new_n in zip(old_sampling, old_gpts, gpts)
         )
 
     return gpts, validated_sampling
@@ -3035,11 +3037,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def interpolate(
         self,
         sampling: Optional[str | float | tuple[float, float]] = None,
-        gpts: Optional[tuple[int, int]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
-        different sampling.
+        different sampling. A sampling finer than that of the diffraction patterns, or
+        more `gpts`, is accepted: the interpolation is bilinear and adds no angular
+        resolution, and the new frequencies outside the range of the patterns'
+        frequencies (a pixel or two at the ends of each axis) take the value of the
+        nearest edge pixel, up to the renormalisation that keeps the sums.
 
         Parameters
         ----------
@@ -3048,7 +3054,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             If a single value, the same sampling is used for both axes. If 'uniform',
             the diffraction patterns are down-sampled along the axis with the smallest
             pixel size such that the sampling is uniform.
-        gpts : tuple of int
+        gpts : int or tuple of int
             Number of grid points of the diffraction patterns after interpolation in
             `x` and `y`.
             Do not use if 'sampling' is used.

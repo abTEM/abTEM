@@ -1031,9 +1031,11 @@ class PixelatedDetector(BaseDetector):
         ``full``
             Diffraction patterns will not be cropped and will include angles outside
             the antialiasing aperture.
-    resample : str or False
+    resample : str, float, two floats or False
         If 'uniform', the diffraction patterns from rectangular cells will be
-        downsampled to a uniform angular sampling.
+        downsampled to a uniform angular sampling. A float or two floats downsample
+        the diffraction patterns to that angular sampling [1 / Å], which must be
+        coarser than the angular sampling of the waves.
     reciprocal_space : bool, optional
         If True (default), the diffraction pattern intensities are detected, otherwise
         the probe intensities are
