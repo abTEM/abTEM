@@ -11,6 +11,30 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- Double precision on Apple Metal: the device `mps` with `precision: float64` (it was refused before) keeps
+  the data as float64 on the host and runs the Fourier multislice (also the core-loss one), the
+  infinite-projection potential and the large host FFTs on the GPU in double-float arithmetic (pairs of
+  float32, ~1e-14 relative accuracy), up to ~16x faster than float64 on the CPU. What the GPU cannot do
+  (real-space multislice, a grid side with a prime factor above 7) runs on the host in the same float64,
+  with a `SlowFFTSizeWarning`; `torch.emulate-float64` asks for the same with the device `cpu`. A
+  `SlowFFTSizeWarning` also says when a grid is markedly slow on Metal, whose FFT runs powers of two 2-4x
+  faster per pixel, and which grid would be faster; the automatic grids stay the same on every device.
+  The test suite now runs its double-precision tests on Metal at the same tolerances as elsewhere
+  ([PR #620](https://github.com/abTEM/abTEM/pull/620))
+- Bloch waves on a Mac in double precision: `bloch.solver: auto` takes the band solver (see `solver='band'`) over the
+  eigendecomposition of the structure matrix from 500 beams for float64 matrices on macOS (other platforms keep the
+  eigendecomposition). On the host the band reduction now runs on the lower triangle only, through the Hermitian
+  matrix product and rank-2k update of the BLAS that SciPy is built with (called with a leading dimension, so nothing is
+  copied), and the Chebyshev recurrence is a compiled kernel, with a bandwidth of 32 instead of 128. A quartz rotation
+  series of 1000 Å took 0.23 s a frame at 1299 beams instead of 0.69 s, 0.79 s instead of 3.5 s at 2195 beams and
+  2.1 s instead of 11.3 s at 3233 beams on an Apple M2 (against `zheevr`, see the fix above), with intensities
+  within 1e-12 of the eigendecomposition. With
+  `device: mps` and `precision: float64` (or `torch.emulate-float64`) the matrix of 3000 beams or more is reduced on the
+  GPU instead, by double-float matrix products (a lean multiply-add, 160 GFLOP/s on the M2, with the panels and block
+  reflectors in float64 on the host) and the recurrence runs on the GPU for 1600 beams or more: 1.1 to 1.3x faster than
+  the host band solver from 3000 to 9000 beams (33 against 42 s at 9009), with intensities within 3e-12 (100 Å) to
+  4e-11 (2000 Å) of the eigendecomposition at 1299 beams, against 5e-14 to 6e-13 on the host
+  ([PR #700](https://github.com/abTEM/abTEM/pull/700), [PR #702](https://github.com/abTEM/abTEM/pull/702))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
@@ -393,6 +417,15 @@ Bugfixes:
   tensor, and could turn it float64. The tensor methods a device array forwards (`take`, `clip`, ...) take one too.
   This surfaced as `Images == Images` between a host and a device object failing in one operand order
   ([PR #691](https://github.com/abTEM/abTEM/pull/691))
+- `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
+  more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
+  returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
+  2²⁴ down below the minimum, so LAPACK refused the call with "Illegal value in argument 10 of internal zheevd"
+  (SciPy) or "Eigenvalues did not converge" (NumPy). The complex Hermitian solver on macOS is now `ZHEEVR`, which
+  needs a far smaller workspace and was also faster on an Apple M2: 0.60 against 0.87 s at 1300 beams, 12.5 against
+  22.7 s at 3233, and a rotation series of 11 frames at 1299 beams 7.7 instead of 10.4 s. The diffraction patterns
+  are unchanged to rounding. Real matrices and other platforms are not affected. The eigenvectors of a complex
+  matrix are written to an array of their own, not over the matrix when it may be overwritten
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))

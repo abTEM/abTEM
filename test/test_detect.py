@@ -10,6 +10,7 @@ from utils import (
     float64_devices,
     gpu,
     lazy_params,
+    skip_float64_on_single_precision_arrays,
     to_host_array,
 )
 
@@ -1355,6 +1356,8 @@ def test_margin_window_keep_the_precision_of_the_waves(device, lazy, precision):
     complex64 waves, whatever the configured precision, and a lazy detection must
     declare the dtype that it computes. Only the resampling to `gpts` works in the
     configured precision, as without a margin."""
+    if precision == "float64":
+        skip_float64_on_single_precision_arrays(device, "widened to complex128")
     waves, _ = _unit_modulus_waves(device, dtype=np.complex64)
     kwargs = dict(margin=0.5, window_func="hann")
     resampled = np.complex64 if precision == "float32" else np.complex128
@@ -1591,7 +1594,12 @@ def test_a_detector_applies_to_waves_in_increasing_order_as_to_any_array_object(
     result = detector.detect(waves)
     expected = ArrayObject.apply_transform(waves, detector)
 
-    np.testing.assert_array_equal(_host(result), _host(expected))
+    if device == "cpu":
+        np.testing.assert_array_equal(_host(result), _host(expected))
+    else:
+        # The two routes sum on the GPU in a different order, which float32
+        # does not reproduce bit for bit (Metal differs by ~3e-7 relative).
+        np.testing.assert_allclose(_host(result), _host(expected), rtol=1e-5)
     assert result.axes_metadata == expected.axes_metadata
 
 
