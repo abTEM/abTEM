@@ -113,8 +113,8 @@ def _cap_threads_per_worker(config):
     so they inherit the environment before importing numba, dask or BLAS.
     Variables already set are left alone.
 
-    BLAS/OpenMP get one thread per worker: the arrays in the tests are small,
-    and GPAW warns (an error here) when OMP_NUM_THREADS > 1 in PW mode. Numba
+    BLAS/OpenMP get one thread per worker: the arrays in the tests are small, and
+    one thread each keeps the workers from oversubscribing the cores. Numba
     and dask share the cores, keeping at least 2 threads, so tests on the
     threaded scheduler still run concurrently.
     """

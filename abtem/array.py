@@ -17,6 +17,7 @@ from typing import (
     Any,
     Callable,
     Generator,
+    Iterator,
     Optional,
     Self,
     Sequence,
@@ -40,6 +41,7 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _index_ensemble_axis,
     _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
@@ -66,6 +68,7 @@ from abtem.core.utils import (
     itemset,
     normalize_axes,
     number_to_tuple,
+    safe_equality,
     tuple_range,
 )
 from abtem.transform import TransformFromFunc
@@ -1173,18 +1176,31 @@ def _validate_array_items(
             )
         )
 
-    if keepdims:
-        items = tuple(
-            slice(item, item + 1) if isinstance(item, int) else item for item in items
-        )
-
     if any(isinstance(item, (type(...),)) for item in items):
         raise NotImplementedError
 
     if len(tuple(item for item in items if item is not None)) > len(shape):
         raise _TooManyIndicesError("too many indices for array")
 
+    if keepdims:
+        lengths = iter(shape)
+        items = tuple(_keep_dimension(item, lengths) for item in items)
+
     return items
+
+
+def _keep_dimension(item: ArrayItemType, lengths: Iterator[int]) -> ArrayItemType:
+    """The slice of length one selecting the integer `item` of the axis whose length
+    `lengths` yields next. `None` indexes no axis."""
+    if item is None:
+        return item
+
+    length = next(lengths)
+    if isinstance(item, (int, np.integer)):
+        i = range(length)[item]
+        return slice(i, i + 1)
+
+    return item
 
 
 class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -1382,6 +1398,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         metadata: dict,
     ) -> Self:
         """Creates array object from a given array and metadata.
+
+        A class that cannot rebuild itself from the array, the axes metadata and
+        the metadata raises `NotImplementedError`; `from_zarr` then rebuilds it
+        from its stored constructor kwargs.
 
         Parameters
         ----------
@@ -1961,14 +1981,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         expanded_axes_metadatas = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
         ]
+        expanded_shape = list(self.ensemble_shape)
         for i, item in enumerate(items):
             if item is None:
                 expanded_axes_metadatas.insert(i, UnknownAxis())
+                expanded_shape.insert(i, 1)
 
         metadata = {}
         axes_metadata = []
         last_indexed = 0
-        for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
+        for item, expanded_axes_metadata, n in zip(
+            items, expanded_axes_metadatas, expanded_shape
+        ):
             last_indexed += 1
             if isinstance(item, Number):
                 metadata = {
@@ -1976,10 +2000,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     **expanded_axes_metadata.item_metadata(item, self.metadata),
                 }
             else:
-                try:
-                    axes_metadata += [expanded_axes_metadata[item].copy()]
-                except TypeError:
-                    axes_metadata += [expanded_axes_metadata.copy()]
+                axes_metadata += [_index_ensemble_axis(expanded_axes_metadata, item, n)]
 
         axes_metadata += expanded_axes_metadatas[last_indexed:]
         return axes_metadata, metadata
@@ -2002,8 +2023,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        indexed_array : ArrayObject or subclass of ArrayObject
-            The indexed array object.
+        kwargs : dict
+            The keyword arguments of the constructor of the indexed array object.
         """
         items = _validate_array_items(
             items, shape=self.ensemble_shape, keepdims=keepdims
@@ -2620,7 +2641,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def set_ensemble_axes_metadata(
         self, axes_metadata: AxisMetadata, axis: int
     ) -> Self:
-        """Sets the axes metadata of an ensemble axis.
+        """Sets the axes metadata of an ensemble axis. The axes metadata are left
+        unchanged when the new axis is refused.
 
         Parameters
         ----------
@@ -2628,16 +2650,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The new axis metadata.
         axis : int
             The axis to set.
+
+        Raises
+        ------
+        RuntimeError
+            If the axis metadata does not fit the dimension, for example an ordinal
+            axis with a different number of values.
+        ValueError
+            If an `EnergyAxis` contradicts the energy of the object.
         """
 
-        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-
-        self.ensemble_axes_metadata[axis] = axes_metadata
+        old_axes_metadata = self._ensemble_axes_metadata
+        self._ensemble_axes_metadata = list(old_axes_metadata)
+        self._ensemble_axes_metadata[axis] = axes_metadata
 
         try:
             self._check_axes_metadata()
-        except RuntimeError:
+            self._check_energy_matches_energy_axes()
+        except (RuntimeError, ValueError):
             self._ensemble_axes_metadata = old_axes_metadata
+            raise
 
         return self
 
@@ -3137,7 +3169,9 @@ def _from_zarr_canonical(root, chunks, decode_types, url):
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        except Exception:
+        except NotImplementedError:
+            # The class rebuilds only from its constructor kwargs, which every
+            # canonical file since abTEM 1.0.10 stores.
             if kwargs is None:
                 raise
 
@@ -3238,6 +3272,71 @@ def validate_axis_metadata(
     return validated_axis_metadata
 
 
+def _short(value: Any, width: int = 40) -> str:
+    text = str(value)
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
+def _describe_field(key: str, a: Any, b: Any) -> str:
+    """A field with its two differing values. Sequences are described by their length
+    or by their first differing element, which a shortened printout would cut off."""
+    sequences = (tuple, list, np.ndarray)
+    if (
+        isinstance(a, sequences)
+        and isinstance(b, sequences)
+        and np.ndim(a) > 0
+        and np.ndim(b) > 0
+    ):
+        if len(a) != len(b):
+            return f"{key} of length {len(a)} vs {len(b)}"
+
+        for i, (x, y) in enumerate(zip(a, b)):
+            try:
+                differs = not np.allclose(x, y)
+            except TypeError:  # elements that are not numbers
+                differs = bool(x != y)
+            if differs:
+                x, y = (v.item() if isinstance(v, np.generic) else v for v in (x, y))
+                return f"{key}[{i}] {_short(x)} vs {_short(y)}"
+
+    return f"{key} {_short(a)} vs {_short(b)}"
+
+
+def _differing_fields(a: AxisMetadata, b: AxisMetadata) -> str:
+    """The fields in which two axes differ, each with both values. A field differs by
+    the rule of the axes' equality."""
+    if type(a) is not type(b):
+        return f"type {type(a).__name__} vs {type(b).__name__}"
+
+    return ", ".join(
+        _describe_field(key, a.__dict__[key], b.__dict__[key])
+        for key in a.__dict__
+        if not safe_equality(a, b, exclude=tuple(k for k in a.__dict__ if k != key))
+    )
+
+
+def _check_same_axes(
+    array_objects: Sequence[ArrayObject], joined: Optional[int] = None
+) -> None:
+    """Raise a ValueError when an array object has a number of axes, or axis metadata
+    along an axis other than `joined`, different from the first one's. It names the
+    first axis that differs and the fields in which it does."""
+    first = array_objects[0].axes_metadata
+    for i, other in enumerate(array_objects[1:], start=1):
+        other_axes = other.axes_metadata
+        if len(first) != len(other_axes):
+            raise ValueError(
+                f"array objects 0 and {i} have different numbers of axes: "
+                f"{len(first)} and {len(other_axes)} axes"
+            )
+        for j, (a, b) in enumerate(zip(first, other_axes)):
+            if j != joined and a != b:
+                raise ValueError(
+                    f"array objects 0 and {i} have different axes along axis {j} "
+                    f"'{a.label}': {_differing_fields(a, b)}"
+                )
+
+
 def stack(
     arrays: Sequence[ArrayObjectType],
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
@@ -3260,6 +3359,12 @@ def stack(
     -------
     array_object : ArrayObject
         The stacked array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes of the array objects differ, since the stacked array object has
+        one set of axes for all of them.
     """
 
     # if not all(isinstance(array, ArrayObject) for array in arrays):
@@ -3269,6 +3374,7 @@ def stack(
     assert axis >= 0
 
     axis_metadata = validate_axis_metadata(axis_metadata)
+    _check_same_axes(arrays)
 
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
@@ -3281,7 +3387,8 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     arrays : sequence of array objects
         Each abTEM array object must have the same type and shape, except in the
         dimension corresponding to axis. The axis metadata along the concatenated
-        axis must be compatible for concatenation.
+        axis must be compatible for concatenation, and that along every other axis
+        must be equal.
     axis : int, optional
         The axis along which the arrays will be joined. Default is 0.
 
@@ -3289,7 +3396,16 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     -------
     array_object : ArrayObject
         The concatenated array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes other than the concatenated one differ between the array objects.
+    RuntimeError
+        If the axis metadata along the concatenated axis cannot be concatenated.
     """
+
+    _check_same_axes(arrays, joined=axis % len(arrays[0].axes_metadata))
 
     xp = get_array_module(arrays[0].array)
 

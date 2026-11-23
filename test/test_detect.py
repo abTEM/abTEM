@@ -11,13 +11,15 @@ from utils import (
     gpu,
     lazy_params,
     skip_float64_on_single_precision_arrays,
-    skip_float64_without_metal_kernels,
     to_host_array,
 )
 
 import abtem
-from abtem.core.backend import asnumpy
+from abtem.array import ArrayObject
+from abtem.core.axes import ScanAxis
+from abtem.core.backend import asnumpy, copy_to_device
 from abtem.detectors import _gpts_and_sampling_from_obj
+from abtem.measurements import Images, RealSpaceLineProfiles
 
 
 @given(data=st.data())
@@ -1092,13 +1094,13 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_wa
         assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
 
 
+@pytest.mark.float64  # sets double precision in its body; Metal cannot hold it
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
     """Without resampling the detected waves are the waves themselves, so a
     lazy detection must declare their dtype, not the configured precision.
     `gpts=()` declared complex128 for complex64 waves under float64 precision
     (it tested `gpts is not None`) and then computed complex64."""
-    skip_float64_without_metal_kernels(device)
     rng = np.random.default_rng(0)
     array = (rng.standard_normal((2, 8, 8)) + 1j * rng.standard_normal((2, 8, 8)))
     waves = abtem.Waves(
@@ -1445,3 +1447,180 @@ def test_window_power_gain_is_computed_once_per_window_and_grid():
     assert _window_power_gain.cache_info().hits == 1
     assert _window_power_gain("hann", (40, 25)) != gain
     assert _window_power_gain("hamming", shape) != gain
+
+
+def _scanned_waves(device, lazy, shape=(5, 4)):
+    """Waves on a scan of 5 by 4 positions (unequal, so a swapped axis fails), whose
+    lazy chunks of 2 and 3 positions are crossed by a reversed axis."""
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ][: len(shape)]
+    rng = np.random.default_rng(0)
+    array = rng.random(shape + (32, 32)) + 1j * rng.random(shape + (32, 32))
+    waves = abtem.Waves(
+        copy_to_device(array.astype(np.complex64), device),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=axes,
+    )
+    if lazy:
+        waves = waves.ensure_lazy(chunks=(2, 3, -1, -1)[: len(shape)] + (-1, -1))
+    return waves
+
+
+_FULL = slice(None)
+_REVERSED = slice(None, None, -1)
+
+# (index of a reversed scan, index of the same positions in increasing order)
+_REVERSED_SCANS = [
+    ((_REVERSED,), (_FULL,)),
+    ((_FULL, _REVERSED), (_FULL, _FULL)),
+    ((_REVERSED, _REVERSED), (_FULL, _FULL)),
+    ((np.arange(5)[::-1],), (_FULL,)),
+    ((slice(None, None, -2), _FULL), (slice(0, None, 2), _FULL)),
+    ((_FULL, [3, 1]), (_FULL, slice(1, None, 2))),
+]
+
+# Detectors whose output has the scan as its base axes, and those that keep it as
+# ensemble axes, with a reduction of the output to images
+_REDUCING_DETECTORS = [
+    abtem.AnnularDetector(inner=0, outer=40),
+    abtem.SpectralSlitDetector(width=20, q_max=60, angle=30.0),
+    abtem.SpectralAnnularDetector(outer=10, q_max=40, angle=45.0),
+]
+_KEEPING_DETECTORS = [
+    (
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        lambda m: m.integrate_radial(10, 60),
+    ),
+    (
+        abtem.SegmentedDetector(inner=10, outer=80, nbins_radial=2, nbins_azimuthal=4),
+        lambda m: m.integrate(radial_limits=(10, 80)),
+    ),
+    (abtem.PixelatedDetector(max_angle=60), lambda m: m.integrate_radial(10, 60)),
+    (abtem.WavesDetector(), lambda m: abtem.AnnularDetector(0, 40).detect(m)),
+]
+
+
+def _host(measurement):
+    return asnumpy(measurement.copy().compute().array)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detector", _REDUCING_DETECTORS, ids=lambda d: type(d).__name__
+)
+@pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
+def test_a_detector_reduces_reversed_scanned_waves_to_the_images_in_order(
+    detector, item, increasing, lazy, device
+):
+    waves = _scanned_waves(device, lazy)
+
+    reversed_images = detector.detect(waves[item])
+    images = detector.detect(waves[increasing])
+
+    assert type(reversed_images) is Images
+    assert reversed_images.sampling == pytest.approx(images.sampling)
+    expected = _host(images)
+    np.testing.assert_allclose(
+        _host(reversed_images), expected, rtol=0, atol=1e-6 * np.ptp(expected)
+    )
+
+
+@lazy_params
+@devices
+def test_a_detector_reduces_a_reversed_line_scan_to_the_line_profile_in_order(
+    lazy, device
+):
+    waves = _scanned_waves(device, lazy, shape=(5,))
+    detector = abtem.AnnularDetector(inner=0, outer=40)
+
+    profiles = detector.detect(waves[::-1])
+
+    assert type(profiles) is RealSpaceLineProfiles
+    assert profiles.sampling == pytest.approx(0.5)
+    expected = _host(detector.detect(waves))
+    np.testing.assert_allclose(
+        _host(profiles), expected, rtol=0, atol=1e-6 * np.ptp(expected)
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detector, reduction", _KEEPING_DETECTORS, ids=lambda d: type(d).__name__
+)
+@pytest.mark.parametrize("item, increasing", _REVERSED_SCANS)
+def test_a_detector_keeps_the_order_of_reversed_scanned_waves_a_reduction_restores_it(
+    detector, reduction, item, increasing, lazy, device
+):
+    waves = _scanned_waves(device, lazy)
+
+    kept = detector.detect(waves[item])
+    expected = detector.detect(waves)[item]
+
+    assert type(kept) is type(expected)
+    assert kept.ensemble_axes_metadata == expected.ensemble_axes_metadata
+    np.testing.assert_allclose(
+        _host(kept), _host(expected), rtol=0, atol=1e-6 * np.ptp(_host(expected))
+    )
+    images = reduction(detector.detect(waves[increasing]))
+    reversed_images = reduction(kept)
+    assert type(reversed_images) is Images
+    assert reversed_images.sampling == pytest.approx(images.sampling)
+    np.testing.assert_allclose(
+        _host(reversed_images),
+        _host(images),
+        rtol=0,
+        atol=1e-6 * np.ptp(np.abs(_host(images))),
+    )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detector",
+    _REDUCING_DETECTORS + [d for d, _ in _KEEPING_DETECTORS],
+    ids=lambda d: type(d).__name__,
+)
+@pytest.mark.parametrize("item", [_FULL, slice(1, 4), slice(None, None, 2)])
+def test_a_detector_applies_to_waves_in_increasing_order_as_to_any_array_object(
+    detector, item, lazy, device
+):
+    waves = _scanned_waves(device, lazy)[item]
+
+    result = detector.detect(waves)
+    expected = ArrayObject.apply_transform(waves, detector)
+
+    if device == "cpu":
+        np.testing.assert_array_equal(_host(result), _host(expected))
+    else:
+        # The two routes sum on the GPU in a different order, which float32
+        # does not reproduce bit for bit (Metal differs by ~3e-7 relative).
+        np.testing.assert_allclose(_host(result), _host(expected), rtol=1e-5)
+    assert result.axes_metadata == expected.axes_metadata
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [abtem.AnnularDetector(inner=0, outer=40), abtem.CTF(defocus=50)],
+    ids=lambda transform: type(transform).__name__,
+)
+def test_apply_transform_of_reversed_waves_passes_max_batch_on(transform, monkeypatch):
+    """A transform of reversed waves, whose output keeps the scan or reduces it,
+    reaches ArrayObject with the batch size given. The test is of the waves' own
+    method, so it pins no device."""
+    calls = []
+    apply_transform = ArrayObject.apply_transform
+
+    def spy(self, transform, max_batch="auto"):
+        calls.append(max_batch)
+        return apply_transform(self, transform, max_batch)
+
+    monkeypatch.setattr(ArrayObject, "apply_transform", spy)
+
+    _scanned_waves("cpu", lazy=False)[::-1].apply_transform(transform, max_batch=3)
+
+    assert calls[-1] == 3

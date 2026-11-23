@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import threading
+import traceback
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
@@ -48,10 +49,13 @@ from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 from abtem.slicing import _integrate_planes
 
+# The import error is kept and chained into the error raised when GPAW is used.
+_gpaw_import_error: ImportError | None = None
 try:
     from gpaw import GPAW
-except ImportError:
+except ImportError as error:
     GPAW = None
+    _gpaw_import_error = error
 
 
 if GPAW is not None:
@@ -459,7 +463,7 @@ class GPAWPotential(_PotentialBuilder):
         Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in the propagation direction in [Å]
-        (default is 0.5 Å).
+        (default is 1.0 Å).
         If given as a float the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
@@ -549,7 +553,7 @@ class GPAWPotential(_PotentialBuilder):
         if GPAW is None:
             raise RuntimeError(
                 "This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/."
-            )
+            ) from _gpaw_import_error
 
         if isinstance(calculators, (tuple, list)):
             atoms = _safe_read_atoms(calculators[0])
@@ -657,10 +661,8 @@ class GPAWPotential(_PotentialBuilder):
             else self.calculators
         )
 
-        try:
+        if isinstance(calculator, Delayed):
             calculator = calculator.compute()
-        except AttributeError:
-            pass
 
         # assert len(self.calculators) == 1
 
@@ -908,16 +910,21 @@ class GPAWParametrization:
 
         try:
             return self._run_all_electron_atom(symbol, added_electrons, spinpol=True)
-        except AssertionError:
+        except AssertionError as error:
             # GPAW's radial solver fails to find a bound state for some open-shell
             # atoms (e.g. Pm, Sm, Eu, Pu) in the spin-polarized calculation,
             # independent of the SCF mixing. The spin-polarized and unpolarized
             # total densities differ by only ~0.1 electrons, which is negligible
             # for the independent-atom potential.
+            failed = traceback.extract_tb(error.__traceback__)[-1]
+            where = f"{failed.filename}:{failed.lineno}"
+            detail = ": ".join(
+                filter(None, (f"`{failed.line}`" if failed.line else "", str(error)))
+            )
             warnings.warn(
                 f"The spin-polarized all-electron calculation for {symbol} failed "
-                "to converge in GPAW; falling back to a non-spin-polarized "
-                "calculation."
+                f"with an AssertionError ({detail + ' at ' if detail else ''}{where}); "
+                "falling back to a non-spin-polarized calculation."
             )
             return self._run_all_electron_atom(symbol, added_electrons, spinpol=False)
 

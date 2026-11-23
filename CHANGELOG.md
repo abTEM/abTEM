@@ -286,9 +286,126 @@ Dependencies:
 
 - The `core-loss` extra is merged into a single `gpaw = ["hankel", "sympy"]` extra, and a new `all` extra
   installs every optional runtime dependency ([PR #329](https://github.com/abTEM/abTEM/pull/329))
+- The `mps` extra requires torch 2.14 (was 2.4). On torch 2.10 to 2.13, Metal has no `linalg.eigh`, and an FFT over
+  an axis before the last four (such as `gaussian_source_size` of a scan with a further ensemble axis) aborts the
+  process. Selecting the `mps` device with an older torch already installed now raises a `RuntimeError` asking for
+  an upgrade, instead of aborting later; upgrade with `pip install -U torch`
 
 Bugfixes:
 
+- A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
+  compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
+  declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
+  configured precision). `azimuthal_average` declared the integer dtype but computed `float64` whatever the
+  configured precision, and with `weighting_function="gaussian"` truncated the averages to integers; the averages
+  are now in the configured precision, and floating point counts keep their dtype. The step bins of `azimuthal_average`
+  summed small integer counts (`uint8`, `int16`, `uint16`) in their own type, which wraps around, so a uniform pattern
+  averaged to a different value in every bin; they are summed in the configured precision, which the GPU kernel needs too
+  (it only reads floating point values) ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- `ChargeDensityPotential` built in chunks of several configurations (`chunks` greater than 1) gives each chunk the
+  charge densities of its own configurations. It paired density *k* with chunk *k* and dropped the rest, so
+  per-configuration charge densities were wrong unless every chunk held one configuration, the default ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- Plots: the log scale can be switched on and off for line profiles and complex (domain-coloured) images, which
+  raised a `TypeError` because their `set_logscale` took no argument (and, for complex images, then did nothing: it
+  now gives the logarithmic amplitude scale and the opacity of `show(logscale=True)` and switches back); the extent of an image converts its y axis with
+  the units of the y axis, not the x axis; `PlasmonScatteringEvents.show_cumulative_scattering_events` plots the
+  requested integer `num_excitations` instead of the first and no longer prints the axes ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- Measurements: `poisson_noise()` with neither `dose_per_area` nor `total_dose` raises the intended
+  `RuntimeError` instead of failing inside NumPy with a NaN dose; `IndexedDiffractionPatterns.normalize_to_spot` keeps
+  the reciprocal lattice vectors (it replaced them by the spot positions) and `poisson_noise(dose_per_area=...)` on it
+  raises a `RuntimeError` (a missing `@property` made it a `TypeError`); `ScanNoiseTransform` keeps the units and label of
+  the images, which it relabelled as counts ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- Bloch waves: `StructureFactor.calculate_scattering_factors` follows the `occupancy`; the excitation-error
+  selection of the beams of an orientation uses `<= sg_max`, as the selection without an orientation does, so an
+  ensemble no longer writes more beams than it selected when `sg_max` equals a beam's excitation error; an ensemble of
+  rotations selects the beams of every member whatever the rounding of the excitation errors of its rotated cells, as
+  they differ in the last bits from those of the ensemble (it could have fewer beams than a member, and raised a
+  `ValueError` writing them) ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- PRISM: `SMatrix(energy=distribution)` keeps the weights and the ensemble mean of the distribution on its energy axis,
+  as `Probe` and `PlaneWave` do, and the measurements of `scan`, `reduce`, `build().scan`, `build().reduce` and
+  `transition_potential_scan` are averaged over a distribution flagged `ensemble_mean=True` with those weights, as
+  `Probe.scan` averages them (they kept the energy axis, with the weights unused: **Behaviour change:** the result has
+  no energy axis, as for `Probe`; with `ensemble_mean=False` it is kept); wave functions keep every energy; the batches
+  of the lattice and streamed reductions
+  count the real size of an element, so at double precision they hold half the rows instead of exceeding their memory
+  budget; the window view of a compressed S-matrix keeps `max_batch_expansion` ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- Potentials and fields: `ChargeDensityPotential` with `repetitions` displaces the repeated atoms of each frozen-phonon
+  configuration (every configuration was the undisplaced repeated cell); `depth_profile` works for magnetic fields and
+  vector potentials, keeping the components as an ensemble axis (it raised a `RuntimeError`); `GPAWMagneticField` and
+  `GPAWVectorPotential` have the labelled component axis of their base classes (it was `None`); the documented default
+  `slice_thickness` of `ChargeDensityPotential` and `GPAWPotential` is the 1.0 Å of the code, not 0.5 Å ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- `BlochWaves.rotate` continues the orientation the Bloch waves already have, so `bloch_waves.rotate(a).rotate(b)`
+  is `bloch_waves.rotate(a, b)`: the rotations are about fixed axes, in the order given, whether they come in one call
+  or several, for angles and for distributions of angles. **Behaviour change:** rotating an already rotated object used
+  to discard its rotation and keep only the last. `BlochWaves.orientation_matrix` returns the (3, 3) orientation, and an
+  `orientation_matrix` that is not (3, 3) raises a `ValueError` naming its shape ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- Wave function normalization is spelled as for the builders of `Waves` everywhere: `BlochWaves.calculate_exit_waves`
+  and `BlochwaveEnsemble.calculate_exit_waves` take the bool `normalize` (default false), as `PlaneWave` does: false
+  gives an incident wave of one in every pixel, true normalizes the reciprocal-space intensity of the incident wave to one.
+  The `normalization` argument they had, `'values'` or `'amplitude'`, only wrote a label to the metadata (and
+  `'amplitude'` made `diffraction_patterns()` raise); it is deprecated: it still works, as a keyword or in its old
+  position, without effect on the exit waves, and raises a `FutureWarning`. `Waves.downsample` and `WavesDetector(gpts)`
+  keep the normalization of the waves; `Waves.downsample(normalization=...)` is deprecated too, and for one release
+  still decides what is preserved (`'values'` the pixel values, `'amplitude'` or `'intensity'` the total amplitude) and raises a
+  `FutureWarning`; the default `'values'` it used to have is gone. **Behaviour change:**
+  they preserved the pixel values of every wave, so the diffraction patterns of a downsampled `Probe` or normalized plane
+  wave summed to (N_new / N_old)² rather than one; they now preserve pixel values only for waves labelled `'values'`
+  (as `PlaneWave()` gives) and the reciprocal-space intensity otherwise, as `diffraction_patterns` already takes them.
+  `Waves.normalize()` labels its result `'reciprocal_space'`, so that `diffraction_patterns()` of a normalized wave sums to
+  one (it divided by the number of pixels once more, to 1 / N²). Waves with no `normalization` label (those of
+  `Probe.build()` and of an S-matrix have none) are taken as normalized in reciprocal space, so downsampling waves built
+  by hand without a label no longer keeps their pixel values; a stored label that is neither `'values'` nor
+  `'reciprocal_space'`, such as the `'amplitude'` that v1.0.11 wrote on Bloch exit waves given `normalization="amplitude"`, makes `downsample` and
+  `WavesDetector(gpts)` raise a `RuntimeError` ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- The default scan sampling is the probe's Nyquist sampling, as documented, and is the same for multislice and PRISM.
+  `GridScan()` with no `sampling` (and so `Probe.scan`, `SMatrixArray.scan` and `SMatrix.build().scan` without a scan) used
+  0.99 of it, a factor from before the number of scan points was counted within rounding of a whole number, while
+  `SMatrix.scan` and `SMatrix.transition_potential_scan` used the Nyquist sampling itself: for an extent of a whole number
+  of Nyquist pitches the same S-matrix gave 12 × 12 points through one and 13 × 13 through the other. **Behaviour change:**
+  the default scan of `Probe.scan` and the other routes has about 1% fewer points per axis (one fewer when the extent
+  is within 1% below a whole number of Nyquist pitches, one or two fewer above about 99 points per axis); `LineScan()` with no
+  `sampling` shares the change; the pitch is still never coarser than Nyquist, as the number of
+  points is rounded up ([PR #695](https://github.com/abTEM/abTEM/pull/695))
+- When an installed CuPy, pyFFTW, mkl_fft or PyTorch fails to import, the error raised on using it says that the
+  package "could not be imported" and carries the original import error, where it said the package was not
+  installed. A CuPy that fails to import warns at `import abtem` when the device is `"gpu"` (once, not twice), a
+  plain `ImportError` from mkl_fft no longer makes `import abtem` fail whichever FFT library is configured, and the
+  message of a missing FFT library now has the space it lacked. The error of `GPAWPotential` without a usable GPAW
+  carries the import error. `AtomsEnsemble` of `.gpw` paths, which raised a bare `AssertionError`, and the
+  interactive `show`, which failed with an `AttributeError`, raise the import error of a missing or broken GPAW or
+  ipywidgets itself. In `abtem.ebsd` the errors of a missing spglib or h5py carry the import error, and an EBSD
+  reference pattern or an EMsoft master pattern made without an importable spglib warns or raises that spglib "could
+  not be imported", with the cause, where it said spglib was not installed.
+  `abtem.visualize.widgets.ipywidgets_not_installed` and `abtem.inelastic.phonons.Reader`, which abTEM did not use,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- `slider_from_axes_metadata` starts a slider at the coordinate nearest a `default_value` given as a plain Python
+  number (it started at the first item), and builds range sliders over axes whose coordinates are Python floats (it
+  raised `TypeError`). An index slider given a `default_value` that is not one number starts at the first item for
+  every axis length ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- An eager build of a `GPAWPotential` from a `.gpw` path raises the error of reading the file instead of
+  `TypeError: Delayed objects are immutable` ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors raised while registering the configuration plugin on dask workers, or inside the scatter-add of an
+  infinite projection, reach the caller unchanged instead of being replaced by an unrelated error. The fallbacks
+  for `distributed` without `Client.register_plugin` and CuPy without `ufunc.at`, which the dependencies exclude,
+  are removed ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- Errors that used to be absorbed reach the caller: a `NotImplementedError` raised inside an override of a scan's
+  `_get_weights` (the weights were dropped), an error of the symmetry search of an EBSD reference pattern other than
+  spglib finding no symmetry (the pattern was built with the symmetry unknown), and an error of the strain check of a
+  default box other than a box with no whole repetition or a cell without a third vector (the check was skipped)
+  ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- abTEM warns once, where the configuration is loaded, about a section of keys that a configuration file or an
+  environment variable sets to a value (for example `diagnostics: true` or `ABTEM_DIAGNOSTICS=1`); every key in it
+  reads its default, as before, but did so silently ([PR #697](https://github.com/abTEM/abTEM/pull/697))
+- A NumPy array works as an operand of a device array on the Metal (MPS) device, on either side of the arithmetic,
+  comparison and bitwise operators (not `//`, which device arrays do not support). The host array is moved onto the
+  device first, so the device side wins: a float64 host operand is narrowed to the device's float32, and a dtype Metal
+  lacks (`uint8`, `int16`, `float16`) raises a `RuntimeError`, also with the `cpu` torch device.
+  `device_array == host_array` raised "Expected all tensors to be on the same device", and with a host array, `!=`,
+  `<`, `<=`, `>`, `>=`, `%`, `&`, `|` and `^` raised a `TypeError`. The in-place operators (`+=`, `-=`, `*=`, `/=`)
+  take a host array now and update the array in place and in float32; with the `cpu` torch device they rebound the
+  tensor, and could turn it float64. The tensor methods a device array forwards (`take`, `clip`, ...) take one too.
+  This surfaced as `Images == Images` between a host and a device object failing in one operand order
+  ([PR #691](https://github.com/abTEM/abTEM/pull/691))
 - `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
   more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
   returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
@@ -788,7 +905,10 @@ Bugfixes:
   judged it by the generic rule and skipped any check the object's class adds (the slice index of
   `SliceIndexedAtoms`). The verdict no longer depends on the order of the held objects: a holder of a
   `PotentialArray` compared with a holder of an equal-array `TransmissionFunction` was equal one way round and
-  unequal the other, and is unequal both ways, as the two objects are on their own
+  unequal the other, and is unequal both ways, as the two objects are on their own. An error that the held
+  object's comparison raises (`TypeError`, `ValueError`, `KeyError`) escapes `==` and `!=` when the object is an
+  attribute itself; held in a list, tuple or dict it still makes the holder unequal, and a lazy comparison is
+  still deferred
 - `==` and `!=` of abTEM objects holding Metal arrays, or a Metal and a host array, whose shapes differ are `False`
   in both orders, as on the host. Objects holding arrays of shapes `(3, 4)` and `(5, 4)`, which do not broadcast, raised
   `RuntimeError` when both arrays were on Metal, or when the Metal one was on the right
@@ -866,6 +986,90 @@ Bugfixes:
   `Images.interpolate`, `RealSpaceLineProfiles.interpolate` and `ReciprocalSpaceLineProfiles.interpolate` on
   NumPy, Metal and float64 CuPy are unchanged
   ([PR #680](https://github.com/abTEM/abTEM/pull/680))
+- `set_ensemble_axes_metadata` raises when the new axis does not fit the array (a `RuntimeError` for an ordinal axis
+  of the wrong length) or contradicts its energy (a `ValueError`), and leaves the object's axes unchanged. It no
+  longer writes into an axes list the object shares with its caller or with other objects, so a list read from
+  `ensemble_axes_metadata` before the call keeps the old axes
+    - **Behaviour change:** the call returned without an error and without changing anything for an axis of the
+      wrong length, and installed a contradicting `EnergyAxis`
+- `from_zarr` builds an object from the axes and metadata the file stores, and falls back to the stored constructor
+  arguments only for the classes that cannot be built that way. A file whose axes do not fit its array raises
+  instead of loading with other axes, and an error inside `from_array_and_metadata` is no longer hidden. Files
+  written by abTEM 1.0.10 and 1.0.11 load to the same objects as before
+- `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
+  per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
+  limit; every other error, an insufficient driver included, raises on every call
+- A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
+  where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
+  returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
+  `TypeError`
+- The GPU chunk and batch size estimates raise a CUDA error from their memory probe, where they fell back to
+  `dask.chunk-size-gpu`. They still use that setting when CuPy is not installed or sees no device
+- `natural_neighbor_weights` falls back to nearest-parent weights only for degenerate (collinear or coincident)
+  parent beams; any other error from the triangulation is raised
+- `shrink_cell` works under `python -O`
+    - **Behaviour change:** an `Atoms` object without atoms raises `ValueError`, where it returned an empty
+      `Atoms` with a zero cell (and did not return under `python -O`)
+- The Miller-index labels of an indexed diffraction-pattern plot delegate only the methods of matplotlib's
+  `Annotation`: `hasattr`, `getattr` with a default and `copy.deepcopy` work on them, and any other name raises
+  `AttributeError`
+- The warning of the GPAW all-electron fallback names the assertion that failed (its source line, message and
+  location), where it reported a convergence failure for any assertion
+- Indexing an ensemble axis with a step, a negative start or stop, a reversed slice or an index array keeps the
+  coordinates of the selected members. The axis kept the unsliced offset and sampling, so `dp[::2, ::2]` of a
+  4D-STEM scan reported the full scan's sampling, and the images derived from it half their true size. A
+  partial slice of a `ReciprocalSpaceAxis` with `fftshift=False` kept the class, whose coordinates for the
+  shorter length are not those of the selected members of an axis stored in `ifftshift` order
+  ([PR #696](https://github.com/abTEM/abTEM/pull/696))
+    - **Behaviour change:** a reversed slice of a scan axis (`dp[::-1]`), or an index array whose members decrease
+      evenly, lists the same positions from the last. The axis stays a scan axis, with the first selected position as
+      its offset and a negative sampling. Before, `dp[::-1]` reversed the data and kept the axes, so its reductions
+      were mirrored. Reductions of a scan to images or line profiles return the positions in increasing order, with
+      a positive sampling, so `dp[::-1]` and `dp` give the same images: `integrate_radial`, `center_of_mass`,
+      `integrated_center_of_mass`, `PolarMeasurements.integrate`, `differentials` and `to_image_ensemble`, and the
+      detectors that reduce the scan of waves (`AnnularDetector` and the spectral detectors), `multislice` included.
+      Every other output keeps the scan in the order it was indexed, whatever else the transform returns: the
+      detectors that keep the scan as ensemble axes (`PixelatedDetector`, `FlexibleAnnularDetector`,
+      `SegmentedDetector`, `WavesDetector`), alone or next to a reducing detector in one `multislice`, the transforms
+      of waves (`apply_ctf`, `multislice` exit waves), and the operations on measurements (the source-size filters,
+      `poisson_noise`). The filters and `poisson_noise` with `dose_per_area` use the distance between neighbouring
+      positions. A scan of waves that are already scanned (`Waves.scan`) puts its own positions in increasing order
+      and keeps the scan of the waves as it was indexed. A single position selected through a reversal
+      (`dp[::-1][:1]`, `dp[3:2:-1]`) has a positive sampling and is not a reversed scan.
+      A reversed slice of another linear axis, and an index array on one, give a `NonLinearAxis` with the selected
+      coordinates, and so do a slice with a step other than one of a `ReciprocalSpaceAxis` and any slice of one with
+      `fftshift=False` that does not select every member. On a scan axis, an index array whose members are evenly
+      spaced is the equivalent slice (`dp[[0, 2, 4]]` is `dp[0:5:2]`) and keeps the scan axis. Any other index array
+      gives a `NonLinearAxis` there too, so the axis is no longer a scan axis: reductions over it return line
+      profiles instead of `Images` for a 2D scan, and a `MeasurementsEnsemble` instead of line profiles for a 1D
+      scan; `integrated_center_of_mass`, the source-size filters (`gaussian_source_size`, `lorentzian_source_size`,
+      `voigtian_source_size` and `pseudo_voigtian_source_size`, of diffraction patterns and of polar measurements)
+      and `poisson_noise` with `dose_per_area` raise when one of the two scan axes was indexed so; and a reduction of
+      `dp[:, [1, 2, 4]]` puts the indexed axis first. Outer indexing of linear ensemble axes
+      (`np.ix_`), or any index array of more than one dimension on one, raises `IndexError`.
+- **Behaviour change:** `abtem.stack` and `abtem.concatenate` raise a `ValueError` when the members have a different
+  number of axes (naming both numbers) or different axes (another part of a scan, a different offset or sampling, a
+  reversed scan), except the axis `concatenate` joins. The message names the first differing axis, the fields that
+  differ and both values (for example `offset 0.25 vs 2.25`). They gave every member the axes of the first one, so
+  the others silently got its coordinates. The `RuntimeError` of `concatenate` for an axis that cannot be joined now
+  carries a message
+- `get_items(index, keepdims=True)` with a negative integer index returns the member counted from the end of the axis,
+  and an index out of range raises `IndexError`. It returned an empty array and an empty axis. A numpy integer index
+  (`np.int64(2)`) keeps a length-1 axis like an `int`; it returned an array without the ensemble axis
+- `LinearAxis[i]` raises `TypeError` for a negative integer instead of returning an axis with the wrong offset
+- Lazy arrays on the Metal (torch) backend can be indexed with a list or a boolean mask along a chunked axis
+  (`numpy.take` is implemented), and `PolarMeasurements.to_image_ensemble` works on an eager measurement
+  (`numpy.moveaxis` is implemented)
+- `DiffractionPatterns.index_diffraction_spots` drops extra leading axes of length 1 of the orientation matrices
+  beyond the ensemble axes of the patterns, for eager and lazy patterns alike. Lazy patterns failed with an error of
+  dask for these, and eager patterns were indexed with some of these matrices and raised an `AssertionError` for
+  others. Patterns of ensemble shape `(4, 3)` with matrices of ensemble shape `(1, 4, 1)` were indexed with the wrong
+  matrices (9 of 12 members); they now equal the `(4, 1)` call
+- **Behaviour change:** `DiffractionPatterns.index_diffraction_spots` raises a `ValueError` for orientation matrices
+  with extra axes longer than 1 (an `AssertionError` for eager patterns and an error of dask for lazy ones before),
+  and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape `(3,)` with matrices of
+  ensemble shape `(3, 1)` or `(3, 1, 1)`, and `(4, 3)` with `(4, 1, 1)` or `(4, 1, 1, 1)`, for example, were indexed
+  with the right matrices
 
 Documentation:
 

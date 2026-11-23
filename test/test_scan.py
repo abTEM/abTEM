@@ -11,7 +11,7 @@ from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials.iam import Potential
 from abtem.scan import CustomScan, GridScan, LineScan
-from abtem.waves import Probe
+from abtem.waves import PlaneWave, Probe
 
 
 def _probe():
@@ -341,3 +341,81 @@ def test_a_zero_length_line_scan_of_gpts_can_have_a_margin(endpoint):
     positions = scan.get_positions()
     assert positions.shape == (scan.gpts, 2)
     np.testing.assert_allclose(positions[0], (0.0, 1.0))
+
+
+@pytest.mark.parametrize("extent_in_nyquists", [12.0, 12.4], ids=["exact", "generic"])
+def test_default_scan_is_the_same_for_multislice_and_both_prism_routes(
+    extent_in_nyquists,
+):
+    # `SMatrix.scan` built its own grid at the Nyquist sampling while every other
+    # route went through validate_scan, which used 0.99 of it: an extent of a whole
+    # number of Nyquist pitches then gave one scan point fewer by `SMatrix.scan`
+    from ase import Atoms
+
+    import abtem
+    from abtem.transfer import nyquist_sampling
+
+    energy, cutoff = 100e3, 20.0
+    nyquist = nyquist_sampling(cutoff, energy)
+    side = extent_in_nyquists * nyquist
+    atoms = Atoms(
+        "Si", positions=[(side / 2, side / 2, 2.0)], cell=(side, side, 4.0), pbc=True
+    )
+    potential = abtem.Potential(atoms, gpts=96, slice_thickness=2.0)
+    detector = abtem.AnnularDetector(inner=40, outer=100)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=cutoff)
+    probe.grid.match(potential)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=cutoff, interpolation=2
+    )
+
+    shapes = {
+        "Probe.scan": probe.scan(potential=potential, detectors=detector, lazy=False),
+        "SMatrix.scan": s_matrix.scan(detectors=detector, lazy=False),
+        "SMatrix.build().scan": s_matrix.build(lazy=False).scan(detectors=detector),
+    }
+
+    expected = int(
+        np.ceil(np.round(extent_in_nyquists, 7))
+    )  # points of a Nyquist pitch
+    for name, measurement in shapes.items():
+        assert measurement.shape == (expected, expected), name
+
+
+class _WeightedScan(CustomScan):
+    """A scan that weights its positions; ``weights`` is what ``_get_weights``
+    returns, or an exception it raises."""
+
+    def __init__(self, positions, weights):
+        super().__init__(positions)
+        self._weights = weights
+
+    def _get_weights(self):
+        if isinstance(self._weights, Exception):
+            raise self._weights
+        return self._weights
+
+
+def _plane_waves():
+    return PlaneWave(energy=100e3, gpts=(16, 12), extent=(4, 3)).build()
+
+
+def test_the_weights_of_a_scan_scale_its_kernel():
+    """CPU only: the override returns NumPy weights."""
+    positions = np.array([[1.0, 1.0], [2.0, 1.5], [0.5, 2.0]])
+    weights = np.array([0.5, 2.0, 1.0])
+    waves = _plane_waves()
+
+    kernel = _WeightedScan(positions, weights)._evaluate_kernel(waves)
+
+    expected = CustomScan(positions)._evaluate_kernel(waves) * weights[:, None, None]
+    np.testing.assert_allclose(kernel, expected, rtol=0, atol=1e-6)
+
+
+def test_an_error_raised_by_the_weights_of_a_scan_reaches_the_caller():
+    """CPU only: the error is raised before any array is made on a device."""
+    error = NotImplementedError("weights are not implemented for this backend")
+    scan = _WeightedScan(np.array([[1.0, 1.0], [2.0, 1.5]]), error)
+
+    with pytest.raises(NotImplementedError, match="not implemented for this backend"):
+        scan._evaluate_kernel(_plane_waves())

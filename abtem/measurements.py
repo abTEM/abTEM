@@ -135,6 +135,11 @@ def _reduced_scanned_images_or_line_profiles(
         if i not in source
     ]
 
+    # a reduced scan is in increasing order, whatever order the positions were in
+    index = _increasing_scan_index(old_measurement)
+    if index is not None:
+        new_array = new_array[index]
+
     if source != destination:
         xp = get_array_module(new_array)
         if old_measurement.is_lazy:
@@ -194,8 +199,30 @@ def _scan_axes(measurement):
 
 
 def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, ...]:
+    """The distance between neighbouring scan positions along each scan axis; a
+    reversed scan axis has a negative sampling and the same distance."""
     return tuple(
-        measurements.axes_metadata[i].sampling for i in _scan_axes(measurements)
+        abs(measurements.axes_metadata[i].sampling) for i in _scan_axes(measurements)
+    )
+
+
+def _increasing_scan_index(
+    array_object: BaseMeasurements | BaseWaves,
+) -> tuple[slice, ...] | None:
+    """The index that puts every reversed scan axis (negative sampling) of
+    `array_object` back in increasing order, or None if none is reversed. Scan axes
+    are ensemble axes, which come first, so their positions index the array object
+    directly."""
+    reversed_axes = {
+        i
+        for i in _scan_axes(array_object)
+        if array_object.axes_metadata[i].sampling < 0
+    }
+    if not reversed_axes:
+        return None
+    return tuple(
+        slice(None, None, -1) if i in reversed_axes else slice(None)
+        for i in range(max(reversed_axes) + 1)
     )
 
 
@@ -214,13 +241,6 @@ def _scan_area_per_pixel(measurements):
         return np.prod(_scan_sampling(measurements))
     else:
         raise RuntimeError("Cannot infer pixel area from axes metadata.")
-
-
-def _scan_extent(measurement):
-    extent = ()
-    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
-        extent += (metadata.sampling * n,)
-    return extent
 
 
 def _array_module_fn(array, xp: ModuleType, name: str):
@@ -674,6 +694,31 @@ def _sum_run_length_encoded(array, result, separators):
             result[i, x] = total
 
 
+def _is_inexact(dtype) -> bool:
+    return np.issubdtype(dtype, np.inexact)
+
+
+def _integrated_dtype(dtype, weighted: bool) -> np.dtype:
+    """The dtype of a radial integral of an array of `dtype`.
+
+    Floating point and complex counts keep their dtype. Integer counts sum exactly
+    to a 64-bit integer, as NumPy and CuPy sum them, unless a per-pixel sensitivity
+    weights them, which gives the configured precision.
+    """
+    dtype = np.dtype(dtype)
+    if _is_inexact(dtype):
+        return dtype
+    return get_dtype(complex=False) if weighted else np.dtype(np.int64)
+
+
+def _averaged_dtype(dtype) -> np.dtype:
+    """The dtype of an average of an array of `dtype`: its own if floating point or
+    complex, otherwise the configured precision (averaging integer counts must not
+    truncate them, nor ignore the configured precision)."""
+    dtype = np.dtype(dtype)
+    return dtype if _is_inexact(dtype) else get_dtype(complex=False)
+
+
 def _sum_runs(array, separators):
     """Sum the runs of `array` (n_batch, n_selected) between `separators` into a
     zeroed (n_batch, n_runs) array, with the kernel of the array's backend: the
@@ -1088,20 +1133,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             "Provide one of 'dose_per_area' or 'total_dose'."
         )
 
-        if (dose_per_area is not None) and (total_dose is not None):
+        # exactly one of the two: with neither, the dose would be NaN
+        if (dose_per_area is None) == (total_dose is None):
             raise wrong_dose_error
 
-        if dose_per_area is not None and total_dose is None:
+        if dose_per_area is not None:
             total_dose = self._area_per_pixel * dose_per_area
-        elif total_dose is None:
-            pass
-
-        elif total_dose is not None:
-            if dose_per_area is not None:
-                raise wrong_dose_error
-
-        else:
-            raise wrong_dose_error
 
         total_dose = np.array(total_dose, dtype=dtype)
 
@@ -4346,7 +4383,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Orientation matrices used for indexing the diffraction spots. The shape of
             the orientation matrices, without the last two axes, must broadcast to the
             ensemble shape of the diffraction patterns: each axis has length 1 or the
-            length of that ensemble axis. Each pattern is indexed with its own matrix.
+            length of that ensemble axis. Extra leading axes of length 1 beyond the
+            ensemble axes are dropped; longer ones raise an error. Each pattern is
+            indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -4375,18 +4414,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        # each pattern is indexed with one matrix: an axis of the matrices is
+        # each pattern is indexed with one matrix: leading axes of length 1 beyond
+        # the ensemble are dropped, and an axis of the remaining ensemble shape is
         # either 1 or as long as the matching ensemble axis
-        if orientation_matrices is not None and any(
-            m not in (1, n)
-            for n, m in zip(
-                self.ensemble_shape[::-1], orientation_matrices.shape[:-2][::-1]
-            )
-        ):
-            raise ValueError(
-                "Every axis of the orientation matrices' ensemble shape must have"
-                " length 1 or the length of the matching ensemble axis."
-            )
+        if orientation_matrices is not None:
+            n_extra = orientation_matrices.ndim - 2 - len(self.ensemble_shape)
+            if n_extra > 0:
+                if any(n != 1 for n in orientation_matrices.shape[:n_extra]):
+                    raise ValueError(
+                        "The orientation matrices have more ensemble axes than the "
+                        "diffraction patterns, and the extra leading axes are not of "
+                        "length 1: the ensemble shape of the matrices is "
+                        f"{orientation_matrices.shape[:-2]}, that of the patterns is "
+                        f"{self.ensemble_shape}."
+                    )
+                orientation_matrices = orientation_matrices[(0,) * n_extra]
+            if any(
+                m not in (1, n)
+                for n, m in zip(
+                    self.ensemble_shape[::-1], orientation_matrices.shape[-3::-1]
+                )
+            ):
+                raise ValueError(
+                    "Every axis of the orientation matrices' ensemble shape must have"
+                    " length 1 or the length of the matching ensemble axis."
+                )
 
         ensemble_ndim = len(self.array.shape[:-2])
 
@@ -5185,7 +5237,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _integrate_fourier_space(
-        array, sampling, inner, outer, fftshift, offset, sensitivity=None
+        array,
+        sampling,
+        inner,
+        outer,
+        fftshift,
+        offset,
+        sensitivity=None,
+        result_dtype=None,
     ):
         xp = get_array_module(array)
 
@@ -5200,7 +5259,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             sensitivity=sensitivity,
         )
 
-        return xp.sum(array * bins, axis=(-2, -1))
+        integrated = xp.sum(array * bins, axis=(-2, -1))
+        if result_dtype is None:
+            return integrated
+        return integrated.astype(result_dtype, copy=False)
 
     @_per_energy
     def integrate_radial(
@@ -5260,6 +5322,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self._check_integration_limits(inner, outer)
 
         xp = get_array_module(self.array)
+        result_dtype = _integrated_dtype(
+            self.array.dtype, weighted=sensitivity is not None
+        )
 
         if self.is_lazy:
             integrated_intensity = self.array.map_blocks(
@@ -5270,8 +5335,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 sensitivity=sensitivity,
+                result_dtype=result_dtype,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=self.array.dtype),
+                meta=xp.array((), dtype=result_dtype),
             )
         else:
             integrated_intensity = self._integrate_fourier_space(
@@ -5282,6 +5348,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 sensitivity=sensitivity,
+                result_dtype=result_dtype,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
@@ -5661,8 +5728,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
         step_runs: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+        result_dtype: Optional[np.dtype] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
+
+        The averages have the dtype `result_dtype`, by default that of `array`.
 
         `step_runs` (`_azimuthal_step_runs`) average the step bins in one pass;
         `step_bounds` are the first and last bin of every pixel, for averaging
@@ -5671,6 +5741,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         are cast to, for the Gaussian weighting.
         """
         xp = get_array_module(array)
+        result_dtype = np.dtype(array.dtype if result_dtype is None else result_dtype)
 
         if step_runs is not None:
             # One gather of the binned pixels and one summing pass, instead of a
@@ -5679,10 +5750,19 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 _on_device_of(run, array) for run in step_runs
             )
             flat = array.reshape((-1, array.shape[-2] * array.shape[-1]))
-            sums = _sum_runs(flat[:, pixels], separators)
+            gathered = flat[:, pixels]
+            if not _is_inexact(gathered.dtype):
+                # Integer counts are summed in the precision of the average, not in
+                # their own type, which wraps around (uint8, int16, uint16) and which
+                # the floating point kernels of the GPU cannot read.
+                gathered = gathered.astype(
+                    result_dtype if _is_inexact(result_dtype) else get_dtype()
+                )
+            sums = _sum_runs(gathered, separators)
             # an empty bin averages to 0, as bin by bin
             values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
-            return values.reshape(array.shape[:-2] + centers.shape)
+            values = values.reshape(array.shape[:-2] + centers.shape)
+            return values.astype(result_dtype, copy=False)
 
         if weighting_function == "step":
             # On the device of the array, unless a node shared by the blocks was
@@ -5693,11 +5773,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
             r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
-        # Follow the input dtype: the default float64 both ignores the
-        # configured precision and silently drops the imaginary part when
-        # the summed values are assigned back in. On the device of the array:
-        # a host array cannot take the device sums assigned into it.
-        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
+        # The result dtype, not the default float64, which ignores the configured
+        # precision and silently drops the imaginary part when the summed values
+        # are assigned back in; and not an integer dtype, which would truncate the
+        # averages. On the device of the array: a host array cannot take the device
+        # sums assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=result_dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)
@@ -5819,6 +5900,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
+        result_dtype = _averaged_dtype(self.array.dtype)
+
         if self.is_lazy:
             base_axes = tuple(
                 range(
@@ -5831,11 +5914,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                result_dtype=result_dtype,
                 **kwargs,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (len(centers),),
-                meta=xp.array((), dtype=self.array.dtype),
+                meta=xp.array((), dtype=result_dtype),
             )
         else:
             array = self._azimuthal_average(
@@ -5843,6 +5927,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                result_dtype=result_dtype,
                 **kwargs,
             )
 
@@ -6631,7 +6716,11 @@ class PolarMeasurements(BaseMeasurements):
 
         # np.moveaxis dispatches to da.moveaxis or cupy.moveaxis; cupy.moveaxis
         # rejects a dask array
-        array = np.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        array = self.array
+        index = _increasing_scan_index(self)
+        if index is not None:
+            array = array[index]
+        array = np.moveaxis(array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()
@@ -6891,13 +6980,15 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         state.pop("_intensities", None)
         self.__dict__.update(state)
 
+    @classmethod
     def from_array_and_metadata(
-        self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
     ) -> BaseMeasurements:
         raise NotImplementedError
 
+    @property
     def _area_per_pixel(self):
-        raise NotImplementedError
+        raise RuntimeError("Cannot infer pixel area for indexed diffraction patterns.")
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
@@ -7181,14 +7272,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         else:
             c = intensities_dict[spot]
 
-        intensities = self.intensities / c
-        return self.__class__(
-            intensities,
-            self.miller_indices.copy(),
-            self.positions.copy(),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self._metadata,
-        )
+        kwargs = self._copy_kwargs(exclude=("array",))
+        return self.__class__(array=self.intensities / c, **kwargs)
 
     def to_data_array(self):
         """
