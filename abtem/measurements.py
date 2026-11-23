@@ -1089,8 +1089,10 @@ class _BaseMeasurement2D(BaseMeasurements):
         if margin != 0.0:
             scan.add_margin(margin)
 
+        # In float64 whatever the configured precision: positions rounded to
+        # float32 are off by up to 3.8e-5 pixels near 100 Å at 0.1 Å sampling.
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+            (scan._positions(np.float64) - self.offset) / self.sampling
         )
 
         if width:

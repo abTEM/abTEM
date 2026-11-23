@@ -764,6 +764,10 @@ class LineScan(BaseScan):
     def get_positions(
         self, chunks: int | None = None, lazy: bool = False
     ) -> np.ndarray:
+        return self._positions(get_dtype(complex=False))
+
+    def _positions(self, dtype) -> np.ndarray:
+        """The positions of the scan, shape (gpts, 2) [Å], in the given dtype."""
         if self.gpts is None:
             raise RuntimeError("gpts is not defined")
 
@@ -775,14 +779,14 @@ class LineScan(BaseScan):
             self.end[0],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         y = np.linspace(
             self.start[1],
             self.end[1],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
