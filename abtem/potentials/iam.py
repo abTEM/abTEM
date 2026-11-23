@@ -254,7 +254,8 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         -------
         depth_profile : Images
             2D image(s) with the remaining spatial axis horizontal and depth
-            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved.
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved; for a
+            magnetic field or a vector potential the components are an ensemble axis.
         """
         return self.build().depth_profile(
             projection_axis=projection_axis,
@@ -1378,7 +1379,8 @@ class FieldArray(BaseField, ArrayObject):
         -------
         depth_profile : Images
             2D image(s) with the remaining spatial axis horizontal and depth
-            (z) vertical.
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved; for a
+            magnetic field or a vector potential the components are an ensemble axis.
         """
         from copy import copy
 
@@ -1407,11 +1409,15 @@ class FieldArray(BaseField, ArrayObject):
 
         array = array.sum(axis=sum_axis)
 
+        # the depth axis, the first base axis, goes last (the vector components of a
+        # magnetic field or vector potential, between the depth and the spatial axis,
+        # become ensemble axes of the profile)
+        depth_axis = -(self._base_dims - 1)
         xp = get_array_module(array)
         if hasattr(array, "rechunk"):
-            array = da.moveaxis(array, -2, -1)
+            array = da.moveaxis(array, depth_axis, -1)
         else:
-            array = xp.moveaxis(array, -2, -1)
+            array = xp.moveaxis(array, depth_axis, -1)
 
         n_z = self.num_slices
         z_extent = self.thickness
@@ -1422,7 +1428,9 @@ class FieldArray(BaseField, ArrayObject):
         return Images(
             array,
             sampling=(spatial_sampling, z_sampling),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            ensemble_axes_metadata=(
+                self.ensemble_axes_metadata + self.base_axes_metadata[1:-2]
+            ),
             metadata=metadata,
         )
 
