@@ -59,7 +59,11 @@ from abtem.detectors import (
     validate_detectors,
 )
 from abtem.measurements import BaseMeasurements
-from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
+from abtem.multislice import (
+    allocate_measurement,
+    allocate_multislice_measurements,
+    multislice_and_detect,
+)
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
@@ -2118,14 +2122,30 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         detectors = validate_detectors(detectors)
 
         if self.ensemble_shape:
-            measurements = allocate_multislice_measurements(
-                self.build(lazy=True).dummy_probes(scan, ctf),
-                detectors,
-                extra_ensemble_axes_shape,
-                extra_ensemble_axes_metadata,
-            )
+            dummy_probes = self.build(lazy=True).dummy_probes(scan, ctf)
+            # Wave functions are not averaged over an ensemble (reduce_ensemble
+            # averages measurements only), so they keep every member.
+            measurements = []
+            for detector in detectors:
+                out_type = detector._out_type(dummy_probes)[0]
+                if issubclass(out_type, BaseMeasurements):
+                    shape = extra_ensemble_axes_shape
+                else:
+                    shape = self.ensemble_shape + exit_planes_shape
+                measurements.append(
+                    allocate_measurement(
+                        dummy_probes, detector, shape, extra_ensemble_axes_metadata
+                    )
+                )
         else:
             measurements = None
+
+        def averaged(measurement):
+            return (
+                isinstance(measurement, BaseMeasurements)
+                and measurement.axes_metadata
+                and measurement.axes_metadata[0]._ensemble_mean
+            )
 
         num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
@@ -2142,7 +2162,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 measurements = new_measurements
             else:
                 for measurement, new_measurement in zip(measurements, new_measurements):
-                    if measurement.axes_metadata[0]._ensemble_mean:
+                    if averaged(measurement):
                         measurement.array[:] += new_measurement.array
                     else:
                         measurement.array[i] = new_measurement.array
@@ -2152,7 +2172,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
-            if measurement.axes_metadata[0]._ensemble_mean:
+            if averaged(measurement):
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
                 if squeeze:

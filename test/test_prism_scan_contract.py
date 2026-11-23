@@ -77,6 +77,44 @@ _PATHS = {
 }
 
 
+def _grid_scan(potential):
+    return abtem.GridScan(
+        start=(0, 0),
+        end=(1, 1),
+        gpts=(3, 5),
+        fractional=True,
+        endpoint=False,
+        potential=potential,
+    )
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("exit_planes", [None, 2])
+@devices
+def test_prism_keeps_waves_of_every_frozen_phonon_configuration(
+    path, exit_planes, device
+):
+    # ensemble_mean averages the annular intensities over the configurations;
+    # wave functions are never averaged, so they keep the configuration axis
+    potential = _potential(frozen_phonons=True, device=device, exit_planes=exit_planes)
+    s_matrix = _s_matrix(potential, device=device)
+    scan = _grid_scan(potential)
+
+    def detectors():
+        return [abtem.WavesDetector(), abtem.AnnularDetector(30, 90)]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=scan, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.scan(scan=scan, detectors=detectors(), **_PATHS[path])
+    measured = measured.compute()
+
+    planes = () if exit_planes is None else (4,)
+    assert measured[0].shape == (2,) + planes + (3, 5, 64, 64)
+    assert measured[1].shape == planes + (3, 5)
+    _assert_matches(list(measured), list(expected))
+
+
 @pytest.mark.parametrize("path", list(_PATHS))
 @pytest.mark.parametrize("frozen_phonons", [None, False])
 @pytest.mark.parametrize("detector", ["annular", "pixelated", "waves"])
