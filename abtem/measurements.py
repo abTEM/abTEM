@@ -2334,6 +2334,7 @@ def _fourier_space_bilinear_nodes_and_weight(
     old_angular_sampling: tuple[float, float],
     new_angular_sampling: tuple[float, float],
     xp,
+    dtype,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nodes = []
     weights = []
@@ -2348,8 +2349,8 @@ def _fourier_space_bilinear_nodes_and_weight(
     )
 
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
+        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(dtype))
+        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(dtype))
         distances = k_new[None] - k[:, None]
         distances[distances < 0.0] = np.inf
         w = distances.min(0) / (k[1] - k[0])
@@ -3008,8 +3009,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
         xp = get_array_module(array)
+        if np.issubdtype(array.dtype, np.inexact):
+            dtype = np.finfo(array.dtype).dtype  # real, also for complex patterns
+        else:
+            # counts are interpolated in the configured precision
+            dtype = np.dtype(get_dtype(complex=False))
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
-            array.shape[-2:], new_gpts, sampling, new_sampling, xp
+            array.shape[-2:], new_gpts, sampling, new_sampling, xp, dtype
         )
 
         old_shape = array.shape

@@ -2120,3 +2120,52 @@ def test_polar_to_diffraction_patterns_keeps_the_precision_of_the_bins(
     # a pixel takes the value of its bin unchanged
     for member in range(members):
         assert np.isin(eager_values[member][inside[member]], data[member]).all()
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_diffraction_patterns_interpolate_in_float64_is_linear_interpolation(
+    lazy, device
+):
+    # Linear interpolation on the centred frequency axes, renormalized to the
+    # input's total as interpolate does, compared on the pixels inside the
+    # input's frequency range. Weights built in float32 deviate by 2e-6 of the
+    # maximum here (64 x 67 pixels) and by up to about 8e-5 at 1024 x 1027,
+    # depending on the data.
+    import scipy.interpolate
+
+    shape = (2, 64, 67)
+    sampling, new_sampling = (0.01, 0.0093), 0.0131
+    array = np.random.default_rng(1).random(shape)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with abtem.config.set({"precision": "float64"}):
+        interpolated = patterns.interpolate(sampling=new_sampling)
+        values = asnumpy(interpolated.copy().compute().array)
+
+    assert values.dtype == np.float64
+    k = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(shape[1:], sampling)
+    ]
+    k_new = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(interpolated.base_shape, interpolated.sampling)
+    ]
+    inside = ((k_new[0] >= k[0][0]) & (k_new[0] <= k[0][-1]))[:, None] & (
+        (k_new[1] >= k[1][0]) & (k_new[1] <= k[1][-1])
+    )[None]
+    points = np.stack(np.meshgrid(*k_new, indexing="ij"), -1)[inside]
+    for member, pattern in enumerate(asnumpy(patterns.copy().compute().array)):
+        expected = scipy.interpolate.RegularGridInterpolator(k, pattern)(points)
+        found = values[member][inside]
+        expected *= found.sum() / expected.sum()
+        np.testing.assert_allclose(found, expected, rtol=0, atol=1e-12 * found.max())
