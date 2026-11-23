@@ -128,3 +128,22 @@ def test_excitations_weights_are_poisson_probabilities(thickness, mean_free_path
     assert excitations_weights(0, thickness, mean_free_path) == pytest.approx(
         np.exp(-thickness / mean_free_path)
     )
+
+
+def test_cumulative_scattering_events_plot_the_requested_excitation_number():
+    # an integer `num_excitations` was replaced by 1, and a debug print left in
+    import matplotlib.pyplot as plt
+
+    events = PlasmonScatteringEvents(
+        depths=((), (1.0,), (1.0, 2.0), (1.5, 3.0)),
+        radial_angles=((),) + ((1.0,),) + ((1.0, 1.0),) * 2,
+        azimuthal_angles=((),) + ((0.0,),) + ((0.0, 0.0),) * 2,
+        weights=(1.0,) * 4,
+        ensemble_mean=False,
+    )
+
+    try:
+        ax = events.show_cumulative_scattering_events(num_excitations=2)
+        assert ax.get_title() == "Second scattering event"
+    finally:
+        plt.close("all")

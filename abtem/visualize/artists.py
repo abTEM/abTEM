@@ -157,7 +157,7 @@ class Artist(metaclass=ABCMeta):
     def set_power(self, power=1.0):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
 
     @abstractmethod
@@ -310,10 +310,10 @@ class LinesArtist(Artist1D):
             line.set_data(x, y[..., i])
 
     def get_logscale(self):
-        return self._ax.set_yscale("log")
+        return self._ax.get_yscale() == "log"
 
-    def set_logscale(self):
-        self._ax.set_yscale("log")
+    def set_logscale(self, logscale: bool = False):
+        self._ax.set_yscale("log" if logscale else "linear")
 
     def get_power(self):
         return 1.0
@@ -369,7 +369,7 @@ class Artist2D(Artist):
     def set_cbars(self, cmap):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
 
     @staticmethod
@@ -463,7 +463,7 @@ def get_extent(measurement, units=None):
         units, measurement.base_axes_metadata[0].units, energy=energy
     )
     conversion_y = get_conversion_factor(
-        units, measurement.base_axes_metadata[0].units, energy=energy
+        units, measurement.base_axes_metadata[1].units, energy=energy
     )
 
     left = (
@@ -1120,6 +1120,17 @@ class DomainColoringArtist(Artist2D):
 
     def set_power(self, power: float = 1.0):
         self._update_norm(self.amplitude_norm, power, self.amplitude_axes_image)
+        self._update_alpha()
+
+    def set_logscale(self, logscale: bool = False):
+        # the amplitude norm decides the logarithmic scale and the opacity of the
+        # phase image, as at construction
+        self._update_norm(
+            self.amplitude_norm,
+            self.get_power(),
+            self.amplitude_axes_image,
+            logscale=logscale,
+        )
         self._update_alpha()
 
     def set_extent(self, extent):

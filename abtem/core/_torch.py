@@ -1386,6 +1386,16 @@ def flip(x, axis=None):
 
 
 @_serialized
+def take(a, indices, axis=None):
+    """``numpy.take`` without ``mode``: a negative index counts from the end of the
+    axis, and ``axis=None`` indexes the flattened array. This is what dask calls to
+    index a lazy array with an index array."""
+    if axis is None:
+        a, axis = a.reshape(-1), 0
+    return a[(slice(None),) * (axis % a.ndim) + (indices,)]
+
+
+@_serialized
 def broadcast_to(x, shape):
     """``numpy.broadcast_to``: a view, as NumPy's is, though not a read-only one."""
     if isinstance(shape, (int, np.integer)):
@@ -1662,6 +1672,8 @@ _ARRAY_FUNCTIONS.update(
         np.broadcast_to: broadcast_to,
         np.broadcast_arrays: broadcast_arrays,
         np.flip: flip,
+        np.take: take,
+        np.moveaxis: torch_numpy.moveaxis,
         np.ones_like: torch_numpy.ones_like,
         np.empty_like: torch_numpy.empty_like,
         np.sum: torch_numpy.sum,
