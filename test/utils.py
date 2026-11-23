@@ -119,3 +119,4 @@ def assert_scanned_measurement_as_expected(
 
 
 gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
+devices = pytest.mark.parametrize("device", [gpu, "cpu"])

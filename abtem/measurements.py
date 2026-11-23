@@ -1547,9 +1547,7 @@ class Images(_BaseMeasurement2D):
         self._check_is_complex()
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.rechunk(
-                self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
@@ -1722,15 +1720,13 @@ class Images(_BaseMeasurement2D):
 
         array = None
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             if method == "fft":
                 array = array.map_blocks(
                     fft_interpolate,
                     new_shape=gpts,
                     normalization=normalization,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -1742,7 +1738,7 @@ class Images(_BaseMeasurement2D):
                     order=order,
                     cval=cval,
                     pad_mode=boundary,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -1849,9 +1845,7 @@ class Images(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
             )
@@ -2076,13 +2070,13 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.extent / gpts
 
         if self.is_lazy:
-            array = self.array.rechunk(self.array.chunks[:-1] + ((self.shape[-1],),))
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._interpolate,
                 gpts=gpts,
                 endpoint=endpoint,
                 order=order,
-                chunks=self.array.chunks[:-1] + (gpts,),
+                chunks=array.chunks[:-1] + (gpts,),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
@@ -2846,6 +2840,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
         if self.is_lazy:
+            array = self.no_base_chunks().array
             orientation_matrices = orientation_matrices[
                 (None,)
                 * (len(self.array.shape[:-2]) - len(orientation_matrices.shape[:-2]))
@@ -2853,7 +2848,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             chunks = tuple(
                 c if n == sum(c) else 1
-                for n, c in zip(orientation_matrices.shape, self.array.chunks[:-2])
+                for n, c in zip(orientation_matrices.shape, array.chunks[:-2])
             )
 
             lazy_orientation_matrices = da.from_array(
@@ -2862,7 +2857,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             intensities = da.map_blocks(
                 self._index_diffraction_spots,
-                self.array,
+                array,
                 lazy_orientation_matrices,
                 hkl=hkl,
                 mask_all=mask,
@@ -2874,7 +2869,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 energy=energy,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
-                chunks=self.array.chunks[:-2] + (mask.sum(),),
+                chunks=array.chunks[:-2] + (mask.sum(),),
                 meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
@@ -3063,12 +3058,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._batch_interpolate_bilinear,
                 sampling=self.sampling,
                 new_sampling=sampling,
                 new_gpts=gpts,
-                chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
@@ -3592,7 +3588,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array.map_blocks(
                 self._bandlimit,
                 inner=inner,
                 outer=outer,
@@ -3668,11 +3664,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._crop,
                 gpts=gpts,
                 fftshift=self.fftshift,
-                chunks=self.array.chunks[:-2] + gpts,
+                chunks=array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:
@@ -4329,7 +4326,7 @@ class PolarMeasurements(BaseMeasurements):
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
-            array = self.array.rechunk(self.array.chunks[:-2] + (-1, -1))
+            array = self.no_base_chunks().array
             xp = get_array_module(array)
             new_array = array.map_blocks(
                 _polar_bins_to_grid,

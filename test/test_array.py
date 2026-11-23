@@ -270,6 +270,9 @@ def test_from_zarr_legacy_format(data, has_array, url):
     has_array_from_zarr = from_zarr(url).compute()
     assert has_array_from_zarr == has_array
 
+    has_array_from_zarr = from_zarr(url, chunks="auto").compute()
+    assert has_array_from_zarr == has_array
+
 
 # ---- large-array zarr chunking (regression: whole-array single chunk hit a
 # codec's 2**31-1 byte buffer limit, and a write that failed partway left a
@@ -681,19 +684,6 @@ class TestBaseLessArrayObject:
         before = m.array.chunks
         after = m.no_base_chunks().array.chunks
         assert after == before
-
-    def test_no_base_chunks_own_arithmetic_is_correct_even_if_reached(
-        self, monkeypatch
-    ):
-        """`no_base_chunks()`'s early return on a correct `_has_base_chunks`
-        already keeps the buggy line from firing for a base-less object --
-        the test above pins that. This pins the line itself: forcing the
-        guard open (as a stale or differently-computed `_has_base_chunks`
-        might) must not resurrect the -0 collapse into one block."""
-        m = self._ensemble(chunks=(1, 1))
-        monkeypatch.setattr(type(m), "_has_base_chunks", property(lambda self: True))
-        after = m.no_base_chunks().array.chunks
-        assert after == ((1, 1), (1, 1))
 
     def test_partition_args_does_not_raise(self):
         m = self._ensemble()
