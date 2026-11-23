@@ -971,6 +971,10 @@ Bugfixes:
 - `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
   per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
   limit; every other error, an insufficient driver included, raises on every call
+- **Behaviour change:** `ensure_cuda_cluster` divides the per-worker memory limit by the number of GPUs the
+  cluster spans, the ones listed in `dask.multi-gpu-devices` when it is set, where it divided by every visible
+  GPU. With 4 visible GPUs and two devices listed, the workers shared 42.5 % of the memory limit in total, and
+  now share 85 %. More devices listed than visible, four listed with two visible, gave 170 %
 - A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
   where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
   returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
