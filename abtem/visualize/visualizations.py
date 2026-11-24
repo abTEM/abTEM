@@ -13,6 +13,7 @@ from ase.data import chemical_symbols, covalent_radii
 from ase.data.colors import jmol_colors
 from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
@@ -451,10 +452,27 @@ class Visualization:
     def set_logscale(self, logscale: bool = False):
         self.set_artists("logscale", logscale=logscale)
 
-    def set_common_value_limits(self, value_limits=(None, None)):
-        value_limits = _get_value_limits(
-            self._measurement.array, value_limits=value_limits
+    def _uses_log_norm(self):
+        return any(
+            isinstance(
+                getattr(artist, "amplitude_norm", getattr(artist, "norm", None)),
+                LogNorm,
+            )
+            for artist in self.artists.ravel()
         )
+
+    def set_common_value_limits(self, value_limits=(None, None)):
+        array = self._measurement.array
+        value_limits = _get_value_limits(array, value_limits=value_limits)
+
+        # a LogNorm takes no limit of 0 or below: the common lower limit is the
+        # smallest positive value of the whole ensemble
+        if value_limits[0] <= 0 and self._uses_log_norm():
+            values = np.abs(array) if np.iscomplexobj(array) else array
+            positive = values[values > 0]
+            if len(positive):
+                value_limits[0] = float(positive.min())
+
         self.set_value_limits(value_limits)
 
     def set_column_titles(

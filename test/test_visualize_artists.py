@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from matplotlib.colors import LogNorm
 
-from abtem.core.axes import RealSpaceAxis
+from abtem.core.axes import OrdinalAxis, RealSpaceAxis
 from abtem.measurements import Images, RealSpaceLineProfiles
 from abtem.visualize.artists import get_extent
 
@@ -67,6 +67,78 @@ def test_log_scale_of_a_complex_image_can_be_switched_on_and_off():
     visualization.set_logscale(False)
     assert not isinstance(artist.amplitude_norm, LogNorm)
     np.testing.assert_allclose(artist.phase_axes_image.get_alpha(), linear_alpha)
+
+
+def _norms(visualization, complex_values):
+    artists = visualization.artists.ravel()
+    return [
+        artist.amplitude_norm if complex_values else artist.norm for artist in artists
+    ]
+
+
+@pytest.mark.parametrize("zeros", ["pixel", "member"])
+@pytest.mark.parametrize("explode", [False, True])
+@pytest.mark.parametrize("complex_values", [False, True])
+def test_common_color_scale_of_a_log_scale_image_with_a_zero_value(
+    complex_values, explode, zeros
+):
+    # a limit of 0 is not valid for a LogNorm: the common limits, taken over the
+    # whole ensemble, give a non-positive vmin when a pixel or a whole member is
+    # zero. The members differ in scale, so that a per-member vmin would differ.
+    rng = np.random.default_rng(0)
+    array = rng.random((2, 8, 8)) + 0.5
+    array[1] *= 10
+    if complex_values:
+        array = array * np.exp(2j * np.pi * rng.random((2, 8, 8)))
+    if zeros == "pixel":
+        array[0, 0, 0] = 0
+    else:
+        array[0] = 0
+    images = Images(
+        array, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
+    )
+
+    visualization = images.show(logscale=True, common_color_scale=True, explode=explode)
+    plt.gcf().canvas.draw()
+
+    magnitude = np.abs(array)
+    smallest_positive = magnitude[magnitude > 0].min()
+    norms = _norms(visualization, complex_values)
+    assert len(norms) == (2 if explode else 1)
+    assert all(isinstance(norm, LogNorm) for norm in norms)
+    assert [norm.vmin for norm in norms] == [smallest_positive] * len(norms)
+    assert [norm.vmax for norm in norms] == [magnitude.max()] * len(norms)
+
+
+@pytest.mark.parametrize("value", [-1.0, 0.0])
+@pytest.mark.parametrize("complex_values", [False, True])
+def test_common_color_scale_of_a_log_scale_image_without_a_positive_value(
+    complex_values, value
+):
+    # nothing to replace the limits with: they stay as they are, and the image draws
+    array = np.full((2, 4, 4), value, dtype=complex if complex_values else float)
+    images = Images(
+        array, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
+    )
+
+    images.show(logscale=True, common_color_scale=True, explode=True)
+    plt.gcf().canvas.draw()
+
+
+@pytest.mark.parametrize("complex_values", [False, True])
+def test_value_limits_of_a_log_scale_image_can_start_at_zero(complex_values):
+    rng = np.random.default_rng(0)
+    array = rng.random((8, 8)) + 0.5
+    if complex_values:
+        array = array * np.exp(2j * np.pi * rng.random((8, 8)))
+    visualization = Images(array, sampling=0.1).show(logscale=True)
+
+    visualization.set_value_limits((0.0, 10.0))
+    plt.gcf().canvas.draw()
+
+    (norm,) = _norms(visualization, complex_values)
+    assert 0 < norm.vmin <= np.abs(array).min()
+    assert norm.vmax == 10.0
 
 
 def test_extent_of_an_image_converts_each_axis_with_its_own_units():
