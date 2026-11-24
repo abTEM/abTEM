@@ -93,7 +93,9 @@ def test_smallest_fast_commensurate_multiple():
     # 6 periods, target 100.35 Å at 0.05 Å -> n_target = 2007, ceil(2007/6) = 335,
     # next fast multiplier is 336 = 2^4*3*7 -> gpts = 2016.
     extent = (100.35, 100.35)
-    positions = _plane_positions(np.arange(6) * (100.35 / 6.0), np.arange(6) * (100.35 / 6.0))
+    positions = _plane_positions(
+        np.arange(6) * (100.35 / 6.0), np.arange(6) * (100.35 / 6.0)
+    )
 
     gpts = commensurate_gpts(extent, positions, target_sampling=0.05)
 
@@ -101,7 +103,9 @@ def test_smallest_fast_commensurate_multiple():
     assert next_fast_fft_size(335) == 336
 
 
-@pytest.mark.parametrize("name,crystalstructure,a", [("Si", "diamond", 5.431), ("Au", "fcc", 4.078)])
+@pytest.mark.parametrize(
+    "name,crystalstructure,a", [("Si", "diamond", 5.431), ("Au", "fcc", 4.078)]
+)
 def test_potential_default_sampling_is_commensurate_and_fast(name, crystalstructure, a):
     from abtem.core import config
 
@@ -332,7 +336,9 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     cell = 3.6
     m = 64
     planes = np.sort(
-        np.concatenate([[i * cell / m, (i + 0.306) * cell / m] for i in range(m)]).ravel()
+        np.concatenate(
+            [[i * cell / m, (i + 0.306) * cell / m] for i in range(m)]
+        ).ravel()
     )
     positions = _plane_positions(planes, planes)
 
@@ -366,3 +372,19 @@ def test_target_grid_of_an_extent_dividing_the_target_sampling(
     )
     assert is_fast_fft_size(points)
     assert gpts == (points, points)
+
+
+def test_fast_fft_overshoot_keeps_the_commensurate_grid():
+    """Rounding the multiplier of the period to a fast size can overshoot the 15 %
+    bound while the commensurate grid itself fits: graphene's y axis at 0.07 Å is
+    66 = 6 x 11 points, where the multiplier 11 would round to 12 (72 points).
+    Commensurability takes precedence over the FFT size, as for a period with a
+    prime factor larger than 7."""
+    import ase.build
+
+    from abtem.atoms import orthogonalize_cell
+
+    atoms = orthogonalize_cell(ase.build.graphene(vacuum=2.0))
+    extent = (atoms.cell[0, 0], atoms.cell[1, 1])
+
+    assert commensurate_gpts(extent, atoms.positions, 0.07)[1] == 66

@@ -65,18 +65,22 @@ def commensurate_slice_thickness(
     Find slice thicknesses commensurate with the crystal planes, no thicker than a
     target thickness.
 
-    Atoms whose z-positions agree within `tolerance` form a plane. Each plane gets
-    the part of the cell closest to it, bounded by the midpoints to the neighbouring
-    planes (the cell is periodic along z), so a plane lies inside its slice and never
-    on a slice limit. A slice limit on an atom splits the atom between two slices,
-    which smears its potential along z when the projection is finite and, under
+    Atoms whose z-positions agree within `tolerance` form a plane. A plane lies
+    inside its slice, not on a slice limit (the cell faces are the exception: a plane
+    on a face is cut by it). A slice limit on an atom splits the atom between two
+    slices, which smears its potential along z when the projection is finite and, under
     frozen phonons, hands a random part of each plane to either neighbour. Adjacent
     slices are then merged as long as the merged slice stays within
-    `target_thickness`, so the slice limits are the planes' midpoints (or the cell
-    faces) and no slice is thicker than the target, as for a uniform slicing with that
-    thickness. Where the planes are further apart than the target, each plane gets a
-    slice centered on it, and the empty gaps are split into the fewest equal slices
-    that fit.
+    `target_thickness`, and no slice is thicker than the target. Planes on a lattice
+    along z (as in a crystal) get equal slices, which also makes the Fresnel
+    propagator, cached on the thickness, be computed about three times and not once
+    per slice: the lattice step, divided into the fewest equal parts that fit the
+    target when it is wider, is the base step, a slice is as many whole base steps as
+    fit the target, and the limits lie half a base step off the lattice. Only the
+    two slices at the cell faces differ. Other planes get the part of the cell closest
+    to them, with limits midway between planes; where they are further apart than the
+    target, each plane gets a slice centered on it and the empty gaps are split into
+    the fewest equal slices that fit.
 
     Translation-equivalent atoms sit identically in their slices, which is what
     makes the slicing commensurate.
@@ -98,20 +102,23 @@ def commensurate_slice_thickness(
     cell_z = float(atoms.cell[2, 2])
     z = atoms.positions[:, 2] % cell_z
 
-    # Snap values at z ≈ cell_z back to 0 before deduplicating, so planes near
-    # the periodic boundary merge with planes near 0 instead of being treated
-    # as distinct. Identify planes by sorted-neighbor distance (as in
+    # Wrap values within tolerance below cell_z to just below 0 before
+    # deduplicating, so planes near the periodic boundary merge with planes near 0
+    # instead of being treated as distinct (and never land exactly on a limit).
+    # Identify planes by sorted-neighbor distance (as in
     # commensurate_gpts) rather than rounding to a fixed tolerance-wide grid
     # anchored at 0: fixed-grid rounding can split two atoms much closer
     # together than `tolerance` into different bins when they straddle a bin
     # edge, or merge genuinely distinct planes that land in the same bin.
-    z[z > cell_z - tolerance] = 0.0
+    z[z > cell_z - tolerance] -= cell_z
     z = np.sort(z)
     new_plane = np.concatenate([[True], np.diff(z) > tolerance])[: len(z)]
     labels = np.cumsum(new_plane) - 1
     planes = np.bincount(labels, weights=z) / np.bincount(labels)
 
-    pieces = _plane_pieces(planes, cell_z, target_thickness)
+    pieces = _lattice_pieces(planes, cell_z, target_thickness)
+    if pieces is None:
+        pieces = _plane_pieces(planes, cell_z, target_thickness)
 
     # Merge neighbouring pieces while the merged slice fits the target. Greedy
     # merging in order gives the fewest slices of any partition into contiguous
@@ -134,6 +141,53 @@ def commensurate_slice_thickness(
     result = tuple(round(float(t), 12) for t in merged)
     assert np.isclose(sum(result), cell_z)
     return result
+
+
+def _lattice_pieces(
+    planes: np.ndarray, cell_z: float, target_thickness: float
+) -> list[float] | None:
+    """
+    Thicknesses of the pieces the cell is cut into when the planes lie on a lattice
+    along z, or None when they do not.
+
+    With a lattice step d between planes, the base step is s = d if d fits the target
+    and else d divided into the fewest equal parts that fit. Every slice is as many
+    whole base steps as fit the target, and the slice limits lie half a base step off
+    the lattice, so every limit is at least s / 2 from every plane and all slices but
+    the two at the cell faces have the same thickness, bit for bit.
+    """
+    if len(planes) == 0:
+        return None
+    n_periods = _plane_lattice_periods(planes, cell_z)
+    if n_periods is None:
+        return None
+    d = cell_z / n_periods
+
+    # The planes must sit on the lattice, not just have lattice-like spacings.
+    offsets = (planes - planes[0]) / d
+    if np.any(np.abs(offsets - np.round(offsets)) > 0.1):
+        return None
+
+    limit = target_thickness * (1.0 + 1e-9)
+    q = 1 if d <= limit else safe_ceiling_int(d / target_thickness)
+    s = d / q
+    m = max(1, int(limit // s))
+    width = m * s
+
+    # First limit: half a base step off the lattice, within the first base step.
+    first = (planes[0] + s / 2) % s
+    if first < 1e-9 or s - first < 1e-9:
+        first = 0.0
+    count = int((cell_z - first) / width + 1e-9)
+    rest = cell_z - first - count * width
+    if rest < 1e-9:
+        rest = 0.0
+
+    pieces = [first] if first > 0 else []
+    pieces += [width] * count
+    if rest > 0:
+        pieces.append(rest)
+    return pieces
 
 
 def _plane_pieces(
@@ -275,6 +329,29 @@ def _translational_period_count(
     return 1
 
 
+def _plane_lattice_periods(
+    planes: np.ndarray, L: float, tolerance: float = 1e-3
+) -> int | None:
+    """
+    The number of primitive periods along the periodic extent `L` if the sorted atom
+    planes lie on a lattice, else None.
+
+    The primitive spacing is the smallest spacing between neighbouring planes
+    (including the wrap-around one), and every spacing must be a whole multiple of
+    it. The period count is refined as the total number of primitive steps, which
+    averages out floating-point scatter in the individual spacings.
+    """
+    spacings = np.concatenate([np.diff(planes), [L + planes[0] - planes[-1]]])
+    min_spacing = float(np.min(spacings))
+    if min_spacing < tolerance:
+        return None
+    ratios = spacings / min_spacing
+    k = np.round(ratios).astype(int)
+    if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
+        return None
+    return int(np.sum(k))
+
+
 def commensurate_gpts(
     extent: tuple[float, float],
     positions: np.ndarray,
@@ -297,9 +374,9 @@ def commensurate_gpts(
     `target_sampling`, just as a plain grid has the fewest points that meet it.
     When the grid has more than 15 % more points than the plain grid (the fewest that
     meet the target, before any fast-FFT rounding) -- which happens only when the
-    primitive spacing is about as fine as the target, or when rounding a multiple of
-    the period to a fast size needs it -- the plain grid is used for that axis
-    instead.
+    primitive spacing is about as fine as the target -- the plain grid is used for
+    that axis instead. When only rounding the multiple of the period to a fast size
+    overshoots that bound, the commensurate grid at its slow size is used.
 
     When `round_to_fast_fft` is enabled the number of grid points additionally
     factorizes completely into the primes 2, 3, 5 and 7 whenever that is
@@ -446,27 +523,12 @@ def commensurate_gpts(
             gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 
-        # Spacings between consecutive unique planes, including the wrap-around gap
-        spacings = np.concatenate([np.diff(unique_x), [L + unique_x[0] - unique_x[-1]]])
-
-        min_spacing = float(np.min(spacings))
-        if min_spacing < tolerance:
+        n_periods = _plane_lattice_periods(unique_x, L, tolerance)
+        if n_periods is None:
+            # No clear commensurability: take the incommensurate fallback
             gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 
-        # Check that every spacing is approximately an integer multiple of the
-        # minimum spacing (i.e. the minimum is the primitive spacing).
-        ratios = spacings / min_spacing
-        k = np.round(ratios).astype(int)
-        if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
-            # No clear commensurability — take the incommensurate fallback
-            gpts.append(fallback_gpts(n_target, unique_x, L))
-            continue
-
-        # Primitive spacing refined as L / (total number of primitive periods).
-        # Using L / sum(k) is more accurate than min_spacing alone because it
-        # averages out any floating-point scatter in the individual spacings.
-        n_periods = int(np.sum(k))
         # The coarsest commensurate grid meeting the target, i.e. the grid chosen
         # when fast-FFT rounding is off.
         commensurate = period_multiple(n_target, n_periods)
@@ -486,9 +548,11 @@ def commensurate_gpts(
             # comes out coarser than it would with rounding off.
             multiplier = next_fast_fft_size(multiplier)
         # The bound is on the grid that results, after any rounding to a fast size.
+        # When only the rounding overshoots it, the commensurate grid at a slow FFT
+        # size is kept: commensurability takes precedence, as when the period itself
+        # has a prime factor larger than 7.
         if multiplier * n_periods > n_target * _COMMENSURATE_MAX_OVERSHOOT:
-            gpts.append(plain_gpts(n_target))
-            continue
+            multiplier = commensurate // n_periods
         gpts.append(multiplier * n_periods)
 
     return tuple(gpts)
@@ -523,11 +587,13 @@ def _validate_slice_thickness(
     num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
     if is_number(slice_thickness):
-        st_value = slice_thickness.item() if isinstance(slice_thickness, np.ndarray) else float(slice_thickness)
+        st_value = (
+            slice_thickness.item()
+            if isinstance(slice_thickness, np.ndarray)
+            else float(slice_thickness)
+        )
         if st_value <= 0.0:
-            raise ValueError(
-                f"slice_thickness must be positive, got {slice_thickness}"
-            )
+            raise ValueError(f"slice_thickness must be positive, got {slice_thickness}")
         if thickness is not None:
             thickness = float(thickness)
             n = max(safe_ceiling_int(thickness / slice_thickness), 1)
@@ -858,14 +924,11 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
             return False
 
         if not all(
-            np.array_equal(a, b)
-            for a, b in zip(self._slice_index, other._slice_index)
+            np.array_equal(a, b) for a, b in zip(self._slice_index, other._slice_index)
         ):
             return False
 
-        return safe_equality(
-            self, other, exclude=("_slice_index",) + self._eq_exclude
-        )
+        return safe_equality(self, other, exclude=("_slice_index",) + self._eq_exclude)
 
     def get_atoms_in_slices(
         self,
@@ -991,9 +1054,7 @@ def _integrate_planes(array, start: float, stop: float):
     if first == last:
         return (v - u) * array[..., first % n]
 
-    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[
-        ..., last % n
-    ]
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[..., last % n]
     if last > first + 1:
         summed = summed + _sum_planes(array, first + 1, last)
     return summed

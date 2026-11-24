@@ -95,35 +95,45 @@ def _mos2():
 
 def _mgo():
     return crystal(
-        ["Mg", "O"], [(0, 0, 0), (0.5, 0, 0)], spacegroup=225,
+        ["Mg", "O"],
+        [(0, 0, 0), (0.5, 0, 0)],
+        spacegroup=225,
         cellpar=[4.211] * 3 + [90] * 3,
     )
 
 
 def _nacl():
     return crystal(
-        ["Na", "Cl"], [(0, 0, 0), (0.5, 0, 0)], spacegroup=225,
+        ["Na", "Cl"],
+        [(0, 0, 0), (0.5, 0, 0)],
+        spacegroup=225,
         cellpar=[5.640] * 3 + [90] * 3,
     )
 
 
 def _caf2():
     return crystal(
-        ["Ca", "F"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=225,
+        ["Ca", "F"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=225,
         cellpar=[5.463] * 3 + [90] * 3,
     )
 
 
 def _gaas():
     return crystal(
-        ["Ga", "As"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=216,
+        ["Ga", "As"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=216,
         cellpar=[5.653] * 3 + [90] * 3,
     )
 
 
 def _inp():
     return crystal(
-        ["In", "P"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=216,
+        ["In", "P"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=216,
         cellpar=[5.869] * 3 + [90] * 3,
     )
 
@@ -144,7 +154,9 @@ def _batio3_tetragonal():
 
 def _vo2_rutile():
     return crystal(
-        ["V", "O"], [(0, 0, 0), (0.3, 0.3, 0.0)], spacegroup=136,
+        ["V", "O"],
+        [(0, 0, 0), (0.3, 0.3, 0.0)],
+        spacegroup=136,
         cellpar=[4.554, 4.554, 2.851, 90, 90, 90],
     )
 
@@ -466,13 +478,13 @@ def test_slice_thickness_splits_gaps_thicker_than_target():
 
     result = commensurate_slice_thickness(atoms, target_thickness=1.0)
 
-    # Each plane gets a slice of the target thickness centered on it (so that no slice
-    # limit cuts an atom), and the empty gaps between those are split in two; the
-    # plane at the cell face is cut in two by it.
-    a = atoms.cell[2, 2]
-    assert result == pytest.approx(
-        (0.5, a / 4 - 0.5, a / 4 - 0.5, 1.0, a / 4 - 0.5, a / 4 - 0.5, 0.5)
-    )
+    # The planes lie on a lattice with step a / 2, which is divided into three equal
+    # base steps s to fit the target. Each plane sits in the middle of a slice of one
+    # base step, with an empty slice on either side; only the two slices at the cell
+    # faces differ (the plane at the face is cut in two by it).
+    s = atoms.cell[2, 2] / 6
+    assert result == pytest.approx((s / 2, s, s, s, s, s, s / 2))
+    assert len(set(result)) == 2
     assert max(result) <= 1.0 + 1e-9
     potential = abtem.Potential(atoms)
     assert potential.slice_thickness == pytest.approx(result)
@@ -510,6 +522,8 @@ def test_slice_limits_never_cut_an_atom(atoms, target):
     result = commensurate_slice_thickness(atoms, target_thickness=target)
 
     cell_z = atoms.cell[2, 2]
+    # The cell faces are limits too and cut a plane that sits on them; that is the one
+    # exception, and the neighbouring slices see the two halves.
     limits = np.cumsum(result)[:-1]
     z = atoms.positions[:, 2] % cell_z
     distance = np.abs(z[None] - limits[:, None])
@@ -517,8 +531,44 @@ def test_slice_limits_never_cut_an_atom(atoms, target):
     assert distance.min() > 0.05
     assert max(result) <= target * (1 + 1e-9)
     assert sum(result) == pytest.approx(cell_z)
-    # equal slices are bit-identical, so that the propagator is computed once
-    assert len(set(result)) <= len(result) // 2 + 2
+
+
+@pytest.mark.parametrize("target", [0.5, 1.0, 1.7, 3.0])
+@pytest.mark.parametrize(
+    "atoms",
+    [bulk("Si", cubic=True) * (2, 2, 6), bulk("Au", cubic=True) * (2, 2, 3)],
+    ids=["Si", "Au"],
+)
+def test_lattice_slicing_has_one_thickness_but_the_faces(atoms, target):
+    """Planes on a lattice give equal slices, bit for bit, except the two at the cell
+    faces, so the Fresnel propagator (cached on the thickness) is computed at most
+    three times, not once per slice."""
+    result = commensurate_slice_thickness(atoms, target_thickness=target)
+
+    assert len(set(result)) <= 3
+    assert len(set(result[1:-1])) == 1
+
+
+def test_fresnel_propagator_is_computed_once_per_distinct_thickness(monkeypatch):
+    """A plane wave through a Si potential with planes further apart than the
+    target hits the propagator cache on every slice but the faces."""
+    from abtem.multislice import FresnelPropagator
+
+    calls = []
+    original = FresnelPropagator._calculate_array
+
+    def counting(waves, thickness, *args, **kwargs):
+        calls.append(thickness)
+        return original(waves, thickness, *args, **kwargs)
+
+    monkeypatch.setattr(FresnelPropagator, "_calculate_array", staticmethod(counting))
+
+    atoms = bulk("Si", cubic=True) * (1, 1, 6)
+    potential = abtem.Potential(atoms, sampling=0.25, projection="infinite")
+    abtem.PlaneWave(energy=100e3).multislice(potential).compute()
+
+    assert len(potential.slice_thickness) > 10
+    assert len(calls) <= 3
 
 
 # ── AtomsEnsemble: commensurability search must be skipped ──────────────────

@@ -280,8 +280,7 @@ def _table_difference(table, i, wi, j, wj):
 
     Snapping a limit to the nearest node instead moved a whole node interval of
     the integral between neighbouring slices when a limit lay halfway between two
-    nodes, which a slice limit on an atomic plane often does (0.55 Å from an atom
-    on 0.1 Å nodes): one ulp decided which, and the field near the atom jumped
+    nodes: one ulp decided which, and the field near the atom jumped
     (by 60 % of the first slice's transverse components, 5 % of the field's
     maximum). Interpolated, the integral is continuous in the limits, and the
     slices of a cell still add up to the integral through it.
@@ -291,7 +290,7 @@ def _table_difference(table, i, wi, j, wj):
     return upper - lower
 
 
-@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+@jit(nopython=True, nogil=True, cache=True)
 def interpolate_quasi_dipole_field_projections(
     magnetic_field,
     sampling,
@@ -342,7 +341,7 @@ def interpolate_quasi_dipole_field_projections(
     return magnetic_field
 
 
-@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+@jit(nopython=True, nogil=True, cache=True)
 def interpolate_quasi_dipole_vector_field_projections(
     magnetic_field,
     sampling,
