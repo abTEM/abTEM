@@ -15,7 +15,7 @@ import ase
 import dask.array as da
 import numpy as np
 import pytest
-from utils import gpu, requires_mps
+from utils import gpu, requires_mps, skip_float64_on_single_precision_arrays
 
 import abtem
 from abtem import distributions
@@ -105,12 +105,12 @@ def test_detector_matches_the_exit_wave_route(scan, lazy, device):
     _assert_close(result, reference, rtol=2e-4)
 
 
-# Double precision: the collection hook of conftest.py skips it on Metal. The float32
-# accumulation is the case of the test above.
+# Double precision. The float32 accumulation is the case of the test above.
 @pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_float64_accumulation_matches_the_exit_wave_route(lazy, device):
+    skip_float64_on_single_precision_arrays(device, "summed in float64")
     detector = PixelatedDetector(MAX_ANGLE, components="all", reduction_dtype="float64")
     result = _detected(True, device, lazy, detector)
     reference = _reference(True, device, lazy, reduction_dtype="float64")
@@ -343,11 +343,12 @@ def test_detecting_waves_directly_and_reducing(lazy, device):
     _assert_close(result, reference, rtol=1e-5)
 
 
-# Double precision: the collection hook of conftest.py skips it on Metal.
+# Double precision.
 @pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
+    skip_float64_on_single_precision_arrays(device, "summed in float64")
     """The diffuse part is the difference of two large numbers where it is far below the
     Bragg peaks: a strong mean wave (300 against noise of 1 per pixel) puts 1e10 in the
     central pixel against a diffuse part of a few hundred, which the single-precision
@@ -465,11 +466,12 @@ def test_averaged_waves_detector_matches_the_mean_of_the_exit_waves(scan, lazy, 
     )
 
 
-# Double precision: the collection hook of conftest.py skips it on Metal.
+# Double precision.
 @pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_averaged_waves_in_double_precision(lazy, device):
+    skip_float64_on_single_precision_arrays(device, "averaged in float64")
     detector = WavesDetector(average_frozen_phonons=True, reduction_dtype="float64")
     result = _detected(True, device, lazy, detector)
     _, expected = _mean_wave_reference(True, device, lazy)

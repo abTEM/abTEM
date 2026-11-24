@@ -28,6 +28,7 @@ def unloaded_backend(monkeypatch):
 
     monkeypatch.setattr(backend, "tp", None)
     monkeypatch.setattr(backend, "TorchNDArray", None)
+    monkeypatch.setattr(backend, "_kernels_checked", False)
     monkeypatch.setattr(_torch, "DEVICE", "mps")
     return _torch
 
@@ -68,13 +69,12 @@ def test_invalid_device_is_rejected_naming_the_key(unloaded_backend):
         assert backend.tp is None, value
 
 
-def test_double_precision_is_still_refused_on_cpu(unloaded_backend):
+def test_double_precision_on_mps_needs_the_real_metal_device(unloaded_backend):
+    # Double precision on 'mps' is the emulation: allowed to be configured, but
+    # its kernels need a real Metal device, which torch's CPU device is not.
     with abtem.config.set({"torch.device": "cpu"}):
-        with pytest.raises(ValueError, match="single-precision"):
-            abtem.config.set({"device": "mps", "precision": "float64"})
-
-        with abtem.config.set({"precision": "float64"}):
-            with pytest.raises(RuntimeError, match="single-precision"):
+        with abtem.config.set({"device": "mps", "precision": "float64"}):
+            with pytest.raises(RuntimeError, match="Metal kernels"):
                 get_array_module("mps")
 
         xp = get_array_module("mps")

@@ -30,6 +30,7 @@ from utils import (
     gpu,
     lazy_params,
     requires_gpu,
+    skip_float64_on_single_precision_arrays,
 )
 
 import abtem
@@ -3283,6 +3284,8 @@ def test_diffraction_patterns_interpolate_is_linear_interpolation(
     # sides of both axes; they take the value of the edge node, which is the
     # interpolation at the frequency clipped to the input's range. The tolerance,
     # relative to the maximum, is a few float32 epsilons for float32.
+    if dtype == "float64":
+        skip_float64_on_single_precision_arrays(device)
     sampling, new_sampling = (0.01, 0.0093), 0.007
     patterns = _random_patterns(shape, sampling, dtype, lazy, device)
 

@@ -174,6 +174,100 @@ def check_mps_is_available():
     module
         The Metal array namespace, as returned by ``get_array_module('mps')``.
     """
+    _load_torch()
+
+    if config.get("precision") != "float32":
+        raise RuntimeError(
+            "Metal (MPS) is a single-precision backend, but the configured "
+            f"precision is '{config.get('precision')}'. Set "
+            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
+            "'gpu' device for double precision."
+        )
+
+    return tp
+
+
+_METAL_DEVICE_NAMES = frozenset({"mps", "metal", "torch"})
+_kernels_checked = False
+
+
+def _check_kernels_once() -> None:
+    global _kernels_checked
+    if not _kernels_checked:
+        check_metal_kernels_are_available()
+        _kernels_checked = True
+
+
+def emulates_float64(device: str | None = None) -> bool:
+    """
+    Whether float64 work runs on the Metal GPU in emulated double precision.
+
+    That is the case on the device 'mps' with precision 'float64', which Metal
+    cannot hold in arrays and so gets from :mod:`abtem.core._double_float`: the
+    data stay float64 on the host and the heavy loops run in double-float on the
+    GPU. The configuration key ``torch.emulate-float64`` asks for the same with
+    the device 'cpu'. Neither does anything in single precision.
+
+    The device is the configured one, or ``device``, the one an object of the
+    computation was made for: float64 arrays of an object made with
+    ``device='mps'`` are NumPy arrays, which nothing but its device name says
+    were meant for the GPU, so the GPU is used when either is 'mps'.
+
+    Parameters
+    ----------
+    device : str, optional
+        The device of an object of the computation.
+    """
+    if config.get("precision") != "float64":
+        return False
+    if _config_get("torch.emulate-float64"):
+        return True
+    return any(
+        isinstance(name, str) and name.lower() in _METAL_DEVICE_NAMES
+        for name in (device, config.get("device"))
+    )
+
+
+def check_metal_kernels_are_available():
+    """
+    Load PyTorch for abTEM's own Metal kernels, raising if they cannot run.
+
+    The emulated double precision of ``torch.emulate-float64``
+    (:mod:`abtem.core._double_float`) runs float64 work on the GPU, so unlike
+    :func:`check_mps_is_available` it takes any precision; it needs the real
+    Metal device and a PyTorch that compiles Metal shaders. Loading goes
+    through the same guards: importing PyTorch any other way would skip the
+    refusal to load it after pyfftw, after which torch's CPU work crashes the
+    process.
+
+    Returns
+    -------
+    module
+        ``abtem.core._torch``.
+    """
+    _load_torch()
+
+    from abtem.core import _torch
+
+    if _torch.DEVICE != "mps":
+        raise RuntimeError(
+            "Emulated float64 (device 'mps' with precision 'float64', or "
+            "torch.emulate-float64) runs Metal kernels, so it needs the 'mps' torch "
+            f"device, but the configuration key 'torch.device' is "
+            f"'{_torch.DEVICE}'."
+        )
+    if not hasattr(_torch.torch.mps, "compile_shader"):
+        raise RuntimeError(
+            "Emulated float64 on Metal compiles Metal kernels with "
+            "torch.mps.compile_shader, which PyTorch "
+            f"{_torch.torch.__version__} does not have. Upgrade PyTorch."
+        )
+    return _torch
+
+
+def _load_torch():
+    """Import PyTorch and the Metal array namespace once, behind the guards
+    against the crashes an unguarded import can cause."""
     global tp, TorchNDArray
 
     if tp is None:
@@ -221,16 +315,6 @@ def check_mps_is_available():
                 TorchNDArray = _torch.TorchNDArray
                 tp = _torch.torch_numpy
 
-    if config.get("precision") != "float32":
-        raise RuntimeError(
-            "Metal (MPS) is a single-precision backend, but the configured "
-            f"precision is '{config.get('precision')}'. Set "
-            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
-            "'gpu' device for double precision."
-        )
-
-    return tp
-
 
 _cuda_cluster_client = None
 
@@ -266,7 +350,8 @@ def _visible_gpu_count(cupy_module) -> int:
 
 def ensure_cuda_cluster():
     """
-    Start a dask-cuda cluster spanning all visible GPUs and return its client.
+    Start a dask-cuda cluster spanning all visible GPUs, or the ones listed in the
+    configuration option ``dask.multi-gpu-devices``, and return its client.
 
     The cluster assigns one worker process to each GPU, allowing dask to distribute
     computations across all of them. It is created once per process and reused on
@@ -304,16 +389,6 @@ def ensure_cuda_cluster():
     from distributed.system import MEMORY_LIMIT
 
     cluster_kwargs: dict = {}
-    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
-    if n_gpus > 0:
-        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
-
-    # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
-    # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
-    # workloads.
-    rmm_pool = _config_get("dask.multi-gpu-rmm-pool", None)
-    if rmm_pool:
-        cluster_kwargs["rmm_pool_size"] = rmm_pool
 
     # Optional subset of GPUs to span, as a list of device indices or a
     # comma-separated string. By default the cluster spans all visible GPUs.
@@ -322,6 +397,19 @@ def ensure_cuda_cluster():
         if not isinstance(devices, str):
             devices = ",".join(str(d) for d in devices)
         cluster_kwargs["CUDA_VISIBLE_DEVICES"] = devices
+
+    n_gpus = _visible_gpu_count(cp) if cp is not None else 0
+    if n_gpus > 0:
+        # One worker per spanned GPU.
+        n_workers = len(devices.split(",")) if devices else n_gpus
+        cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_workers)
+
+    # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
+    # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
+    # workloads.
+    rmm_pool = _config_get("dask.multi-gpu-rmm-pool", None)
+    if rmm_pool:
+        cluster_kwargs["rmm_pool_size"] = rmm_pool
 
     try:
         _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
@@ -343,7 +431,7 @@ def ensure_cuda_cluster():
 
     logger.info(
         "dask.multi-gpu: started a dask-cuda LocalCUDACluster; computations "
-        "will be distributed with one worker per visible GPU."
+        "will be distributed with one worker per spanned GPU."
     )
 
     return _cuda_cluster_client
@@ -537,6 +625,12 @@ def get_array_module(
             return cp
 
         if x.lower() in ("torch", "mps", "metal"):
+            if config.get("precision") == "float64":
+                # Metal has no float64 arrays: double precision on 'mps' is the
+                # emulation, whose data are float64 NumPy arrays on the host (see
+                # emulates_float64), so this device is NumPy's with Metal kernels.
+                _check_kernels_once()
+                return np
             return check_mps_is_available()
 
     if isinstance(x, np.ndarray):

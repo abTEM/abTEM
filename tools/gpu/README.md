@@ -12,7 +12,7 @@ python -m pytest test/test_realspace_multislice.py -q -k "StencilNumericalAccura
 python -m pytest test/ -q -k gpu -m "not multigpu"
 ```
 
-The first force-compiles the raw GPU kernels and compares them against the scipy reference — it fails fast on compiler/toolchain problems. The second runs every GPU-parameterized test (~540 as of 2026-09; the `--runslow`-gated ones stay skipped). Passing on one platform does not imply the other: CUDA/NVRTC and ROCm/hipRTC have caught disjoint bugs, so changes to GPU code should be validated on whichever platforms are available, ideally both.
+The first force-compiles the raw GPU kernels and compares them against the scipy reference — it fails fast on compiler/toolchain problems. The second runs every GPU-parameterized test (the `--runslow`-gated ones stay skipped). Passing on one platform does not imply the other: CUDA/NVRTC and ROCm/hipRTC have caught disjoint bugs, so changes to GPU code should be validated on whichever platforms are available, ideally both.
 
 ## Running
 
@@ -24,7 +24,7 @@ The first force-compiles the raw GPU kernels and compares them against the scipy
 tools/gpu/run_gpu_tests.sh
 ```
 
-The test dependencies come from the `test` dependency group (`uv pip install -e . --group test` or `pip install --group test .` with pip ≥ 25.1) plus a cupy matching your platform (`cupy-cuda12x`, or a ROCm build).
+On ROCm the second invocation differs; see [ROCm](#rocm) below. The test dependencies come from the `test` dependency group (`uv pip install -e . --group test` or `pip install --group test .` with pip ≥ 25.1) plus a cupy matching your platform (`cupy-cuda12x`, or a ROCm build).
 
 **Unattended / cron** (`ABTEM_CI_ROOT` enables managed mode: the script maintains its own clone and venv there, hard-tracking `origin/dev`, and self-heals if a scratch purge deletes them):
 
@@ -54,7 +54,19 @@ Example: weekly on NERSC Perlmutter via `scrontab -e` (times are local; `-q shar
 
 **Reusing an existing venv** (e.g. a dev machine where cupy is a custom ROCm build): `ABTEM_CI_VENV=<venv>` activates it and installs nothing; the checkout under test is put on `PYTHONPATH`, so an editable abtem install in that venv is never re-pointed.
 
-**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. **NVIDIA/CUDA only** — abTEM's multi-GPU path is built on `dask-cuda`, which has no ROCm equivalent, so this flag does not apply on a ROCm machine. Setting it is a contract: the run **fails unless at least one multigpu test passes**, so an environment that cannot actually test multi-GPU (fewer than 2 visible GPUs, or `import dask_cuda` failing even though the package is installed) produces a red run rather than a silent all-skip. It requires a ≥ 2-GPU allocation (e.g. `--gpus 2` in the scrontab resources); managed mode installs `dask-cuda` (and its `cuda-bindings` dependency, from NVIDIA's package index) into its venv when the flag is set, while `ABTEM_CI_VENV` / in-place mode must already provide it. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT`; runs that do share a root are serialized by a lock (a run that starts while another is still holding the same `ABTEM_CI_ROOT` skips that trigger rather than corrupting the shared clone).
+**Compute nodes without internet:** `ABTEM_CI_OFFLINE=1` (managed mode) tests the clone under `ABTEM_CI_ROOT` as it is: no clone, fetch or reset, and the branch tested is the one checked out there (the run fails if the clone does not exist). Update the clone from a node with internet access first. The dependency install runs with `UV_OFFLINE=1` unless the caller set it, so uv installs from its cache only and fails when the cache lacks a package; `ABTEM_CI_VENV` pointing at an existing environment skips all installs. In-place mode never touches git state, so the knob changes nothing there.
+
+**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds invocations running the `multigpu`-marked tests. The knob takes `1`, `0` or empty; any other value (`yes`, `true`, `2`) fails the run at the start. **NVIDIA/CUDA only** — abTEM's multi-GPU path is built on `dask-cuda`, which has no ROCm equivalent, so this flag does not apply on a ROCm machine. Setting it is a contract. A preflight first checks that `dask_cuda` imports and that at least 2 GPUs are visible; when it fails, the multi-GPU tests are not run and the run fails after the single-GPU sweep, with the reason in the `multigpu[...]` part of the `status.tsv` summary. The tests run as two pytest calls. `test/test_multigpu.py` runs alone and **fails** the run when pytest fails, when no test passes, or when its tally reports any skipped test, wherever the skip was raised. The remaining `multigpu` tests (the one in `test/test_measure.py`, which needs only 2 GPUs) run in a second call that must return 0; skips at collection time, such as the `gpaw` import skip in `test_gpaw_atom_solver_output.py`, do not fail it. `status.tsv` shows both tallies. The run needs a ≥ 2-GPU allocation (e.g. `--gpus 2` in the scrontab resources). Managed mode installs `dask-cuda` and `cuda-bindings>=12,<13` from PyPI into its venv when `ABTEM_CI_MULTIGPU=1` (`dask-cuda` does not declare `cuda-bindings`) and supports only the default `ABTEM_CI_CUPY_PKG` (`cupy-cuda12x`), because the `cuda-bindings` pin is the 12.x line; `ABTEM_CI_VENV` / in-place mode must already provide them. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT`; runs that do share a root are serialized by a lock (a run that starts while another is still holding the same `ABTEM_CI_ROOT` skips that trigger rather than corrupting the shared clone).
+
+**Deselecting tests:** `ABTEM_CI_DESELECT` is a pytest `-k` expression of tests to leave out of the full sweep, on every backend (`ABTEM_CI_DESELECT="charge_density or chargedensity"`): a machine whose GPU hangs on some tests deselects them here. The `status.tsv` summary ends with `; deselected: <expression>`, so a deselection is never silent.
+
+**Provenance:** the commit column of `status.tsv` gets a `-dirty` suffix when tracked files differ from `HEAD`.
+
+### ROCm
+
+On a ROCm GPU the script changes the second invocation:
+
+- **One pytest process per test file**, with `-rfE` (failed and errored tests are listed) and abort detection: a file whose process is killed by a signal (exit status ≥ 128, e.g. a GPU abort) is reported as aborted, costs only that file, and the other files still run and report their failures. The sweep fails when no test passed in any file. `status.tsv` records the numbers of passed and of failed or errored tests, and the aborted files, instead of one pytest tally.
 
 All knobs are documented in the header of `run_gpu_tests.sh`.
 
