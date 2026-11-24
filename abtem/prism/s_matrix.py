@@ -5298,8 +5298,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # largest, coarser than the 1e-6 floor of the lattice basis, and the
         # weakest built-beam directions (a few 1e-4 of the largest) would mix
         # with the round-off null space. The eigendecompositions are only
-        # (rank, rank); the double-precision copy of `projected` and the
-        # product forming `moment` cost about 1% of the Gram accumulation above.
+        # (rank, rank). In single precision, the double-precision copy of
+        # `projected` and the product forming `moment` typically cost about 1%
+        # of the Gram accumulation above; the ratio is roughly n_dense /
+        # n_pixels, so it grows at large semiangles on coarse grids (an
+        # estimated 4.5% at 50 mrad, 0.1 Å sampling and 80 keV).
         projected64 = to_double(projected)
         moment = projected64.conj().T @ projected64
 

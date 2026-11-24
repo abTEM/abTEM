@@ -80,15 +80,16 @@ settings.load_profile("dev")
 def _restore_numpy():
     """Undo the NumPy patches of GPAW's debug mode, if they are in place.
 
-    GPAW 25 switches its debug mode on whenever it is imported with pytest in
-    `sys.modules`, GPAW 26.7 only with `GPAW_DEBUG` set. The mode patches NumPy
-    for the whole process: `np.empty` and `np.empty_like` fill every new array
-    with NaN (an object array too, which then holds nan instead of None), and
-    `np.seterr` raises on overflow, division by zero and invalid values. Once
-    any module imports GPAW, every later test in that process runs against the
-    patched NumPy; matplotlib's `subplots(..., sharey=True)`, for one, shares
-    the axes with the None it expects in a fresh `np.empty` object array, and
-    failed. GPAW can be imported before this file is (GPAW 26.7 is an ASE io
+    GPAW 25 and older (checked back to 22.8) switch their debug mode on whenever
+    they are imported with pytest in `sys.modules` or under `python -d`, GPAW
+    26.7 only with `GPAW_DEBUG` set. The mode patches NumPy for the whole
+    process: `np.empty` and `np.empty_like` fill every new array with NaN (an
+    object array too, which then holds nan instead of None), and `np.seterr`
+    raises on overflow, division by zero and invalid values. Once any module
+    imports GPAW, every later test in that process runs against the patched
+    NumPy; matplotlib's `subplots(..., sharey=True)`, for one, shares the axes
+    with the None it expects in a fresh `np.empty` object array, and fails on
+    nan. GPAW can be imported before this file is (GPAW 26.7 is an ASE io
     plugin, so `import abtem` imports it, and pytest imports abtem for the
     `filterwarnings` setting), so the originals are taken from the copies GPAW
     keeps rather than captured here, and the error state is reset to NumPy's

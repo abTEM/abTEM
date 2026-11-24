@@ -2,7 +2,7 @@
 
 GPAW's debug mode patches NumPy process-wide; `conftest._restore_numpy` explains
 when the mode is on and undoes it. These tests can fail only where the mode is
-on: GPAW 25, or GPAW 26.7 with `GPAW_DEBUG` set.
+on: GPAW 25 and older, or GPAW 26.7 with `GPAW_DEBUG` set.
 """
 
 import numpy as np
