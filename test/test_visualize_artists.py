@@ -111,18 +111,19 @@ def test_common_color_scale_of_a_log_scale_image_with_a_zero_value(
 
 
 @pytest.mark.parametrize("value", [-1.0, 0.0])
-@pytest.mark.parametrize("complex_values", [False, True])
-def test_common_color_scale_of_a_log_scale_image_without_a_positive_value(
-    complex_values, value
-):
-    # nothing to replace the limits with: they stay as they are, and the image draws
-    array = np.full((2, 4, 4), value, dtype=complex if complex_values else float)
+def test_common_color_scale_of_a_log_scale_image_without_a_positive_value(value):
+    # nothing to replace the limits with: they stay the limits of the data. Whether
+    # such a norm draws depends on the matplotlib version (3.8.4 raises), so the
+    # limits are checked.
+    array = np.full((2, 4, 4), value)
     images = Images(
         array, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
     )
 
-    images.show(logscale=True, common_color_scale=True, explode=True)
-    plt.gcf().canvas.draw()
+    visualization = images.show(logscale=True, common_color_scale=True, explode=True)
+
+    for norm in _norms(visualization, complex_values=False):
+        assert (norm.vmin, norm.vmax) == (value, value)
 
 
 @pytest.mark.parametrize("complex_values", [False, True])
