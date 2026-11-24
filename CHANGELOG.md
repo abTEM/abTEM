@@ -1097,7 +1097,7 @@ Bugfixes:
   raises `ValueError: Invalid vmin or vmax`, for real and complex images alike. The common limits were written into the
   `LogNorm` unchanged, so a minimum of 0 was an invalid limit. When the common lower limit is 0 or below and a
   positive value exists, it is now the smallest positive value of the whole ensemble (the amplitude, for complex
-  images), the same for every member. An ensemble with no positive value draws as before
+  images), the same for every member. An ensemble with no positive value keeps its limits as before
 - Setting both `ABTEM_<SECTION>` and `ABTEM_<SECTION>__<KEY>` (for example `ABTEM_DIAGNOSTICS=1` with
   `ABTEM_DIAGNOSTICS__TASK_PROGRESS=1`), or their deprecated `DASK_` forms, no longer raises `TypeError` at
   `import abtem` or drops the key, depending on the order of the environment. **Behaviour change:** the variable of the
