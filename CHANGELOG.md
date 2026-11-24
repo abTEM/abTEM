@@ -1093,6 +1093,21 @@ Bugfixes:
   `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
   `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
   fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
+- `show(logscale=True, common_color_scale=True)` of images with a zero pixel, or a member that is all zero, no longer
+  raises `ValueError: Invalid vmin or vmax`, for real and complex images alike. The common limits were written into the
+  `LogNorm` unchanged, so a minimum of 0 was an invalid limit. When the common lower limit is 0 or below and a
+  positive value exists, it is now the smallest positive value of the whole ensemble (the amplitude, for complex
+  images), the same for every member. An ensemble with no positive value draws as before
+- Setting both `ABTEM_<SECTION>` and `ABTEM_<SECTION>__<KEY>` (for example `ABTEM_DIAGNOSTICS=1` with
+  `ABTEM_DIAGNOSTICS__TASK_PROGRESS=1`), or their deprecated `DASK_` forms, no longer raises `TypeError` at
+  `import abtem` or drops the key, depending on the order of the environment. **Behaviour change:** the variable of the
+  key wins, whatever the order, and the variable of the section is ignored with a `UserWarning` that names both; a
+  section given as a dict (`ABTEM_DIAGNOSTICS="{'task-progress': False}"`) is kept, with the key overridden
+- `LineScan` and `GridScan` raise `ValueError: gpts must be greater than 0` when constructed with a number of
+  positions below 1, and `LineScan.gpts` and `GridScan.gpts` when set to one. A scan with zero positions was accepted
+  and failed later, far from the cause: with a `ZeroDivisionError` in the chunking of a lazy run, or with a
+  `RuntimeError` about the axes metadata of an eager one. **Behaviour change:** `LineScan(gpts=0, sampling=...)` raises
+  too; it used to let the sampling decide the number of positions
 
 Documentation:
 
