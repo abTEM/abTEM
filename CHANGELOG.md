@@ -309,7 +309,8 @@ Bugfixes:
   directions spanned by the built beams (a few 1e-4 of the largest) mixed with the round-off null space and were
   partly dropped: the plane-wave branch, meant to be PRISM exactly, was up to 1e-4 off it on a 50-90 mrad band, by an
   amount set by the GPU's rounding (1e-4 on an RTX 5080, 4e-6 on an RTX 4090). It is now 3e-6 on both. The extra
-  double-precision work costs about 1 % of the Gram matrix accumulation the compression already does.
+  double-precision work typically costs about 1 % of the Gram matrix accumulation the compression already does
+  (more at large semiangles on coarse grids).
 - A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
   compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
