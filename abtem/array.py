@@ -62,6 +62,7 @@ from abtem.core.utils import (
     itemset,
     normalize_axes,
     number_to_tuple,
+    safe_equality,
     tuple_range,
 )
 from abtem.transform import TransformFromFunc
@@ -2576,6 +2577,47 @@ def validate_axis_metadata(
     return validated_axis_metadata
 
 
+def _short(value: Any, width: int = 40) -> str:
+    text = str(value)
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
+def _differing_fields(a: AxisMetadata, b: AxisMetadata) -> str:
+    """The fields in which two axes differ, each with both values. A field differs by
+    the rule of the axes' equality."""
+    if type(a) is not type(b):
+        return f"type {type(a).__name__} vs {type(b).__name__}"
+
+    fields = [
+        f"{key} {_short(a.__dict__[key])} vs {_short(b.__dict__[key])}"
+        for key in a.__dict__
+        if not safe_equality(a, b, exclude=tuple(k for k in a.__dict__ if k != key))
+    ]
+    return ", ".join(fields) or "in a way that could not be determined"
+
+
+def _check_same_axes(
+    array_objects: Sequence[ArrayObject], joined: Optional[int] = None
+) -> None:
+    """Raise a ValueError when an array object has a number of axes, or axis metadata
+    along an axis other than `joined`, different from the first one's. It names the
+    first axis that differs and the fields in which it does."""
+    first = array_objects[0].axes_metadata
+    for i, other in enumerate(array_objects[1:], start=1):
+        other_axes = other.axes_metadata
+        if len(first) != len(other_axes):
+            raise ValueError(
+                f"array objects 0 and {i} have different numbers of axes: "
+                f"{len(first)} and {len(other_axes)} axes"
+            )
+        for j, (a, b) in enumerate(zip(first, other_axes)):
+            if j != joined and a != b:
+                raise ValueError(
+                    f"array objects 0 and {i} have different axes along axis {j} "
+                    f"'{a.label}': {_differing_fields(a, b)}"
+                )
+
+
 def stack(
     arrays: Sequence[ArrayObjectType],
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
@@ -2598,6 +2640,12 @@ def stack(
     -------
     array_object : ArrayObject
         The stacked array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes of the array objects differ, since the stacked array object has
+        one set of axes for all of them.
     """
 
     # if not all(isinstance(array, ArrayObject) for array in arrays):
@@ -2607,6 +2655,7 @@ def stack(
     assert axis >= 0
 
     axis_metadata = validate_axis_metadata(axis_metadata)
+    _check_same_axes(arrays)
 
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
@@ -2619,7 +2668,8 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     arrays : sequence of array objects
         Each abTEM array object must have the same type and shape, except in the
         dimension corresponding to axis. The axis metadata along the concatenated
-        axis must be compatible for concatenation.
+        axis must be compatible for concatenation, and that along every other axis
+        must be equal.
     axis : int, optional
         The axis along which the arrays will be joined. Default is 0.
 
@@ -2627,7 +2677,16 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     -------
     array_object : ArrayObject
         The concatenated array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes other than the concatenated one differ between the array objects.
+    RuntimeError
+        If the axis metadata along the concatenated axis cannot be concatenated.
     """
+
+    _check_same_axes(arrays, joined=axis % len(arrays[0].axes_metadata))
 
     xp = get_array_module(arrays[0].array)
 

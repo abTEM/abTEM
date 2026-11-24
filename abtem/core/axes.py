@@ -188,10 +188,15 @@ class AxisMetadata:
     def concatenate(self, other: AxisMetadata) -> AxisMetadata:
         """Concatenate this axis metadata with another compatible axis metadata."""
         if not self._concatenate:
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate along the {type(self).__name__} '{self.label}'"
+            )
 
         if not self.__eq__(other):
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate along the {type(self).__name__} '{self.label}': "
+                "the axes to join have different parameters"
+            )
 
         return self
 
@@ -367,7 +372,11 @@ class OrdinalAxis(AxisMetadata):
 
     def concatenate(self, other: AxisMetadata) -> OrdinalAxis:
         if not safe_equality(self, other, ("values", "weights")):
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate the {type(self).__name__} '{self.label}' with "
+                f"the {type(other).__name__} '{other.label}': they differ in more "
+                "than their values and weights"
+            )
 
         assert isinstance(other, OrdinalAxis)
 

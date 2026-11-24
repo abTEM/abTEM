@@ -130,3 +130,18 @@ def test_reciprocal_space_axis_coordinates_match_fftfreq(n, fftshift):
         expected = np.fft.fftshift(expected)
 
     np.testing.assert_allclose(axis.coordinates(n), expected, rtol=0, atol=1e-12)
+
+
+def test_concatenating_an_axis_that_cannot_be_joined_names_it():
+    axis = LinearAxis(label="a", _concatenate=False)
+
+    with pytest.raises(RuntimeError, match="along the LinearAxis 'a'"):
+        axis.concatenate(axis.copy())
+
+
+def test_concatenating_axes_with_other_parameters_names_them():
+    axis = OrdinalAxis(label="a", values=(1, 2))
+    other = OrdinalAxis(label="b", values=(3, 4))
+
+    with pytest.raises(RuntimeError, match="OrdinalAxis 'a' with the OrdinalAxis 'b'"):
+        axis.concatenate(other)
