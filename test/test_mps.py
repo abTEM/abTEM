@@ -21,6 +21,7 @@ Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
 """
 
+import operator
 import subprocess
 import sys
 import textwrap
@@ -28,9 +29,10 @@ import textwrap
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import requires_mps
+from utils import requires_metal_kernels, requires_mps
 
 import abtem
+from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
     copy_to_device,
@@ -124,29 +126,31 @@ def test_inferred_double_precision_is_narrowed():
         xp.asarray(np.zeros(4), dtype=np.float64)
 
 
-def test_double_precision_configuration_is_rejected():
-    with abtem.config.set({"precision": "float64"}):
-        with pytest.raises(RuntimeError, match="single-precision"):
-            get_array_module("mps")
+@requires_metal_kernels
+def test_double_precision_on_mps_is_the_emulation_on_the_host():
+    # Metal holds no float64, so the 'mps' device with precision float64 is the
+    # emulation (abtem.core._double_float): NumPy arrays on the host, the loops on
+    # the GPU, and the single-precision backend only where precision is float32.
+    with abtem.config.set({"device": "mps", "precision": "float64"}):
+        assert get_array_module("mps") is np
+        assert backend.emulates_float64()
+
+        potential = abtem.Potential(
+            bulk("Si", cubic=True) * (1, 1, 2), gpts=64, device="mps"
+        )
+        waves = abtem.PlaneWave(energy=100e3, device="mps").multislice(potential)
+        assert isinstance(waves.array, np.ndarray)
+        assert waves.array.dtype == np.complex128
+
+    assert not backend.emulates_float64()
+    assert get_array_module("mps") is not np
 
 
-def test_metal_device_rejects_double_precision_when_configured():
-    # The combination is refused where it is set, not later inside a
-    # computation, and a refused set leaves the configuration untouched.
-    before = (abtem.config.get("device"), abtem.config.get("precision"))
-
-    with pytest.raises(ValueError, match="single-precision"):
-        abtem.config.set({"device": "mps", "precision": "float64"})
-
-    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
-
-    with abtem.config.set({"device": "mps"}):
-        with pytest.raises(ValueError, match="single-precision"):
-            abtem.config.set({"precision": "float64"})
-
-        assert abtem.config.get("precision") == "float32"
-
-    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
+def test_double_precision_is_refused_on_single_precision_arrays():
+    # An explicit float64 on the single-precision backend's arrays is refused.
+    xp = get_array_module("mps")
+    with pytest.raises(RuntimeError, match="single-precision"):
+        xp.asarray(np.zeros(4), dtype=np.float64)
 
 
 def test_unsupported_operation_names_itself():
@@ -348,6 +352,41 @@ def test_diag_and_fill_diagonal_match_numpy():
     assert np.array_equal(asnumpy(on_device), expected)
 
 
+@pytest.mark.parametrize(
+    "indices, axis",
+    [
+        ([0, 2], 0),
+        ([3, -1, 0], 1),
+        ([[0, 1], [4, -5]], -1),
+        (np.array([1, 0, 0], dtype=np.uint8), 2),
+        (2, 1),
+        ([7, -12, 3], None),
+    ],
+)
+def test_take_matches_numpy(indices, axis):
+    """The axes differ in length, so an index resolved against the wrong one differs."""
+    xp = get_array_module("mps")
+    array = np.arange(60, dtype=np.float32).reshape(3, 4, 5)
+    on_device = copy_to_device(array, "mps")
+
+    result = np.take(on_device, indices, axis=axis)
+
+    assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(result), np.take(array, indices, axis=axis))
+
+
+def test_moveaxis_matches_numpy():
+    xp = get_array_module("mps")
+    array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    on_device = copy_to_device(array, "mps")
+
+    for source, destination in [(0, -1), ((0, 1), (-2, -1)), (-1, 0)]:
+        result = np.moveaxis(on_device, source, destination)
+
+        assert get_array_module(result) is xp
+        assert np.array_equal(asnumpy(result), np.moveaxis(array, source, destination))
+
+
 def test_flip_and_broadcasting_match_numpy():
     xp = get_array_module("mps")
     array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
@@ -399,6 +438,117 @@ def test_minimum_and_maximum_take_a_scalar():
         asnumpy(xp.minimum(on_device + 1, 8)), np.minimum(indices + 1, 8)
     )
     assert np.array_equal(asnumpy(xp.maximum(2, on_device)), np.maximum(2, indices))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        operator.add,
+        operator.sub,
+        operator.mul,
+        operator.mod,
+        operator.eq,
+        operator.ne,
+        operator.lt,
+        operator.le,
+        operator.gt,
+        operator.ge,
+        operator.and_,
+        operator.or_,
+        operator.xor,
+    ],
+    ids=lambda op: op.__name__,
+)
+def test_a_device_array_operator_takes_a_host_array(op):
+    # Torch turns a NumPy operand into a CPU tensor itself, so the device side
+    # moves the host operand first. With the host array on the left, NumPy
+    # dispatches to the ufunc, which has to be registered. Values only: where
+    # the operand ends up is checked on a device other than the host below.
+    xp = get_array_module("mps")
+    host = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    other = np.array([[1, 5, 3], [2, 5, 7]], dtype=np.int32)
+
+    on_device = xp.asarray(host)
+
+    for result in (op(on_device, other), op(other, on_device)):
+        assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(op(on_device, other)), op(host, other))
+    assert np.array_equal(asnumpy(op(other, on_device)), op(other, host))
+
+
+@pytest.fixture
+def device_other_than_the_host(monkeypatch):
+    """Make the backend's device differ from the host, on any machine.
+
+    Torch's CPU device, which CI runs the backend on, *is* the host, so a host
+    operand that torch turns into a CPU tensor goes unnoticed there. On the
+    'meta' device that CPU tensor is a device mismatch, as it is on Metal.
+    """
+    from abtem.core import _torch
+
+    monkeypatch.setattr(_torch, "DEVICE", "meta")
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        operator.add,
+        operator.sub,
+        operator.mul,
+        operator.truediv,
+        operator.pow,
+        operator.mod,
+        operator.eq,
+        operator.ne,
+        operator.lt,
+        operator.and_,
+    ],
+    ids=lambda op: op.__name__,
+)
+def test_a_host_operand_joins_the_device_when_it_is_not_the_host(
+    op, device_other_than_the_host
+):
+    xp = get_array_module("mps")
+    host = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    on_device = xp.asarray(host)
+
+    for result in (op(on_device, host), op(host, on_device)):
+        assert result._tensor.device.type == "meta"
+
+
+@pytest.mark.parametrize(
+    "op", [operator.iadd, operator.isub, operator.imul, operator.itruediv]
+)
+def test_an_in_place_operator_takes_a_host_array(op, device_other_than_the_host):
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.ones((2, 3), dtype=np.float32))
+    tensor = on_device._tensor
+
+    op(on_device, np.full((2, 3), 2.0, dtype=np.float32))
+
+    assert on_device._tensor is tensor  # updated in place, not rebound
+    assert on_device._tensor.device.type == "meta"
+
+
+def test_assigning_a_host_array_into_a_device_array(device_other_than_the_host):
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.zeros((2, 3), dtype=np.float32))
+
+    on_device[0] = np.ones(3, dtype=np.float32)
+
+    assert on_device._tensor.device.type == "meta"
+
+
+def test_a_forwarded_method_takes_a_host_array(device_other_than_the_host):
+    # Methods the wrapper does not define are forwarded to the tensor, with the
+    # same rule for their array arguments.
+    xp = get_array_module("mps")
+    on_device = xp.asarray(np.arange(6, dtype=np.float32).reshape(2, 3))
+
+    result = on_device.index_select(1, np.array([0, 2]))
+
+    assert result._tensor.device.type == "meta"
+    assert tuple(result.shape) == (2, 2)
 
 
 def test_dask_constant_boundary_overlap_stays_on_device():

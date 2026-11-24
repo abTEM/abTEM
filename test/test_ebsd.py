@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 import ase
@@ -37,6 +38,7 @@ from abtem.ebsd.emsoft import _conventional_cell
 from abtem.ebsd.orientations import (
     _crystal_and_displacements,
     _displaced,
+    _SymmetryNotFoundError,
     is_centrosymmetric,
 )
 from abtem.ebsd.reciprocity import (
@@ -516,10 +518,23 @@ class TestOrientations:
                 monkeypatch.setattr(
                     spglib.error, "OLD_ERROR_HANDLING", old_error_handling
                 )
-                with pytest.raises(ValueError, match="could not determine"):
+                with pytest.raises(_SymmetryNotFoundError, match="could not determine"):
                     is_centrosymmetric(overlapping)
                 with pytest.raises(ValueError, match="could not standardize"):
                     _conventional_cell(overlapping, None)
+
+    def test_a_missing_spglib_is_reported_with_its_import_error(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "spglib", None)
+        with pytest.raises(ImportError, match="requires spglib") as info:
+            is_centrosymmetric(SILICON)
+        assert isinstance(info.value.__cause__, ImportError)
+        with pytest.raises(ValueError, match="spglib could not be imported") as info:
+            _conventional_cell(SILICON, None)
+        assert isinstance(info.value.__cause__, ImportError)
+        with pytest.warns(
+            UserWarning, match=r"spglib could not be imported \(.+\), so"
+        ):
+            _conventional_cell(SILICON, 227)
 
 
 # --------------------------------------------------------------------------
@@ -2042,10 +2057,13 @@ class TestHemispheres:
 
     def test_without_spglib_the_symmetry_is_unknown(self, monkeypatch):
         # without spglib, or when it cannot find the symmetry, the pattern is
-        # still built, and records the symmetry as unknown
+        # still built, and records the symmetry as unknown; an spglib that cannot
+        # be imported is reported with the cause
+        broken = ImportError("finding the inversion centre requires spglib")
+        broken.__cause__ = ModuleNotFoundError("No module named 'spglib'")
         for error, match in (
-            (ImportError("no spglib"), "spglib is not installed"),
-            (ValueError("no symmetry"), "spglib could not determine"),
+            (broken, r"spglib could not be imported \(No module named 'spglib'\)"),
+            (_SymmetryNotFoundError("no symmetry"), "spglib could not determine"),
         ):
 
             def search(atoms, error=error):
@@ -2055,6 +2073,17 @@ class TestHemispheres:
             with pytest.warns(UserWarning, match=match):
                 pattern = self.reference(SILICON, "north").build(pbar=False, lazy=False)
             assert pattern.metadata["centrosymmetric"] is None
+
+    def test_an_unrelated_error_of_the_symmetry_search_is_raised(self, monkeypatch):
+        # only spglib's failure to find the symmetry leaves it unknown; any other
+        # error (here a stand-in) stops the build rather than reading as that
+        # failure
+        def search(atoms):
+            raise np.linalg.LinAlgError("stand-in for an unrelated error")
+
+        monkeypatch.setattr(reference_module, "is_centrosymmetric", search)
+        with pytest.raises(np.linalg.LinAlgError, match="stand-in"):
+            self.reference(SILICON, "north").build(pbar=False, lazy=False)
 
 
 # --------------------------------------------------------------------------
@@ -2274,6 +2303,14 @@ class TestEMsoftWriter:
         path = str(tmp_path / "master.h5")
         pattern.to_emsoft(path, atoms, **kwargs)
         return h5py.File(path)
+
+    def test_a_missing_h5py_is_reported_with_its_import_error(
+        self, tmp_path, pattern, monkeypatch
+    ):
+        monkeypatch.setitem(sys.modules, "h5py", None)
+        with pytest.raises(ImportError, match="requires h5py") as info:
+            pattern.to_emsoft(str(tmp_path / "master.h5"), SILICON)
+        assert isinstance(info.value.__cause__, ImportError)
 
     def test_follows_the_format(self, tmp_path, pattern):
         with self.write(tmp_path, pattern, npx=20) as f:

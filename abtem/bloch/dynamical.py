@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import sys
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
@@ -53,7 +54,7 @@ from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAx
 from abtem.core.backend import (
     asnumpy,
     cp,
-    device_name_from_array_module,
+    emulates_float64,
     get_array_module,
     validate_device,
 )
@@ -80,7 +81,7 @@ from abtem.slicing import _integrate_planes
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Probe, Waves
+from abtem.waves import Probe, Waves, _normalize_with_deprecated_normalization
 
 if TYPE_CHECKING:
     from abtem.scan import BaseScan
@@ -103,7 +104,7 @@ class BlochWavePrecisionWarning(UserWarning):
 _issued_precision_warnings: set[str] = set()
 
 
-def _warn_if_single_precision(device: str) -> None:
+def _warn_if_single_precision() -> None:
     # The eigendecomposition and the propagation phases carry an absolute error
     # of roughly 1e-7 to 3e-5 of the strongest beam in float32, growing with
     # thickness and beam count (Si and Au, 490-850 beams, 1000-20000 Å). Beams
@@ -113,20 +114,14 @@ def _warn_if_single_precision(device: str) -> None:
     if np.dtype(get_dtype()) != np.float32:
         return
 
-    if device_name_from_array_module(get_array_module(device)) == "mps":
-        reason = "the Metal (MPS) device supports single precision only"
-        check = "the 'cpu' or 'gpu' device with precision 'float64'"
-    else:
-        reason = "the 'precision' setting is 'float32'"
-        check = "precision 'float64'"
-
     message = (
-        f"Bloch waves are computed in single precision because {reason}. Beams "
+        "Bloch waves are computed in single precision because the 'precision' "
+        "setting is 'float32'. Beams "
         "down to 1e-3 of the strongest typically agree with double precision to "
         "within about 2e-4 relative, but weaker diffraction intensities may be "
         "inaccurate, increasingly so for thick samples and many beams "
         "(scattering matrices are exponentiated in double precision "
-        f"regardless). Check the result against {check}, e.g. with "
+        "regardless). Check the result against precision 'float64', e.g. with "
         "abtem.config.set({'precision': 'float64'})."
     )
     if message in _issued_precision_warnings:
@@ -648,6 +643,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
             parametrization=self._parametrization,
             g_max=self.g_max,
             thermal_sigma=self._thermal_sigma,
+            occupancy=self._occupancy,
             cutoff=self._cutoff,
         )
 
@@ -1154,6 +1150,34 @@ def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
     return array
 
 
+# Apple's Accelerate returns the size of the real workspace of ZHEEVD, 1 + 5n + 2n^2,
+# as a single-precision number: above 2**24 (n = 2896) an odd size is rounded down,
+# below the minimum, and LAPACK refuses the call ("Illegal value in argument 10 of
+# internal zheevd" from SciPy, "Eigenvalues did not converge" from NumPy). That is
+# every even n from there on, and the real solver, with its double-precision
+# workspace, is not affected. The divide-and-conquer solver of the complex
+# Hermitian matrices of a Bloch-wave calculation of about 3000 beams is replaced
+# there by the one of ZHEEVR, whose workspace is 24n, and which was also 1.5-2
+# times faster than ZHEEVD on an Apple M2 (n = 1300: 0.60 against 0.87 s; n = 3233:
+# 12.5 against 22.7 s).
+_COMPLEX_EIGH_NEEDS_EVR = sys.platform == "darwin"
+
+
+def _eigh_evr(a: np.ndarray, overwrite_a: bool) -> tuple[np.ndarray, np.ndarray]:
+    """`_eigh` of a complex host matrix by ZHEEVR, in double precision whatever the
+    precision of `a`, as `numpy.linalg.eigh` solves it, with the results in the
+    precision of `a`."""
+    double = a.dtype == np.complex128
+    w, v = scipy.linalg.eigh(
+        a if double else a.astype(np.complex128),
+        lower=True,
+        overwrite_a=overwrite_a and double and a.flags.f_contiguous,
+        check_finite=False,
+        driver="evr",
+    )
+    return (w, v) if double else (w.astype(a.real.dtype), v.astype(a.dtype))
+
+
 def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """The eigenvalues and eigenvectors of a Hermitian matrix, from its lower triangle.
 
@@ -1168,6 +1192,8 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
     single-precision solver, and the results do not change with this function.
     """
     xp = get_array_module(a)
+    if xp is np and _COMPLEX_EIGH_NEEDS_EVR and np.iscomplexobj(a):
+        return _eigh_evr(a, overwrite_a)
     double = xp is np and a.dtype in (np.float64, np.complex128)
     if overwrite_a and double and a.flags.f_contiguous:
         return scipy.linalg.eigh(
@@ -1248,13 +1274,22 @@ def calculate_dynamical_scattering(
     solver, bounds = _select_solver(solver, structure_matrix, scales)
 
     if solver == "band" and len(direct):
-        array = propagate_incident_beam(
-            structure_matrix,
-            scales,
-            direct=int(direct[0]),
-            bounds=bounds,
-            overwrite_a=overwrite_structure_matrix,
-        )
+        if _band_is_on_the_gpu(structure_matrix):
+            from abtem.bloch._band_double_float import (
+                propagate_incident_beam as propagate_emulated,
+            )
+
+            array = propagate_emulated(
+                structure_matrix, scales, direct=int(direct[0]), bounds=bounds
+            )
+        else:
+            array = propagate_incident_beam(
+                structure_matrix,
+                scales,
+                direct=int(direct[0]),
+                bounds=bounds,
+                overwrite_a=overwrite_structure_matrix,
+            )
         del structure_matrix
         if not use_wave_eq:
             array *= xp.asarray(
@@ -1286,6 +1321,39 @@ def calculate_dynamical_scattering(
 
 _SOLVERS = ("auto", "eigh", "band")
 
+# On a Mac, from this many beams 'auto' takes the band solver over the host
+# eigendecomposition (Accelerate's LAPACK; the band reduction runs on its BLAS3). Measured
+# on an Apple M2 for quartz at 1000 Å (see benchmarks/benchmark_metal_float64.py):
+# 319 beams take 28 ms against 22 ms, 759 beams 122 against 176 ms, 1299 beams 0.31
+# against 0.69 s and 3233 beams 2.9 against 13 s. Other platforms are not measured and
+# keep the eigendecomposition.
+_HOST_BAND_MIN_BEAMS = 500
+
+# From this many beams the band solver of float64 emulated on the GPU
+# (`emulates_float64`) reduces the matrix on the GPU (see
+# abtem.bloch._band_double_float): 1.25 to 1.3x faster than the host band solver from
+# 3000 beams (3233 beams: 2.3 against 2.9 s; 9009: 33 against 42 s), but 10 to 30 times
+# less accurate (1e-11 against 1e-12 of the intensities), and slower below.
+_GPU_BAND_MIN_BEAMS = 3000
+
+
+def _is_host_float64(structure_matrix: np.ndarray) -> bool:
+    return isinstance(structure_matrix, np.ndarray) and structure_matrix.dtype in (
+        np.float64,
+        np.complex128,
+    )
+
+
+def _band_is_on_the_gpu(structure_matrix: np.ndarray) -> bool:
+    """Whether the band solver reduces the matrix on the Metal GPU in emulated double
+    precision: for a large host matrix, when float64 work runs there (see
+    `abtem.core.backend.emulates_float64`)."""
+    return (
+        _is_host_float64(structure_matrix)
+        and len(structure_matrix) >= _GPU_BAND_MIN_BEAMS
+        and emulates_float64()
+    )
+
 
 def _select_solver(
     solver: Optional[str], structure_matrix: np.ndarray, scales: np.ndarray
@@ -1299,6 +1367,8 @@ def _select_solver(
     if solver != "auto":
         return solver, None
     xp = get_array_module(structure_matrix)
+    if _is_host_float64(structure_matrix) and sys.platform == "darwin":
+        return ("band" if len(structure_matrix) >= _HOST_BAND_MIN_BEAMS else "eigh"), None
     if cp is None or xp is not cp:
         return "eigh", None
     bounds = gershgorin_bounds(structure_matrix)
@@ -1737,8 +1807,17 @@ class BlochWaves:
 
         cell = structure_factor.cell
 
-        if orientation_matrix is not None:
+        if orientation_matrix is None:
+            orientation_matrix = np.eye(3)
+        else:
+            orientation_matrix = np.array(orientation_matrix, dtype=float)
+            if orientation_matrix.shape != (3, 3):
+                raise ValueError(
+                    "orientation_matrix must have shape (3, 3), "
+                    f"got {orientation_matrix.shape}"
+                )
             cell = Cell(np.dot(cell, orientation_matrix.T))
+        self._orientation_matrix = orientation_matrix
 
         g_max = validate_g_max(g_max, structure_factor)
 
@@ -1882,6 +1961,12 @@ class BlochWaves:
     @property
     def cell(self) -> Cell:
         return self._cell
+
+    @property
+    def orientation_matrix(self) -> np.ndarray:
+        """The (3, 3) orientation matrix of the unit cell relative to the structure
+        factor's; the identity if not rotated."""
+        return self._orientation_matrix
 
     @property
     def g_max(self) -> float:
@@ -2088,7 +2173,7 @@ class BlochWaves:
             The scattering matrix.
         """
         self._require_single_energy("calculate_scattering_matrix")
-        _warn_if_single_precision(self._device)
+        _warn_if_single_precision()
         A = self.calculate_structure_matrix(lazy=lazy)
 
         kwargs = dict(
@@ -2116,7 +2201,7 @@ class BlochWaves:
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
         assert isinstance(thicknesses, np.ndarray)
-        _warn_if_single_precision(self._device)
+        _warn_if_single_precision()
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array(lazy=lazy)
@@ -2307,9 +2392,10 @@ class BlochWaves:
         thicknesses: float | Iterable[float],
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for a given set of thicknesses.
 
@@ -2321,17 +2407,27 @@ class BlochWaves:
             The grid points of the exit waves.
         extent : tuple of floats
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves. If 'values', the exit waves are
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochWaves.calculate_exit_waves"
+        )
 
         # --- Multi-energy ensemble path ---
         if len(self._energies) > 1:
@@ -2341,7 +2437,7 @@ class BlochWaves:
                     thicknesses,
                     gpts=gpts,
                     extent=extent,
-                    normalization=normalization,
+                    normalize=normalize,
                     g_max=g_max,
                     lazy=lazy,
                 )
@@ -2428,6 +2524,11 @@ class BlochWaves:
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
 
+        if normalize:
+            # the incident wave is one in every pixel; normalized, its raw Fourier
+            # transform has a unit intensity
+            array = array / float(np.prod(gpts))
+
         ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
@@ -2440,7 +2541,7 @@ class BlochWaves:
             extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata={"normalization": normalization},
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves
@@ -2477,6 +2578,11 @@ class BlochWaves:
     ) -> BlochWaves | BlochwaveEnsemble:
         """Rotate the unit cell by a given set of Euler angles.
 
+        The rotations are about axes fixed in space, applied in the order given, and
+        on top of the orientation the Bloch waves already have: rotating the result of
+        a rotation continues it, so ``bloch_waves.rotate(a).rotate(b)`` is
+        ``bloch_waves.rotate(a, b)``.
+
         Parameters
         ----------
         args : sequence of (str, float)
@@ -2512,9 +2618,10 @@ class BlochWaves:
                 use_wave_eq=self.use_wave_eq,
                 device=self._device,
                 use_degrees=degrees,
+                orientation_matrix=self._orientation_matrix,
             )
         else:
-            orientation_matrix = np.eye(3)
+            orientation_matrix = self._orientation_matrix
 
             for axes, rotation in zip(all_axes, all_rotations):
                 R = Rotation.from_euler(axes, rotation, degrees=degrees).as_matrix()
@@ -2699,14 +2806,22 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         # per-energy union mask -- each energy admits a different set of
         # beams, and every energy in the ensemble must share the same
         # reciprocal-space basis for the results to stack.
+        #
+        # The ensemble takes the excitation errors from the unrotated cell and each
+        # member from its rotated cell, which differ in the last bits. A beam on
+        # the boundary of a member could then fall outside the ensemble's, which
+        # every member must be a subset of, so the ensemble selects the beams within
+        # a band far wider than that rounding (~1e-15 1/A) and far narrower than any
+        # spacing of beams: it can only add a beam to the union that no member has.
+        boundary_tolerance = 1e-9
         mask = np.zeros(len(hkl), dtype=bool)
         for energy in self._energies:
             mask |= filter_reciprocal_space_vectors(
                 hkl=hkl,
                 cell=self._structure_factor.cell,
                 energy=float(energy),
-                sg_max=self.sg_max,
-                g_max=self.g_max,
+                sg_max=self.sg_max + boundary_tolerance,
+                g_max=self.g_max + boundary_tolerance,
                 centering=self.centering,
                 orientation_matrices=orientation_matrices,
             )
@@ -3083,7 +3198,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
 
-        _warn_if_single_precision(self.device)
+        _warn_if_single_precision()
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -3154,7 +3269,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3194,7 +3309,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 lazy=False,
             )
@@ -3211,7 +3326,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> np.ndarray:
@@ -3220,7 +3335,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
         )
@@ -3230,7 +3345,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: np.ndarray,
         gpts: tuple[int, int],
         extent: tuple[float, float],
-        normalization: str,
+        normalize: bool,
         g_max: Optional[float],
         pbar: bool,
     ) -> da.core.Array:
@@ -3254,7 +3369,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
-            normalization=normalization,
+            normalize=normalize,
             g_max=g_max,
             pbar=pbar,
             concatenate=True,
@@ -3267,10 +3382,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: float | Sequence[float] | np.ndarray,
         gpts: Optional[tuple[int, int]] = None,
         extent: Optional[tuple[float, float]] = None,
-        normalization: str = "values",
+        normalize: bool = False,
         g_max: Optional[float] = None,
         lazy: bool = True,
         pbar: Optional[bool] = None,
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Calculate the exit waves for the ensemble for a given set of
         thicknesses.
@@ -3283,8 +3399,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             The grid points of the exit waves.
         extent : tuple of floats, optional
             The extent of the exit waves [Å].
-        normalization : {'values', 'amplitude'}
-            The normalization of the exit waves.
+        normalize : bool, optional
+            If true, the exit waves are normalized such that the reciprocal space
+            intensity of the incident wave sums to one, as for
+            ``PlaneWave(normalize=True)``. If false, the incident wave takes a value of
+            one everywhere, as for ``PlaneWave()`` (default).
         g_max : float, optional
             Maximum scattering vector length for the plane wave
             expansion [1/Å].
@@ -3294,12 +3413,19 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         pbar : bool, optional
             If True, a progress bar is shown. Default is None, which means
             the value is taken from the configuration.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated, and without effect on the exit waves: it only set a label in
+            the metadata. Use `normalize`.
 
         Returns
         -------
         Waves
             The exit waves.
         """
+
+        normalize = _normalize_with_deprecated_normalization(
+            normalize, normalization, "BlochwaveEnsemble.calculate_exit_waves"
+        )
 
         if pbar is None:
             pbar = config.get("diagnostics.task_progress", False)
@@ -3331,7 +3457,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 )
             ]
 
-        _warn_if_single_precision(self.device)
+        _warn_if_single_precision()
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -3346,7 +3472,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3355,7 +3481,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses=thicknesses,
                 gpts=gpts,
                 extent=extent,
-                normalization=normalization,
+                normalize=normalize,
                 g_max=g_max,
                 pbar=pbar,
             )
@@ -3373,7 +3499,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
-            metadata={"normalization": normalization},
+            metadata={"normalization": "reciprocal_space" if normalize else "values"},
         )
 
         return waves

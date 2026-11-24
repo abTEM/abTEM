@@ -25,10 +25,13 @@ from typing import Any
 import dask.array as da
 import numpy as np
 
+# The import error is kept and chained into the error raised when torch is used.
+_torch_import_error: ImportError | None = None
 try:
     import torch
-except ModuleNotFoundError:
+except ImportError as error:
     torch = None  # type: ignore[assignment]
+    _torch_import_error = error
 
 
 # The torch device the arrays live on: "mps", or "cpu" to run this layer on any
@@ -131,9 +134,9 @@ def is_available() -> bool:
 def _check_available() -> None:
     if torch is None:
         raise RuntimeError(
-            "PyTorch is not installed, Metal (MPS) calculations are disabled. "
+            "PyTorch could not be imported, Metal (MPS) calculations are disabled. "
             "Install it from https://pytorch.org, or change the device to 'cpu'."
-        )
+        ) from _torch_import_error
     if DEVICE == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError(
             "The Metal (MPS) backend is not available: it needs macOS with a "
@@ -262,6 +265,11 @@ def _resolve_reversed_slices(tensor, key):
     return tensor, tuple(resolved)
 
 
+def _to_device_operand(x):
+    """Move a host NumPy array onto the device; pass anything else through."""
+    return asarray(x) if isinstance(x, np.ndarray) else x
+
+
 def _forward(name: str):
     """Build a method that applies the tensor's ``name`` and rewraps the result."""
 
@@ -274,8 +282,18 @@ def _forward(name: str):
             # single-chunk array keeps the result lazy and on the device.
             return getattr(da.from_array(self, chunks=-1), name)(*args, **kwargs)
 
-        args = tuple(_unwrap(arg) for arg in args)
-        kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
+        # A host array is moved onto the device first, as the NumPy ufuncs below
+        # do, so the device side wins. Torch would otherwise turn it into a CPU
+        # tensor itself: most operators then decline it (NotImplemented, and
+        # NumPy's reflected ufunc does the move), but `==` does not and fails
+        # with a device mismatch. This holds for every method forwarded to the
+        # tensor, not only the operators: `take`, `clip`, `masked_fill`, ...
+        # take a host array argument too, narrowed to single precision, as
+        # `asarray` does.
+        args = tuple(_unwrap(_to_device_operand(arg)) for arg in args)
+        kwargs = {
+            key: _unwrap(_to_device_operand(value)) for key, value in kwargs.items()
+        }
         return _wrap(getattr(self._tensor, name)(*args, **kwargs))
 
     method.__name__ = name
@@ -483,11 +501,8 @@ class TorchNDArray:
 
     @_serialized
     def __setitem__(self, key, value):
-        if isinstance(value, np.ndarray):
-            # torch will not take a host array as the right-hand side
-            value = _unwrap(asarray(value))
-        else:
-            value = _unwrap(value)
+        # torch will not take a host array as the right-hand side
+        value = _unwrap(_to_device_operand(value))
         # NumPy casts on assignment (e.g. a real result into a complex array);
         # torch instead refuses a dtype mismatch, so cast to match NumPy.
         if isinstance(value, torch.Tensor) and value.dtype != self._tensor.dtype:
@@ -565,22 +580,22 @@ class TorchNDArray:
     # for the matching binary operators, which it cannot see are compatible.
     @_serialized
     def __iadd__(self, other):  # type: ignore[misc]
-        self._tensor += _unwrap(other)
+        self._tensor += _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __isub__(self, other):  # type: ignore[misc]
-        self._tensor -= _unwrap(other)
+        self._tensor -= _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __imul__(self, other):  # type: ignore[misc]
-        self._tensor *= _unwrap(other)
+        self._tensor *= _unwrap(_to_device_operand(other))
         return self
 
     @_serialized
     def __itruediv__(self, other):  # type: ignore[misc]
-        self._tensor /= _unwrap(other)
+        self._tensor /= _unwrap(_to_device_operand(other))
         return self
 
 
@@ -1371,6 +1386,16 @@ def flip(x, axis=None):
 
 
 @_serialized
+def take(a, indices, axis=None):
+    """``numpy.take`` without ``mode``: a negative index counts from the end of the
+    axis, and ``axis=None`` indexes the flattened array. This is what dask calls to
+    index a lazy array with an index array."""
+    if axis is None:
+        a, axis = a.reshape(-1), 0
+    return a[(slice(None),) * (axis % a.ndim) + (indices,)]
+
+
+@_serialized
 def broadcast_to(x, shape):
     """``numpy.broadcast_to``: a view, as NumPy's is, though not a read-only one."""
     if isinstance(shape, (int, np.integer)):
@@ -1647,6 +1672,8 @@ _ARRAY_FUNCTIONS.update(
         np.broadcast_to: broadcast_to,
         np.broadcast_arrays: broadcast_arrays,
         np.flip: flip,
+        np.take: take,
+        np.moveaxis: torch_numpy.moveaxis,
         np.ones_like: torch_numpy.ones_like,
         np.empty_like: torch_numpy.empty_like,
         np.sum: torch_numpy.sum,
@@ -1682,6 +1709,15 @@ _ARRAY_UFUNCS.update(
     {
         np.matmul: matmul,
         np.equal: _binary_ufunc("eq"),
+        np.not_equal: _binary_ufunc("ne"),
+        np.less: _binary_ufunc("lt"),
+        np.less_equal: _binary_ufunc("le"),
+        np.greater: _binary_ufunc("gt"),
+        np.greater_equal: _binary_ufunc("ge"),
+        np.remainder: _binary_ufunc("remainder"),
+        np.bitwise_and: _binary_ufunc("bitwise_and"),
+        np.bitwise_or: _binary_ufunc("bitwise_or"),
+        np.bitwise_xor: _binary_ufunc("bitwise_xor"),
         np.multiply: _binary_ufunc("multiply"),
         np.add: _binary_ufunc("add"),
         np.subtract: _binary_ufunc("subtract"),

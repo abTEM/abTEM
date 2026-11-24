@@ -593,6 +593,8 @@ class TestInfiniteProjectionUsesRealFFTs:
     def test_matches_the_complex_transforms(self, device, precision, gpts, monkeypatch):
         import abtem.integrals as integrals
 
+        if precision == "float64" and device == gpu.values[0]:
+            pytest.skip("on Metal, float64 is the emulation, with its own transforms")
         real_calls, inverse_calls = [], []
         rfft2, irfft2 = integrals.rfft2, integrals.irfft2
         monkeypatch.setattr(
@@ -1428,3 +1430,19 @@ class TestGaussianProjectionIntegralsUsable:
         assert len(restored._gaussians) == 0
         # and it must still work after the round trip
         self._build(restored)
+
+
+def test_an_attribute_error_inside_the_scatter_add_reaches_the_caller():
+    """``superpose_deltas`` passes on an error from its scatter-add unchanged. The
+    stand-in is a NumPy subclass whose ufuncs raise, so the device does not
+    matter."""
+    from abtem.integrals import superpose_deltas
+
+    class FailingScatterAdd(np.ndarray):
+        def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+            raise AttributeError(f"{ufunc.__name__}.{method} failed in the stand-in")
+
+    array = np.zeros((6, 5), dtype=np.float32).view(FailingScatterAdd)
+
+    with pytest.raises(AttributeError, match="add.at failed in the stand-in"):
+        superpose_deltas(np.array([[1.2, 2.7], [3.5, 0.4]]), array)

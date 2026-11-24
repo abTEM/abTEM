@@ -49,10 +49,13 @@ from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 from abtem.slicing import _integrate_planes
 
+# The import error is kept and chained into the error raised when GPAW is used.
+_gpaw_import_error: ImportError | None = None
 try:
     from gpaw import GPAW
-except ImportError:
+except ImportError as error:
     GPAW = None
+    _gpaw_import_error = error
 
 
 if GPAW is not None:
@@ -460,7 +463,7 @@ class GPAWPotential(_PotentialBuilder):
         Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in the propagation direction in [Å]
-        (default is 0.5 Å).
+        (default is 1.0 Å).
         If given as a float the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
@@ -550,7 +553,7 @@ class GPAWPotential(_PotentialBuilder):
         if GPAW is None:
             raise RuntimeError(
                 "This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/."
-            )
+            ) from _gpaw_import_error
 
         if isinstance(calculators, (tuple, list)):
             atoms = _safe_read_atoms(calculators[0])
@@ -658,10 +661,8 @@ class GPAWPotential(_PotentialBuilder):
             else self.calculators
         )
 
-        try:
+        if isinstance(calculator, Delayed):
             calculator = calculator.compute()
-        except AttributeError:
-            pass
 
         # assert len(self.calculators) == 1
 

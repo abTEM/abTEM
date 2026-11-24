@@ -58,30 +58,6 @@ config_lock = threading.Lock()
 defaults: list[Mapping] = []
 
 
-_METAL_DEVICES = frozenset({"mps", "metal", "torch"})
-
-
-def _check_consistent(config: dict) -> None:
-    """Reject configurations the hardware cannot honour.
-
-    Metal is a single-precision backend -- PyTorch refuses a float64 tensor on
-    the MPS device outright -- so pairing it with double precision cannot work.
-    Saying so when the configuration is set beats failing later, somewhere
-    inside a computation, where the cause is much harder to see.
-    """
-    if str(config.get("device", "")).lower() not in _METAL_DEVICES:
-        return
-
-    precision = config.get("precision", "float32")
-
-    if precision != "float32":
-        raise ValueError(
-            f"device 'mps' cannot be combined with precision {precision!r}: Metal "
-            "is a single-precision backend. Use precision 'float32', or the 'cpu' "
-            "or 'gpu' device for double precision."
-        )
-
-
 class set:
     """Temporarily set configuration values within a context manager
 
@@ -120,14 +96,6 @@ class set:
                     key = key.replace("__", ".")
                     key = check_deprecations(key)
                     self._assign(key.split("."), value, config)
-
-            try:
-                _check_consistent(config)
-            except Exception:
-                # A rejected combination must not leave half of itself applied;
-                # put the configuration back as it was before re-raising.
-                self._unwind()
-                raise
 
     def __enter__(self):
         return self.config
@@ -360,6 +328,27 @@ def collect(
     return merge(*configs)
 
 
+def _warn_about_values_in_place_of_sections(
+    config: dict, defaults: list[Mapping] = defaults
+) -> None:
+    """Warn about the sections of the defaults that ``config`` sets to a value.
+
+    Every key under such a section reads its default, without notice from
+    :func:`get`, so the configuration is checked once, where it is loaded.
+    """
+    found = [
+        f"{key!r} to {config[key]!r}"
+        for key, section in merge(*defaults).items()
+        if isinstance(section, dict) and not isinstance(config.get(key, section), dict)
+    ]
+    if found:
+        warnings.warn(
+            f"abTEM config sets {', '.join(found)} where a section of keys is "
+            "expected, so the keys in each take their defaults",
+            stacklevel=3,
+        )
+
+
 def refresh(
     config: dict = config, defaults: list[Mapping] = defaults, **kwargs
 ) -> None:
@@ -395,6 +384,7 @@ def refresh(
     kwargs.setdefault("defaults", defaults)
 
     update(config, collect(**kwargs))
+    _warn_about_values_in_place_of_sections(config, defaults)
 
 
 def get(

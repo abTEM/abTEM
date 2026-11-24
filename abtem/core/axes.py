@@ -194,10 +194,15 @@ class AxisMetadata:
     def concatenate(self, other: AxisMetadata) -> AxisMetadata:
         """Concatenate this axis metadata with another compatible axis metadata."""
         if not self._concatenate:
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate along the {type(self).__name__} '{self.label}'"
+            )
 
         if not self.__eq__(other):
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate along the {type(self).__name__} '{self.label}': "
+                "the axes to join have different parameters"
+            )
 
         return self
 
@@ -261,18 +266,16 @@ class LinearAxis(AxisMetadata):
         change here -- the number of points continues to come from the
         array's own shape wherever this axis is used.
 
-        Only simple, positive-step, non-empty slices/indices -- which is all
-        `iterate_chunk_ranges` chunk partitioning ever produces -- are
-        represented exactly; anything else raises TypeError rather than
-        silently returning an axis with the wrong offset. TypeError
-        specifically: `ArrayObject._get_ensemble_axes_metadata_items`
-        (general user-facing indexing, e.g. `waves[::-1]`) already wraps
-        `axis[item]` in `try/except TypeError` and falls back to a plain
-        copy for whatever an axis can't represent exactly -- the same
-        fallback this axis relied on before it had a `__getitem__` at all.
-        Chunk partitioning is unaffected either way, since it never
-        constructs a slice this doesn't support.
+        Only a non-negative integer or a non-empty slice with a step of one and a
+        non-negative start -- which is all `iterate_chunk_ranges` chunk
+        partitioning ever produces -- is represented. Any other slice, a negative
+        integer, and any index that is neither an integer nor a slice, raises
+        TypeError rather than silently returning an axis with the wrong offset.
+        Indexing an array object goes through `_index_ensemble_axis`, which
+        knows the length of the axis and so also handles strides, negative
+        bounds, reversed slices and index arrays.
         """
+
         kwargs = dataclasses.asdict(self)
 
         # `iterate_chunk_ranges` always yields a tuple of slices, one per
@@ -289,6 +292,11 @@ class LinearAxis(AxisMetadata):
             item = item[0]
 
         if isinstance(item, Number):
+            if item < 0:
+                raise TypeError(
+                    f"{type(self).__name__} does not support a negative "
+                    f"integer, got {item}"
+                )
             start = item
         elif isinstance(item, slice):
             if item.step not in (None, 1):
@@ -411,7 +419,11 @@ class OrdinalAxis(AxisMetadata):
 
     def concatenate(self, other: AxisMetadata) -> OrdinalAxis:
         if not safe_equality(self, other, ("values", "weights")):
-            raise RuntimeError()
+            raise RuntimeError(
+                f"cannot concatenate the {type(self).__name__} '{self.label}' with "
+                f"the {type(other).__name__} '{other.label}': they differ in more "
+                "than their values and weights"
+            )
 
         assert isinstance(other, OrdinalAxis)
 
@@ -825,6 +837,84 @@ def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]
     if not _has_unequal_weights(weights):
         return None
     return tuple(float(weight) for weight in weights)
+
+
+def _scan_run_axis(axis: ScanAxis, run: range) -> ScanAxis:
+    """The scan axis of the members `run` of `axis`, an evenly spaced run in either
+    direction. A run of fewer than two members has no direction, so its sampling is
+    positive and a single position is never a reversed scan."""
+    sampling = axis.sampling * run.step
+    if len(run) < 2:
+        sampling = abs(sampling)
+    # an empty reversed range starts at the stop, which can be -1
+    return dataclasses.replace(
+        axis, offset=axis.offset + max(run.start, 0) * axis.sampling, sampling=sampling
+    )
+
+
+def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
+    """The metadata of an ensemble axis of length `n` indexed by `item`, a slice or
+    an integer or boolean index array. A linear axis raises `IndexError` for an index
+    array of more than one dimension.
+
+    A slice selecting every member gives a copy of the axis. Any other slice with a
+    positive step is represented exactly by an axis of the same class, except that
+    a `ReciprocalSpaceAxis` keeps its class only for a step of one and only with
+    ``fftshift=True`` (with ``fftshift=False`` its coordinates are not linear in
+    storage order). On a `ScanAxis`, an index array selecting evenly spaced members
+    is treated as the equivalent slice, and so is a slice with a negative step: it
+    lists the same positions from the last, so the axis keeps its class with the
+    first selected member as its offset and a negative sampling. Every other slice
+    and index array give a `NonLinearAxis` with the selected coordinates.
+    """
+    if not isinstance(axis, LinearAxis):
+        return axis[item].copy() if hasattr(axis, "__getitem__") else axis.copy()
+
+    if np.ndim(item) > 1:
+        raise IndexError(
+            f"{type(axis).__name__} '{axis.label}' cannot be indexed with an index "
+            f"array of {np.ndim(item)} dimensions (such as the arrays of `np.ix_`): "
+            f"index one axis at a time."
+        )
+
+    # scan reductions find their scan axes by class, so an index array that a
+    # slice could express keeps a scan axis as the slice does
+    if isinstance(axis, ScanAxis) and not isinstance(item, slice):
+        indices = np.arange(n)[item]
+        step = int(indices[1] - indices[0]) if len(indices) > 1 else 1
+        if len(indices) and step != 0:
+            run = range(int(indices[0]), int(indices[-1]) + step, step)
+            if np.array_equal(indices, run):
+                return _scan_run_axis(axis, run)
+
+    if isinstance(item, slice):
+        indices = range(n)[item]
+        if indices == range(n):
+            return axis.copy()
+
+        # a ReciprocalSpaceAxis rounds its offset to a whole multiple of its sampling,
+        # which a slice with a step does not keep
+        if isinstance(axis, ReciprocalSpaceAxis):
+            exact = indices.step == 1 and axis.fftshift
+        else:
+            # a reversed scan lists the same positions from the last: its offset is
+            # the first member selected and its sampling is negative
+            exact = indices.step > 0 or isinstance(axis, ScanAxis)
+        if exact:
+            if isinstance(axis, ScanAxis):
+                return _scan_run_axis(axis, indices)
+            return dataclasses.replace(
+                axis,
+                offset=axis.offset + indices.start * axis.sampling,
+                sampling=axis.sampling * indices.step,
+            )
+
+    kwargs = {
+        field.name: getattr(axis, field.name)
+        for field in dataclasses.fields(AxisMetadata)
+    }
+    values = tuple(float(value) for value in np.asarray(axis.coordinates(n))[item])
+    return NonLinearAxis(values=values, **kwargs)
 
 
 def axis_to_dict(axis: AxisMetadata):

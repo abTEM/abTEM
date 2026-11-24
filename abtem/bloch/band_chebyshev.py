@@ -28,10 +28,12 @@ is faster.
 
 from __future__ import annotations
 
+import ctypes
 import functools
 
 import numpy as np
 import scipy.special  # type: ignore
+from numba import njit  # type: ignore
 
 from abtem.core.backend import cp, get_array_module
 
@@ -55,6 +57,103 @@ def gershgorin_bounds(A: np.ndarray, block: int = 1024) -> tuple[float, float]:
         low = min(low, float((diagonal - radius).min()))
         high = max(high, float((diagonal + radius).max()))
     return low, high
+
+
+class _HostBlas:
+    """The Hermitian (symmetric) matrix product and rank-2k update of the BLAS that
+    SciPy is built with, called with a leading dimension, so that the trailing matrix
+    of the band reduction, a block of a larger array, is neither copied nor
+    transposed, and only its lower triangle is read and written: two thirds of the
+    arithmetic of the three general products it replaces.
+
+    The functions are those of `scipy.linalg.cython_blas`, whose C pointers SciPy
+    exposes in capsules; they are called by ctypes with their Fortran signature.
+    """
+
+    def __init__(self, dtype):
+        import scipy.linalg.cython_blas as cython_blas  # type: ignore
+
+        capi = cython_blas.__pyx_capi__
+        get_name = ctypes.pythonapi.PyCapsule_GetName
+        get_name.restype = ctypes.c_char_p
+        get_name.argtypes = [ctypes.py_object]
+        get_pointer = ctypes.pythonapi.PyCapsule_GetPointer
+        get_pointer.restype = ctypes.c_void_p
+        get_pointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+
+        def function(name, *types):
+            capsule = capi[name]
+            address = get_pointer(capsule, get_name(capsule))
+            return ctypes.CFUNCTYPE(None, *types)(address)
+
+        pointer, integer, char = ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_char_p
+        self.complex = np.dtype(dtype) == np.complex128
+        scalar = ctypes.c_double * 2 if self.complex else ctypes.c_double
+        self._scalar = scalar
+        if self.complex:
+            self._multiply = function(
+                "zhemm", char, char, integer, integer, pointer, pointer, integer,
+                pointer, integer, pointer, pointer, integer,
+            )
+            self._update = function(
+                "zher2k", char, char, integer, integer, pointer, pointer, integer,
+                pointer, integer, ctypes.POINTER(ctypes.c_double), pointer, integer,
+            )
+        else:
+            self._multiply = function(
+                "dsymm", char, char, integer, integer, pointer, pointer, integer,
+                pointer, integer, pointer, pointer, integer,
+            )
+            self._update = function(
+                "dsyr2k", char, char, integer, integer, pointer, pointer, integer,
+                pointer, integer, pointer, pointer, integer,
+            )
+
+    @staticmethod
+    def _leading_dimension(array: np.ndarray) -> int:
+        assert array.flags.f_contiguous or array.strides[0] == array.itemsize
+        return max(1, array.strides[1] // array.itemsize)
+
+    def _value(self, value: float):
+        if self.complex:
+            return self._scalar(value, 0.0)
+        return self._scalar(value)
+
+    def multiply(self, a: np.ndarray, b: np.ndarray, out: np.ndarray) -> None:
+        """out = a b for the Hermitian `a`, of which the lower triangle is read."""
+        n, k = out.shape
+        ld = self._leading_dimension
+        self._multiply(
+            b"L", b"L", ctypes.byref(ctypes.c_int(n)), ctypes.byref(ctypes.c_int(k)),
+            ctypes.byref(self._value(1.0)), a.ctypes.data, ctypes.byref(ctypes.c_int(ld(a))),
+            b.ctypes.data, ctypes.byref(ctypes.c_int(ld(b))),
+            ctypes.byref(self._value(0.0)), out.ctypes.data, ctypes.byref(ctypes.c_int(ld(out))),
+        )
+
+    def update(self, alpha: float, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> None:
+        """c += alpha (a b^H + b a^H) for the Hermitian `c`, of which the lower
+        triangle is written."""
+        n, k = c.shape[0], a.shape[1]
+        ld = self._leading_dimension
+        beta = ctypes.c_double(1.0) if self.complex else self._value(1.0)
+        self._update(
+            b"L", b"N", ctypes.byref(ctypes.c_int(n)), ctypes.byref(ctypes.c_int(k)),
+            ctypes.byref(self._value(alpha)), a.ctypes.data, ctypes.byref(ctypes.c_int(ld(a))),
+            b.ctypes.data, ctypes.byref(ctypes.c_int(ld(b))),
+            ctypes.byref(beta), c.ctypes.data, ctypes.byref(ctypes.c_int(ld(c))),
+        )
+
+
+@functools.lru_cache(maxsize=None)
+def _host_blas(dtype_char: str):
+    """The `_HostBlas` of a dtype ('D' complex128, 'd' float64), or None where SciPy
+    does not give access to its BLAS."""
+    if dtype_char not in ("D", "d"):
+        return None
+    try:
+        return _HostBlas(np.dtype(dtype_char))
+    except Exception:  # noqa: BLE001 -- a build without cython_blas capsules
+        return None
 
 
 def _gemm(transa: str, transb: str, alpha, a, b, beta, c) -> None:
@@ -148,7 +247,15 @@ def band_reduce(A: np.ndarray, bandwidth: int) -> list:
         # W <- W - 1/2 V (T^H V^H W), trailing <- trailing - V W^H - W V^H
         trailing = A[start:, start:]
         VT = xp.asfortranarray(V @ T)
-        if xp is np:
+        blas = _host_blas(A.dtype.char) if xp is np else None
+        if blas is not None:
+            # the Hermitian product and update read and write the lower triangle
+            # only: the upper one of the trailing matrix is stale from here on
+            W = np.empty((m, k), dtype=A.dtype, order="F")
+            blas.multiply(trailing, VT, W)
+            W -= 0.5 * V @ (T.conj().T @ (V.conj().T @ W))
+            blas.update(-1.0, V, np.asfortranarray(W), trailing)
+        elif xp is np:
             W = trailing @ VT
             W -= 0.5 * V @ (T.conj().T @ (V.conj().T @ W))
             trailing -= V @ W.conj().T
@@ -250,6 +357,91 @@ def _step_kernel(dtype_char: str):
     return cp.RawKernel(source, "chebyshev_step")
 
 
+@njit(nogil=True, fastmath=True)
+def _chebyshev_recurrence(lre, lim, cre, cim, scale1, shift1, scale, shift, ore, oim):
+    """The Chebyshev recurrence on the host, in float64: `lre`, `lim` the real and
+    imaginary parts of the lower band (bandwidth + 1, n), `cre`, `cim` the
+    coefficients (terms, thicknesses), `ore`, `oim` the result (thicknesses, n).
+
+    Loops over the offsets of the band with the rows inside, which the compiler
+    makes into vector operations; one thread, and `nogil`, so that it can run next to
+    the GPU work of another frame."""
+    b = lre.shape[0] - 1
+    n = lre.shape[1]
+    terms, nz = cre.shape
+    pre = np.zeros(n)
+    pim = np.zeros(n)
+    cur_re = np.zeros(n)
+    cur_im = np.zeros(n)
+    cur_re[0] = 1.0
+    nre = np.zeros(n)
+    nim = np.zeros(n)
+    sre = np.zeros(n)
+    sim = np.zeros(n)
+    for z in range(nz):
+        ore[z, 0] += cre[0, z]
+        oim[z, 0] += cim[0, z]
+    for k in range(1, terms):
+        sc = scale1 if k == 1 else scale
+        sh = shift1 if k == 1 else shift
+        for i in range(n):
+            sre[i] = lre[0, i] * cur_re[i] - lim[0, i] * cur_im[i]
+            sim[i] = lre[0, i] * cur_im[i] + lim[0, i] * cur_re[i]
+        for o in range(1, b + 1):
+            m = n - o
+            for i in range(m):
+                cr = lre[o, i]
+                ci = lim[o, i]
+                tr = cur_re[i + o]
+                ti = cur_im[i + o]
+                sre[i] += cr * tr + ci * ti
+                sim[i] += cr * ti - ci * tr
+            for i in range(m):
+                cr = lre[o, i]
+                ci = lim[o, i]
+                tr = cur_re[i]
+                ti = cur_im[i]
+                sre[i + o] += cr * tr - ci * ti
+                sim[i + o] += cr * ti + ci * tr
+        for i in range(n):
+            nre[i] = sc * sre[i] - sh * cur_re[i] - pre[i]
+            nim[i] = sc * sim[i] - sh * cur_im[i] - pim[i]
+        for z in range(nz):
+            ar = cre[k, z]
+            ai = cim[k, z]
+            for i in range(n):
+                ore[z, i] += ar * nre[i] - ai * nim[i]
+                oim[z, i] += ar * nim[i] + ai * nre[i]
+        pre, cur_re, nre = cur_re, nre, pre
+        pim, cur_im, nim = cur_im, nim, pim
+
+
+def chebyshev_propagate_host(
+    band: np.ndarray, scales: np.ndarray, bounds: tuple[float, float]
+) -> np.ndarray:
+    """`chebyshev_propagate` in float64 on the host, by a compiled kernel: the band
+    of a complex128 or float64 matrix, the result complex128."""
+    n = band.shape[1]
+    coefficients, center, half = chebyshev_coefficients(
+        scales, bounds, float(np.finfo(np.float64).eps) * _TRUNCATION
+    )
+    real = np.zeros((len(scales), n))
+    imaginary = np.zeros((len(scales), n))
+    _chebyshev_recurrence(
+        np.ascontiguousarray(band.real),
+        np.ascontiguousarray(band.imag),
+        np.ascontiguousarray(coefficients.real),
+        np.ascontiguousarray(coefficients.imag),
+        1.0 / half,
+        center / half,
+        2.0 / half,
+        2.0 * center / half,
+        real,
+        imaginary,
+    )
+    return (real + 1j * imaginary).T
+
+
 def chebyshev_propagate(
     band: np.ndarray,
     scales: np.ndarray,
@@ -259,9 +451,12 @@ def chebyshev_propagate(
     """exp(i s B) e_0 for each s, as an (n, len(scales)) array, from the lower band of
     the Hermitian band matrix B (see `lower_band`) and bounds on its spectrum.
 
-    On a GPU each term is one fused kernel unless `fused` is False.
+    On a GPU each term is one fused kernel unless `fused` is False; on the CPU, a
+    double-precision band goes to a compiled kernel (`chebyshev_propagate_host`).
     """
     xp = get_array_module(band)
+    if xp is np and band.dtype in (np.float64, np.complex128):
+        return chebyshev_propagate_host(band, scales, bounds)
     bandwidth, n = band.shape[0] - 1, band.shape[1]
     real_dtype = np.finfo(band.dtype).dtype
     complex_dtype = np.result_type(band.dtype, np.complex64)
@@ -333,7 +528,7 @@ def propagate_incident_beam(
     A: np.ndarray,
     scales: np.ndarray,
     direct: int = 0,
-    bandwidth: int = 128,
+    bandwidth: int | None = None,
     bounds: tuple[float, float] | None = None,
     overwrite_a: bool = False,
     fused: bool = True,
@@ -348,8 +543,10 @@ def propagate_incident_beam(
         The values of s.
     direct : int
         The index of the incident beam.
-    bandwidth : int
-        The bandwidth of the reduction.
+    bandwidth : int, optional
+        The bandwidth of the reduction: 128 on a GPU, 32 on the CPU, where a wider
+        band makes the recurrence dearer faster than it makes the reduction cheaper
+        (1299 beams, an Apple M2: 0.11 s and 0.16 s for 32, 0.11 s and 0.30 s for 64).
     bounds : tuple of float, optional
         Bounds on the spectrum of A; Gershgorin bounds if not given.
     overwrite_a : bool
@@ -374,6 +571,8 @@ def propagate_incident_beam(
     if direct:
         A[[0, direct]] = A[[direct, 0]]
         A[:, [0, direct]] = A[:, [direct, 0]]
+    if bandwidth is None:
+        bandwidth = 32 if xp is np else 128
     bandwidth = max(0, min(bandwidth, n - 1))
     factors = band_reduce(A, bandwidth) if bandwidth else []
     band = lower_band(A, bandwidth)
