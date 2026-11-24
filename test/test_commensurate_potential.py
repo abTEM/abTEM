@@ -986,3 +986,51 @@ def test_a_rebuilt_potential_keeps_the_resolved_grid_and_slices():
 
     assert array.shape[:2] == (2, 5)
     assert array.gpts == potential.gpts
+
+
+def _mean_haadf(potential, scan_extent, device):
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(start=(0, 0), end=scan_extent, gpts=(3, 3), endpoint=False)
+    detector = abtem.AnnularDetector(inner=50, outer=120)
+    measurement = probe.scan(potential, scan=scan, detectors=detector).compute()
+    return float(np.mean(measurement.to_cpu().array))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_crystal_potential_tile_boundaries_do_not_bias_finite_haadf(device):
+    """A plane on the cell face is cut by it, and in a `CrystalPotential` the last
+    slice of one tile and the first of the next, each holding half of that plane, are
+    adjacent. With the planes on a lattice and equal slices the two halves add up, so
+    the finite-projection HAADF of six tiles stays within a few percent of the same
+    crystal sliced at 0.1 Å (+9.9 % with the previous midpoint slicing, +0.7 %
+    now)."""
+    unit_atoms = bulk("Si", cubic=True) * (2, 2, 1)
+    gpts = (108, 108)
+    scan_extent = (unit_atoms.cell[0, 0] / 2, unit_atoms.cell[1, 1] / 2)
+
+    reference = abtem.Potential(
+        unit_atoms * (1, 1, 6),
+        gpts=gpts,
+        slice_thickness=0.1,
+        projection="finite",
+        commensurate=False,
+        device=device,
+    )
+    unit = abtem.Potential(
+        unit_atoms,
+        gpts=gpts,
+        slice_thickness=1.0,
+        projection="finite",
+        device=device,
+    )
+    # The periodic stack, which is what the reference is; correct_surfaces would
+    # (by design) remove the periodic images beyond the outer surfaces.
+    crystal = abtem.CrystalPotential(
+        unit, repetitions=(1, 1, 6), correct_surfaces=False
+    )
+
+    expected = _mean_haadf(reference, scan_extent, device)
+    result = _mean_haadf(crystal, scan_extent, device)
+
+    assert result == pytest.approx(expected, rel=0.03)
