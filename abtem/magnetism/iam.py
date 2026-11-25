@@ -278,12 +278,10 @@ def _table_difference(table, i, wi, j, wj):
     """The cumulative integral `table` (nodes along its first axis) from the
     position (i, wi) to the position (j, wj), linearly interpolated between nodes.
 
-    Snapping a limit to the nearest node instead moved a whole node interval of
-    the integral between neighbouring slices when a limit lay halfway between two
-    nodes: one ulp decided which, and the field near the atom jumped
-    (by 60 % of the first slice's transverse components, 5 % of the field's
-    maximum). Interpolated, the integral is continuous in the limits, and the
-    slices of a cell still add up to the integral through it.
+    The integral is interpolated, not snapped to the nearest node, so that it is
+    continuous in the limits: a limit halfway between two nodes would otherwise
+    move a whole node interval of the integral between neighbouring slices on one
+    ulp, and the slices of a cell add up to the integral through it.
     """
     upper = table[j] * (1.0 - wj) + table[j + 1] * wj
     lower = table[i] * (1.0 - wi) + table[i + 1] * wi

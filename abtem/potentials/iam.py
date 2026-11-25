@@ -134,10 +134,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
         is_exit_plane = np.zeros(len(self), dtype=bool)
         for i in range(len(is_exit_plane)):
-            if (
-                exit_plane_index < len(exit_planes)
-                and i == exit_planes[exit_plane_index]
-            ):
+            if exit_plane_index < len(exit_planes) and i == exit_planes[exit_plane_index]:
                 is_exit_plane[i] = True
                 exit_plane_index += 1
 
@@ -398,7 +395,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             z_extent = profile.extent[1]
 
             if explode is True or (isinstance(explode, Sequence) and explode):
-                n_panels = profile.ensemble_shape[0] if profile.ensemble_shape else 1
+                n_panels = (
+                    profile.ensemble_shape[0] if profile.ensemble_shape else 1
+                )
             else:
                 n_panels = 1
 
@@ -1918,7 +1917,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         lies inside its own slice, so a slice limit does not cut an atom (except at
         the cell faces), with planes on a lattice along z sliced in equal steps and
         neighbouring planes merged as long as the slice stays within the thickness
-        (see `abtem.slicing.commensurate_slice_thickness`). For
+        (see `abtem.slicing.commensurate_slice_thickness`). Planes are atoms whose z
+        positions agree within 0.2 Å, so with a thickness below that a slice limit
+        can fall inside a buckled plane. For
         atoms that are not periodic along the propagation direction, an
         `AtomsEnsemble` of several configurations, or with `commensurate=False`,
         the height of the potential is instead divided into the fewest equal
@@ -2230,7 +2231,9 @@ class FieldArray(BaseField, ArrayObject):
         first_slice, last_slice = self._slice_range(first_slice, last_slice)
 
         if chunk_size == "auto":
-            chunk_size = estimate_potential_chunk_size(self.base_shape[1:], self.device)
+            chunk_size = estimate_potential_chunk_size(
+                self.base_shape[1:], self.device
+            )
 
         # Cap so the whole range is one chunk when it fits in the budget,
         # then distribute evenly so the last chunk is never smaller than
@@ -2247,7 +2250,9 @@ class FieldArray(BaseField, ArrayObject):
             )
             chunk_array = self.array[s]
 
-            exit_planes = tuple(np.where(exit_plane_after[chunk_start:chunk_end])[0])
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
 
             chunk = self.__class__(
                 chunk_array,
@@ -2298,7 +2303,9 @@ class FieldArray(BaseField, ArrayObject):
         # the exit planes index the slices, hence they have to be mapped into the
         # sliced potential; those falling outside it are dropped, and if none
         # remain the exit plane defaults to the last slice of the new potential
-        selected = np.atleast_1d(np.arange(potential_array.num_slices)[slic_items[0]])
+        selected = np.atleast_1d(
+            np.arange(potential_array.num_slices)[slic_items[0]]
+        )
         exit_planes = tuple(
             int(np.flatnonzero(selected == plane)[0])
             for plane in potential_array.exit_planes
@@ -2564,7 +2571,9 @@ class PotentialArray(BasePotential, FieldArray):
                 self._transmission_function,
                 self.array,
                 energy=energy,
-                meta=xp.array((), dtype=np.result_type(self.array.dtype, np.complex64)),
+                meta=xp.array(
+                    (), dtype=np.result_type(self.array.dtype, np.complex64)
+                ),
             )
         else:
             array = self._transmission_function(self.array, energy=energy)
@@ -4001,7 +4010,9 @@ class CrystalPotential(_PotentialBuilder):
                 out[k] = array
                 slice_thicknesses.append(thickness)
 
-            exit_planes = tuple(np.where(exit_plane_after[chunk_start:chunk_end])[0])
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
             chunk = PotentialArray(
                 out,
                 slice_thickness=tuple(slice_thicknesses),

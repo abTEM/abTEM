@@ -83,7 +83,8 @@ def commensurate_slice_thickness(
     the fewest equal slices that fit.
 
     Translation-equivalent atoms sit identically in their slices, which is what
-    makes the slicing commensurate.
+    makes the slicing commensurate, except at the cell faces, which cut a plane that
+    sits on them.
 
     Parameters
     ----------
@@ -587,13 +588,11 @@ def _validate_slice_thickness(
     num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
     if is_number(slice_thickness):
-        st_value = (
-            slice_thickness.item()
-            if isinstance(slice_thickness, np.ndarray)
-            else float(slice_thickness)
-        )
+        st_value = slice_thickness.item() if isinstance(slice_thickness, np.ndarray) else float(slice_thickness)
         if st_value <= 0.0:
-            raise ValueError(f"slice_thickness must be positive, got {slice_thickness}")
+            raise ValueError(
+                f"slice_thickness must be positive, got {slice_thickness}"
+            )
         if thickness is not None:
             thickness = float(thickness)
             n = max(safe_ceiling_int(thickness / slice_thickness), 1)
@@ -924,11 +923,14 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
             return False
 
         if not all(
-            np.array_equal(a, b) for a, b in zip(self._slice_index, other._slice_index)
+            np.array_equal(a, b)
+            for a, b in zip(self._slice_index, other._slice_index)
         ):
             return False
 
-        return safe_equality(self, other, exclude=("_slice_index",) + self._eq_exclude)
+        return safe_equality(
+            self, other, exclude=("_slice_index",) + self._eq_exclude
+        )
 
     def get_atoms_in_slices(
         self,
@@ -1054,7 +1056,9 @@ def _integrate_planes(array, start: float, stop: float):
     if first == last:
         return (v - u) * array[..., first % n]
 
-    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[..., last % n]
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[
+        ..., last % n
+    ]
     if last > first + 1:
         summed = summed + _sum_planes(array, first + 1, last)
     return summed

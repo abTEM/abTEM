@@ -104,8 +104,8 @@ potential:
   # commensurate with the atoms and no coarser than this.
   sampling: 0.05
   # The largest slice thickness [Å] of a Potential given neither `slice_thickness`
-  # nor `num_slices`; each atomic plane lies inside its own slice, and no slice is
-  # thicker than this.
+  # nor `num_slices`; each atomic plane lies inside its own slice (except a plane on
+  # a cell face, which the face cuts), and no slice is thicker than this.
   slice-thickness: 1.0
 bloch:
   # How Bloch waves compute the beam amplitudes from the structure matrix.

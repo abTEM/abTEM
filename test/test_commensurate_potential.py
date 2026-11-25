@@ -549,9 +549,10 @@ def test_lattice_slicing_has_one_thickness_but_the_faces(atoms, target):
     assert len(set(result[1:-1])) == 1
 
 
-def test_fresnel_propagator_is_computed_once_per_distinct_thickness(monkeypatch):
+def test_fresnel_propagator_is_computed_at_most_three_times(monkeypatch):
     """A plane wave through a Si potential with planes further apart than the
-    target hits the propagator cache on every slice but the faces."""
+    target hits the propagator cache on every slice but the faces: the first
+    slice, the equal ones, and the last."""
     from abtem.multislice import FresnelPropagator
 
     calls = []
@@ -1003,10 +1004,12 @@ def test_crystal_potential_tile_boundaries_do_not_bias_finite_haadf(device):
     slice of one tile and the first of the next, each holding half of that plane, are
     adjacent. With the planes on a lattice and equal slices the two halves add up, so
     the finite-projection HAADF of six tiles stays within a few percent of the same
-    crystal sliced at 0.1 Å (+9.9 % with the previous midpoint slicing, +0.7 %
+    crystal sliced at 0.1 Å (-11.9 % with the previous midpoint slicing, -1.6 %
     now)."""
     unit_atoms = bulk("Si", cubic=True) * (2, 2, 1)
-    gpts = (108, 108)
+    # The grid must cover the detector: the antialiasing cutoff of a 200 keV probe is
+    # 148 mrad at this grid, beyond the 120 mrad outer angle.
+    gpts = (192, 192)
     scan_extent = (unit_atoms.cell[0, 0] / 2, unit_atoms.cell[1, 1] / 2)
 
     reference = abtem.Potential(
@@ -1034,3 +1037,26 @@ def test_crystal_potential_tile_boundaries_do_not_bias_finite_haadf(device):
     result = _mean_haadf(crystal, scan_extent, device)
 
     assert result == pytest.approx(expected, rel=0.03)
+
+
+def test_planes_with_lattice_like_spacings_off_the_lattice_use_the_midpoint_rule():
+    """Every spacing is within 5 % of the smallest, but the planes drift off the
+    lattice of the mean step by 0.2 Å, so a half-step limit could fall on a plane."""
+    from abtem.slicing import _lattice_pieces, _plane_lattice_periods
+
+    planes = np.cumsum([0.0] + [1.0] * 10 + [1.04] * 9)
+    cell_z = 20.4
+
+    assert _plane_lattice_periods(planes, cell_z) == 20
+    assert _lattice_pieces(planes, cell_z, 1.0) is None
+
+    atoms = _atoms_at_z(planes, cell_z=cell_z)
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+    assert sum(result) == pytest.approx(cell_z)
+    assert max(result) <= 1.0 + 1e-9
+
+
+def test_planes_closer_than_the_tolerance_are_not_a_lattice():
+    from abtem.slicing import _plane_lattice_periods
+
+    assert _plane_lattice_periods(np.array([0.0, 0.0005, 2.0]), 4.0) is None

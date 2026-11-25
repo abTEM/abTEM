@@ -91,8 +91,8 @@ Features:
     - **Behaviour change:** `sampling` and `slice_thickness` are the largest sampling and slice thickness to
       accept, as before, but the grid is now the coarsest one commensurate with the atom planes that meets the
       sampling, and each atomic plane lies inside its own slice, so a slice limit does not cut an atom (which
-      would split it between two slices and bias `projection="finite"`); only the cell faces are limits, and a
-      plane on a face is cut by it. Planes on a lattice along z, as in a crystal, get equal slices: as many
+      would split it between two slices and bias `projection="finite"`); the one exception is a plane on a cell face, which the face cuts, so the
+      faces are slice limits that can fall on an atom. Planes on a lattice along z, as in a crystal, get equal slices: as many
       lattice steps as fit the thickness, or the step divided into the fewest equal parts that fit when it is
       wider, with the limits half a step off the lattice; only the two slices at the faces differ, so the
       Fresnel propagator is computed about three times, not once per slice. Other planes get limits midway
@@ -100,8 +100,9 @@ Features:
       This also applies to an explicit numeric
       `sampling` and `slice_thickness`, which results of an existing script depend on: `Potential(si * (3, 3, 2),
       sampling=0.05, slice_thickness=1.0)` (cubic Si) has 336 × 336 grid points instead of 326 × 326, and 17
-      slices (0.34 and 0.68 Å) instead of 11 of 0.987 Å, so a multislice simulation does up to about a half
-      more slices where the planes are further apart than the thickness. Use `gpts` and `num_slices` to set
+      slices (0.34 and 0.68 Å) instead of 11 of 0.987 Å, so a multislice simulation does up to about twice
+      as many slices (Si at 1.3 to 1.35 Å: 1.8 to 1.9 times dev's, and 2.0 to 2.4 times the multislice time) where
+      the planes are further apart than the thickness. Use `gpts` and `num_slices` to set
       the discretization explicitly; `commensurate=False` restores the plain grid and uniform slices
     - Neither is ever coarser than requested. A commensurate grid that would need more than 15 % more grid
       points than the plain grid along an axis (atom planes about as fine as the sampling) gives way to the
