@@ -311,6 +311,14 @@ Bugfixes:
   amount set by the GPU's rounding (1e-4 on an RTX 5080, 4e-6 on an RTX 4090). It is now 3e-6 on both. The extra
   double-precision work typically costs about 1 % of the Gram matrix accumulation the compression already does
   (more at large semiangles on coarse grids).
+- The band solver (`bloch.solver: band`) solves a single-precision matrix on the host in double precision, as NumPy's
+  `eigh` does, and rounds the amplitudes back. Reduced in single precision, the band form was 1.2 to 3.4 times as far
+  from the answer as rounding the matrix alone, by an amount that depended on how the BLAS divided its products
+  between threads (a 960-beam baddeleyite matrix at 1000 Å: 1.0e-5 to 2.9e-5 of the largest amplitude, 8.5e-6 for
+  the rounding). `test_band_solver_in_single_precision_is_as_accurate_as_eigh` failed or passed with the thread
+  count. The double-precision solve is as fast or faster on the host (960 to 4000 beams on 8 cores: 1.6 to 2.8 times
+  faster, 0.07 against 0.11 s at 960). Only an explicit `solver='band'` with `precision: float32` on the CPU is
+  affected; `auto` takes `eigh` there, and the GPU path is unchanged.
 - A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
   compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
