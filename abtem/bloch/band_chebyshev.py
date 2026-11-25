@@ -563,6 +563,25 @@ def propagate_incident_beam(
     xp = get_array_module(A)
     if xp is not np and (cp is None or xp is not cp):
         raise NotImplementedError("the band solver needs NumPy or CuPy arrays")
+    if xp is np and A.dtype in (np.float32, np.complex64):
+        # On the host a single-precision matrix is solved in double precision, as
+        # NumPy's eigh solves it, and the result is rounded back. Reduced in single
+        # precision, the error of the band form was 1.2 to 3.4 times that of
+        # rounding A itself, and set by how the BLAS split the products between
+        # threads (960 beams at 1000 Å: 1.0e-5 to 2.9e-5 of the largest amplitude,
+        # against 8.5e-6). In double precision the reduction takes the Hermitian
+        # BLAS kernels and the recurrence the compiled kernel, which leaves the
+        # cost about the same.
+        y = propagate_incident_beam(
+            A.astype(np.promote_types(A.dtype, np.float64), order="F"),
+            scales,
+            direct=direct,
+            bandwidth=bandwidth,
+            bounds=bounds,
+            overwrite_a=True,
+            fused=fused,
+        )
+        return y.astype(np.promote_types(A.dtype, np.complex64))
     n = len(A)
     A = xp.asfortranarray(A) if overwrite_a else xp.array(A, order="F", copy=True)
     if bounds is None:
