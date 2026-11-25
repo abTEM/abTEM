@@ -36,7 +36,10 @@ _VACUUM_KWARGS = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
 
 def _small_potential(gpts=96, repetitions=(2, 2, 3), device="cpu"):
     atoms = bulk("Si", cubic=True) * repetitions
-    return Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
+    # The uniform slicing these tests were written for: the fewest slices no
+    # thicker than 2 Å (`slice_thickness=2` is slicing commensurate with the planes).
+    num_slices = int(np.ceil(atoms.cell[2, 2] / 2 - 1e-9))
+    return Potential(atoms, gpts=gpts, num_slices=num_slices, device=device)
 
 
 def _relative_error(measurement, reference):
