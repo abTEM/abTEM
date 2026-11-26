@@ -955,3 +955,51 @@ def test_a_small_max_batch_multislice_keeps_the_seeded_crystal(device):
     np.testing.assert_allclose(
         batched, default, rtol=0, atol=1e-5 * np.abs(default).max()
     )
+
+
+@pytest.mark.parametrize("exit_planes", [2, 3], ids=["5 planes", "4 planes"])
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, True), (True, False)],
+    ids=["eager", "lazy, one task per S-matrix", "lazy"],
+)
+def test_prism_with_a_ctf_ensemble_and_exit_planes_and_frozen_phonons_equals_multislice(
+    exit_planes, lazy, disable_s_matrix_chunks
+):
+    # the per-member eager reduction averaged the CTF ensemble before the caller
+    # stored it in an allocation that keeps that axis, so the exit-plane axis of a
+    # member landed on the CTF axis: a broadcast ValueError for 5 planes against 4
+    # defocus values and wrong values for 4 against 4
+    import abtem
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (1, 1, 2)
+    frozen_phonons = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=(1, 2))
+    potential = abtem.Potential(
+        frozen_phonons, sampling=0.1, slice_thickness=1.8, exit_planes=exit_planes
+    )
+    defocus = abtem.distributions.gaussian(
+        standard_deviation=30, num_samples=4, sampling_limit=2
+    )
+    scan = abtem.GridScan((0, 0), (2, 2), gpts=(2, 2))
+    detector = abtem.AnnularDetector(30, 120)
+
+    reference = abtem.Probe(semiangle_cutoff=20, defocus=defocus, energy=100e3).scan(
+        potential, scan=scan, detectors=detector, lazy=False
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
+    )
+    kwargs = {"disable_s_matrix_chunks": disable_s_matrix_chunks} if lazy else {}
+    measurement = s_matrix.scan(
+        scan=scan,
+        ctf=abtem.CTF(semiangle_cutoff=20, defocus=defocus),
+        detectors=detector,
+        lazy=lazy,
+        **kwargs,
+    ).compute()
+
+    assert measurement.shape == reference.shape
+    np.testing.assert_allclose(
+        measurement.array, reference.array, rtol=0, atol=1e-5 * reference.array.max()
+    )

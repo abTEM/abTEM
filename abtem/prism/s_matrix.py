@@ -1366,9 +1366,13 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         detectors: BaseDetector | list[BaseDetector] = None,
         max_batch_reduction: int | str = "auto",
         reduction_scheme: str = "auto",
+        _defer_frozen_phonon_reduction: bool = False,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         # reduce, keeping the position axis of a bare position for the caller
-        # that assembles the results of several reductions
+        # that assembles the results of several reductions. A caller that holds
+        # one member of an S-matrix ensemble defers the averaging of every axis
+        # flagged ensemble_mean (frozen phonons, a CTF ensemble) to itself: it
+        # allocates the members' measurements with those axes.
         self.accelerator.check_is_defined()
 
         if ctf is None:
@@ -1419,16 +1423,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
             # Ensemble axes flagged ensemble_mean (frozen phonons by default, or
-            # a CTF ensemble) were returned unreduced, unlike the lazy branch,
-            # which averages them in _finalize_lazy_measurements.
-            measurements = [
-                (
-                    measurement.reduce_ensemble()
-                    if hasattr(measurement, "reduce_ensemble")
-                    else measurement
-                )
-                for measurement in measurements
-            ]
+            # a CTF ensemble) are returned unreduced; they are averaged here, as
+            # the lazy branch averages them in _finalize_lazy_measurements.
+            if not _defer_frozen_phonon_reduction:
+                measurements = [
+                    (
+                        measurement.reduce_ensemble()
+                        if hasattr(measurement, "reduce_ensemble")
+                        else measurement
+                    )
+                    for measurement in measurements
+                ]
 
         return _wrap_measurements(measurements)
 
@@ -2185,7 +2190,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             s_matrix_array = s_matrix.build(lazy=False, max_batch=max_batch_multislice)
 
             new_measurements = s_matrix_array._reduce(
-                scan=scan, detectors=detectors, ctf=ctf
+                scan=scan,
+                detectors=detectors,
+                ctf=ctf,
+                _defer_frozen_phonon_reduction=True,
             )
 
             new_measurements = ensure_list(new_measurements)
