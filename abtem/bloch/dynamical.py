@@ -1199,7 +1199,15 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
         return scipy.linalg.eigh(
             a, lower=True, overwrite_a=True, check_finite=False, driver="evd"
         )
-    if overwrite_a and cp is not None and xp is cp and a.flags.f_contiguous:
+    # ROCm: the HIP binding of cupy has no syevd, so cupy.linalg.eigh itself goes
+    # through cupyx.cusolver.syevj, which copies the matrix.
+    if (
+        overwrite_a
+        and cp is not None
+        and xp is cp
+        and a.flags.f_contiguous
+        and not cp.cuda.runtime.is_hip
+    ):
         try:
             # the function behind cupy.linalg.eigh, which takes overwrite_a
             from cupy.linalg._eigenvalue import _syevd  # type: ignore
