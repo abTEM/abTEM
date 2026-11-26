@@ -2572,3 +2572,32 @@ def test_subsampled_scan_images_have_the_subsampled_scan_sampling(
         np.testing.assert_allclose(
             new_axis.coordinates(n), np.asarray(axis.coordinates(n_full))[item]
         )
+
+
+@pytest.mark.parametrize(
+    "item",
+    [slice(None, None, -1), slice(5, 1, -1), [5, 1], [-1, -3], [4, 0, 2]],
+    ids=["reversed", "reversed range", "decreasing", "negative", "unordered"],
+)
+@pytest.mark.parametrize("lazy", [False, True])
+def test_indexing_a_linear_ensemble_axis_out_of_order_keeps_the_coordinates(
+    item, lazy
+):
+    # an index that is not an increasing run cannot be a linear axis; the axis was
+    # copied whole, so the coordinates of the members were those of the first ones
+    from abtem.core.axes import ScanAxis
+
+    axis = ScanAxis(offset=1.0, sampling=0.5, label="x", units="Å")
+    array = np.arange(7 * 3 * 3, dtype="float32").reshape(7, 3, 3)
+    images = Images(array, sampling=0.1, ensemble_axes_metadata=[axis])
+    if lazy:
+        images = images.lazy()
+
+    coordinates = np.asarray(axis.coordinates(7))[item]
+    selected = images[item]
+
+    new_axis = selected.ensemble_axes_metadata[0]
+    np.testing.assert_allclose(
+        np.asarray(new_axis.coordinates(selected.shape[0])), coordinates
+    )
+    np.testing.assert_array_equal(selected.compute().array, array[item])

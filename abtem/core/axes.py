@@ -729,7 +729,9 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     and the step scales the sampling. A `ReciprocalSpaceAxis` keeps its class this
     way only for a step of one and with ``fftshift=True``, since it rounds its offset
     to a whole multiple of its sampling. Any other item is passed to the axis's own
-    ``__getitem__``, and the axis is copied whole where that raises TypeError.
+    ``__getitem__``. Where that raises TypeError, a linear axis becomes an
+    `OrdinalAxis` of the coordinates of the selected members, and any other axis is
+    copied whole.
     """
     if isinstance(axis, LinearAxis):
         run = _increasing_run(item, n)
@@ -747,6 +749,13 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     try:
         return axis[item].copy()
     except TypeError:
+        if isinstance(axis, LinearAxis):
+            # a reversed or otherwise irregular selection of a linear axis is not
+            # linear: keep the coordinates of the members instead of the whole axis
+            try:
+                return axis.to_ordinal_axis(n)[item].copy()
+            except (TypeError, IndexError):
+                pass
         return axis.copy()
 
 
