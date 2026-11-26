@@ -4518,3 +4518,47 @@ def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
     occupied = values != 0  # a bin with no pixel is zero
     assert occupied.sum() > 5
     np.testing.assert_allclose(values[occupied], value, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "shape, kwargs, num_panels, num_points",
+    [
+        ((3,), {}, (1, 1), 3),
+        ((3, 4), {}, (1, 1), 4),
+        ((3, 4), {"explode": (0,)}, (3, 1), 4),
+        ((3, 4, 2), {}, (1, 1), 2),
+    ],
+)
+def test_show_of_a_measurement_ensemble_plots_along_its_last_free_axis(
+    shape, kwargs, num_panels, num_points
+):
+    # without base axes, show() found no axis to plot along and raised IndexError
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    axes = [
+        OrdinalAxis(values=tuple(range(n)), label=f"a{i}") for i, n in enumerate(shape)
+    ]
+    ensemble = MeasurementsEnsemble(
+        np.random.default_rng(0).random(shape), ensemble_axes_metadata=axes
+    )
+
+    visualization = ensemble.show(**kwargs)
+    try:
+        assert visualization.axes.shape == num_panels
+        assert len(visualization.axes[0, 0].lines[0].get_xdata()) == num_points
+    finally:
+        plt.close("all")
+
+
+def test_show_of_a_measurement_ensemble_with_every_axis_exploded_explains_itself():
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    ensemble = MeasurementsEnsemble(
+        np.zeros(3), ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))]
+    )
+    with pytest.raises(ValueError, match="none is left to plot along"):
+        ensemble.show(explode=True)
