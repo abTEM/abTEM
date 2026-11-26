@@ -186,7 +186,9 @@ def test_to_hyperspy_axes_describe_the_axes_of_the_data(transpose, lazy, device)
 
     # transpose=True reverses the base axes only
     order = (0, 1, 3, 2) if transpose else (0, 1, 2, 3)
-    data = asnumpy(np.asarray(signal.data))
+    # the signal holds the device array of the data, lazily or not
+    data = signal.data.compute() if hasattr(signal.data, "compute") else signal.data
+    data = asnumpy(data)
     np.testing.assert_array_equal(
         data, np.transpose(asnumpy(images.compute().array), order)
     )
