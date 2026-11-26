@@ -304,6 +304,7 @@ Dependencies:
 
 Bugfixes:
 
+- `MeasurementsEnsemble.show()` plots along the last ensemble axis that is not exploded instead of raising `IndexError`; exploding every axis raises a `ValueError` that says why. `RealSpaceLineProfiles.show(logscale=True)` works (the keyword reached matplotlib's `Line2D`), with limits computed for positive values. `show_atoms` raises a `ValueError` for a plane that is not a string such as `'xy'`; the pair of viewing angles its documentation offered was never implemented, and the documentation now says so. Also in 1.0.12.
 - A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
   compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
