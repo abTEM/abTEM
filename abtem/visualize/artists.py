@@ -196,6 +196,7 @@ class LinesArtist(Artist1D):
         label=None,
         units: str = None,
         legend: bool = False,
+        logscale: bool = False,
         **kwargs,
     ):
         super().__init__(ax=ax, measurement=measurement)
@@ -243,6 +244,9 @@ class LinesArtist(Artist1D):
         formatter.set_powerlimits((-2, 2))
         ax.yaxis.set_major_formatter(formatter)
 
+        if logscale:
+            self.set_logscale(True)
+
     def remove(self):
         for line in self._lines:
             line.remove()
@@ -272,11 +276,24 @@ class LinesArtist(Artist1D):
         return [xlim[0] - 0.05 * ptp, xlim[1] + 0.05 * ptp]
 
     def get_ylim(self):
+        log = self._ax.get_yscale() == "log"
         ylim = [np.inf, -np.inf]
         for line in self._lines:
-            data = line.get_data()[1]
+            data = np.asarray(line.get_data()[1])
+            if log:
+                # only positive values can be shown, and the margin is a factor
+                data = data[data > 0]
+                if data.size == 0:
+                    continue
             new_ylim = [np.min(data), np.max(data)]
             ylim = [min(new_ylim[0], ylim[0]), max(new_ylim[1], ylim[1])]
+
+        if log:
+            if ylim[0] > ylim[1]:
+                return [1.0, 10.0]
+            margin = (ylim[1] / ylim[0]) ** 0.05 if ylim[1] > ylim[0] else 1.1
+            return [ylim[0] / margin, ylim[1] * margin]
+
         ptp = ylim[1] - ylim[0]
         ptp = max(ptp, ylim[1] * 0.01)
         return [ylim[0] - 0.05 * ptp, ylim[1] + 0.05 * ptp]
@@ -327,6 +344,18 @@ class LinesArtist(Artist1D):
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
         value_limits = _get_value_limits(data, value_limits, margin=0.05)
+
+        if self._ax.get_yscale() == "log":
+            # a logarithmic axis shows only positive values, and the margin of the
+            # limits is a factor
+            positive = data[data > 0]
+            low, high = value_limits
+            if low <= 0:
+                low = positive.min() / 1.1 if positive.size else 1.0
+            if high <= low:
+                high = low * 10.0
+            value_limits = [low, high]
+
         self._ax.set_ylim(value_limits)
 
     def set_legend(self, **kwargs):

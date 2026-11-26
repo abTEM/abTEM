@@ -2669,3 +2669,22 @@ def test_show_of_a_measurement_ensemble_with_every_axis_exploded_explains_itself
     )
     with pytest.raises(ValueError, match="none is left to plot along"):
         ensemble.show(explode=True)
+
+
+@pytest.mark.parametrize("logscale", [True, False])
+def test_line_profiles_show_with_a_logscale_keyword(logscale):
+    # the keyword reached matplotlib's Line2D, which does not know it
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import LinearAxis
+
+    profiles = RealSpaceLineProfiles(
+        np.array([1.0, 10.0, 100.0, 1000.0]),
+        sampling=0.1,
+        metadata={},
+    )
+    visualization = profiles.show(logscale=logscale)
+    try:
+        assert visualization.axes[0, 0].get_yscale() == ("log" if logscale else "linear")
+    finally:
+        plt.close("all")
