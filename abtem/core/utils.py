@@ -11,6 +11,7 @@ from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.base import is_dask_collection
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
@@ -158,7 +159,8 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         from abtem.core.ensemble import EmptyEnsemble
 
         if isinstance(value, EmptyEnsemble) and isinstance(other, EmptyEnsemble):
-            return True
+            # these two attributes are equal; the rest are still compared
+            continue
 
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
@@ -167,6 +169,10 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # Python's operator dispatch, so a check its class adds runs and a
         # subclass of the other operand's class is compared as at the top level.
         if not isinstance(value, EqualityMixin):
+            # A deferred array is not compared: that would run the computation
+            # that produces it, as `==` has never done
+            if is_dask_collection(value) or is_dask_collection(other):
+                continue
             # A tolerance is for floating-point round-off; integers (seeds,
             # counts, indices) compare without one. Both comparisons broadcast,
             # so the shapes must match as well: (5,) is not (5, 5).
@@ -180,7 +186,15 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
                 pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
-        if equal is False:
+        if is_dask_collection(equal):
+            # a deferred value is not reduced: `not np.all(...)` would execute the
+            # graph, so `==` would run the simulations it compares
+            continue
+
+        # `np.all`, not an identity test with False: ase.Atoms.__eq__ returns
+        # numpy.bool_, which is not the False singleton, so atoms that differ
+        # compared equal
+        if not np.all(equal):
             return False
 
     return True
@@ -225,8 +239,13 @@ def _get_dims_to_broadcast(
 
 
 class EqualityMixin:
+    #: Names of lazily populated, derived attributes that carry no identity and are
+    #: left out of the comparison, so that an object does not stop equalling an
+    #: identical one once a result has been computed from it.
+    _eq_exclude: tuple[str, ...] = ()
+
     def __eq__(self, other):
-        return safe_equality(self, other)
+        return safe_equality(self, other, self._eq_exclude)
 
     def __ne__(self, other):
         return not self.__eq__(other)

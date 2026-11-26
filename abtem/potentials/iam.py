@@ -676,6 +676,11 @@ class _FieldBuilder(BaseField):
 
 
 class _FieldBuilderFromAtoms(_FieldBuilder):
+    # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from the
+    # atoms, the slicing and the cell, which are compared already. Declared where
+    # it is created, so that Potential, MagneticField and VectorPotential inherit it.
+    _eq_exclude = ("_sliced_atoms",)
+
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons,
@@ -1893,6 +1898,10 @@ class CrystalPotential(_PotentialBuilder):
     # Appended to a FrozenPhonons unit's seeds to make the root seed of a
     # crystal (see _root_seed_of): "CRYS" in ASCII.
     _root_seed_tag = 0x43525953
+
+    # the derived state of get_sliced_atoms(), as in _FieldBuilderFromAtoms, which this
+    # class does not inherit from
+    _eq_exclude = ("_sliced_atoms",)
 
     def __init__(
         self,

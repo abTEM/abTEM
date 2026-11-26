@@ -59,6 +59,17 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         If True, intermediate calculations are kept.
     """
 
+    # lazily filled caches, a function of what is compared already: an integrator
+    # that has been used must still equal an identical one that has not
+    _eq_exclude = (
+        "_gaussians",
+        "_corrections",
+        "_scattering_factors",
+        "_tables",
+        "_sorted_disks",
+        "_device_arrays",
+    )
+
     def __init__(self, periodic: bool, finite: bool, retain_data: bool = False):
         self._periodic = periodic
         self._finite = finite
