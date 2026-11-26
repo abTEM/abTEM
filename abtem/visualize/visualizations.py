@@ -723,7 +723,7 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 
 def show_atoms(
     atoms: Atoms,
-    plane: tuple[float, float] | str = "xy",
+    plane: str = "xy",
     ax: Axes = None,
     scale: float = 0.75,
     title: str = None,
@@ -743,9 +743,8 @@ def show_atoms(
     ----------
     atoms : ase.Atoms
         The atoms to be shown.
-    plane : str, two float
-        The projection plane given as a concatenation of 'x' 'y' and 'z', e.g. 'xy', or as two floats representing the
-        azimuth and elevation angles of the viewing direction [degrees], e.g. (45, 45).
+    plane : str
+        The projection plane given as a concatenation of 'x' 'y' and 'z', e.g. 'xy'.
     ax : matplotlib.axes.Axes, optional
         If given the plots are added to the axes.
     scale : float
@@ -770,6 +769,12 @@ def show_atoms(
     -------
     matplotlib.figure.Figure, matplotlib.axes.Axes
     """
+    if not isinstance(plane, str):
+        raise ValueError(
+            "the projection plane must be given as a string of axes, e.g. 'xy', "
+            f"not {plane!r}"
+        )
+
     if show_periodic:
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)

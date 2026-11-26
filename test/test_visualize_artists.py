@@ -84,3 +84,14 @@ def test_extent_of_an_image_converts_each_axis_with_its_own_units():
 
     assert right - left == pytest.approx(0.1 * 4)  # already in Å
     assert top - bottom == pytest.approx(0.2 * 6 * 10)  # converted from nm
+
+
+def test_show_atoms_refuses_a_plane_that_is_not_a_string_of_axes():
+    # a pair of angles was documented but never implemented, and failed with a
+    # KeyError of the first angle
+    import ase.build
+
+    from abtem import show_atoms
+
+    with pytest.raises(ValueError, match="string of axes"):
+        show_atoms(ase.build.bulk("Si", cubic=True), plane=(45.0, 45.0))
