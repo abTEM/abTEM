@@ -3038,6 +3038,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             # counts are interpolated in the configured precision
             dtype = np.dtype(get_dtype(complex=False))
+            array = array.astype(dtype)
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
             array.shape[-2:], new_gpts, sampling, new_sampling, xp, dtype
         )

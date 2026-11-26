@@ -2601,3 +2601,27 @@ def test_indexing_a_linear_ensemble_axis_out_of_order_keeps_the_coordinates(
         np.asarray(new_axis.coordinates(selected.shape[0])), coordinates
     )
     np.testing.assert_array_equal(selected.compute().array, array[item])
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("dtype", ["int32", "uint16"])
+def test_diffraction_patterns_interpolate_counts_in_the_configured_precision(
+    dtype, lazy
+):
+    # integer counts raised a UFuncTypeError: the weights were cast to the integers
+    counts = np.random.default_rng(0).integers(0, 1000, (2, 32, 33)).astype(dtype)
+    patterns = DiffractionPatterns(
+        counts,
+        sampling=(0.1, 0.09),
+        ensemble_axes_metadata=[abtem.core.axes.OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 1e5},
+    )
+    if lazy:
+        patterns = patterns.lazy()
+
+    interpolated = patterns.interpolate(sampling=0.07).compute()
+
+    assert interpolated.array.dtype == np.dtype(get_dtype(complex=False))
+    np.testing.assert_allclose(
+        interpolated.array.sum((-2, -1)), counts.sum((-2, -1)), rtol=1e-5
+    )
