@@ -1,7 +1,6 @@
 # Changelog
 
-The changes of each release, newest first. The changes of the next release go under a
-heading `## Upcoming: <version>`, which is renamed to the version when it is released.
+The changes of each release, newest first.
 
 ## 1.0.12
 
@@ -10,50 +9,45 @@ It also includes three fixes from before 1.0.11 that the 1.0.11 port missed ([#5
 
 ### Fixed: results that change
 
+Magnitudes are from small test systems and vary with the data.
+
 **PRISM**
-- Potentials with more than one exit plane work: `SMatrix.scan`/`reduce` raised or silently dropped the exit planes; results now have multislice's shape and agree with it to float32 round-off ([#563](https://github.com/abTEM/abTEM/pull/563), fixes [#398](https://github.com/abTEM/abTEM/issues/398)). Eager PRISM with a `WavesDetector` and `FrozenPhonons(ensemble_mean=True)` returns the exit waves of every configuration ([#563](https://github.com/abTEM/abTEM/pull/563)).
-- With the default `downsample="cutoff"`, the band limit is that of the full grid: patterns, radial bins and automatic outer angles match multislice (38×38 instead of 26×22 in one example) ([#656](https://github.com/abTEM/abTEM/pull/656)).
-- Eager `SMatrix.reduce`/`scan`, and `disable_s_matrix_chunks=True` (the GPU default), honour `max_batch_multislice` (with `None` or a NumPy integer now raising `ValueError`, as the lazy chunked path did) ([#678](https://github.com/abTEM/abTEM/pull/678)). Automatic batch sizes count exit planes, detector outputs, the PRISM crop box and `dask.chunk-size-gpu`; chunks were up to ~6× the configured size ([#649](https://github.com/abTEM/abTEM/pull/649), [#563](https://github.com/abTEM/abTEM/pull/563)).
+- Potentials with several exit planes work in scans and reductions, and results have multislice's shape and agree with it to float32 round-off ([#563](https://github.com/abTEM/abTEM/pull/563), fixes [#398](https://github.com/abTEM/abTEM/issues/398)). Eager frozen-phonon runs with a waves detector return every configuration.
+- The default band limit is that of the full grid, so patterns, radial bins and automatic outer angles match multislice (38×38 pixels instead of 26×22 in one example) ([#656](https://github.com/abTEM/abTEM/pull/656)).
+- Eager reductions honour `max_batch_multislice`, and automatic batch sizes count exit planes, detector outputs and the crop box; chunks were up to 6× the configured size ([#678](https://github.com/abTEM/abTEM/pull/678), [#649](https://github.com/abTEM/abTEM/pull/649)).
 
-**Potentials**
-- An unseeded `CrystalPotential` is one crystal per simulation. Every lazy scan block, S-matrix plane-wave batch, potential chunk and `build()` used to draw a different frozen-phonon mosaic ([#524](https://github.com/abTEM/abTEM/pull/524)). Two crystals of one `FrozenPhonons` unit are the same crystal; pass `seeds` for independent ones.
-- A `CrystalPotential` of a periodic finite-projection `Potential` calculates its entrance and exit slices as in a slab; they were off by up to 50 % and 99 %. The new keyword `correct_surfaces` (on by default for finite projection) turns this off; atoms within 0.3 Å of the entrance or exit plane give a warning, and stacking a correcting crystal along z raises `ValueError` ([#648](https://github.com/abTEM/abTEM/pull/648)). Infinite projection is unchanged.
+**Potentials and multislice**
+- An unseeded `CrystalPotential` is one crystal per simulation instead of a new frozen-phonon mosaic for every chunk ([#524](https://github.com/abTEM/abTEM/pull/524)). Pass seeds for independent crystals.
+- The entrance and exit slices of a crystal of finite-projection potentials are computed as in a slab; they were off by up to 50 % and 99 %. The new keyword `correct_surfaces` turns this off ([#648](https://github.com/abTEM/abTEM/pull/648)).
+- Real-space multislice applies the beam tilt (tilted waves were propagated as untilted), and its series is correct from order 4 (order-6 error 4.7e-5 → 6.1e-8) ([#628](https://github.com/abTEM/abTEM/pull/628), [#678](https://github.com/abTEM/abTEM/pull/678)).
+- Double-channel core-loss scans of frozen-phonon potentials no longer use another slice's transmission function; runs differed by up to 11 % of the maximum ([#578](https://github.com/abTEM/abTEM/pull/578)).
+- Monte Carlo plasmon deflections add as 2D vectors ([#617](https://github.com/abTEM/abTEM/pull/617)).
 
-**Multislice**
-- `RealSpaceMultislice` applies the beam tilt; tilted waves and tilt ensembles were propagated as untilted ([#628](https://github.com/abTEM/abTEM/pull/628)). Its series is correct from order 4 (order-6 error 4.7e-5 → 6.1e-8; orders 1 to 3 unchanged) ([#678](https://github.com/abTEM/abTEM/pull/678)).
-- Double-channel core-loss scans of frozen-phonon potentials no longer occasionally use another slice's transmission function (runs differed by up to ~11 % of the maximum) ([#578](https://github.com/abTEM/abTEM/pull/578)).
-- Monte Carlo plasmon deflections add as 2D vectors, and `MonteCarloPlasmons.draw_events` runs ([#617](https://github.com/abTEM/abTEM/pull/617)).
-
-**Measurements and interpolation**
-- Lazy waves and measurements chunked along the grid (e.g. `chunks="auto"`, `from_zarr(chunks=...)`, `rechunk`) give the eager result instead of wrong values (errors of order 1), a wrong shape or an exception ([#651](https://github.com/abTEM/abTEM/pull/651)).
-- `DiffractionPatterns.interpolate` and `PixelatedDetector(resample=...)` are accurate to the precision of the data (float32 was off by up to 1.4e-4 of the maximum, float64 by 8e-5) ([#651](https://github.com/abTEM/abTEM/pull/651), [#659](https://github.com/abTEM/abTEM/pull/659)). On CuPy, float32 data no longer jumps to the wrong node, up to 0.9 of the maximum on CuPy ≥ 14.1 ([#680](https://github.com/abTEM/abTEM/pull/680)). `interpolate_line` builds its positions in float64 (values change by up to ~4e-5 of the maximum) ([#680](https://github.com/abTEM/abTEM/pull/680)).
-- Indexing a linear ensemble axis with a step, negative bounds or an evenly spaced index array gives the right offset and sampling: `dp[::2, ::2]` reported half the scan sampling ([#696](https://github.com/abTEM/abTEM/pull/696)).
-- `PolarMeasurements.to_diffraction_patterns` keeps float64 ([#651](https://github.com/abTEM/abTEM/pull/651)). `to_hyperspy` passes the axes in the order of the data; x/y and ensemble axes were swapped ([#651](https://github.com/abTEM/abTEM/pull/651)).
-- `show()` with an overlaid axis ahead of an indexed axis drew the wrong lines ([#624](https://github.com/abTEM/abTEM/pull/624)); a `vmin`-only change updates the colorbar ([#669](https://github.com/abTEM/abTEM/pull/669)); `compute()` refreshes state held beside the array, such as the local potential of a `TransitionPotentialArray` ([#669](https://github.com/abTEM/abTEM/pull/669)).
-- `poisson_noise` needs exactly one of `dose_per_area`/`total_dose` (it gave a NaN dose), and `ScanNoiseTransform` keeps the label and units of the images ([#695](https://github.com/abTEM/abTEM/pull/695)).
-
-**Bloch waves**
-- The structure factor honours `occupancy`; a beam whose excitation error equals `sg_max` is selected with an orientation too ([#695](https://github.com/abTEM/abTEM/pull/695)).
-
-**Normalization**
-- `Waves.normalize()` labels its result as normalized in reciprocal space, so its diffraction patterns sum to 1 (they summed to 1/N) ([#695](https://github.com/abTEM/abTEM/pull/695)).
-- `Waves.downsample` and `WavesDetector(gpts=...)` keep the normalization of the waves; a downsampled probe's diffraction pattern summed to (N_new/N_old)², e.g. 0.196 instead of 1 ([#695](https://github.com/abTEM/abTEM/pull/695)). Waves that carry no normalization label, such as a `Waves` made from an array or read from an older file, are downsampled as `diffraction_patterns` takes them, which preserves the amplitude; `downsample` gave the pixel values the same mean before.
+**Measurements**
+- Lazy waves and measurements chunked along the grid give the eager result instead of errors of order 1, a wrong shape or an exception ([#651](https://github.com/abTEM/abTEM/pull/651)).
+- Interpolation of diffraction patterns, resampling detectors and line profiles are accurate to the precision of the data: float32 was off by up to 1.4e-4 of the maximum, float64 by 8e-5, and on CuPy float32 data could jump to the wrong node by up to 0.9 of the maximum ([#651](https://github.com/abTEM/abTEM/pull/651), [#659](https://github.com/abTEM/abTEM/pull/659), [#680](https://github.com/abTEM/abTEM/pull/680)).
+- Indexing a linear ensemble axis gives the right offset and sampling; a strided scan reported half its sampling ([#696](https://github.com/abTEM/abTEM/pull/696)).
+- The hyperspy export passes the axes in the order of the data, and conversion from polar measurements keeps float64 ([#651](https://github.com/abTEM/abTEM/pull/651)).
+- Plots with an overlaid axis ahead of an indexed one drew the wrong lines ([#624](https://github.com/abTEM/abTEM/pull/624)); a change of the lower colour limit updates the colorbar, and `compute()` refreshes derived state ([#669](https://github.com/abTEM/abTEM/pull/669)).
+- Poisson noise needs exactly one dose argument (it gave a NaN dose), and scan noise keeps labels and units ([#695](https://github.com/abTEM/abTEM/pull/695)).
+- Bloch waves honour site occupancy and select a beam whose excitation error equals the maximum ([#695](https://github.com/abTEM/abTEM/pull/695)).
+- Normalized and downsampled waves keep their normalization: diffraction patterns of a downsampled probe summed to (N_new/N_old)², for example 0.196 instead of 1 ([#695](https://github.com/abTEM/abTEM/pull/695)).
 
 ### Fixed: errors
 
-- Indexing a linear ensemble axis out of order (`im[::-1]`, `im[[5, 1]]`) keeps the coordinates of the selected members, as an `OrdinalAxis`; they were those of the first members. Integer diffraction patterns can be interpolated (`UFuncTypeError`).
-- `MeasurementsEnsemble.show()` plots along the last ensemble axis that is not exploded (`IndexError`); `RealSpaceLineProfiles.show(logscale=True)` works (`AttributeError`). `show_atoms` raises a `ValueError` for a plane that is not a string such as `'xy'`; the pair of viewing angles its documentation offered was never implemented.
-- PRISM with a CTF distribution, exit planes and a frozen-phonon ensemble, in eager scans and with `disable_s_matrix_chunks=True`, no longer raises or gives wrong values (new in this release's port of the exit planes; found in review).
-
-- No longer raising: hard `Aperture` with a semiangle-cutoff ensemble ([#647](https://github.com/abTEM/abTEM/pull/647)); `AnnularDetector.show()` ([#677](https://github.com/abTEM/abTEM/pull/677)); `interpolate(gpts=...)` and two samplings ([#659](https://github.com/abTEM/abTEM/pull/659)); `PixelatedDetector(resample=...)` finer than the waves ([#661](https://github.com/abTEM/abTEM/pull/661)); domain colouring with NaN or inf, now drawn transparent ([#659](https://github.com/abTEM/abTEM/pull/659)); `index_diffraction_spots` with one orientation matrix per member ([#660](https://github.com/abTEM/abTEM/pull/660)); `set_logscale` on lines and complex images, `IndexedDiffractionPatterns.normalize_to_spot`, `depth_profile` of magnetic fields, rotated Bloch ensembles at the beam boundary ([#695](https://github.com/abTEM/abTEM/pull/695)); `ChargeDensityPotential` from `FrozenPhonons` or an `AtomsEnsemble` ([#460](https://github.com/abTEM/abTEM/pull/460)); `shrink_cell` under `python -O` ([#688](https://github.com/abTEM/abTEM/pull/688)); `import abtem` with a broken `mkl_fft` or GPAW ([#697](https://github.com/abTEM/abTEM/pull/697)).
-- `GPAWMagneticField`/`GPAWVectorPotential.base_axes_metadata` gives the axes instead of `None` ([#695](https://github.com/abTEM/abTEM/pull/695)). Docstrings: the `slice_thickness` default of GPAW and charge-density potentials is 1.0 Å ([#695](https://github.com/abTEM/abTEM/pull/695)); `angular_spread` is a 1/e width in mrad ([#645](https://github.com/abTEM/abTEM/pull/645)).
+- Detectors and apertures: hard apertures with a cutoff ensemble ([#647](https://github.com/abTEM/abTEM/pull/647)), plotting an annular detector ([#677](https://github.com/abTEM/abTEM/pull/677)), resampling finer than the waves ([#661](https://github.com/abTEM/abTEM/pull/661)).
+- Measurements: interpolation to a given grid or two samplings ([#659](https://github.com/abTEM/abTEM/pull/659)), domain colouring with NaN, now drawn transparent ([#659](https://github.com/abTEM/abTEM/pull/659)), integer patterns, out-of-order indexing of a linear axis (the coordinates were those of the first members), and several smaller cases in `set_logscale`, depth profiles and rotated Bloch ensembles ([#695](https://github.com/abTEM/abTEM/pull/695)).
+- Plotting: 1D ensembles, log-scale line profiles and a clear error for an invalid `show_atoms` plane.
+- Spot indexing with one orientation matrix per member ([#660](https://github.com/abTEM/abTEM/pull/660)); charge-density potentials from frozen phonons ([#460](https://github.com/abTEM/abTEM/pull/460)); PRISM with a CTF ensemble, exit planes and frozen phonons together.
+- Python: `shrink_cell` under `python -O` ([#688](https://github.com/abTEM/abTEM/pull/688)), and `import abtem` with a broken `mkl_fft` or GPAW ([#697](https://github.com/abTEM/abTEM/pull/697)).
+- Docstrings of default slice thicknesses and the angular spread ([#695](https://github.com/abTEM/abTEM/pull/695), [#645](https://github.com/abTEM/abTEM/pull/645)).
 
 ### Changed: behaviour
 
-- New errors instead of silently wrong results: `PixelatedDetector(max_angle<=0)` ([#678](https://github.com/abTEM/abTEM/pull/678)); `stack`/`concatenate` of members with different axes ([#705](https://github.com/abTEM/abTEM/pull/705)); `set_ensemble_axes_metadata` with an axis that does not fit ([#688](https://github.com/abTEM/abTEM/pull/688)); `shrink_cell` of empty atoms ([#688](https://github.com/abTEM/abTEM/pull/688)); `polar_binning`/`radial_binning` of complex patterns, which point to `.intensity()` ([#651](https://github.com/abTEM/abTEM/pull/651)). `from_zarr` no longer hides unrelated errors ([#688](https://github.com/abTEM/abTEM/pull/688)).
-- PRISM at a single position, and `SMatrix.reduce()` without a scan, return no position axis, as multislice does ([#563](https://github.com/abTEM/abTEM/pull/563)).
-- `==` compares integers such as seeds exactly, requires equal shapes and compares held abTEM objects by their own `__eq__`, so it no longer depends on operand order ([#670](https://github.com/abTEM/abTEM/pull/670)). It reports atoms that differ as different (two `Potential`s with an atom moved by 1.2 Å compared equal), and an object that has been built or used equals an identical one that has not. It does not compute deferred arrays, and as before leaves them out of the comparison.
-- `downsample(normalization=...)` is deprecated. `BlochWaves.calculate_exit_waves` takes `normalize` (default `False`), as `PlaneWave` does; its `normalization` argument only set a label and is deprecated ([#695](https://github.com/abTEM/abTEM/pull/695)).
+- New errors instead of silently wrong results: non-positive maximum angles ([#678](https://github.com/abTEM/abTEM/pull/678)), stacking measurements with different axes ([#705](https://github.com/abTEM/abTEM/pull/705)), shrinking empty atoms or setting a misfitting ensemble axis ([#688](https://github.com/abTEM/abTEM/pull/688)), binning complex patterns ([#651](https://github.com/abTEM/abTEM/pull/651)).
+- PRISM at a single position returns no position axis, as multislice does ([#563](https://github.com/abTEM/abTEM/pull/563)).
+- `==` compares seeds and shapes exactly and no longer depends on operand order ([#670](https://github.com/abTEM/abTEM/pull/670)); it also tells different atoms apart (a potential with an atom moved by 1.2 Å compared equal).
+- The `normalization` arguments of `downsample` and `BlochWaves.calculate_exit_waves` are deprecated; the latter takes `normalize` (default `False`), as plane waves do ([#695](https://github.com/abTEM/abTEM/pull/695)).
 
 ## 1.0.11
 
