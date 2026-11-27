@@ -2783,7 +2783,8 @@ def test_line_profiles_show_with_a_logscale_keyword(logscale):
     )
     visualization = profiles.show(logscale=logscale)
     try:
-        assert visualization.axes[0, 0].get_yscale() == ("log" if logscale else "linear")
+        yscale = visualization.axes[0, 0].get_yscale()
+        assert yscale == ("log" if logscale else "linear")
     finally:
         plt.close("all")
 
@@ -2843,7 +2844,9 @@ def _exploded_log_profiles(members):
     return RealSpaceLineProfiles(
         np.array(members, dtype=float),
         sampling=0.1,
-        ensemble_axes_metadata=[OrdinalAxis(label="member", values=tuple(range(len(members))))],
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="member", values=tuple(range(len(members))))
+        ],
         metadata={},
     )
 
@@ -2861,7 +2864,8 @@ def test_common_log_limits_of_exploded_profiles_cover_every_panel():
         explode=True, logscale=True, common_scale=True
     )
     try:
-        limits = [visualization.axes[i].get_ylim() for i in np.ndindex(visualization.axes.shape)]
+        axes = visualization.axes
+        limits = [axes[i].get_ylim() for i in np.ndindex(axes.shape)]
         # the extremes of the positive values of all the members, with one margin
         margin = (1000 / 1) ** 0.05
         for low, high in limits:
