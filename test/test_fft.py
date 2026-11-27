@@ -675,8 +675,9 @@ def test_a_c_ordered_empty_array_is_passed_through_uncopied(monkeypatch):
 @pytest.mark.parametrize("func", ["fft2", "ifft2", "fftn", "ifftn"])
 @pytest.mark.parametrize("shape", [(0, 4, 6), (3, 0, 4, 6)])
 def test_an_fft_of_an_empty_array_is_empty_and_complex(device, func, shape):
-    """CuPy and torch raise for a transform of an array with a zero-length axis,
-    batch axes included; the transformed axes are not empty here."""
+    """CuPy and torch 2.14's MKL transforms raise for a transform of an array
+    with a zero-length axis, batch axes included; the transformed axes are not
+    empty here."""
     xp = abtem.core.backend.get_array_module(device)
     array = xp.zeros(shape, dtype=xp.complex64)
 
@@ -689,12 +690,16 @@ def test_an_fft_of_an_empty_array_is_empty_and_complex(device, func, shape):
 @pytest.mark.parametrize("device", [gpu])
 def test_an_fft_of_an_empty_array_with_an_explicit_size_reaches_the_backend(device):
     """An explicit `s` changes the output shape, so the empty shortcut leaves it
-    to the backend, which raises for the zero-length axis."""
+    to the backend: CuPy and torch 2.14's MKL transforms raise for the
+    zero-length axis, and torch 2.15 returns an empty result of shape `s`."""
     xp = abtem.core.backend.get_array_module(device)
     array = xp.zeros((0, 4, 6), dtype=xp.complex64)
 
-    with pytest.raises((RuntimeError, ValueError)):
-        abtem_fft.fft2(array, s=(5, 7))
+    try:
+        result = abtem_fft.fft2(array, s=(5, 7))
+    except (RuntimeError, ValueError):
+        return
+    assert result.shape == (0, 5, 7)
 
 
 @requires_pyfftw

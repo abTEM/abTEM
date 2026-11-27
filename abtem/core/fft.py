@@ -901,9 +901,9 @@ def _fft_dispatch(
         )
 
     if 0 in x.shape and kwargs.get("s") is None:
-        # CuPy and torch reject an array with a zero-length axis, a batch axis
-        # included. Without `s` the output has the input's shape; with one it
-        # is left to the backend.
+        # CuPy, and torch 2.14's MKL transforms on the CPU, reject an array
+        # with a zero-length axis, a batch axis included. Without `s` the
+        # output has the input's shape; with one it is left to the backend.
         # A zero-length transformed axis, which no public call produces, also
         # returns empty here, where NumPy and FFTW raise.
         return xp.empty(x.shape, dtype=_fft_dtype(x.dtype))
