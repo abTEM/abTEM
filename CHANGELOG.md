@@ -1095,9 +1095,11 @@ Bugfixes:
   fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 - `==` compares a list, tuple or dict holding arrays or `dask.delayed` values item by item, by the same rules as
   attributes. An object holding one, such as a `GPAWPotential` from a list of `.gpw` paths and any `CrystalPotential`,
-  `SMatrix` or multislice transform holding it, never equalled its own copy. A list or tuple of numbers and arrays now
-  compares the same whatever the order of its items; in a dict, a number ahead of its first array still compares
-  exactly. **Behaviour change:** an error raised by an abTEM object's own `==` while such a container is compared now
+  `SMatrix` or multislice transform holding it, never equalled its own copy. A list, tuple or dict of numbers and
+  arrays now compares the same whatever the order of its items, and a difference after a lazy item is found.
+  **Behaviour change:** a list or tuple of abTEM objects equals a tuple or list of the same objects, and numbers in it
+  compare to the tolerance of `np.allclose` (integers exactly), where `==` on the container decided before. **Behaviour
+  change:** an error raised by an abTEM object's own `==` while such a container is compared now
   escapes, as it already does for an object held directly; before, the container read as different. `==` between
   objects holding lists of delayed values with different keys, such as `GPAWPotential(["a.gpw", "b.gpw"])` and
   `GPAWPotential(["a.gpw", "c.gpw"])`, raises `LazyComparisonError` (a `TypeError`) instead of returning `False`, as
@@ -1116,9 +1118,9 @@ Bugfixes:
   `ValueError: Invalid input striding` in some runs; the array is copied to the layout the FFTW plans are made for
 - An FFT of an empty array on CuPy or Metal no longer raises `ValueError: Invalid number of FFT data points (0)` or
   a DFTI error; the result is empty, with the input's shape and the transform's complex dtype
-- On Metal, the truth value of an array of more than one element, or of an empty one, raises NumPy's `ValueError`
-  instead of torch's `RuntimeError`, so `==` between objects holding a list, tuple or dict of Metal arrays compares them
-  item by item instead of raising
+- On Metal, the truth value of an array of more than one element raises NumPy's `ValueError` instead of torch's
+  `RuntimeError`, and that of an empty one follows NumPy (it raises from NumPy 2.2), so `==` between objects holding a
+  list, tuple or dict of Metal arrays compares them item by item instead of raising
 
 Documentation:
 
