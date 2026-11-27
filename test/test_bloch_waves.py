@@ -24,6 +24,7 @@ from abtem.bloch.dynamical import (
     _COMPLEX_EIGH_NEEDS_EVR,
     BlochwaveEnsemble,
     _eigh,
+    _warn_if_rocm_eigh_is_slow,
     calculate_dynamical_scattering,
     calculate_structure_factors,
     calculate_structure_matrix,
@@ -2240,6 +2241,18 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
     tol = 40 * (1e-4 if single else 1e-12)
     np.testing.assert_allclose(w, np.linalg.eigvalsh(matrix.astype(complex)), atol=tol)
     np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
+
+
+def test_rocm_eigh_warns_once_from_a_thousand_beams(monkeypatch):
+    monkeypatch.setattr("abtem.bloch.dynamical._rocm_eigh_warned", False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_if_rocm_eigh_is_slow(999)
+    with pytest.warns(UserWarning, match="1000 beams on a ROCm GPU is slower"):
+        _warn_if_rocm_eigh_is_slow(1000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_if_rocm_eigh_is_slow(3000)
 
 
 @pytest.mark.parametrize("blas", [True, False])
