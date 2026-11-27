@@ -1603,6 +1603,28 @@ def test_a_detector_applies_to_waves_in_increasing_order_as_to_any_array_object(
     assert result.axes_metadata == expected.axes_metadata
 
 
+@lazy_params
+@devices
+@pytest.mark.parametrize(
+    "detector",
+    _REDUCING_DETECTORS + [d for d, _ in _KEEPING_DETECTORS],
+    ids=lambda d: type(d).__name__,
+)
+@pytest.mark.parametrize("item", [(slice(2, 2),), (_FULL, slice(1, 1))])
+def test_a_detector_of_scanned_waves_sliced_to_no_positions_gives_an_empty_result(
+    detector, item, lazy, device
+):
+    """A scan axis of length 0 has one empty chunk; the result has the shape and
+    axes of the eager detection of the same selection (0 by 4 and 5 by 0
+    positions)."""
+    result = detector.detect(_scanned_waves(device, lazy)[item])
+    expected = detector.detect(_scanned_waves(device, lazy=False)[item])
+
+    assert 0 in expected.shape
+    assert result.shape == expected.shape
+    assert result.axes_metadata == expected.axes_metadata
+
+
 @pytest.mark.parametrize(
     "transform",
     [abtem.AnnularDetector(inner=0, outer=40), abtem.CTF(defocus=50)],

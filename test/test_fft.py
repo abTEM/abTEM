@@ -6,8 +6,9 @@ import warnings
 import numpy as np
 import pytest
 
-from utils import gpu, requires_gpu
+from utils import devices, gpu, lazy_params, requires_gpu, si_cubic_atoms
 
+import abtem
 from abtem.core import config
 from abtem.core import fft as abtem_fft
 from abtem.core.fft import (
@@ -610,6 +611,160 @@ def test_fftw_transforms_a_non_contiguous_array_in_place(func):
     reference = getattr(np.fft, func)(before.astype(np.complex128))
     assert np.allclose(result, reference, atol=1e-4)
     assert np.array_equal(view, before)
+
+
+def _aligned_with_strides_numpy_calls_contiguous(kind):
+    """An aligned complex64 array on a 48 by 40 grid (unequal, so a swapped axis
+    fails) that NumPy flags `c_contiguous` although its strides are not the C
+    strides of its shape: a view with a new axis of length 1 (stride 0), and a
+    computed empty array (strides 0 under NumPy 2.4)."""
+    from numpy.lib.stride_tricks import as_strided
+
+    if kind == "length-1 axis":
+        buffer = pyfftw.empty_aligned((48, 40), dtype=np.complex64)
+        buffer[...] = np.random.default_rng(11).random((48, 40))
+        array = buffer[None]
+    else:
+        buffer = pyfftw.empty_aligned((3, 48, 40), dtype=np.complex64)
+        array = as_strided(buffer[:0], strides=(0, 0, 0))
+
+    assert array.flags.c_contiguous
+    assert pyfftw.is_byte_aligned(array)
+    return array
+
+
+_NUMPY_CONTIGUOUS_KINDS = ["length-1 axis", "length-0 axis"]
+
+
+def _fftw_tolerance(reference):
+    return 1e-4 * max(1.0, np.abs(reference).max(initial=0.0))
+
+
+@requires_pyfftw
+@pytest.mark.parametrize("kind", _NUMPY_CONTIGUOUS_KINDS)
+@pytest.mark.parametrize("func", ["fft2", "ifft2"])
+def test_fftw_transforms_an_array_numpy_flags_contiguous_with_other_strides(func, kind):
+    """FFTW plans on C strides and `update_arrays` refuses others, which NumPy's
+    `c_contiguous` flag does not tell apart for an axis of length 0 or 1. The
+    FFTW path runs on the CPU, so the test pins no device."""
+    array = _aligned_with_strides_numpy_calls_contiguous(kind)
+
+    with config.set({"fft": "fftw"}):
+        result = getattr(abtem_fft, func)(array, overwrite_x=True)
+
+    reference = getattr(np.fft, func)(array.astype(np.complex128))
+    assert result.shape == array.shape
+    np.testing.assert_allclose(
+        result, reference, rtol=0, atol=_fftw_tolerance(reference)
+    )
+
+
+@requires_pyfftw
+def test_a_c_ordered_empty_array_is_passed_through_uncopied(monkeypatch):
+    """An empty array with a zero-length axis ahead of others has the strides of
+    `pyfftw.zeros_aligned`, which count that axis as 1. malloc places an empty
+    array aligned in about half the runs; it is reported aligned here, so the run
+    is deterministic. Device-independent: the FFTW path runs on the CPU."""
+    array = pyfftw.zeros_aligned((3, 0, 48, 40), dtype=np.complex64)
+    monkeypatch.setattr(abtem_fft.pyfftw, "is_byte_aligned", lambda *args: True)
+
+    assert abtem_fft._fftw_aligned(array) is array
+
+
+@devices
+@pytest.mark.parametrize("func", ["fft2", "ifft2", "fftn", "ifftn"])
+@pytest.mark.parametrize("shape", [(0, 4, 6), (3, 0, 4, 6)])
+def test_an_fft_of_an_empty_array_is_empty_and_complex(device, func, shape):
+    """CuPy and torch 2.14's MKL transforms raise for a transform of an array
+    with a zero-length axis, batch axes included; the transformed axes are not
+    empty here."""
+    xp = abtem.core.backend.get_array_module(device)
+    array = xp.zeros(shape, dtype=xp.complex64)
+
+    result = getattr(abtem_fft, func)(array, axes=(-2, -1))
+
+    assert result.shape == shape
+    assert result.dtype == xp.complex64
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_an_fft_of_an_empty_array_with_an_explicit_size_reaches_the_backend(device):
+    """An explicit `s` changes the output shape, so the empty shortcut leaves it
+    to the backend: CuPy and torch 2.14's MKL transforms raise for the
+    zero-length axis, and torch 2.15 returns an empty result of shape `s`."""
+    xp = abtem.core.backend.get_array_module(device)
+    array = xp.zeros((0, 4, 6), dtype=xp.complex64)
+
+    try:
+        result = abtem_fft.fft2(array, s=(5, 7))
+    except (RuntimeError, ValueError):
+        return
+    assert result.shape == (0, 5, 7)
+
+
+@requires_pyfftw
+@pytest.mark.parametrize("kind", _NUMPY_CONTIGUOUS_KINDS)
+def test_cached_fftw_convolution_of_an_array_numpy_flags_contiguous_with_other_strides(
+    kind,
+):
+    """As the transforms above, for the convolution of the Fresnel propagator.
+    Device-independent: the FFTW path runs on the CPU."""
+    array = _aligned_with_strides_numpy_calls_contiguous(kind)
+    kx = np.arange(48)[:, None] / 48
+    ky = np.arange(40)[None, :] / 40
+    kernel = np.exp(2j * np.pi * (kx + 2 * ky)).astype(np.complex64)
+
+    result = abtem_fft.CachedFFTWConvolution()(array, kernel, overwrite_x=True)
+
+    reference = _convolution_reference(array, kernel.astype(np.complex128))
+    assert result.shape == array.shape
+    np.testing.assert_allclose(
+        result, reference, rtol=0, atol=_fftw_tolerance(reference)
+    )
+
+
+@requires_pyfftw
+@lazy_params
+def test_multislice_of_waves_sliced_to_no_positions_with_an_aligned_empty_array(
+    lazy, monkeypatch
+):
+    """The multislice of waves sliced to no scan positions gives the empty result
+    `fft: numpy` gives. malloc places an empty array unaligned in about half the
+    runs, which `_fftw_aligned` copies; every empty array is reported aligned
+    here, so the run is deterministic. Device-independent: the FFTW path runs on
+    the CPU."""
+    from abtem.core.axes import ScanAxis
+
+    atoms = si_cubic_atoms()
+    potential = abtem.Potential(atoms, gpts=(32, 40), slice_thickness=2)
+    waves = abtem.Waves(
+        np.ones((5, 4, 32, 40), dtype=np.complex64),
+        energy=100e3,
+        extent=tuple(np.diag(atoms.cell)[:2]),
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5),
+            ScanAxis(label="y", sampling=0.4),
+        ],
+    )
+    if lazy:
+        waves = waves.ensure_lazy(chunks=(2, 3, -1, -1))
+    is_byte_aligned = pyfftw.is_byte_aligned
+    monkeypatch.setattr(
+        abtem_fft.pyfftw,
+        "is_byte_aligned",
+        lambda array, *args: array.size == 0 or is_byte_aligned(array, *args),
+    )
+
+    def multislice(fft):
+        with config.set({"fft": fft}):
+            result = waves[2:2].multislice(potential)
+            return result.compute() if lazy else result
+
+    result = multislice("fftw")
+    expected = multislice("numpy")
+
+    assert result.shape == expected.shape == (0, 4, 32, 40)
+    assert result.axes_metadata == expected.axes_metadata
 
 
 @requires_pyfftw

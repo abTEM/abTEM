@@ -7,7 +7,7 @@ from hypothesis import given
 from utils import assert_array_objects_equal, devices, si_cubic_atoms
 
 from abtem.array import ArrayObject
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, copy_to_device
 
 
 @given(data=st.data())
@@ -196,16 +196,116 @@ class TestEqualityDiscriminates:
 
         assert complete != incomplete
 
-    def test_an_attribute_whose_comparison_raises_is_a_difference(self):
-        """`list.__eq__` reduces each pairwise `==` of arrays to a bool, which
-        numpy refuses for arrays of more than one element."""
-        from abtem.core.utils import EqualityMixin
+    @staticmethod
+    def _arrays_in(kind, scale=1.0, shift=0.0):
+        """Float arrays of 3 and 5 elements (two sizes, so a swapped pair differs
+        in shape) held in the container `kind`, their values scaled by `scale`."""
+        a = np.linspace(0.1, 1.0, 3) * scale + shift
+        b = np.linspace(0.2, 2.0, 5) * scale + shift
+        return {
+            "list": [a, b],
+            "tuple": (a, b),
+            "dict": {"a": a, "b": b},
+            "nested": [{"a": a}, [b]],
+            "number first": [0.5 * scale, a, b],
+        }[kind]
 
-        class Holder(EqualityMixin):
-            def __init__(self):
-                self._arrays = [np.zeros(3)]
+    @pytest.mark.parametrize(
+        "kind", ["list", "tuple", "dict", "nested", "number first"]
+    )
+    def test_a_container_holding_arrays_is_compared_item_by_item(self, kind):
+        """A list, tuple or dict holding arrays, which `==` cannot reduce, is
+        compared item by item by the rules of arrays held directly: equal to a
+        fresh copy and within the `np.allclose` tolerance, different when scaled
+        by 2, in both orders. Device-independent: the rule under test is the
+        container dispatch."""
+        Holder = self._list_holder()
 
-        assert Holder() != Holder()
+        def hold(**kwargs):
+            return Holder(self._arrays_in(kind, **kwargs))
+
+        assert hold() == hold()
+        assert hold() == hold(scale=1 + 1e-12)
+        assert hold(scale=1 + 1e-12) == hold()
+        assert hold() != hold(scale=2.0)
+        assert hold(scale=2.0) != hold()
+
+    @devices
+    @pytest.mark.parametrize("kind", ["list", "tuple", "dict"])
+    def test_a_container_of_device_arrays_compares_item_by_item(self, kind, device):
+        """A list, tuple or dict of float32 arrays on the device, whose `bool()`
+        is ambiguous as NumPy's is, is compared item by item: equal to a fresh
+        one, different when scaled by 2."""
+        Holder = self._list_holder()
+
+        def hold(scale=1.0):
+            arrays = [
+                copy_to_device(array.astype(np.float32), device)
+                for array in self._arrays_in("list", scale=scale)
+            ]
+            containers = {
+                "list": arrays,
+                "tuple": tuple(arrays),
+                "dict": dict(enumerate(arrays)),
+            }
+            return Holder(containers[kind])
+
+        assert hold() == hold()
+        assert hold() != hold(scale=2.0)
+
+    def test_a_container_holding_arrays_of_other_shapes_lengths_or_keys_differs(self):
+        """Items of another shape, a container of another length, a dict with
+        other keys and integer arrays that differ by 1 are all differences.
+        Device-independent."""
+        Holder = self._list_holder()
+
+        assert Holder([np.zeros(3)]) != Holder([np.zeros(4)])
+        assert Holder([np.zeros(3)]) != Holder([np.zeros(3), np.zeros(3)])
+        assert Holder({"a": np.zeros(3)}) != Holder({"b": np.zeros(3)})
+        assert Holder({"a": np.zeros(3), "b": 1}) != Holder(
+            {"a": np.zeros(3), "c": 1}
+        )
+        assert Holder([np.arange(3)]) != Holder([np.arange(3) + 1])
+
+    @pytest.mark.parametrize("number_first", [True, False])
+    def test_numbers_and_arrays_in_a_container_compare_in_either_order(
+        self, number_first
+    ):
+        """A list of a number and an array decides the number to the default
+        tolerance whichever item comes first. Device-independent."""
+        Holder = self._list_holder()
+
+        def hold(x):
+            items = [x, np.linspace(0, 1, 5)]
+            return Holder(items if number_first else items[::-1])
+
+        assert hold(0.5) == hold(0.5 + 1e-12)
+        assert hold(0.5) != hold(0.6)
+
+    def test_a_container_of_arrays_and_delayed_values(self):
+        """A delayed item is decided by its key, without being computed: the same
+        key is equal, another key has no verdict, and a difference elsewhere
+        decides even with an undecided item. Device-independent."""
+        import copy
+
+        import dask
+
+        from abtem.core.utils import LazyComparisonError
+
+        reads = []
+
+        def read(n):
+            reads.append(n)
+            return np.arange(n)
+
+        Holder = self._list_holder()
+        a = Holder([np.arange(3), dask.delayed(read)(3)])
+
+        assert a == copy.deepcopy(a)
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            a == Holder([np.arange(3), dask.delayed(read)(4)])
+        assert a != Holder([np.arange(3) + 1, dask.delayed(read)(4)])
+        assert reads == []
 
     def test_a_built_potential_equals_an_unbuilt_one_inside_a_container(self):
         """`_eq_exclude` is applied by `EqualityMixin.__eq__`, which compares a
@@ -329,10 +429,9 @@ class TestEqualityDiscriminates:
         assert hold(a) == hold(a.copy())
 
     def test_held_slice_indexed_atoms_equal_an_identical_twin(self):
-        """`SliceIndexedAtoms.__eq__` compares its list of index arrays with
-        `np.array_equal`; the generic rule compares the list with `list.__eq__`,
-        which raises for arrays of more than one element. An object holding the
-        slices, with no exclusion of them, gives the slices' own verdict.
+        """The generic rule compares the slices' list of index arrays item by
+        item. An object holding the slices, with no exclusion of them, equals an
+        identical twin and differs from one with another binning.
         Device-independent."""
         from abtem.core.utils import EqualityMixin
         from abtem.slicing import SliceIndexedAtoms
@@ -610,32 +709,71 @@ class TestEqualityDiscriminates:
         assert hold(3) != hold(3, 3)
         assert hold(3, 3) != hold(3)
 
+    @staticmethod
+    def _array_object(kind, scale=1.0):
+        """An `Images` (3 by 4), or a `MeasurementsEnsemble` of 3 positions, which
+        has only ensemble axes and is indexable like an array of 3."""
+        from abtem.core.axes import NonLinearAxis
+        from abtem.measurements import DiffractionPatterns
+
+        if kind == "images":
+            return TestEqualityDiscriminates._images(
+                np.full((3, 4), scale, dtype="float32")
+            )
+        return DiffractionPatterns(
+            np.full((3, 6, 6), scale, dtype="float32"),
+            sampling=0.2,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                NonLinearAxis(label="x", values=(0.25, 1.25, 2.75), units="Å")
+            ],
+        ).integrate_radial(0, 10)
+
+    @pytest.mark.parametrize("kind", ["images", "ensemble"])
     @pytest.mark.parametrize(
         "other",
-        ["none", "floats", "empty", "integers", "number", "object"],
+        ["none", "floats", "empty", "integers", "number", "object", "detector"],
     )
     @pytest.mark.parametrize("container_first", [True, False])
     def test_a_container_of_array_objects_differs_from_a_value_in_both_orders(
-        self, other, container_first
+        self, other, container_first, kind
     ):
-        """Whichever side the container of `ArrayObject`s is on, `None`, a list
-        of numbers, an empty list, a number and a bare object differ from it.
-        Device-independent."""
+        """Whichever side the container of array objects is on, `None`, a list
+        of numbers, an empty list, a number, a bare object and an abTEM object of
+        another class differ from it. An `Images` and a `MeasurementsEnsemble` with
+        only ensemble axes are converted differently by NumPy. Device-independent."""
+        from abtem import AnnularDetector
+
         Holder = self._list_holder()
-        images = self._images(np.zeros((3, 4), dtype="float32"))
+        element = self._array_object(kind)
         values = {
             "none": None,
             "floats": [1.0],
             "empty": [],
             "integers": [1, 2],
             "number": 1.0,
-            "object": images,
+            "object": element,
+            "detector": AnnularDetector(50, 150),
         }
-        container = Holder([images, images] if other == "integers" else [images])
+        container = Holder([element, element] if other == "integers" else [element])
         value = Holder(values[other])
 
         pair = (container, value) if container_first else (value, container)
         assert pair[0] != pair[1]
+
+    def test_a_container_of_an_ensemble_of_measurements_is_decided_by_its_elements(
+        self,
+    ):
+        """A list holding a `MeasurementsEnsemble` equals a fresh one and differs
+        from one with every value doubled. Device-independent."""
+        Holder = self._list_holder()
+
+        assert Holder([self._array_object("ensemble")]) == Holder(
+            [self._array_object("ensemble")]
+        )
+        assert Holder([self._array_object("ensemble")]) != Holder(
+            [self._array_object("ensemble", scale=2.0)]
+        )
 
     @pytest.mark.parametrize("object_first", [True, False])
     def test_an_array_object_differs_from_a_number_in_both_orders(self, object_first):
@@ -703,20 +841,64 @@ class TestEqualityDiscriminates:
 
         assert (array != container) if array_first else (container != array)
 
-    def test_a_container_of_array_objects_is_decided_by_eq_on_the_container(self):
-        """`==` on the container decides, so a list does not equal a tuple of the
-        same objects and the numbers in it compare exactly, while without an
-        `ArrayObject` both keep the NumPy comparison. A list that also holds a
-        3-element ndarray differs from a copy of itself, as any list holding one
-        does: `list.__eq__` cannot reduce the array's comparison. Device-independent."""
+    def test_a_list_of_array_objects_equals_a_tuple_of_them(self):
+        """A list and a tuple of the same array objects, with or without an
+        ndarray beside them, are equal, as a list and a tuple of ndarrays are;
+        array objects of other shapes differ. Device-independent."""
+        Holder = self._list_holder()
+        images = self._images(np.zeros((3, 4), dtype="float32"))
+        other = self._images(np.zeros((5, 4), dtype="float32"))
+        a = np.arange(3.0)
+
+        assert Holder([a, 2 * a]) == Holder((a, 2 * a))
+        assert Holder([images]) == Holder((images,))
+        assert Holder([images, a]) == Holder((images, a))
+        assert Holder([images]) != Holder((other,))
+        assert Holder([images, a]) != Holder((images, a + 1))
+
+    def test_numbers_in_a_container_of_array_objects_compare_to_a_tolerance(self):
+        """A float beside an array object, as beside an ndarray, compares to the
+        default tolerance of `np.allclose`; integers compare exactly.
+        Device-independent."""
         Holder = self._list_holder()
         images = self._images(np.zeros((3, 4), dtype="float32"))
 
-        assert Holder([1.0]) == Holder((1.0,))
-        assert Holder([images]) != Holder((images,))
         assert Holder([0.1]) == Holder([0.1 + 1e-12])
-        assert Holder([images, 0.1]) != Holder([images, 0.1 + 1e-12])
-        assert Holder([images, np.arange(3)]) != Holder([images, np.arange(3)])
+        assert Holder([images, 0.1]) == Holder([images, 0.1 + 1e-12])
+        assert Holder([images, 0.1]) != Holder([images, 0.2])
+        assert Holder([images, 1_000_000]) != Holder([images, 1_000_001])
+
+    def test_a_dict_of_a_number_and_an_array_compares_the_number_to_a_tolerance(self):
+        """A dict whose number comes ahead of its first array compares the number
+        to the default tolerance, as a list does. Device-independent."""
+        Holder = self._list_holder()
+        array = np.linspace(0, 1, 5)
+
+        def hold(number, array=array):
+            return Holder({"s": number, "a": array})
+
+        assert hold(0.5) == hold(0.5 + 1e-12, array.copy())
+        assert hold(0.5) != hold(0.6)
+        assert hold(0.5) != hold(0.5, array + 1)
+
+    def test_a_difference_after_a_lazy_item_of_a_container_decides(self):
+        """`==` on a list stops at its first lazy item with no verdict; a later
+        item that differs is a difference, and with none that differs the lazy
+        item leaves the comparison undecided. Device-independent."""
+        import dask.array as da
+
+        from abtem.core.utils import LazyComparisonError
+
+        Holder = self._list_holder()
+
+        def hold(lazy_fill, array):
+            lazy = self._images(lazy_fill((3, 4), dtype="float32"))
+            return Holder([lazy, array])
+
+        assert hold(da.zeros, np.zeros(3)) != hold(da.ones, np.ones(3))
+        assert hold(da.zeros, np.zeros(3)) != hold(da.zeros, np.ones(3))
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            hold(da.zeros, np.zeros(3)) == hold(da.ones, np.zeros(3))
 
     def test_a_runtime_error_from_a_held_object_escapes(self):
         """Only the `RuntimeError` of an `ArrayObject` indexed by NumPy is caught;
@@ -735,12 +917,13 @@ class TestEqualityDiscriminates:
             Holder() == Holder()
 
     @pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
-    def test_an_error_from_a_held_objects_own_comparison_escapes(self, error):
+    @pytest.mark.parametrize("held_in", ["attribute", "list"])
+    def test_an_error_from_a_held_objects_own_comparison_escapes(self, error, held_in):
         """A held object's `__eq__` decides every comparison it cannot make
         itself, so an error it raises is a defect and escapes `==`, as a
-        `RuntimeError` does, when the object is an attribute itself (held in a
-        list, tuple or dict, the error is still a difference). A lazy
-        comparison error stays deferred. Device-independent."""
+        `RuntimeError` does, whether the object is an attribute itself or held
+        in a list that also holds an ndarray, which is compared item by item. A
+        lazy comparison error stays deferred. Device-independent."""
         from abtem.core.utils import EqualityMixin
 
         class Inner(EqualityMixin):
@@ -749,7 +932,9 @@ class TestEqualityDiscriminates:
 
         class Holder(EqualityMixin):
             def __init__(self):
-                self._inner = Inner()
+                self._inner = (
+                    Inner() if held_in == "attribute" else [Inner(), np.arange(3)]
+                )
 
         with pytest.raises(error, match="not comparable"):
             Holder() == Holder()

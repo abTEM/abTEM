@@ -393,12 +393,22 @@ def _fftw_aligned(array: np.ndarray) -> np.ndarray:
     so planning for whatever buffer arrives would make the result depend on
     where malloc happened to place it. Every buffer is instead brought to an
     aligned, C-contiguous layout -- by copying when it is not in it already,
-    which changes no arithmetic -- so that it always gets the same plan.
+    which changes no arithmetic -- so that it always gets the same plan. The
+    layout is the strides of a C-ordered buffer of the same shape (an axis of
+    length 0 counts as 1, as for ``pyfftw.zeros_aligned``), which the plans are
+    made for and ``update_arrays`` requires: NumPy's ``c_contiguous`` flag
+    ignores the strides along axes of length 0 or 1, which an empty array or
+    ``x[None]`` can have otherwise.
 
     A copy is a new buffer, so a caller passing ``overwrite_x=True`` must use the
     returned result rather than expect its own array to hold it.
     """
-    if array.flags.c_contiguous and pyfftw.is_byte_aligned(array):
+
+    c_strides = tuple(
+        array.itemsize * math.prod(max(n, 1) for n in array.shape[axis + 1 :])
+        for axis in range(array.ndim)
+    )
+    if array.strides == c_strides and pyfftw.is_byte_aligned(array):
         return array
     return _fftw_aligned_copy(array)
 
@@ -889,6 +899,14 @@ def _fft_dispatch(
             **kwargs,
             meta=xp.array((), dtype=_fft_dtype(x.dtype)),
         )
+
+    if 0 in x.shape and kwargs.get("s") is None:
+        # CuPy, and torch 2.14's MKL transforms on the CPU, reject an array
+        # with a zero-length axis, a batch axis included. Without `s` the
+        # output has the input's shape; with one it is left to the backend.
+        # A zero-length transformed axis, which no public call produces, also
+        # returns empty here, where NumPy and FFTW raise.
+        return xp.empty(x.shape, dtype=_fft_dtype(x.dtype))
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
         _warn_slow_metal_fft_size(x.shape, func_name, kwargs)

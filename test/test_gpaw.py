@@ -344,6 +344,56 @@ def test_gpaw_potential_accepts_its_own_box(box_calculator):
     assert own.box == default.box == CELL
 
 
+def test_a_gpaw_potential_from_a_calculator_equals_its_copy(box_calculator):
+    """GPAW's own mode, xc and grid descriptor define no `__eq__`; the potential
+    compares them through `_DummyGPAW`, so it equals its copy and one built from
+    the same calculator."""
+    potential = GPAWPotential(box_calculator, gpts=(16, 16))
+
+    assert potential == potential.copy()
+    assert potential == GPAWPotential(box_calculator, gpts=(16, 16))
+
+
+def test_a_dummy_gpaw_with_an_old_style_mode_equals_its_copy(box_calculator):
+    """The mode of an old-style GPAW calculator (`gpaw.old`, and `gpaw.PW` before
+    GPAW 26) has no useful `repr`; it is compared by its settings."""
+    import copy
+    import dataclasses
+
+    OldPW = pytest.importorskip("gpaw.old.wavefunctions.pw").PW
+
+    from abtem.potentials.gpaw import _DummyGPAW
+
+    dummy = dataclasses.replace(
+        _DummyGPAW.from_gpaw(box_calculator), setup_mode=OldPW(250)
+    )
+
+    assert dummy == copy.deepcopy(dummy)
+    assert dummy != dataclasses.replace(dummy, setup_mode=OldPW(300))
+
+
+def test_a_dummy_gpaw_with_an_array_in_its_mode_settings_equals_its_copy(
+    box_calculator,
+):
+    """The settings of a mode can hold an array (`qspiral`), which `==` on the
+    settings cannot reduce."""
+    import copy
+    import dataclasses
+
+    NewPW = pytest.importorskip("gpaw.dft").PW
+
+    from abtem.potentials.gpaw import _DummyGPAW
+
+    def dummy(q):
+        mode = NewPW(250, qspiral=np.array([0.0, 0.0, q]))
+        return dataclasses.replace(
+            _DummyGPAW.from_gpaw(box_calculator), setup_mode=mode
+        )
+
+    assert dummy(0.1) == copy.deepcopy(dummy(0.1))
+    assert dummy(0.1) != dummy(0.2)
+
+
 def test_gpaw_potential_box_follows_the_repetitions(box_calculator):
     repeated = (6.4, 2.8, 3.6)
     potential = GPAWPotential(
