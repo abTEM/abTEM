@@ -380,6 +380,17 @@ class Artist2D(Artist):
         if vmax is None and array is not None:
             vmax = array.max()
 
+        # a LogNorm takes no limit of 0 or below: as in `_get_norm`, leave it to the
+        # norm's autoscaling, which skips non-positive values; with no positive upper
+        # limit there is nothing to autoscale to
+        if (
+            isinstance(norm, colors.LogNorm)
+            and vmin is not None
+            and vmin <= 0
+            and (vmax is None or vmax > 0)
+        ):
+            vmin = None
+
         # one change signal for both limits, also when only one of them changes
         with norm.callbacks.blocked():
             norm.vmin = vmin

@@ -593,6 +593,8 @@ class TestInfiniteProjectionUsesRealFFTs:
     def test_matches_the_complex_transforms(self, device, precision, gpts, monkeypatch):
         import abtem.integrals as integrals
 
+        if precision == "float64" and device == gpu.values[0] == "mps":
+            pytest.skip("on Metal, float64 is the emulation, with its own transforms")
         real_calls, inverse_calls = [], []
         rfft2, irfft2 = integrals.rfft2, integrals.irfft2
         monkeypatch.setattr(

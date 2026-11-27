@@ -11,6 +11,30 @@ Fixes that were also released in 1.0.11 are listed under that version as well.
 
 Features:
 
+- Double precision on Apple Metal: the device `mps` with `precision: float64` (it was refused before) keeps
+  the data as float64 on the host and runs the Fourier multislice (also the core-loss one), the
+  infinite-projection potential and the large host FFTs on the GPU in double-float arithmetic (pairs of
+  float32, ~1e-14 relative accuracy), up to ~16x faster than float64 on the CPU. What the GPU cannot do
+  (real-space multislice, a grid side with a prime factor above 7) runs on the host in the same float64,
+  with a `SlowFFTSizeWarning`; `torch.emulate-float64` asks for the same with the device `cpu`. A
+  `SlowFFTSizeWarning` also says when a grid is markedly slow on Metal, whose FFT runs powers of two 2-4x
+  faster per pixel, and which grid would be faster; the automatic grids stay the same on every device.
+  The test suite now runs its double-precision tests on Metal at the same tolerances as elsewhere
+  ([PR #620](https://github.com/abTEM/abTEM/pull/620))
+- Bloch waves on a Mac in double precision: `bloch.solver: auto` takes the band solver (see `solver='band'`) over the
+  eigendecomposition of the structure matrix from 500 beams for float64 matrices on macOS (other platforms keep the
+  eigendecomposition). On the host the band reduction now runs on the lower triangle only, through the Hermitian
+  matrix product and rank-2k update of the BLAS that SciPy is built with (called with a leading dimension, so nothing is
+  copied), and the Chebyshev recurrence is a compiled kernel, with a bandwidth of 32 instead of 128. A quartz rotation
+  series of 1000 Å took 0.23 s a frame at 1299 beams instead of 0.69 s, 0.79 s instead of 3.5 s at 2195 beams and
+  2.1 s instead of 11.3 s at 3233 beams on an Apple M2 (against `zheevr`, see the fix above), with intensities
+  within 1e-12 of the eigendecomposition. With
+  `device: mps` and `precision: float64` (or `torch.emulate-float64`) the matrix of 3000 beams or more is reduced on the
+  GPU instead, by double-float matrix products (a lean multiply-add, 160 GFLOP/s on the M2, with the panels and block
+  reflectors in float64 on the host) and the recurrence runs on the GPU for 1600 beams or more: 1.1 to 1.3x faster than
+  the host band solver from 3000 to 9000 beams (33 against 42 s at 9009), with intensities within 3e-12 (100 Å) to
+  4e-11 (2000 Å) of the eigendecomposition at 1299 beams, against 5e-14 to 6e-13 on the host
+  ([PR #700](https://github.com/abTEM/abTEM/pull/700), [PR #702](https://github.com/abTEM/abTEM/pull/702))
 - `CrystalPotential(..., correct_surfaces=...)` calculates the slices at the entrance and exit surfaces of the crystal
   as they are in a slab, by default for a unit with a finite projection. Without it the crystal is a periodic stack,
   whose first and last slices hold the finite-projection potential of the images of the unit beyond the surfaces
@@ -167,6 +191,12 @@ Features:
   overlapping discs interfere. Aberration, aperture and tilt series (precession included) and energy
   ensembles are supported, and the calculation is lazy. `BlochwaveEnsemble` takes a fixed
   `orientation_matrix` ([PR #254](https://github.com/abTEM/abTEM/pull/254))
+- The GPU test runner `tools/gpu/run_gpu_tests.sh` has `ABTEM_CI_OFFLINE=1`, which tests the managed clone as it is,
+  without clone, fetch or reset, and installs from uv's cache only, for compute nodes without internet access. On ROCm
+  it runs one pytest process per test file, reports the passed and the failed or errored tests, detects aborts and
+  fails when no test passed. `ABTEM_CI_DESELECT` takes a pytest `-k` expression of tests to leave out of the sweep, and
+  the `status.tsv` summary names it. The recorded commit gets a `-dirty` suffix when tracked files differ from `HEAD`
+  ([PR #708](https://github.com/abTEM/abTEM/pull/708))
 
 Performance:
 
@@ -314,6 +344,21 @@ Bugfixes:
   ulp, which moved the transverse components of the first slice near the atom by up to 60 % (5 % of the
   field's maximum). Slices whose limits lie off the nodes change slightly; the slices of a cell still add up to the same
   integral through it
+- C-PRISM (`upsample=True`) in single precision chooses the retained modes in double precision. The eigendecompositions
+  that pick them are of normal matrices, which square the condition number, so in single precision the weakest
+  directions spanned by the built beams (a few 1e-4 of the largest) mixed with the round-off null space and were
+  partly dropped: the plane-wave branch, meant to be PRISM exactly, was up to 1e-4 off it on a 50-90 mrad band, by an
+  amount set by the GPU's rounding (1e-4 on an RTX 5080, 4e-6 on an RTX 4090). It is now 3e-6 on both. The extra
+  double-precision work typically costs about 1 % of the Gram matrix accumulation the compression already does
+  (more at large semiangles on coarse grids).
+- The band solver (`bloch.solver: band`) solves a single-precision matrix on the host in double precision, as NumPy's
+  `eigh` does, and rounds the amplitudes back. Reduced in single precision, the band form was 1.2 to 3.4 times as far
+  from the answer as rounding the matrix alone, by an amount that depended on how the BLAS divided its products
+  between threads (a 960-beam baddeleyite matrix at 1000 Å: 1.0e-5 to 2.9e-5 of the largest amplitude, 8.5e-6 for
+  the rounding). `test_band_solver_in_single_precision_is_as_accurate_as_eigh` failed or passed with the thread
+  count. The double-precision solve is as fast or faster on the host (960 to 4000 beams on 8 cores: 1.6 to 2.8 times
+  faster, 0.07 against 0.11 s at 960). Only an explicit `solver='band'` with `precision: float32` on the CPU is
+  affected; `auto` takes `eigh` there, and the GPU path is unchanged.
 - A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
   compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
@@ -427,6 +472,15 @@ Bugfixes:
   tensor, and could turn it float64. The tensor methods a device array forwards (`take`, `clip`, ...) take one too.
   This surfaced as `Images == Images` between a host and a device object failing in one operand order
   ([PR #691](https://github.com/abTEM/abTEM/pull/691))
+- `BlochWaves` no longer fails on macOS for complex structure matrices of an even number of about 2900 beams or
+  more (a quartz rotation series at `g_max=3` and `sg_max=0.5` with 3233 beams, for example). Apple's Accelerate
+  returns the real workspace size of `ZHEEVD`, 1 + 5n + 2n², in single precision, which rounds an odd size above
+  2²⁴ down below the minimum, so LAPACK refused the call with "Illegal value in argument 10 of internal zheevd"
+  (SciPy) or "Eigenvalues did not converge" (NumPy). The complex Hermitian solver on macOS is now `ZHEEVR`, which
+  needs a far smaller workspace and was also faster on an Apple M2: 0.60 against 0.87 s at 1300 beams, 12.5 against
+  22.7 s at 3233, and a rotation series of 11 frames at 1299 beams 7.7 instead of 10.4 s. The diffraction patterns
+  are unchanged to rounding. Real matrices and other platforms are not affected. The eigenvectors of a complex
+  matrix are written to an array of their own, not over the matrix when it may be overwritten
 - `AnnularDetector.show()` can be drawn: its one region made a one-colour colormap that matplotlib refused when
   rendering the figure ("data mapping points must start with x=0 and end with x=1"). The detectors with several
   regions keep their colours ([PR #677](https://github.com/abTEM/abTEM/pull/677))
@@ -1011,6 +1065,10 @@ Bugfixes:
 - `ensure_cuda_cluster` raises a CUDA error from its device probe, where it started the cluster without the
   per-worker memory limit. Only "no CUDA device" (`cudaErrorNoDevice`, `hipErrorNoDevice`) still means no
   limit; every other error, an insufficient driver included, raises on every call
+- **Behaviour change:** `ensure_cuda_cluster` divides the per-worker memory limit by the number of GPUs the
+  cluster spans, the ones listed in `dask.multi-gpu-devices` when it is set, where it divided by every visible
+  GPU. With 4 visible GPUs and two devices listed, the workers shared 42.5 % of the memory limit in total, and
+  now share 85 %. More devices listed than visible, four listed with two visible, gave 170 %
 - A GPU or Metal computation raises the error of an active dask client that cannot answer the scheduler query,
   where it ran on the synchronous scheduler instead. An asynchronous client inside its event loop, whose query
   returns a coroutine, is not used: the computation runs on the synchronous scheduler, where the check raised
@@ -1082,6 +1140,33 @@ Bugfixes:
   and for extra axes of length 1 that are not leading. Eager patterns of ensemble shape `(3,)` with matrices of
   ensemble shape `(3, 1)` or `(3, 1, 1)`, and `(4, 3)` with `(4, 1, 1)` or `(4, 1, 1, 1)`, for example, were indexed
   with the right matrices
+- The multi-GPU run of `tools/gpu/run_gpu_tests.sh` (`ABTEM_CI_MULTIGPU`) runs `test/test_multigpu.py` as its own
+  pytest call, which fails when no test passes or any is skipped, where a single pass anywhere was enough: the multigpu
+  test in `test/test_measure.py` needs only 2 GPUs, so a broken `dask-cuda` import ended green with one pass and six
+  skips. The other multigpu tests run in a second call that must return 0. A preflight checks that `dask_cuda` imports
+  and that 2 GPUs are visible, and the managed venv installs `cuda-bindings>=12,<13` from PyPI, the line that matches
+  `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
+  `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
+  fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
+- `show(logscale=True, common_color_scale=True)` of images with a zero pixel, or a member that is all zero, no longer
+  raises `ValueError: Invalid vmin or vmax`, for real and complex images alike, and neither does `set_value_limits`
+  with a lower limit of 0 on a log scale. The limits were written into the `LogNorm` unchanged, so a minimum of 0 was
+  an invalid limit. When limits shared by all members have a lower limit of 0 or below on a log scale and a positive
+  value exists, the lower limit is now the smallest positive value of the whole ensemble (the amplitude, for complex
+  images), the same for every member. An ensemble with no positive value keeps its limits as before. **Behaviour
+  change:** `set_logscale` applies the shared limits again to the new norm, so after a common colour scale
+  `set_logscale(True)` keeps one lower limit for all members instead of each member's own, and `set_logscale(False)`
+  restores the shared lower limit instead of keeping the logarithmic one
+- Setting both `ABTEM_<SECTION>` and `ABTEM_<SECTION>__<KEY>` (for example `ABTEM_DIAGNOSTICS=1` with
+  `ABTEM_DIAGNOSTICS__TASK_PROGRESS=1`), or their deprecated `DASK_` forms, no longer raises `TypeError` at
+  `import abtem` or drops the key, depending on the order of the environment. **Behaviour change:** the variable of the
+  key wins, whatever the order, and the variable of the section is ignored with a `UserWarning` that names both; a
+  section given as a dict (`ABTEM_DIAGNOSTICS="{'task-progress': False}"`) is kept, with the key overridden
+- `LineScan` and `GridScan` raise `ValueError: gpts must be greater than 0` when constructed with a number of
+  positions below 1, and `LineScan.gpts` and `GridScan.gpts` when set to a number below 1. A scan with zero positions
+  was accepted and failed later, far from the cause: with a `ZeroDivisionError` in the chunking of a lazy run, or with a
+  `RuntimeError` about the axes metadata of an eager one. **Behaviour change:** `LineScan(gpts=0, sampling=...)` raises
+  too; it used to let the sampling decide the number of positions
 
 Documentation:
 

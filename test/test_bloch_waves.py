@@ -14,12 +14,14 @@ from utils import assert_array_objects_equal, devices, gpu, requires_gpu
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
+from abtem.bloch import dynamical
 from abtem.bloch.band_chebyshev import (
     band_is_faster,
     gershgorin_bounds,
     propagate_incident_beam,
 )
 from abtem.bloch.dynamical import (
+    _COMPLEX_EIGH_NEEDS_EVR,
     BlochwaveEnsemble,
     _eigh,
     calculate_dynamical_scattering,
@@ -1647,10 +1649,7 @@ def test_bloch_waves_warn_in_single_precision(device, precision, monkeypatch):
                 abtem.bloch.dynamical, "_issued_precision_warnings", set()
             )
             if precision == "float32":
-                # Metal has no double precision to switch to, so the advice
-                # there is to check on another device.
-                check = "'cpu' or 'gpu' device" if device == "mps" else "precision"
-                with pytest.warns(BlochWavePrecisionWarning, match=check):
+                with pytest.warns(BlochWavePrecisionWarning, match="precision"):
                     calculate()
             else:
                 with warnings.catch_warnings():
@@ -2227,6 +2226,10 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
     # checked before asnumpy, which with CuPy installed copies a host array to C order
     single = dtype in (np.float32, np.complex64)
     in_place = device != "cpu" or not single
+    # ZHEEVR, used for complex matrices where ZHEEVD's workspace query fails (see
+    # _COMPLEX_EIGH_NEEDS_EVR), writes the eigenvectors to an array of their own
+    if device == "cpu" and _COMPLEX_EIGH_NEEDS_EVR and np.iscomplexobj(matrix):
+        in_place = False
     if device == "cpu":
         assert np.shares_memory(v, a) == in_place
     else:
@@ -2235,6 +2238,101 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
     tol = 40 * (1e-4 if single else 1e-12)
     np.testing.assert_allclose(w, np.linalg.eigvalsh(matrix.astype(complex)), atol=tol)
     np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
+
+
+@pytest.mark.parametrize("blas", [True, False])
+@pytest.mark.parametrize("complex_", [True, False])
+@pytest.mark.parametrize("bandwidth", [None, 5, 24])
+def test_band_solver_on_the_cpu_matches_the_eigendecomposition(
+    bandwidth, complex_, blas, monkeypatch
+):
+    """The band solver of a double-precision matrix on the host: the Hermitian BLAS3
+    reduction (reading the lower triangle only, through SciPy's BLAS) or the general
+    products, and the compiled recurrence."""
+    from abtem.bloch import band_chebyshev
+
+    if not blas:
+        monkeypatch.setattr(band_chebyshev, "_host_blas", lambda dtype_char: None)
+    n, direct = 120, 5
+    rng = np.random.default_rng(3)
+    coupling = rng.normal(size=(n, n)) + (
+        1j * rng.normal(size=(n, n)) if complex_ else 0.0
+    )
+    A = np.asfortranarray(
+        0.1 * (coupling + coupling.conj().T) / np.sqrt(n)
+        + np.diag(rng.uniform(-9.0, 9.0, size=n))
+    )
+    scales = np.array([0.5, 6.0, 30.0])
+    w, v = np.linalg.eigh(A)
+    reference = v @ (np.exp(1j * scales[None] * w[:, None]) * v[direct].conj()[:, None])
+
+    original = A.copy()
+    amplitudes = band_chebyshev.propagate_incident_beam(
+        A, scales, direct=direct, bandwidth=bandwidth
+    )
+
+    np.testing.assert_array_equal(A, original)
+    assert amplitudes.dtype == np.complex128
+    np.testing.assert_allclose(amplitudes, reference, rtol=0, atol=1e-11)
+
+
+def _hermitian(n, dtype, seed=0):
+    rng = np.random.default_rng(seed)
+    matrix = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+    return (matrix + matrix.conj().T).astype(dtype)
+
+
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("overwrite_a", [False, True])
+def test_eigh_by_evr_agrees_with_the_default_solver(monkeypatch, dtype, overwrite_a):
+    """The complex solver that stands in for ZHEEVD on macOS (see
+    `_COMPLEX_EIGH_NEEDS_EVR`) gives the decomposition of NumPy's, in the precision
+    of the matrix, and leaves the matrix alone unless it may be overwritten."""
+    matrix = _hermitian(60, dtype)
+    reference_w, _ = np.linalg.eigh(matrix)
+
+    monkeypatch.setattr(dynamical, "_COMPLEX_EIGH_NEEDS_EVR", True)
+    a = np.asfortranarray(matrix.copy())
+    w, v = _eigh(a, overwrite_a=overwrite_a)
+
+    assert w.dtype == matrix.real.dtype and v.dtype == dtype
+    tol = 60 * (1e-4 if dtype == np.complex64 else 1e-12)
+    np.testing.assert_allclose(w, reference_w, atol=tol)
+    np.testing.assert_allclose(matrix @ v, v * w, atol=tol)
+    np.testing.assert_allclose(v.conj().T @ v, np.eye(60), atol=tol)
+    if not overwrite_a or dtype == np.complex64:
+        np.testing.assert_array_equal(a, matrix)
+
+
+def test_bloch_diffraction_patterns_do_not_depend_on_the_eigh_solver(monkeypatch):
+    """Eigenvectors differ in phase and, for the degenerate eigenvalues of a zone
+    axis, within their subspace between solvers; the patterns do not."""
+    thicknesses = [50.0, 400.0, 1500.0]
+    results = []
+    for evr in (False, True):
+        monkeypatch.setattr(dynamical, "_COMPLEX_EIGH_NEEDS_EVR", evr)
+        with abtem.config.set({"precision": "float64"}):
+            patterns = _silicon_bloch_waves("cpu").calculate_diffraction_patterns(
+                thicknesses, lazy=False
+            )
+        results.append(asnumpy(patterns.array))
+    np.testing.assert_allclose(
+        results[1], results[0], atol=1e-10 * np.abs(results[0]).max()
+    )
+
+
+@pytest.mark.slow
+def test_eigh_of_a_complex_matrix_of_an_even_size_above_3000():
+    """Accelerate's ZHEEVD refused these (see `_COMPLEX_EIGH_NEEDS_EVR`): the
+    workspace it asks for, 1 + 5n + 2n^2, is odd for an even n and rounded down in
+    single precision above 2**24."""
+    n = 3000
+    matrix = np.asfortranarray(_hermitian(n, np.complex128))
+    w, v = _eigh(matrix, overwrite_a=False)
+    probe = np.random.default_rng(1).normal(size=n)
+    np.testing.assert_allclose(
+        matrix @ (v @ probe), v @ (w * probe), atol=1e-9 * np.abs(w).max()
+    )
 
 
 def test_dynamical_scattering_keeps_the_structure_matrix_by_default():
@@ -2410,6 +2508,38 @@ def test_band_solver_in_single_precision_is_as_accurate_as_eigh():
     # numpy solves a single-precision eigh in double precision, so the error of the
     # GPU's single-precision eigh (~3e-5 at these sizes) is the yardstick
     assert np.abs(single - reference).max() < 3e-5 * np.abs(reference).max()
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("threads", [1, 4])
+def test_band_solver_of_a_single_precision_host_matrix_is_solved_in_double(
+    dtype, threads
+):
+    # reduced in single precision, the band form of a 960-beam matrix was off by
+    # 1e-5 to 3e-5 of the largest amplitude, by an amount that depended on how the
+    # BLAS split its products between threads; the rounding of the matrix itself
+    # (the floor, taken out here by solving the rounded matrix exactly) is 1e-6
+    from threadpoolctl import threadpool_limits
+
+    rng = np.random.default_rng(3)
+    n = 400
+    couplings = rng.normal(size=(n, n)) * 0.002
+    if dtype == np.complex64:
+        couplings = couplings + 1j * rng.normal(size=(n, n)) * 0.002
+    diagonal = np.diag(np.sort(rng.uniform(-2.0, 2.0, n)))
+    A = (diagonal + (couplings + couplings.conj().T) / 2).astype(dtype)
+    scales = np.array([8.0, 80.0])
+
+    values, vectors = np.linalg.eigh(A.astype(np.complex128))
+    phases = np.exp(1j * np.outer(values, scales))
+    exact = vectors @ (phases * vectors[0].conj()[:, None])
+
+    with threadpool_limits(threads):
+        result = propagate_incident_beam(A, scales)
+
+    assert result.dtype == np.complex64
+    # beyond the rounding of the result to single precision: the solve was in double
+    assert np.abs(result - exact).max() < 2e-7 * np.abs(exact).max()
 
 
 def test_band_solver_through_lazy_rotation_series():

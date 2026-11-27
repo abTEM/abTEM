@@ -82,12 +82,6 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
     )
 
 
-# PRISM and multislice are different code paths, so their results agree only
-# to within float round-off. These are the tolerances of np.allclose, which is
-# what `==` applied to the eager array before the comparison was made
-# value-based for lazy results too.
-PRISM_VS_PROBE_TOLERANCES = dict(rtol=1e-5, atol=1e-8)
-
 PRISM_SCAN_DETECTORS = [
     abtem_st.segmented_detector,
     abtem_st.flexible_annular_detector,
@@ -297,8 +291,13 @@ def test_prism_scan_match_probe_scan(data, lazy, device):
     ).to_cpu()
 
     assert prism_measurement.shape == probe_measurement.shape
+    # PRISM and multislice are different code paths, so their results agree only
+    # to within float round-off of the largest value: the tolerance is absolute
+    # and scaled to it, as a small element next to large ones differs by that
+    # round-off.
+    scale = np.abs(probe_measurement.compute().array).max()
     assert_array_objects_equal(
-        prism_measurement, probe_measurement, **PRISM_VS_PROBE_TOLERANCES
+        prism_measurement, probe_measurement, rtol=0.0, atol=1e-5 * scale
     )
 
 

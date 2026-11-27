@@ -96,7 +96,17 @@ def test_ensure_cuda_cluster_is_memoized(cuda_client):
 # --------------------------------------------------------------------------
 
 
-def test_gpu_compute_distributes_over_all_workers(cuda_client):
+def _assert_work_on_several_workers(task_stream, n):
+    """Dask's scheduler does not guarantee that every worker runs a task of a small graph,
+    so the check is that the work is not on a single GPU. That each worker has its own GPU
+    is checked by ``test_workers_pinned_to_distinct_gpus``."""
+    workers = {
+        r.get("worker") for r in task_stream.data if isinstance(r, dict) and r.get("worker")
+    }
+    assert len(workers) > 1, f"work ran on {len(workers)} of {n} GPU workers"
+
+
+def test_gpu_compute_distributes_over_several_workers(cuda_client):
     from distributed import get_task_stream
 
     n = len(cuda_client.nthreads())
@@ -109,8 +119,7 @@ def test_gpu_compute_distributes_over_all_workers(cuda_client):
     assert arr.shape[0] == 2 * n
     assert np.all(np.isfinite(arr.real)) and np.all(np.isfinite(arr.imag))
 
-    workers = {r.get("worker") for r in ts.data if isinstance(r, dict) and r.get("worker")}
-    assert len(workers) == n, f"work ran on {len(workers)}/{n} GPU workers"
+    _assert_work_on_several_workers(ts, n)
 
 
 def test_haadf_image_independent_of_gpu_distribution(cuda_client):
@@ -139,5 +148,4 @@ def test_automatic_multigpu_config_distributes(cuda_client):
         with get_task_stream(cuda_client) as ts:
             waves.compute(progress_bar=False)
 
-    workers = {r.get("worker") for r in ts.data if isinstance(r, dict) and r.get("worker")}
-    assert len(workers) == n
+    _assert_work_on_several_workers(ts, n)

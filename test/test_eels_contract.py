@@ -2,14 +2,12 @@
 
 import numpy as np
 import pytest
-from utils import gpu
+from utils import gpu, skip_float64_on_single_precision_arrays
 
 from abtem.core.backend import asnumpy, get_array_module
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-# String dtypes, so that the collection hook of conftest.py sees "complex128"
-# and skips it on the single-precision torch backend.
 @pytest.mark.parametrize("dtype", ["complex64", "complex128"])
 @pytest.mark.parametrize("order", ["beam", "probe"])
 @pytest.mark.parametrize(
@@ -19,6 +17,8 @@ from abtem.core.backend import asnumpy, get_array_module
 def test_contract_eels_matches_reference(device, dtype, order, shape):
     from abtem.prism._eels_contract import contract_eels
 
+    if dtype == "complex128":
+        skip_float64_on_single_precision_arrays(device, "complex128")
     xp = get_array_module(device)
     n_s2, n_k, n_active, n_t, wy, wx = shape
     rng = np.random.default_rng(20260909)
