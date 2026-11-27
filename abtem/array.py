@@ -110,6 +110,17 @@ def _auto_ensemble_chunks(n_ensemble: int, n_base: int) -> tuple:
     return ("auto",) * n_ensemble + (-1,) * n_base
 
 
+def _axis_origin(axis: AxisMetadata) -> float:
+    """The coordinate of the first sample of an axis for the exports, which describe
+    an axis by an origin and a sampling.
+
+    An unshifted reciprocal axis starts at zero frequency, whereas its `offset` is that
+    of the centred grid."""
+    if not getattr(axis, "fftshift", True):
+        return 0.0
+    return getattr(axis, "offset", 0.0)
+
+
 def _to_hyperspy_axes_metadata(
     axes_metadata: list[AxisMetadata], shape: int | tuple[int, ...]
 ):
@@ -123,7 +134,7 @@ def _to_hyperspy_axes_metadata(
 
         if isinstance(metadata, LinearAxis):
             hyperspy_axis["scale"] = metadata.sampling
-            hyperspy_axis["offset"] = metadata.offset
+            hyperspy_axis["offset"] = _axis_origin(metadata)
             hyperspy_axis["units"] = metadata.units
         elif isinstance(metadata, OrdinalAxis):
             if all(isinstance(value, Number) for value in metadata.values) and (
@@ -2190,12 +2201,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            # An unshifted reciprocal axis starts at zero frequency (its `offset` is
-            # that of the centred grid), so the first sample is at 0.
-            if getattr(axis, "fftshift", True):
-                origin.append(getattr(axis, "offset", 0.0))
-            else:
-                origin.append(0.0)
+            origin.append(_axis_origin(axis))
 
         # The signal units are the metadata units, as abTEM's own measurements set them
         # ("arb. unit" by default). quantem only displays them, and reads the same

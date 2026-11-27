@@ -300,3 +300,38 @@ def test_to_quantem_origin_of_unshifted_patterns_is_zero(quantem_records):
     patterns.to_quantem()
 
     assert quantem_records["origin"] == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_to_hyperspy_origin_follows_the_first_sample_of_a_pattern(
+    fftshift, monkeypatch
+):
+    # the offset of a reciprocal axis is that of the centred grid; the data of an
+    # unshifted pattern start at zero frequency, as the quantem export has it
+    captured = {}
+
+    class Signal2D:
+        def __init__(self, data, axes):
+            captured["axes"] = axes
+
+        def as_lazy(self):
+            return self
+
+    monkeypatch.setattr(
+        abtem.array, "hs", SimpleNamespace(signals=SimpleNamespace(Signal2D=Signal2D))
+    )
+    patterns = DiffractionPatterns(
+        np.ones(GPTS, dtype=np.float32),
+        sampling=SAMPLING,
+        fftshift=fftshift,
+        metadata={"energy": 100e3},
+    )
+
+    patterns.to_hyperspy(transpose=False)
+
+    offsets = [axis["offset"] for axis in captured["axes"]]
+    if fftshift:
+        expected = [-(n // 2) * d for n, d in zip(GPTS, SAMPLING)]
+    else:
+        expected = [0.0, 0.0]
+    np.testing.assert_allclose(offsets, expected, atol=1e-12)
