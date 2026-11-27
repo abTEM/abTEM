@@ -1190,6 +1190,11 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
     A single-precision matrix on the CPU is still copied: `numpy.linalg.eigh` solves
     it in double precision, an order of magnitude more accurately than LAPACK's
     single-precision solver, and the results do not change with this function.
+
+    On a ROCm GPU the solve goes through `cupy.linalg.eigh`, which copies the matrix and
+    uses the Jacobi solver `syevj`: accurate, but much slower than the host at 1000 to
+    3000 beams (60.8 s for 2000 beams on an MI250X, against 0.5 s for the host's
+    eigenvalues alone).
     """
     xp = get_array_module(a)
     if xp is np and _COMPLEX_EIGH_NEEDS_EVR and np.iscomplexobj(a):

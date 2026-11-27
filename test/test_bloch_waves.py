@@ -2232,7 +2232,9 @@ def test_eigh_factorizes_a_fortran_matrix_in_place(device, dtype):
         in_place = False
     if device == "cpu":
         assert np.shares_memory(v, a) == in_place
-    elif not xp.cuda.runtime.is_hip:  # ROCm has no in-place syevd, see _eigh
+    elif xp.cuda.runtime.is_hip:  # ROCm has no in-place syevd, see _eigh
+        assert v.data.ptr != a.data.ptr
+    else:
         assert v.data.ptr == a.data.ptr
     w, v = asnumpy(w), asnumpy(v)
     tol = 40 * (1e-4 if single else 1e-12)
