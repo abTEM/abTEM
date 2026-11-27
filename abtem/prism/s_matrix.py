@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import numbers
 import operator
 import warnings
 from abc import abstractmethod
@@ -1712,8 +1713,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # each plane wave is propagated to every exit plane, hence an automatic
         # batch holds the waves of all exit planes within the chunk size
         exit_planes_shape, _ = self._exit_planes_shape_and_metadata
-        if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, exit_planes_shape + self.gpts)
+        if isinstance(max_batch, numbers.Integral):
+            max_batch = int(max_batch) * reduce(operator.mul, exit_planes_shape + self.gpts)
 
         chunks = validate_chunks(
             shape=(len(self),) + exit_planes_shape + self.gpts,

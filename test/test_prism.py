@@ -1003,3 +1003,33 @@ def test_prism_with_a_ctf_ensemble_and_exit_planes_and_frozen_phonons_equals_mul
     np.testing.assert_allclose(
         measurement.array, reference.array, rtol=0, atol=1e-5 * reference.array.max()
     )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("path", ["build", "scan", "scan_no_chunks"])
+def test_max_batch_multislice_accepts_a_numpy_integer(lazy, path):
+    from ase import Atoms
+
+    from abtem import Potential, SMatrix
+
+    """A NumPy integer, such as an np.arange loop gives, batches as an int does."""
+    atoms = Atoms("Si", positions=[(2.0, 2.0, 1.0)], cell=(4, 4, 2), pbc=True)
+    potential = Potential(atoms, gpts=32, slice_thickness=1)
+
+    def run(max_batch):
+        s_matrix = SMatrix(
+            energy=100e3, semiangle_cutoff=20, potential=potential, interpolation=2
+        )
+        if path == "build":
+            result = s_matrix.build(lazy=lazy, max_batch=max_batch)
+        else:
+            result = s_matrix.scan(
+                GridScan(start=(0, 0), end=(2, 2), gpts=2),
+                max_batch_multislice=max_batch,
+                lazy=lazy,
+                **({"disable_s_matrix_chunks": True} if path == "scan_no_chunks" else {}),
+            )
+        return result.compute() if lazy else result
+
+    expected = run(4)
+    np.testing.assert_array_equal(run(np.int64(4)).array, expected.array)
