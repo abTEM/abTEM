@@ -456,8 +456,7 @@ class Visualization:
         ):
             # a LogNorm takes no limit of 0 or below: the shared lower limit is the
             # smallest positive value of the whole ensemble
-            array = self._measurement.array
-            values = np.abs(array) if np.iscomplexobj(array) else array
+            values = self._drawn_values()
             positive = values[values > 0]
             if len(positive):
                 value_limits = [float(positive.min()), value_limits[1]]
@@ -477,6 +476,16 @@ class Visualization:
         ):
             self.set_value_limits(self._value_limits)
 
+    def _drawn_values(self):
+        """The values the artists draw: not those of a line profile's complex parts
+        taken together, nor the spots below the threshold."""
+        drawn = [artist.drawn_values() for artist in self.artists.ravel()]
+        if drawn and all(values is not None for values in drawn):
+            return np.concatenate([np.ravel(values) for values in drawn])
+
+        array = self._measurement.array
+        return np.abs(array) if np.iscomplexobj(array) else array
+
     def _uses_log_norm(self):
         return any(
             isinstance(
@@ -494,7 +503,7 @@ class Visualization:
             # the extremes of the positive values of all the panels together; each
             # panel then adds the same margin
             value_limits = _positive_value_limits(
-                self._measurement.array, value_limits=value_limits
+                self._drawn_values(), value_limits=value_limits
             )
         else:
             value_limits = _get_value_limits(
