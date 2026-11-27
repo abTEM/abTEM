@@ -1129,3 +1129,60 @@ def test_exit_waves_without_the_label_do_not_warn():
         _silicon_bloch_waves().calculate_exit_waves(
             [50.0], gpts=(16, 16), normalize=True, lazy=False
         )
+
+
+def test_rotating_a_rotation_continues_it():
+    # rotate() rebuilt the Bloch waves from the structure factor, so the rotation
+    # of an already rotated object replaced the first rotation
+    bloch_waves = _silicon_bloch_waves()
+    assert np.allclose(bloch_waves.orientation_matrix, np.eye(3))
+
+    once = bloch_waves.rotate("x", 0.02, "y", 0.015)
+    chained = bloch_waves.rotate("x", 0.02).rotate("y", 0.015)
+    only_the_last = bloch_waves.rotate("y", 0.015)
+
+    np.testing.assert_allclose(chained.orientation_matrix, once.orientation_matrix)
+    assert not np.allclose(chained.orientation_matrix, only_the_last.orientation_matrix)
+    np.testing.assert_allclose(
+        chained.calculate_diffraction_patterns([50.0], lazy=False).array,
+        once.calculate_diffraction_patterns([50.0], lazy=False).array,
+    )
+
+
+def test_rotations_are_about_fixed_axes_in_the_order_given():
+    from scipy.spatial.transform import Rotation
+
+    bloch_waves = _silicon_bloch_waves()
+    first = Rotation.from_euler("x", 0.3).as_matrix()
+    second = Rotation.from_euler("y", 0.2).as_matrix()
+
+    rotated = bloch_waves.rotate("x", 0.3).rotate("y", 0.2)
+
+    np.testing.assert_allclose(rotated.orientation_matrix, second @ first)
+
+
+def test_rotating_a_rotation_with_a_distribution_continues_it():
+    bloch_waves = _silicon_bloch_waves()
+    y_angles = np.array([0.0, 0.3, 0.5])
+    ensemble = bloch_waves.rotate("x", 0.4, degrees=True).rotate(
+        "y", abtem.distributions.from_values(y_angles), degrees=True
+    )
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+
+    for i, y in enumerate(y_angles):
+        single = bloch_waves.rotate("x", 0.4, "y", y, degrees=True)
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
+
+
+def test_orientation_matrix_must_be_three_by_three():
+    structure_factor = _silicon_bloch_waves().structure_factor
+    with pytest.raises(ValueError, match="shape"):
+        BlochWaves(
+            structure_factor=structure_factor,
+            energy=200e3,
+            sg_max=0.1,
+            orientation_matrix=np.eye(2),
+        )

@@ -1353,8 +1353,17 @@ class BlochWaves:
 
         cell = structure_factor.cell
 
-        if orientation_matrix is not None:
+        if orientation_matrix is None:
+            orientation_matrix = np.eye(3)
+        else:
+            orientation_matrix = np.array(orientation_matrix, dtype=float)
+            if orientation_matrix.shape != (3, 3):
+                raise ValueError(
+                    "orientation_matrix must have shape (3, 3), "
+                    f"got {orientation_matrix.shape}"
+                )
             cell = Cell(np.dot(cell, orientation_matrix.T))
+        self._orientation_matrix = orientation_matrix
 
         g_max = validate_g_max(g_max, structure_factor)
 
@@ -1409,6 +1418,12 @@ class BlochWaves:
     @property
     def cell(self) -> Cell:
         return self._cell
+
+    @property
+    def orientation_matrix(self) -> np.ndarray:
+        """The (3, 3) orientation matrix of the unit cell relative to the structure
+        factor's; the identity if not rotated."""
+        return self._orientation_matrix
 
     @property
     def g_max(self) -> float:
@@ -1851,6 +1866,11 @@ class BlochWaves:
     ) -> BlochWaves | BlochwaveEnsemble:
         """Rotate the unit cell by a given set of Euler angles.
 
+        The rotations are about axes fixed in space, applied in the order given, and
+        on top of the orientation the Bloch waves already have: rotating the result of
+        a rotation continues it, so ``bloch_waves.rotate(a).rotate(b)`` is
+        ``bloch_waves.rotate(a, b)``.
+
         Parameters
         ----------
         args : sequence of (str, float)
@@ -1913,9 +1933,10 @@ class BlochWaves:
                 use_wave_eq=self.use_wave_eq,
                 device=self._device,
                 use_degrees=degrees,
+                orientation_matrix=self._orientation_matrix,
             )
         else:
-            orientation_matrix = np.eye(3)
+            orientation_matrix = self._orientation_matrix
 
             for axes, rotation in zip(all_axes, all_rotations):
                 R = Rotation.from_euler(axes, rotation, degrees=degrees).as_matrix()
@@ -1953,6 +1974,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         device: Optional[str] = None,
         use_wave_eq: bool = False,
         use_degrees: bool = False,
+        orientation_matrix: Optional[np.ndarray] = None,
     ):
         axes = args[::2]
         if not is_valid_rotation_axes(axes):
@@ -1977,6 +1999,12 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._rotations = validated_rotations
 
         self._use_degrees = use_degrees
+        # the orientation the rotations are applied to
+        self._orientation_matrix = (
+            np.eye(3)
+            if orientation_matrix is None
+            else np.array(orientation_matrix, dtype=float)
+        )
         self._structure_factor = structure_factor
         self._energy = energy
         self._centering = centering
@@ -2036,7 +2064,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
             orientation_matrices = orientation_matrices @ R
 
-        return orientation_matrices
+        return orientation_matrices @ self._orientation_matrix
 
     @property
     def structure_factor(self) -> BaseStructureFactor:
@@ -2053,6 +2081,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     @property
     def use_degrees(self) -> bool:
         return self._use_degrees
+
+    @property
+    def orientation_matrix(self) -> np.ndarray:
+        """The orientation the rotations are applied to."""
+        return self._orientation_matrix
 
     @property
     def energy(self) -> float:
