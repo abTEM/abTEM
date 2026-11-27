@@ -13,6 +13,7 @@ from ase.data import chemical_symbols, covalent_radii
 from ase.data.colors import jmol_colors
 from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
@@ -443,13 +444,46 @@ class Visualization:
     def set_value_limits(
         self, value_limits: tuple[float, float] | list[float] = (None, None)
     ):
+        # limits given here are shared by every artist, also after a change of scale
+        self._value_limits = () if value_limits is None else tuple(value_limits)
+
+        if (
+            value_limits is not None
+            and value_limits[0] is not None
+            and value_limits[0] <= 0
+            and self._uses_log_norm()
+        ):
+            # a LogNorm takes no limit of 0 or below: the shared lower limit is the
+            # smallest positive value of the whole ensemble
+            array = self._measurement.array
+            values = np.abs(array) if np.iscomplexobj(array) else array
+            positive = values[values > 0]
+            if len(positive):
+                value_limits = [float(positive.min()), value_limits[1]]
+
         self.set_artists("value_limits", value_limits=value_limits)
 
     def set_power(self, power: float = 1.0):
         self.set_artists("power", power=power)
 
     def set_logscale(self, logscale: bool = False):
+        uses_log_norm = self._uses_log_norm()
         self.set_artists("logscale", logscale=logscale)
+
+        # a new norm takes the shared limits again, for its own valid lower limit
+        if self._uses_log_norm() != uses_log_norm and any(
+            limit is not None for limit in self._value_limits
+        ):
+            self.set_value_limits(self._value_limits)
+
+    def _uses_log_norm(self):
+        return any(
+            isinstance(
+                getattr(artist, "amplitude_norm", getattr(artist, "norm", None)),
+                LogNorm,
+            )
+            for artist in self.artists.ravel()
+        )
 
     def set_common_value_limits(self, value_limits=(None, None)):
         value_limits = _get_value_limits(

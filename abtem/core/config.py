@@ -183,6 +183,47 @@ def _defines_key(key: str, defaults: list[Mapping] = defaults) -> bool:
     return False
 
 
+def _nest_variables(d: dict, names: Mapping[str, str], env: Mapping[str, str]) -> dict:
+    """Nest environment variables into a config dict.
+
+    A variable for a key inside a section wins over one that sets the section to a
+    value, whatever the order of the environment: the latter is dropped, with a
+    warning that names both. The remaining keys are applied shallowest first, so
+    that a deeper key also overrides the same key in a section given as a dict.
+
+    Parameters
+    ----------
+    d : dict
+        The values of the variables by dotted key.
+    names : Mapping[str, str]
+        The name of the variable of each key of ``d``.
+    env : Mapping[str, str]
+        The environment the variables come from.
+
+    Returns
+    -------
+    config : dict
+    """
+    for key in list(d):
+        deeper = [other for other in d if other.startswith(key + ".")]
+        if deeper and not isinstance(d[key], Mapping):
+            warnings.warn(
+                f"{names[key]}={env[names[key]]} is ignored: {names[deeper[0]]} sets "
+                "a key inside that section.",
+                UserWarning,
+                stacklevel=3,
+            )
+            del d[key]
+
+    result: dict = {}
+    set(
+        dict(sorted(d.items(), key=lambda item: item[0].count("."))),
+        config=result,
+        lock=threading.Lock(),
+    )
+    return result
+
+
 def collect_env(env: Mapping[str, str] | None = None) -> dict:
     """Collect config from environment variables
 
@@ -193,6 +234,11 @@ def collect_env(env: Mapping[str, str] | None = None) -> dict:
     -  Lower-cases the key text
     -  Treats ``__`` (double-underscore) as nested access
     -  Calls ``ast.literal_eval`` on the value
+
+    When ``ABTEM_FOO=1`` and ``ABTEM_FOO__BAR=2`` are both set, the variable of the
+    key wins whatever the order of the environment: ``ABTEM_FOO`` is ignored with
+    a warning. A section given as a dict (``ABTEM_FOO="{'bar': 1}"``) is kept, and
+    the variable of the key overrides its entry (see :func:`_nest_variables`).
 
     ``ABTEM_CONFIG`` and ``ABTEM_ROOT_CONFIG`` are excluded even though they
     carry the ``ABTEM_`` prefix: they control where :func:`collect` looks for
@@ -212,15 +258,13 @@ def collect_env(env: Mapping[str, str] | None = None) -> dict:
     if env is None:
         env = os.environ
 
-    d = {
-        name[len(ENV_PREFIX) :].lower().replace("__", "."): interpret_value(value)
-        for name, value in env.items()
+    names = {
+        name[len(ENV_PREFIX) :].lower().replace("__", "."): name
+        for name in env
         if name.startswith(ENV_PREFIX) and name not in _CONTROL_ENV_VARS
     }
-
-    result: dict = {}
-    set(d, config=result, lock=threading.Lock())
-    return result
+    d = {key: interpret_value(env[name]) for key, name in names.items()}
+    return _nest_variables(d, names, env)
 
 
 def collect_legacy_env(
@@ -251,6 +295,7 @@ def collect_legacy_env(
         env = os.environ
 
     d = {}
+    names = {}
     for name, value in env.items():
         if not name.startswith(LEGACY_ENV_PREFIX):
             continue
@@ -269,10 +314,9 @@ def collect_legacy_env(
             stacklevel=2,
         )
         d[key] = interpret_value(value)
+        names[key] = name
 
-    result: dict = {}
-    set(d, config=result, lock=threading.Lock())
-    return result
+    return _nest_variables(d, names, env)
 
 
 def collect(

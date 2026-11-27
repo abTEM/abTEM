@@ -304,6 +304,21 @@ Dependencies:
 
 Bugfixes:
 
+- C-PRISM (`upsample=True`) in single precision chooses the retained modes in double precision. The eigendecompositions
+  that pick them are of normal matrices, which square the condition number, so in single precision the weakest
+  directions spanned by the built beams (a few 1e-4 of the largest) mixed with the round-off null space and were
+  partly dropped: the plane-wave branch, meant to be PRISM exactly, was up to 1e-4 off it on a 50-90 mrad band, by an
+  amount set by the GPU's rounding (1e-4 on an RTX 5080, 4e-6 on an RTX 4090). It is now 3e-6 on both. The extra
+  double-precision work typically costs about 1 % of the Gram matrix accumulation the compression already does
+  (more at large semiangles on coarse grids).
+- The band solver (`bloch.solver: band`) solves a single-precision matrix on the host in double precision, as NumPy's
+  `eigh` does, and rounds the amplitudes back. Reduced in single precision, the band form was 1.2 to 3.4 times as far
+  from the answer as rounding the matrix alone, by an amount that depended on how the BLAS divided its products
+  between threads (a 960-beam baddeleyite matrix at 1000 Å: 1.0e-5 to 2.9e-5 of the largest amplitude, 8.5e-6 for
+  the rounding). `test_band_solver_in_single_precision_is_as_accurate_as_eigh` failed or passed with the thread
+  count. The double-precision solve is as fast or faster on the host (960 to 4000 beams on 8 cores: 1.6 to 2.8 times
+  faster, 0.07 against 0.11 s at 960). Only an explicit `solver='band'` with `precision: float32` on the CPU is
+  affected; `auto` takes `eigh` there, and the GPU path is unchanged.
 - A lazy `DiffractionPatterns.integrate_radial` and `azimuthal_average` of integer counts declare the dtype they
   compute. `integrate_radial` declared the integer dtype of the counts but summed to `int64`, which is now the
   declared and computed dtype (floating point counts keep theirs; with a `sensitivity` the result has the
@@ -1093,15 +1108,34 @@ Bugfixes:
   `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
   `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
   fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
+- `show(logscale=True, common_color_scale=True)` of images with a zero pixel, or a member that is all zero, no longer
+  raises `ValueError: Invalid vmin or vmax`, for real and complex images alike, and neither does `set_value_limits`
+  with a lower limit of 0 on a log scale. The limits were written into the `LogNorm` unchanged, so a minimum of 0 was
+  an invalid limit. When limits shared by all members have a lower limit of 0 or below on a log scale and a positive
+  value exists, the lower limit is now the smallest positive value of the whole ensemble (the amplitude, for complex
+  images), the same for every member. An ensemble with no positive value keeps its limits as before. **Behaviour
+  change:** `set_logscale` applies the shared limits again to the new norm, so after a common colour scale
+  `set_logscale(True)` keeps one lower limit for all members instead of each member's own, and `set_logscale(False)`
+  restores the shared lower limit instead of keeping the logarithmic one
+- Setting both `ABTEM_<SECTION>` and `ABTEM_<SECTION>__<KEY>` (for example `ABTEM_DIAGNOSTICS=1` with
+  `ABTEM_DIAGNOSTICS__TASK_PROGRESS=1`), or their deprecated `DASK_` forms, no longer raises `TypeError` at
+  `import abtem` or drops the key, depending on the order of the environment. **Behaviour change:** the variable of the
+  key wins, whatever the order, and the variable of the section is ignored with a `UserWarning` that names both; a
+  section given as a dict (`ABTEM_DIAGNOSTICS="{'task-progress': False}"`) is kept, with the key overridden
+- `LineScan` and `GridScan` raise `ValueError: gpts must be greater than 0` when constructed with a number of
+  positions below 1, and `LineScan.gpts` and `GridScan.gpts` when set to a number below 1. A scan with zero positions
+  was accepted and failed later, far from the cause: with a `ZeroDivisionError` in the chunking of a lazy run, or with a
+  `RuntimeError` about the axes metadata of an eager one. **Behaviour change:** `LineScan(gpts=0, sampling=...)` raises
+  too; it used to let the sampling decide the number of positions
 - `==` compares a list, tuple or dict holding arrays or `dask.delayed` values item by item, by the same rules as
   attributes. An object holding one, such as a `GPAWPotential` from a list of `.gpw` paths and any `CrystalPotential`,
   `SMatrix` or multislice transform holding it, never equalled its own copy. A list, tuple or dict of numbers and
   arrays now compares the same whatever the order of its items, and a difference after a lazy item is found.
   **Behaviour change:** a list or tuple of abTEM objects equals a tuple or list of the same objects, and numbers in it
-  compare to the tolerance of `np.allclose` (integers exactly), where `==` on the container decided before. **Behaviour
-  change:** an error raised by an abTEM object's own `==` while such a container is compared now
-  escapes, as it already does for an object held directly; before, the container read as different. `==` between
-  objects holding lists of delayed values with different keys, such as `GPAWPotential(["a.gpw", "b.gpw"])` and
+  compare to the tolerance of `np.allclose` (integers exactly), where `==` on the container decided before.
+  **Behaviour change:** an error raised by an abTEM object's own `==` while such a container is compared now escapes,
+  as it already does for an object held directly; before, the container read as different. `==` between objects
+  holding lists of delayed values with different keys, such as `GPAWPotential(["a.gpw", "b.gpw"])` and
   `GPAWPotential(["a.gpw", "c.gpw"])`, raises `LazyComparisonError` (a `TypeError`) instead of returning `False`, as
   for a held dask array of another name
 - A `GPAWPotential` from GPAW calculators (one, or a list) equals its copy and one built from the same calculators; it

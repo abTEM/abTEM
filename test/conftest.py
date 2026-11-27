@@ -7,6 +7,7 @@ import sys
 # MPLBACKEND that is already set wins.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
@@ -74,6 +75,41 @@ settings.register_profile(
     phases=[Phase.explicit, Phase.reuse, Phase.generate, Phase.shrink],
 )
 settings.load_profile("dev")
+
+
+def _restore_numpy():
+    """Undo the NumPy patches of GPAW's debug mode, if they are in place.
+
+    GPAW 25 and older (checked back to 22.8) switch their debug mode on whenever
+    they are imported with pytest in `sys.modules` or under `python -d`, GPAW
+    26.7 only with `GPAW_DEBUG` set. The mode patches NumPy for the whole
+    process: `np.empty` and `np.empty_like` fill every new array with NaN (an
+    object array too, which then holds nan instead of None), and `np.seterr`
+    raises on overflow, division by zero and invalid values. Once any module
+    imports GPAW, every later test in that process runs against the patched
+    NumPy; matplotlib's `subplots(..., sharey=True)`, for one, shares the axes
+    with the None it expects in a fresh `np.empty` object array, and fails on
+    nan. GPAW can be imported before this file is (GPAW 26.7 is an ASE io
+    plugin, so `import abtem` imports it, and pytest imports abtem for the
+    `filterwarnings` setting), so the originals are taken from the copies GPAW
+    keeps rather than captured here, and the error state is reset to NumPy's
+    default.
+    """
+    gpaw = sys.modules.get("gpaw")
+    if (
+        gpaw is not None
+        and getattr(gpaw, "debug", False)
+        and np.empty is not gpaw.oldempty
+    ):
+        np.empty = gpaw.oldempty
+        np.empty_like = gpaw.oldempty_like
+        np.seterr(divide="warn", over="warn", invalid="warn", under="ignore")
+
+
+def pytest_runtest_setup(item):
+    # before every test rather than only after collection: a test that imports
+    # GPAW in its body patches NumPy for the tests after it
+    _restore_numpy()
 
 
 @pytest.fixture(autouse=True)
