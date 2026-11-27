@@ -393,12 +393,22 @@ def _fftw_aligned(array: np.ndarray) -> np.ndarray:
     so planning for whatever buffer arrives would make the result depend on
     where malloc happened to place it. Every buffer is instead brought to an
     aligned, C-contiguous layout -- by copying when it is not in it already,
-    which changes no arithmetic -- so that it always gets the same plan.
+    which changes no arithmetic -- so that it always gets the same plan. The
+    layout is the strides of a C-ordered buffer of the same shape (an axis of
+    length 0 counts as 1, as for ``pyfftw.zeros_aligned``), which the plans are
+    made for and ``update_arrays`` requires: NumPy's ``c_contiguous`` flag
+    ignores the strides along axes of length 0 or 1, which an empty array or
+    ``x[None]`` can have otherwise.
 
     A copy is a new buffer, so a caller passing ``overwrite_x=True`` must use the
     returned result rather than expect its own array to hold it.
     """
-    if array.flags.c_contiguous and pyfftw.is_byte_aligned(array):
+
+    c_strides = tuple(
+        array.itemsize * math.prod(max(n, 1) for n in array.shape[axis + 1 :])
+        for axis in range(array.ndim)
+    )
+    if array.strides == c_strides and pyfftw.is_byte_aligned(array):
         return array
     return _fftw_aligned_copy(array)
 
