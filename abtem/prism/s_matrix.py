@@ -1497,7 +1497,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             ctf=ctf,
             detectors=detectors,
             max_batch_reduction=max_batch_reduction,
-            rechunk=rechunk,
+            reduction_scheme=rechunk,
         )
 
 

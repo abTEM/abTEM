@@ -1033,3 +1033,19 @@ def test_max_batch_multislice_accepts_a_numpy_integer(lazy, path):
 
     expected = run(4)
     np.testing.assert_array_equal(run(np.int64(4)).array, expected.array)
+
+
+def test_scan_of_a_built_s_matrix_equals_the_scan_of_the_s_matrix():
+    # SMatrixArray.scan passed an unknown keyword to reduce
+    from ase import Atoms
+
+    from abtem import Potential, SMatrix
+
+    atoms = Atoms("Si", positions=[(2.0, 2.0, 1.0)], cell=(4, 4, 2), pbc=True)
+    potential = Potential(atoms, gpts=32, slice_thickness=1)
+    s_matrix = SMatrix(energy=100e3, semiangle_cutoff=20, potential=potential)
+    scan = GridScan(start=(0, 0), end=(2, 2), gpts=2)
+
+    expected = s_matrix.scan(scan, lazy=False)
+    built = s_matrix.build(lazy=False)
+    np.testing.assert_allclose(built.scan(scan).array, expected.array, rtol=1e-5)
