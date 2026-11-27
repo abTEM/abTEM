@@ -1151,8 +1151,9 @@ Bugfixes:
 - An FFT under `fft: fftw` of an empty array, such as the multislice of waves sliced to no scan positions
   (`waves[2:2]`), or of an aligned view with a length-1 axis made with `None`, no longer raises
   `ValueError: Invalid input striding` in some runs; the array is copied to the layout the FFTW plans are made for
-- An FFT of an empty array on CuPy or Metal no longer raises `ValueError: Invalid number of FFT data points (0)` or
-  a DFTI error; the result is empty, with the input's shape and the transform's complex dtype
+- An FFT of an empty array on CuPy, or on torch 2.14 on the CPU (the Metal layer's emulation), no longer raises
+  `ValueError: Invalid number of FFT data points (0)` or a oneMKL DFTI error; the result is empty, with the input's
+  shape and the transform's complex dtype
 - On Metal, the truth value of an array of more than one element raises NumPy's `ValueError` instead of torch's
   `RuntimeError`, and that of an empty one follows NumPy (it raises from NumPy 2.2), so `==` between objects holding a
   list, tuple or dict of Metal arrays compares them item by item instead of raising
