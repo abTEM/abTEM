@@ -4619,7 +4619,50 @@ def test_log_scale_line_profiles_without_a_positive_value_warn(y):
     import matplotlib.pyplot as plt
 
     try:
-        with pytest.warns(UserWarning, match="no positive values"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+        messages = [str(w.message) for w in caught]
+        # abTEM's own message; matplotlib's "Data has no positive values" comes for
+        # these data whatever abTEM does
+        assert any("to show on a logarithmic axis" in m for m in messages), messages
+    finally:
+        plt.close("all")
+
+
+def _exploded_log_profiles(members):
+    return RealSpaceLineProfiles(
+        np.array(members, dtype=float),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="member", values=tuple(range(len(members))))
+        ],
+        metadata={},
+    )
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        [np.append(np.linspace(1, 10, 9), 0.0), np.linspace(100, 1000, 10)],
+        [np.linspace(1, 10, 10), np.linspace(100, 1000, 10), np.zeros(10)],
+    ],
+    ids=["one_zero", "all_zero_member"],
+)
+def test_common_log_limits_of_exploded_profiles_cover_every_panel(members):
+    # each panel took the limits of its own smallest positive value, and the shared
+    # axis kept those of the last: the first member was drawn outside its axis
+    import matplotlib.pyplot as plt
+
+    visualization = _exploded_log_profiles(members).show(
+        explode=True, logscale=True, common_scale=True
+    )
+    try:
+        # the extremes of the positive values of all the members, with one margin
+        margin = (1000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 1000 * margin]
+            )
     finally:
         plt.close("all")

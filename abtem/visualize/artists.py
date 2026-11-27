@@ -70,15 +70,10 @@ def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=No
     return value_limits
 
 
-def _log_value_limits(data, value_limits=None, warn=True):
-    """The limits of a logarithmic value axis.
-
-    Only the positive values of the data can be shown. The limits are those given, or
-    the extremes of the positive values for one that is not given or not positive,
-    widened by a factor (their ratio to the power 0.05, or 1.1 for a single value) so
-    that the margin is 5 % of the decades shown, as it is 5 % of the range on a linear
-    axis. A plot without a positive value warns and shows one decade from 1.
-    """
+def _positive_value_limits(data, value_limits=None):
+    """The limits of a logarithmic value axis before the margin: those given, or the
+    extremes of the positive values of the data for one that is not given or not
+    positive. An entry is None if there is no positive value to take it from."""
     data = np.asarray(data)
     positive = data[data > 0]
     limits = [None, None] if value_limits is None else list(value_limits)
@@ -90,6 +85,19 @@ def _log_value_limits(data, value_limits=None, warn=True):
     for i in range(2):
         if limits[i] is None or not limits[i] > 0:
             limits[i] = defaults[i]
+    return limits
+
+
+def _log_value_limits(data, value_limits=None, warn=True):
+    """The limits of a logarithmic value axis.
+
+    Only the positive values of the data can be shown. The limits are those given, or
+    the extremes of the positive values for one that is not given or not positive,
+    widened by a factor (their ratio to the power 0.05, or 1.1 for a single value) so
+    that the margin is 5 % of the decades shown, as it is 5 % of the range on a linear
+    axis. A plot without a positive value warns and shows one decade from 1.
+    """
+    limits = _positive_value_limits(data, value_limits)
 
     if limits[0] is None or limits[1] is None:
         if warn:

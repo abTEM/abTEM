@@ -26,6 +26,7 @@ from abtem.visualize.artists import (
     LinesArtist,
     ScatterArtist,
     _get_value_limits,
+    _positive_value_limits,
     validate_cmap,
 )
 from abtem.visualize.axes_grid import AxesCollection, AxesGrid
@@ -452,9 +453,19 @@ class Visualization:
         self.set_artists("logscale", logscale=logscale)
 
     def set_common_value_limits(self, value_limits=(None, None)):
-        value_limits = _get_value_limits(
-            self._measurement.array, value_limits=value_limits
-        )
+        if any(
+            isinstance(artist, LinesArtist) and artist.get_logscale()
+            for artist in self.artists.ravel()
+        ):
+            # the extremes of the positive values of all the panels together; each
+            # panel then adds the same margin
+            value_limits = _positive_value_limits(
+                self._measurement.array, value_limits=value_limits
+            )
+        else:
+            value_limits = _get_value_limits(
+                self._measurement.array, value_limits=value_limits
+            )
         self.set_value_limits(value_limits)
 
     def set_column_titles(
