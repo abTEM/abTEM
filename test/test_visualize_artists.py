@@ -76,15 +76,8 @@ def _norms(visualization, complex_values):
     ]
 
 
-@pytest.mark.parametrize("zeros", ["pixel", "member"])
-@pytest.mark.parametrize("explode", [False, True])
-@pytest.mark.parametrize("complex_values", [False, True])
-def test_common_color_scale_of_a_log_scale_image_with_a_zero_value(
-    complex_values, explode, zeros
-):
-    # a limit of 0 is not valid for a LogNorm: the common limits, taken over the
-    # whole ensemble, give a non-positive vmin when a pixel or a whole member is
-    # zero. The members differ in scale, so that a per-member vmin would differ.
+def _ensemble_with_a_zero(complex_values, zeros="pixel"):
+    # The members differ in scale, so that a per-member vmin would differ.
     rng = np.random.default_rng(0)
     array = rng.random((2, 8, 8)) + 0.5
     array[1] *= 10
@@ -97,17 +90,64 @@ def test_common_color_scale_of_a_log_scale_image_with_a_zero_value(
     images = Images(
         array, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
     )
+    return images, np.abs(array)
+
+
+@pytest.mark.parametrize("zeros", ["pixel", "member"])
+@pytest.mark.parametrize("explode", [False, True])
+@pytest.mark.parametrize("complex_values", [False, True])
+def test_common_color_scale_of_a_log_scale_image_with_a_zero_value(
+    complex_values, explode, zeros
+):
+    # a limit of 0 is not valid for a LogNorm: the common limits, taken over the
+    # whole ensemble, give a non-positive vmin when a pixel or a whole member is
+    # zero
+    images, magnitude = _ensemble_with_a_zero(complex_values, zeros)
 
     visualization = images.show(logscale=True, common_color_scale=True, explode=explode)
     plt.gcf().canvas.draw()
 
-    magnitude = np.abs(array)
     smallest_positive = magnitude[magnitude > 0].min()
     norms = _norms(visualization, complex_values)
     assert len(norms) == (2 if explode else 1)
     assert all(isinstance(norm, LogNorm) for norm in norms)
     assert [norm.vmin for norm in norms] == [smallest_positive] * len(norms)
     assert [norm.vmax for norm in norms] == [magnitude.max()] * len(norms)
+
+
+@pytest.mark.parametrize(
+    "order",
+    ["log scale after common scale", "limits from 0", "limits from 0 as an array"],
+)
+@pytest.mark.parametrize("complex_values", [False, True])
+def test_limits_shared_by_a_log_scale_ensemble_keep_a_shared_lower_limit(
+    complex_values, order
+):
+    images, magnitude = _ensemble_with_a_zero(complex_values)
+
+    if order == "log scale after common scale":
+        visualization = images.show(common_color_scale=True, explode=True)
+        visualization.set_logscale(True)
+        vmax = magnitude.max()
+    else:
+        limits = [0.0, 100.0]
+        if order == "limits from 0 as an array":
+            limits = np.array(limits)
+        visualization = images.show(logscale=True, explode=True)
+        visualization.set_value_limits(limits)
+        # the visualization keeps its own copy of the limits
+        limits[0] = 50.0
+        vmax = 100.0
+    plt.gcf().canvas.draw()
+
+    norms = _norms(visualization, complex_values)
+    assert all(isinstance(norm, LogNorm) for norm in norms)
+    assert [norm.vmin for norm in norms] == [magnitude[magnitude > 0].min()] * 2
+    assert [norm.vmax for norm in norms] == [vmax] * 2
+
+    # on a linear scale the shared lower limit is 0 again
+    visualization.set_logscale(False)
+    assert [norm.vmin for norm in _norms(visualization, complex_values)] == [0.0] * 2
 
 
 @pytest.mark.parametrize("value", [-1.0, 0.0])
@@ -126,15 +166,19 @@ def test_common_color_scale_of_a_log_scale_image_without_a_positive_value(value)
         assert (norm.vmin, norm.vmax) == (value, value)
 
 
+@pytest.mark.parametrize("target", ["visualization", "artist"])
 @pytest.mark.parametrize("complex_values", [False, True])
-def test_value_limits_of_a_log_scale_image_can_start_at_zero(complex_values):
+def test_value_limits_of_a_log_scale_image_can_start_at_zero(complex_values, target):
     rng = np.random.default_rng(0)
     array = rng.random((8, 8)) + 0.5
     if complex_values:
         array = array * np.exp(2j * np.pi * rng.random((8, 8)))
     visualization = Images(array, sampling=0.1).show(logscale=True)
 
-    visualization.set_value_limits((0.0, 10.0))
+    if target == "visualization":
+        visualization.set_value_limits((0.0, 10.0))
+    else:
+        visualization.artists.ravel()[0].set_value_limits((0.0, 10.0))
     plt.gcf().canvas.draw()
 
     (norm,) = _norms(visualization, complex_values)

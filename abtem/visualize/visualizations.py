@@ -444,13 +444,37 @@ class Visualization:
     def set_value_limits(
         self, value_limits: tuple[float, float] | list[float] = (None, None)
     ):
+        # limits given here are shared by every artist, also after a change of scale
+        self._value_limits = () if value_limits is None else tuple(value_limits)
+
+        if (
+            value_limits is not None
+            and value_limits[0] is not None
+            and value_limits[0] <= 0
+            and self._uses_log_norm()
+        ):
+            # a LogNorm takes no limit of 0 or below: the shared lower limit is the
+            # smallest positive value of the whole ensemble
+            array = self._measurement.array
+            values = np.abs(array) if np.iscomplexobj(array) else array
+            positive = values[values > 0]
+            if len(positive):
+                value_limits = [float(positive.min()), value_limits[1]]
+
         self.set_artists("value_limits", value_limits=value_limits)
 
     def set_power(self, power: float = 1.0):
         self.set_artists("power", power=power)
 
     def set_logscale(self, logscale: bool = False):
+        uses_log_norm = self._uses_log_norm()
         self.set_artists("logscale", logscale=logscale)
+
+        # a new norm takes the shared limits again, for its own valid lower limit
+        if self._uses_log_norm() != uses_log_norm and any(
+            limit is not None for limit in self._value_limits
+        ):
+            self.set_value_limits(self._value_limits)
 
     def _uses_log_norm(self):
         return any(
@@ -462,17 +486,9 @@ class Visualization:
         )
 
     def set_common_value_limits(self, value_limits=(None, None)):
-        array = self._measurement.array
-        value_limits = _get_value_limits(array, value_limits=value_limits)
-
-        # a LogNorm takes no limit of 0 or below: the common lower limit is the
-        # smallest positive value of the whole ensemble
-        if value_limits[0] <= 0 and self._uses_log_norm():
-            values = np.abs(array) if np.iscomplexobj(array) else array
-            positive = values[values > 0]
-            if len(positive):
-                value_limits[0] = float(positive.min())
-
+        value_limits = _get_value_limits(
+            self._measurement.array, value_limits=value_limits
+        )
         self.set_value_limits(value_limits)
 
     def set_column_titles(
