@@ -54,12 +54,24 @@ def test_linear_axis_getitem_with_length_one_tuple():
     assert axis[(slice(3, 6),)].offset == axis[3:6].offset
 
 
+def test_linear_axis_getitem_with_an_empty_slice():
+    """A lazy axis of length 0 has the chunks `((0,),)`, which partition into
+    one empty slice; the axis it gives starts where the empty range starts."""
+    axis = RealSpaceAxis(offset=10.0, sampling=0.5)
+
+    assert axis[3:3].offset == pytest.approx(11.5)
+    assert axis[(slice(0, 0),)].offset == pytest.approx(10.0)
+
+    (block,) = axis._to_blocks(((0,),)).compute()
+    assert block == axis
+
+
 @pytest.mark.parametrize(
     "bad_item",
     [slice(None, None, -1), slice(None, None, 2), slice(-3, None), slice(5, 2)],
 )
 def test_linear_axis_getitem_rejects_unsupported_slices(bad_item):
-    """Strided, negative, or empty slices cannot be represented by shifting
+    """Strided, negative, or reversed slices cannot be represented by shifting
     `offset` alone, and `__getitem__` raises TypeError for them: it is the
     contract of the chunk partitioning, which never constructs such a slice.
     Indexing an array object goes through `_index_ensemble_axis` instead."""
