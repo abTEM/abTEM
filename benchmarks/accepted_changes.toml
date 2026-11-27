@@ -30,10 +30,12 @@
 #   shape         optional table mapping an output name to the shape the
 #                 candidate gives it, e.g. { potential = [33, 256, 256] }: an
 #                 output whose shape changed to that one is accepted when its
-#                 dtype is unchanged and its values are finite (its axis
-#                 mismatches follow from the new shape); the bounds above then
-#                 apply to the case's other outputs only; each name must be an
-#                 output of a case the glob matches
+#                 dtype and number of axes are unchanged and its values are
+#                 finite (its axis mismatches follow from the new shape); the
+#                 bounds above then apply to its sums over the axes whose
+#                 length changed (invariant under a re-cut axis, not under a
+#                 resampled one); each name must be an output of a case the
+#                 glob matches
 # A drift beyond any bound of a change's entries is not accepted by that
 # change; when several changes in the candidate cover a case (dev holds both
 # #298 and the 1.0.11 port of the #269 accumulator), the drift is accepted when
