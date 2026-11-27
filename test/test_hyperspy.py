@@ -251,3 +251,37 @@ def test_to_quantem_exports_a_host_array(device, quantem_records):
 
     assert type(quantem_records["array"]) is np.ndarray
     np.testing.assert_array_equal(quantem_records["array"], asnumpy(images.array))
+
+
+def test_to_quantem_origin_is_the_offset_of_scan_axes(quantem_records):
+    # the origin of every axis was written as 0
+    from abtem.core.axes import ScanAxis
+
+    scan_axes = [
+        ScanAxis(label="x", sampling=0.5, offset=1.0, units="Å"),
+        ScanAxis(label="y", sampling=0.4, offset=-2.0, units="Å"),
+    ]
+    images = Images(
+        np.zeros((4, 5, *GPTS), dtype=np.float32),
+        sampling=SAMPLING,
+        ensemble_axes_metadata=scan_axes,
+    )
+
+    images.to_quantem()
+
+    assert quantem_records["origin"][:2] == (1.0, -2.0)
+    assert quantem_records["origin"][2:] == (0.0, 0.0)
+
+
+def test_to_quantem_origin_puts_zero_frequency_at_k_zero(quantem_records):
+    patterns = DiffractionPatterns(
+        np.ones((*GPTS,), dtype=np.float32),
+        sampling=SAMPLING,
+        fftshift=True,
+        metadata={"energy": 100e3},
+    )
+
+    patterns.to_quantem()
+
+    for o, d, n in zip(quantem_records["origin"], quantem_records["sampling"], GPTS):
+        assert abs(o + (n // 2) * d) <= 1e-12 * d

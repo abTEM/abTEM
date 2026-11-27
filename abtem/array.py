@@ -2189,7 +2189,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            origin.append(0.0)
+            origin.append(getattr(axis, "offset", 0.0))
 
         # The signal units are the metadata units, as abTEM's own measurements set them
         # ("arb. unit" by default). quantem only displays them, and reads the same
