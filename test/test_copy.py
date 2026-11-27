@@ -7,7 +7,7 @@ from hypothesis import given
 from utils import assert_array_objects_equal, devices, si_cubic_atoms
 
 from abtem.array import ArrayObject
-from abtem.core.backend import asnumpy
+from abtem.core.backend import asnumpy, copy_to_device
 
 
 @given(data=st.data())
@@ -229,6 +229,29 @@ class TestEqualityDiscriminates:
         assert hold(scale=1 + 1e-12) == hold()
         assert hold() != hold(scale=2.0)
         assert hold(scale=2.0) != hold()
+
+    @devices
+    @pytest.mark.parametrize("kind", ["list", "tuple", "dict"])
+    def test_a_container_of_device_arrays_compares_item_by_item(self, kind, device):
+        """A list, tuple or dict of float32 arrays on the device, whose `bool()`
+        is ambiguous as NumPy's is, is compared item by item: equal to a fresh
+        one, different when scaled by 2."""
+        Holder = self._list_holder()
+
+        def hold(scale=1.0):
+            arrays = [
+                copy_to_device(array.astype(np.float32), device)
+                for array in self._arrays_in("list", scale=scale)
+            ]
+            containers = {
+                "list": arrays,
+                "tuple": tuple(arrays),
+                "dict": dict(enumerate(arrays)),
+            }
+            return Holder(containers[kind])
+
+        assert hold() == hold()
+        assert hold() != hold(scale=2.0)
 
     def test_a_container_holding_arrays_of_other_shapes_lengths_or_keys_differs(self):
         """Items of another shape, a container of another length, a dict with

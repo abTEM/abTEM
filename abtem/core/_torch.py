@@ -523,6 +523,16 @@ class TorchNDArray:
 
     @_serialized
     def __bool__(self) -> bool:
+        # NumPy's error for an ambiguous truth value (torch raises RuntimeError),
+        # which code written for NumPy arrays expects, such as `==` on two lists
+        # of arrays.
+        if self._tensor.numel() > 1:
+            raise ValueError(
+                "The truth value of an array with more than one element is "
+                "ambiguous. Use a.any() or a.all()"
+            )
+        if self._tensor.numel() == 0:
+            raise ValueError("The truth value of an empty array is ambiguous.")
         return bool(self._tensor)
 
     def __getattr__(self, name):

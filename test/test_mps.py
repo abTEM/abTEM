@@ -87,6 +87,23 @@ def test_scalar_keeps_zero_dimensions():
     assert xp.asarray([20.0]).shape == (1,)
 
 
+@pytest.mark.parametrize("size", [0, 1, 2])
+def test_the_truth_value_of_an_array_is_numpys(size):
+    # torch raises RuntimeError for an array of more than one element and for an
+    # empty one; code written for NumPy arrays, such as `==` on two lists of
+    # them, expects NumPy's ValueError.
+    array = np.arange(size, dtype=np.float32) + 1
+    on_device = copy_to_device(array, "mps")
+
+    try:
+        expected = bool(array)
+    except ValueError:
+        with pytest.raises(ValueError, match="truth value of an"):
+            bool(on_device)
+    else:
+        assert bool(on_device) == expected
+
+
 @pytest.mark.parametrize("reps", [(2, 3), (2, 1, 3), 2])
 def test_tile_of_a_complex_array(reps):
     # Metal cannot repeat a complex tensor, which the tilt transform needs.
