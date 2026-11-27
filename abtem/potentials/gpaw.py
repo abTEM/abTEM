@@ -36,7 +36,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.core.utils import itemset
+from abtem.core.utils import EqualityMixin, _values_equal, itemset
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     BaseFrozenPhonons,
@@ -80,8 +80,23 @@ if GPAW is not None:
 _GPAW_LOCK = threading.RLock()
 
 
-@dataclass
-class _DummyGPAW:
+def _settings(value):
+    """The settings of a GPAW mode or xc object, else the value itself."""
+    return value.todict() if hasattr(value, "todict") else value
+
+
+@dataclass(eq=False)
+class _DummyGPAW(EqualityMixin):
+    # GPAW's grid descriptor and its mode and xc parameter objects define no
+    # __eq__, so a copy would differ from the original by identity. `gd` is the
+    # density's grid, fixed by `nt_sG`'s shape and the atoms' cell, and is not
+    # compared; the mode and xc are compared by their `todict()`, the settings
+    # that both the old-style and the new-style GPAW objects define, or by
+    # themselves when they are plain values, by the rules of `safe_equality`.
+    # Settings that are spelled differently (an old-style and a new-style
+    # `PW(250)`, `XC("PBE")` and `"PBE"`) differ.
+    _eq_exclude = ("gd", "setup_mode", "setup_xc")
+
     setup_mode: str
     setup_xc: str
     nt_sG: np.ndarray
@@ -90,6 +105,14 @@ class _DummyGPAW:
     atoms: Atoms
     Q_aL: dict
     valence_potential: np.ndarray
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _DummyGPAW)
+            and _values_equal(_settings(self.setup_mode), _settings(other.setup_mode))
+            and _values_equal(_settings(self.setup_xc), _settings(other.setup_xc))
+            and super().__eq__(other)
+        )
 
     def __len__(self):
         return 1

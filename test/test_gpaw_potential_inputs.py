@@ -228,6 +228,56 @@ def test_a_path_list_equals_itself_without_reading(fake_gpaw, monkeypatch):
     assert reads == []
 
 
+def test_a_path_list_equals_its_copy_without_reading(fake_gpaw, monkeypatch):
+    """A list of paths is held as a list of delayed reads, which are compared by
+    key: the potential, and a crystal of it, equal their copies and one built
+    alike, and differ undecidedly from another list, without reading a file."""
+    from abtem.core.utils import LazyComparisonError
+
+    reads = []
+    read = gpaw_module.GPAW
+    monkeypatch.setattr(
+        gpaw_module,
+        "GPAW",
+        lambda *args, **kwargs: reads.append(args) or read(*args, **kwargs),
+    )
+    potential = GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS)
+    crystal = CrystalPotential(potential, repetitions=(2, 1, 1))
+
+    assert potential == potential.copy()
+    assert potential == GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS)
+    assert crystal == crystal.copy()
+    with pytest.raises(LazyComparisonError):
+        potential == GPAWPotential(["a.gpw", "c.gpw"], gpts=GPTS)
+    assert reads == []
+
+
+@pytest.mark.parametrize("paths", [["a.gpw"], ["a.gpw", "b.gpw"]])
+def test_loaded_calculators_compare_by_value(fake_gpaw, paths):
+    """A potential from loaded calculators (one, or a list) equals its copy and
+    one built from the same calculators; calculators with another valence
+    potential or another xc differ, and a list mixing a path and a calculator
+    equals its copy."""
+    import dataclasses
+
+    def potential(calculators):
+        return GPAWPotential(calculators, gpts=GPTS)
+
+    calculators = [_loaded(path) for path in paths]
+    held = calculators[0] if len(calculators) == 1 else calculators
+    reference = potential(held)
+
+    assert reference == reference.copy()
+    assert reference == potential(held)
+    assert calculators[0] == _loaded(paths[0])
+    assert calculators[0] != dataclasses.replace(calculators[0], setup_xc="LDA")
+    if len(paths) == 2:
+        assert reference != potential([calculators[0], _loaded("c.gpw")])
+
+    mixed = potential(["a.gpw", _loaded("b.gpw")])
+    assert mixed == mixed.copy()
+
+
 def _single_calculator(kind):
     return "single.gpw" if kind == "path" else _loaded("single.gpw")
 
