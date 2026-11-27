@@ -93,7 +93,9 @@ class Accepted:
     large the accepted drift may be, per output; a drift beyond a bound stays
     ``DRIFT``. A non-finite value that differs between the two outputs is never
     accepted. ``shape`` maps an output name to the candidate shape the change
-    gives it; see ``_shape_violations``.
+    gives it; see ``_shape_violations``. The bounds also apply to the sums of
+    such an output over the axes whose length changed (``output_stats``), as they
+    apply to an output of unchanged shape.
     """
 
     case: str
@@ -134,11 +136,18 @@ class Accepted:
     def violations(self, outputs: dict[str, dict[str, Any]]) -> list[str]:
         """Outputs whose drift exceeds a bound or has non-finite mismatches.
 
-        Outputs with the verdict ``SHAPE`` have no drift to bound.
+        An output with the verdict ``SHAPE`` is judged by its sums over the axes
+        whose length changed (the ``summed`` statistics); one without sums has
+        no drift to bound.
         """
         out = []
         for name, s in outputs.items():
-            if s.get("identical") or s.get("verdict") == SHAPE:
+            if s.get("verdict") == SHAPE:
+                s = s.get("summed")
+                if s is None:
+                    continue
+                name = f"{name} summed over axes {s['axes']}"
+            if s.get("identical"):
                 continue
             if s.get("nonfinite_mismatch"):
                 out.append(
@@ -156,14 +165,16 @@ class Accepted:
         return out
 
     def record(self, case_id: str, outputs: dict[str, dict[str, Any]]) -> None:
-        """Credit a matched row; fold its drift into ``worst`` and its shapes
-        into ``shape_change``."""
+        """Credit a matched row; fold its drift into ``worst`` (for an output of
+        changed shape, the drift of its sums) and its shapes into ``shape_change``."""
         self.matched.append(case_id)
         for name, s in outputs.items():
             if s.get("verdict") == SHAPE:
                 if name in self.shape and "cand_shape" in s:
                     self.shape_change[name] = (s["ref_shape"], s["cand_shape"])
-                continue
+                s = s.get("summed")
+                if s is None:
+                    continue
             for key in ("rel_above", "intensity", "max_abs_norm"):
                 value = s.get(key)
                 if value is None:
@@ -182,8 +193,11 @@ def _shape_violations(
     An output is accepted when its shape changed, some entry of the change
     declares, for its name, the candidate shape, its dtype is unchanged and
     every candidate value is finite; the axis mismatches that follow from the
-    new shape are accepted with it. An output missing in the candidate, with a
-    changed dtype or with an unchanged shape is never accepted.
+    new shape are accepted with it. The bounds of the entries then apply to its
+    sums over the changed axes (``Accepted.violations``), so a candidate whose
+    number of axes differs, which has no such sums, is never accepted. An
+    output missing in the candidate, with a changed dtype or with an unchanged
+    shape is never accepted.
     """
     out = []
     for name, s in outputs.items():
@@ -206,6 +220,8 @@ def _shape_violations(
                 f"{name} shape {s['cand_shape']} but the change declares "
                 + " / ".join(map(str, declared))
             )
+        elif len(s["cand_shape"]) != len(s["ref_shape"]):
+            out.append(f"{name} rank changed; values cannot be compared")
         elif s["cand_nonfinite"]:
             out.append(f"{name} has {s['cand_nonfinite']} non-finite values")
     return out
@@ -528,6 +544,9 @@ def output_stats(
     ref_meta: dict | None = None,
     cand_meta: dict | None = None,
 ) -> dict[str, Any]:
+    """Statistics of one output; when the shape changed along some axes of an
+    unchanged rank, ``summed`` holds the statistics of the sums of both arrays
+    over those axes (``axes``)."""
     s = close_stats(cand_arr, ref_arr, above_rel=above_rel)
     s["dtype_ok"] = str(cand_arr.dtype) == str(ref_arr.dtype)
     s["ref_shape"], s["cand_shape"] = tuple(ref_arr.shape), tuple(cand_arr.shape)
@@ -538,6 +557,15 @@ def output_stats(
     if not s["shape_ok"]:
         s["cand_nonfinite"] = int((~np.isfinite(cand_arr)).sum())
         notes.append(f"shape {s['ref_shape']} → {s['cand_shape']}")
+        if ref_arr.ndim == cand_arr.ndim:
+            pairs = zip(ref_arr.shape, cand_arr.shape)
+            axes = tuple(i for i, (r, c) in enumerate(pairs) if r != c)
+            s["summed"] = {
+                "axes": list(axes),
+                **close_stats(
+                    cand_arr.sum(axis=axes), ref_arr.sum(axis=axes), above_rel=above_rel
+                ),
+            }
     if not s["dtype_ok"]:
         notes.append(f"dtype {ref_arr.dtype} → {cand_arr.dtype}")
     notes.extend(bad)

@@ -559,6 +559,8 @@ SID = "demo.shape@quick/cpu"
 #: the reference's output arrays; a candidate changes the shape along axis 1
 POT = np.linspace(1.0, 2.0, 72).reshape(3, 4, 6)
 AUX = np.linspace(1.0, 2.0, 12).reshape(3, 4)
+#: ``POT`` with its last row split into two halves: one more row, equal sums over axis 1
+RECUT = np.concatenate([POT[:, :3], POT[:, 3:] / 2, POT[:, 3:] / 2], axis=1)
 DECLARE = "shape = { potential = [3, 5, 6] }"
 
 
@@ -571,8 +573,8 @@ def registry_with_shape(registry_with_demo):
 
 
 def _grown(tmp_path, cand=None, ref_axes=(), cand_axes=()):
-    """Reference bundle and a candidate whose ``potential`` has one more row along
-    axis 1 (``cand`` replaces the candidate's outputs)."""
+    """Reference bundle and a candidate whose ``potential`` is ``RECUT``, with one
+    more row along axis 1 (``cand`` replaces the candidate's outputs)."""
     ref = bundle(
         tmp_path,
         "ref",
@@ -586,14 +588,14 @@ def _grown(tmp_path, cand=None, ref_axes=(), cand_axes=()):
     )
     if cand is None:
         cand = {
-            "potential": (np.resize(POT, (3, 5, 6)), list(cand_axes), {}),
+            "potential": (RECUT, list(cand_axes), {}),
             "aux": (AUX, [], {}),
         }
     return ref, bundle(tmp_path, "cand", {SID: (record(), cand)})
 
 
-def _shape_entry(declare=DECLARE, case="demo.shape@quick/*", extra=""):
-    return f'case = "{case}"\nreason = "grown"\npr = 7\n{LOOSE}\n{declare}\n{extra}'
+def _shape_entry(declare=DECLARE, case="demo.shape@quick/*", extra="", bound=LOOSE):
+    return f'case = "{case}"\nreason = "grown"\npr = 7\n{bound}\n{declare}\n{extra}'
 
 
 def _compare_shape(tmp_path, reg, ref, cand, *entries):
@@ -609,8 +611,9 @@ def test_a_declared_shape_is_accepted(tmp_path, registry_with_shape):
     assert report.failures(cmp.parse_fail_on("drift,shape")) == []
     entry = report.accepted[0]
     assert entry.matched == [SID] and report.stale_accepted == []
-    # the NaN statistics of the shape-accepted output are not folded into worst
-    assert entry.worst == {"rel_above": 0.0, "intensity": 0.0, "max_abs_norm": 0.0}
+    # the sums of the shape-accepted output are folded into worst
+    assert set(entry.worst) == {"rel_above", "intensity", "max_abs_norm"}
+    assert max(entry.worst.values()) < 1e-15
     assert entry.shape_change == {"potential": ((3, 4, 6), (3, 5, 6))}
 
 
@@ -637,7 +640,7 @@ def test_an_undeclared_output_that_changes_shape_stays_shape(
     tmp_path, registry_with_shape
 ):
     cand = {
-        "potential": (np.resize(POT, (3, 5, 6)), [], {}),
+        "potential": (RECUT, [], {}),
         "aux": (np.resize(AUX, (3, 5)), [], {}),
     }
     ref, cand = _grown(tmp_path, cand)
@@ -670,7 +673,7 @@ def test_an_entry_of_the_change_may_declare_what_another_does_not(
 
 @pytest.mark.parametrize("same_shape", [False, True])
 def test_a_dtype_change_is_never_accepted(tmp_path, registry_with_shape, same_shape):
-    pot = np.resize(POT, POT.shape if same_shape else (3, 5, 6)).astype(np.float32)
+    pot = (POT if same_shape else RECUT).astype(np.float32)
     ref, cand = _grown(tmp_path, {"potential": (pot, [], {}), "aux": (AUX, [], {})})
     declare = f"shape = {{ potential = {list(pot.shape)} }}"
     report = _compare_shape(
@@ -695,7 +698,7 @@ def test_drift_of_another_output_must_hold_the_bounds(
     tmp_path, registry_with_shape, bound, verdict
 ):
     cand = {
-        "potential": (np.resize(POT, (3, 5, 6)), [], {}),
+        "potential": (RECUT, [], {}),
         "aux": (AUX * 1.5, [], {}),
     }
     ref, cand = _grown(tmp_path, cand)
@@ -707,6 +710,129 @@ def test_drift_of_another_output_must_hold_the_bounds(
         assert (
             "exceeds accepted bound: aux rel 5.0e-01 > 1.0e-01" in report.rows[0].notes
         )
+
+
+def _moved():
+    """``RECUT`` with mass moved along axis 2: the total is kept, the sums over
+    axis 1 are not."""
+    moved = RECUT.copy()
+    moved[:, :, 0] += 0.5
+    moved[:, :, 1] -= 0.5
+    return moved
+
+
+TIGHT = "max_abs_norm = 1e-6"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        RECUT * 1000,
+        np.zeros_like(RECUT),
+        -RECUT,
+        np.random.default_rng(0).uniform(1.0, 2.0, RECUT.shape),
+        _moved(),
+    ],
+    ids=["x1000", "zeros", "negated", "random", "moved"],
+)
+def test_the_values_of_a_shape_accepted_output_are_compared(
+    tmp_path, registry_with_shape, candidate
+):
+    cand = {"potential": (candidate, [], {}), "aux": (AUX, [], {})}
+    ref, cand = _grown(tmp_path, cand)
+    entry = _shape_entry(bound=TIGHT)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, entry)
+    row = report.rows[0]
+    assert row.verdict == cmp.SHAPE and row.accepted_by == []
+    assert row.outputs["potential"]["verdict"] == cmp.SHAPE
+    [note] = [n for n in row.notes if n.startswith("exceeds")]
+    assert "potential summed over axes [1] max_abs" in note
+    assert "> 1.0e-06" in note
+    assert report.failures({"shape": None}) == [f"{SID}: SHAPE"]
+    assert report.accepted[0].exceeded == [SID]
+
+
+def test_a_recut_axis_with_equal_sums_is_accepted(tmp_path, registry_with_shape):
+    ref, cand = _grown(tmp_path)
+    report = _compare_shape(
+        tmp_path, registry_with_shape, ref, cand, _shape_entry(bound=TIGHT)
+    )
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    summed = report.rows[0].outputs["potential"]["summed"]
+    assert summed["axes"] == [1] and summed["max_abs_norm"] < 1e-15
+
+
+def test_every_entry_of_the_change_bounds_the_sums(tmp_path, registry_with_shape):
+    cand = {"potential": (RECUT * 1.001, [], {}), "aux": (AUX, [], {})}
+    ref, cand = _grown(tmp_path, cand)
+    kwargs = {"bound": "max_abs_norm = 1e-2", "extra": "max_intensity = 1e-2"}
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    report = _compare_shape(
+        tmp_path, registry_with_shape, ref, cand, _shape_entry(**kwargs)
+    )
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    kwargs["extra"] = "max_intensity = 1e-4"
+    report = _compare_shape(
+        tmp_path, registry_with_shape, ref, cand, _shape_entry(**kwargs)
+    )
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert (
+        "exceeds accepted bound: potential summed over axes [1] intensity "
+        "1.0e-03 > 1.0e-04"
+    ) in report.rows[0].notes
+
+
+def test_the_sums_run_over_every_changed_axis(tmp_path, registry_with_shape):
+    cand = np.zeros((3, 5, 7))
+    cand[:, 0, 0] = POT.sum(axis=(1, 2))
+    ref, cand_b = _grown(tmp_path, {"potential": (cand, [], {}), "aux": (AUX, [], {})})
+    entry = _shape_entry("shape = { potential = [3, 5, 7] }", bound=TIGHT)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand_b, entry)
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    assert report.rows[0].outputs["potential"]["summed"]["axes"] == [1, 2]
+    cand[:, 0, 0] *= 2
+    ref, cand_b = _grown(tmp_path, {"potential": (cand, [], {}), "aux": (AUX, [], {})})
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand_b, entry)
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert "potential summed over axes [1, 2] max_abs" in report.rows[0].notes[-1]
+
+
+@pytest.mark.parametrize("factor, verdict", [(1, cmp.ACCEPTED), (0, cmp.SHAPE)])
+def test_the_sums_over_every_axis_are_compared(
+    tmp_path, registry_with_shape, factor, verdict
+):
+    cand = np.zeros((2, 5, 7))
+    cand[0, 0, 0] = factor * POT.sum()
+    ref, cand_b = _grown(tmp_path, {"potential": (cand, [], {}), "aux": (AUX, [], {})})
+    entry = _shape_entry("shape = { potential = [2, 5, 7] }", bound=TIGHT)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand_b, entry)
+    assert report.rows[0].verdict == verdict
+    assert report.rows[0].outputs["potential"]["summed"]["axes"] == [0, 1, 2]
+
+
+def test_a_change_of_rank_is_never_accepted(tmp_path, registry_with_shape):
+    cand = {"potential": (POT[..., None], [], {}), "aux": (AUX, [], {})}
+    ref, cand = _grown(tmp_path, cand)
+    entry = _shape_entry("shape = { potential = [3, 4, 6, 1] }")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, entry)
+    row = report.rows[0]
+    assert row.verdict == cmp.SHAPE
+    assert (
+        "exceeds accepted bound: potential rank changed; values cannot be compared"
+    ) in row.notes
+    assert "summed" not in row.outputs["potential"]
+
+
+def test_the_sums_are_in_the_json_and_the_changelog(tmp_path, registry_with_shape):
+    cand = {"potential": (RECUT * 1.001, [], {}), "aux": (AUX, [], {})}
+    ref, cand = _grown(tmp_path, cand)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.accepted[0].worst["intensity"] == pytest.approx(1e-3)
+    assert ", intensity 1.0e-03, " in cmp.to_markdown(report)
+    summed = cmp.to_json(report)["rows"][0]["outputs"]["potential"]["summed"]
+    assert summed["axes"] == [1]
+    assert summed["intensity"] == pytest.approx(1e-3)
 
 
 def test_an_axis_mismatch_follows_the_declared_shape(tmp_path, registry_with_shape):
@@ -759,15 +885,13 @@ def test_a_change_without_a_shape_leaves_a_shape_row_untouched(
 def test_a_non_finite_value_in_a_shape_accepted_output_is_refused(
     tmp_path, registry_with_shape, bad
 ):
-    pot = np.resize(POT, (3, 5, 6))
+    pot = RECUT.copy()
     pot[0, 0, :2] = bad
     ref, cand = _grown(tmp_path, {"potential": (pot, [], {}), "aux": (AUX, [], {})})
     report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
     assert report.rows[0].verdict == cmp.SHAPE
-    assert (
-        "exceeds accepted bound: potential has 2 non-finite values"
-        in report.rows[0].notes
-    )
+    [note] = [n for n in report.rows[0].notes if n.startswith("exceeds")]
+    assert "potential has 2 non-finite values" in note
 
 
 def test_an_output_of_unchanged_shape_is_never_accepted_by_shape(
