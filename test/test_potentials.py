@@ -1691,3 +1691,21 @@ def test_repeated_atoms_and_crystal_potential_have_the_same_slice_count():
     crystal = CrystalPotential(unit, repetitions=(1, 1, 3))
     assert unit.num_slices == 12
     assert repeated.num_slices == crystal.num_slices == 36
+
+
+def test_a_finite_projection_after_a_change_of_the_grid_equals_a_fresh_build():
+    # the integral table of an element was kept for the first sampling it was
+    # built at, and served to every other one: 46 % of the maximum off
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True)
+    potential = Potential(atoms, gpts=32, projection="finite", slice_thickness=1.4)
+    potential.build(lazy=False)
+
+    potential.gpts = 96
+    reused = potential.build(lazy=False).array
+    fresh = Potential(
+        atoms, gpts=96, projection="finite", slice_thickness=1.4
+    ).build(lazy=False).array
+
+    np.testing.assert_allclose(reused, fresh, rtol=0, atol=1e-6 * fresh.max())
