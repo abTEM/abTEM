@@ -5235,40 +5235,44 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # to ~1e-3 relative, well above the smallest supported tolerance. The
         # eigenvalues near the round-off floor (the coarse expansion is rank
         # deficient) are dropped.
-        # Metal has no double precision at all, so this one accumulation cannot
-        # run on the device. It streams to the host instead of dropping to
-        # single precision, which would cost exactly the spectral resolution the
+        # Metal has no double precision at all, so this double-precision linear
+        # algebra (here and in choosing the retained subspace below) runs on
+        # the host there. It streams to the host instead of dropping to single
+        # precision, which would cost exactly the spectral resolution the
         # paragraph above explains this step exists to keep. The Gram matrix is
         # (n_beams, n_beams) and the transfer is one pass over a matrix the
         # build has already streamed several times.
-        gram_xp = np if device_name_from_array_module(xp) == "mps" else xp
+        double_xp = np if device_name_from_array_module(xp) == "mps" else xp
 
-        gram = gram_xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
+        def to_double(array):
+            if double_xp is not xp:
+                array = asnumpy(array)
+            return array.astype(np.complex128, copy=False)
+
+        def descending_eigh(hermitian):
+            values, vectors = double_xp.linalg.eigh(hermitian)
+            return double_xp.clip(values[::-1], 0.0, None), vectors[:, ::-1]
+
+        gram = double_xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
         pixel_batch = self._expansion_batch_size(len(matrix))
         for start in range(0, matrix.shape[1], pixel_batch):
-            chunk = matrix[:, start : start + pixel_batch]
-            if gram_xp is np:
-                chunk = asnumpy(chunk)
-            chunk = chunk.astype(np.complex128)
+            chunk = to_double(matrix[:, start : start + pixel_batch])
             gram += chunk @ chunk.T.conj()
 
-        eigenvalues, eigenvectors = gram_xp.linalg.eigh(gram)
-        eigenvalues = gram_xp.clip(eigenvalues[::-1], 0.0, None)
-        eigenvectors = eigenvectors[:, ::-1]
+        eigenvalues, eigenvectors = descending_eigh(gram)
 
         # a round-off floor only: the tolerance must not truncate here, or the
         # row space of the built beams is already incomplete before the
         # interpolation and the plane-wave branch stops being exact
         keep = max(1, int((eigenvalues > eigenvalues[0] * 1e-14).sum()))
-        singular_values = gram_xp.sqrt(eigenvalues[:keep])
+        singular_values = double_xp.sqrt(eigenvalues[:keep])
 
         # L = V diag(s) and Q = diag(1 / s) V^H T, with T = L Q exact on the
-        # retained subspace
-        beam_factor = (eigenvectors[:, :keep] * singular_values[None]).astype(dtype)
-
-        if gram_xp is not xp:
-            # back to the device now that the double-precision part is done
-            beam_factor = xp.asarray(beam_factor)
+        # retained subspace; back to the device now that the double-precision
+        # part is done
+        beam_factor = xp.asarray(
+            (eigenvectors[:, :keep] * singular_values[None]).astype(dtype)
+        )
 
         dense_indices = self._dense_indices()
 
@@ -5288,13 +5292,27 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # branch exact at any tolerance — the blended reduction is bounded by
         # PRISM on every band it covers — while the tolerance still controls the
         # cost of the interpolated part.
-        moment = projected.conj().T @ projected
+        #
+        # The eigendecompositions below are of normal matrices, which square
+        # the condition number, so like the Gram matrix above they are formed
+        # and solved in double precision independently of
+        # ``config['precision']``. In single precision the square roots of
+        # their eigenvalues would be resolved only to ~sqrt(1e-7) = 3e-4 of the
+        # largest, coarser than the 1e-6 floor of the lattice basis, and the
+        # weakest built-beam directions (a few 1e-4 of the largest) would mix
+        # with the round-off null space. The eigendecompositions are only
+        # (rank, rank). In single precision, the double-precision copy of
+        # `projected` and the product forming `moment` typically cost about 1%
+        # of the Gram accumulation above; the ratio is roughly n_dense /
+        # n_pixels, so it grows at large semiangles on coarse grids (an
+        # estimated 4.5% at 50 mrad, 0.1 Å sampling and 80 keV).
+        projected64 = to_double(projected)
+        moment = projected64.conj().T @ projected64
 
         def leading(hermitian, threshold):
-            values, vectors = xp.linalg.eigh(hermitian)
-            values = xp.clip(values[::-1], 0.0, None)
-            count = int((xp.sqrt(values) >= threshold).sum())
-            return vectors[:, ::-1][:, :count].T.conj(), xp.sqrt(values)
+            values, vectors = descending_eigh(hermitian)
+            count = int((double_xp.sqrt(values) >= threshold).sum())
+            return vectors[:, :count].T.conj(), double_xp.sqrt(values)
 
         _, spectrum = leading(moment, 0.0)
         largest = float(spectrum[0]) if len(spectrum) else 0.0
@@ -5305,19 +5323,22 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # the floor sits above the single-precision noise of the coarse matrix
         # (~1e-7 relative) and far below any usable tolerance, so the row space
         # is captured whole without admitting round-off directions
-        lattice_rows = projected[xp.asarray(lattice)]
+        lattice_rows = projected64[double_xp.asarray(lattice)]
         lattice_basis, _ = leading(
             lattice_rows.conj().T @ lattice_rows, largest * 1e-6
         )
 
         # what the built beams do not already span, by tolerance
-        residual = xp.eye(moment.shape[0], dtype=dtype)
+        residual = double_xp.eye(moment.shape[0], dtype=np.complex128)
         residual = residual - lattice_basis.conj().T @ lattice_basis
         extra_basis, _ = leading(
             residual @ moment @ residual, self._tolerance * largest
         )
 
-        w = xp.concatenate([lattice_basis, extra_basis], axis=0)
+        w = xp.asarray(
+            double_xp.concatenate([lattice_basis, extra_basis], axis=0).astype(dtype)
+        )
+        spectrum = xp.asarray(spectrum)
 
         # order the retained modes by how much of the expansion they carry, so
         # that a rank cap keeps the largest and the reported spectrum descends;
