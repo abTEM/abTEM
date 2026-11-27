@@ -166,8 +166,11 @@ class TestFourierMultislice:
         # - transpose=True is P then t, so P (t_n P ... t_1 P) = t_0 P (t_n P ...)
         #   with t_0 = 1: the transposed run with a trailing vacuum slice is the
         #   plain run.
-        # Measured: <= 2.4e-7 and 0 against the 1e-6 bound; ignoring the flag
-        # gives 4.1e-2 and 1.4e-3.
+        # Measured on the CPU: <= 2.4e-7 and 0 against the 1e-6 bound; ignoring the
+        # flag gives 4.1e-2 and 1.4e-3. The transposed run does one more FFT round
+        # trip than the plain run, which differs on a GPU by float32 rounding: at
+        # most 4.8e-7 (A100), 1.3e-6 (MI250X) and 1.4e-6 (Radeon 8050S), so the
+        # transpose bound on a GPU is 3e-6.
         rng = np.random.default_rng(0)
         array = 10 * rng.random((3, 32, 28)).astype(np.float32)
         vacuum = np.zeros_like(array[:1])
@@ -185,6 +188,7 @@ class TestFourierMultislice:
                     .array
                 )
 
+        transpose_atol = 1e-6 if device == "cpu" else 3e-6
         for order in (1, 2, "exact"):
             plain = run(array, order=order)
             np.testing.assert_allclose(
@@ -198,7 +202,7 @@ class TestFourierMultislice:
                 run(np.concatenate([array, vacuum]), order=order, transpose=True),
                 plain,
                 rtol=0,
-                atol=1e-6,
+                atol=transpose_atol,
                 err_msg=f"transpose, order {order}",
             )
 
