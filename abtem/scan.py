@@ -604,7 +604,9 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = int(np.ceil(self.extent / self.sampling))
+        gpts = int(np.ceil(self.extent / self.sampling))
+        _validate_scan_gpts(gpts)
+        self._gpts = gpts
 
         self._adjust_sampling()
 

@@ -250,3 +250,9 @@ def test_scans_of_one_position_are_accepted():
 #         blocks[i] = blocks[i].values
 #
 #     assert np.allclose(concatenate_blocks(blocks), s.get_positions())
+
+
+def test_a_line_scan_without_extent_is_refused_with_a_sampling():
+    # the extent divided by the sampling gave 0 positions
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        LineScan(start=(1.0, 1.0), end=(1.0, 1.0), sampling=0.1)
