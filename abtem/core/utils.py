@@ -156,14 +156,11 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     Numbers, and tuples, lists and arrays of numbers, are equal when their
     shapes and their values are: integers exactly, any other number to the
     default tolerance of `np.allclose`. A list equals a tuple of the same values.
-    A list, tuple or dict that neither `==` nor NumPy can compare whole, such
-    as one holding arrays or delayed values, is compared item by item by these
-    rules: it equals a list or tuple of the same length, or a dict with the
-    same keys, whose items equal its own; in a dict mixing numbers and arrays, a
-    number ahead of the first array compares exactly. Any other list or tuple
-    holding abTEM objects (`EqualityMixin`), at any depth, is decided by `==` on
-    the container alone: it does not equal a tuple of the same objects, and the
-    numbers in it compare exactly.
+    A list, tuple or dict that `==` does not find equal and that NumPy cannot
+    compare whole, such as one holding arrays, delayed values or abTEM objects
+    (`EqualityMixin`), is compared item by item by these rules: it equals a list
+    or tuple of the same length, or a dict with the same keys, whose items equal
+    its own.
 
     A lazy (dask) attribute decides nothing: comparing its values would run its
     graph, discard the result and let an error from inside the graph escape
@@ -247,15 +244,19 @@ def _values_equal(value, other) -> Optional[bool]:
         # A held EqualityMixin is compared with its own __eq__, which applies
         # its `_eq_exclude` and any check a subclass adds, and decides every
         # comparison it cannot make itself, so an error it raises is a defect
-        # and escapes. Lazy content below, in a held object, list or dict, is
-        # deferred like a lazy attribute. Any other value raises `TypeError` or
-        # `ValueError` when `==` cannot reduce its comparison: a list or dict
-        # holding arrays or delayed values, which is compared item by item, and
-        # arrays on two devices or an ndarray against a list of array objects
+        # and escapes. Lazy content in a held object is deferred like a lazy
+        # attribute. Any other value raises `TypeError` or `ValueError` when
+        # `==` cannot reduce its comparison: a list or dict holding arrays or
+        # delayed values, which is compared item by item, and arrays on two
+        # devices or an ndarray against a list of array objects
         # (`_TooManyIndicesError`, from the `ArrayObject.__getitem__` NumPy
         # calls to convert it), which differ. A `KeyError` escapes.
         equal = value == other
     except LazyComparisonError:
+        # `==` on a list or dict stops at its first lazy item: a later item can
+        # still differ.
+        if isinstance(value, (list, tuple, dict)):
+            return _items_equal(value, other)
         return None
     except (TypeError, ValueError, _TooManyIndicesError):
         if isinstance(value, EqualityMixin):
@@ -277,18 +278,15 @@ def _values_equal(value, other) -> Optional[bool]:
         )
         try:
             equal = np.all(compare(value, other)) and _shape(value) == _shape(other)
-        except ValueError:
-            # Values NumPy cannot stack into one array, such as numbers and
-            # arrays in one list, which `==` decided by its first difference.
-            if isinstance(value, (list, tuple, dict)):
+        except (ValueError, TypeError, NotImplementedError, _TooManyIndicesError):
+            # NumPy cannot compare the values whole: numbers and arrays in one
+            # list (`ValueError`), or a list holding array objects, which it
+            # indexes (`_TooManyIndicesError`), or does arithmetic on when they
+            # have only ensemble axes (`NotImplementedError`, for another
+            # operand). A container `==` did not find equal is compared item by
+            # item; any other value keeps the verdict of `==`.
+            if isinstance(value, (list, tuple, dict)) and not np.all(equal):
                 return _items_equal(value, other)
-        except (TypeError, NotImplementedError, _TooManyIndicesError):
-            # NumPy cannot convert or subtract the values: a list holding array
-            # objects, which it indexes (`_TooManyIndicesError`), or does
-            # arithmetic on when they have only ensemble axes
-            # (`NotImplementedError`, for another operand); `==` gave the
-            # verdict.
-            pass
     # `np.all`, not `equal is False`. The identity test only catches the
     # `False` singleton, and several producers here return something else:
     # ase.Atoms.__eq__ returns numpy.bool_, and `np.False_ is False` is

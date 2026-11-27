@@ -841,20 +841,64 @@ class TestEqualityDiscriminates:
 
         assert (array != container) if array_first else (container != array)
 
-    def test_a_container_of_array_objects_is_decided_by_eq_on_the_container(self):
-        """`==` on the container decides, so a list does not equal a tuple of the
-        same objects and the numbers in it compare exactly, while without an
-        `ArrayObject` both keep the NumPy comparison. A list that also holds a
-        3-element ndarray is compared item by item, and equals a copy of itself.
+    def test_a_list_of_array_objects_equals_a_tuple_of_them(self):
+        """A list and a tuple of the same array objects, with or without an
+        ndarray beside them, are equal, as a list and a tuple of ndarrays are;
+        array objects of other shapes differ. Device-independent."""
+        Holder = self._list_holder()
+        images = self._images(np.zeros((3, 4), dtype="float32"))
+        other = self._images(np.zeros((5, 4), dtype="float32"))
+        a = np.arange(3.0)
+
+        assert Holder([a, 2 * a]) == Holder((a, 2 * a))
+        assert Holder([images]) == Holder((images,))
+        assert Holder([images, a]) == Holder((images, a))
+        assert Holder([images]) != Holder((other,))
+        assert Holder([images, a]) != Holder((images, a + 1))
+
+    def test_numbers_in_a_container_of_array_objects_compare_to_a_tolerance(self):
+        """A float beside an array object, as beside an ndarray, compares to the
+        default tolerance of `np.allclose`; integers compare exactly.
         Device-independent."""
         Holder = self._list_holder()
         images = self._images(np.zeros((3, 4), dtype="float32"))
 
-        assert Holder([1.0]) == Holder((1.0,))
-        assert Holder([images]) != Holder((images,))
         assert Holder([0.1]) == Holder([0.1 + 1e-12])
-        assert Holder([images, 0.1]) != Holder([images, 0.1 + 1e-12])
-        assert Holder([images, np.arange(3)]) == Holder([images, np.arange(3)])
+        assert Holder([images, 0.1]) == Holder([images, 0.1 + 1e-12])
+        assert Holder([images, 0.1]) != Holder([images, 0.2])
+        assert Holder([images, 1_000_000]) != Holder([images, 1_000_001])
+
+    def test_a_dict_of_a_number_and_an_array_compares_the_number_to_a_tolerance(self):
+        """A dict whose number comes ahead of its first array compares the number
+        to the default tolerance, as a list does. Device-independent."""
+        Holder = self._list_holder()
+        array = np.linspace(0, 1, 5)
+
+        def hold(number, array=array):
+            return Holder({"s": number, "a": array})
+
+        assert hold(0.5) == hold(0.5 + 1e-12, array.copy())
+        assert hold(0.5) != hold(0.6)
+        assert hold(0.5) != hold(0.5, array + 1)
+
+    def test_a_difference_after_a_lazy_item_of_a_container_decides(self):
+        """`==` on a list stops at its first lazy item with no verdict; a later
+        item that differs is a difference, and with none that differs the lazy
+        item leaves the comparison undecided. Device-independent."""
+        import dask.array as da
+
+        from abtem.core.utils import LazyComparisonError
+
+        Holder = self._list_holder()
+
+        def hold(lazy_fill, array):
+            lazy = self._images(lazy_fill((3, 4), dtype="float32"))
+            return Holder([lazy, array])
+
+        assert hold(da.zeros, np.zeros(3)) != hold(da.ones, np.ones(3))
+        assert hold(da.zeros, np.zeros(3)) != hold(da.zeros, np.ones(3))
+        with pytest.raises(LazyComparisonError, match=r"\.compute\(\)"):
+            hold(da.zeros, np.zeros(3)) == hold(da.ones, np.zeros(3))
 
     def test_a_runtime_error_from_a_held_object_escapes(self):
         """Only the `RuntimeError` of an `ArrayObject` indexed by NumPy is caught;
