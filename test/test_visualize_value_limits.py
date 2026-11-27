@@ -5,6 +5,9 @@ of scattered spots on the norm's limits.
 on the device.
 """
 
+import contextlib
+import gc
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -96,3 +99,46 @@ def test_first_draw_and_autoscale_keep_their_limits():
     visualization.set_value_limits([None, None])
     visualization.get_figure().canvas.draw()
     assert cax.get_ylim() == pytest.approx((values.min(), values.max()), rel=1e-6)
+
+
+class _Listener:
+    def __init__(self):
+        self.cycle = self  # freed only by a cyclic garbage collection
+
+    def on_changed(self):
+        pass
+
+
+def test_a_norm_listener_collected_while_the_norm_is_blocked_is_not_an_error(
+    monkeypatch,
+):
+    # matplotlib's CallbackRegistry.blocked() swaps out the registry's callbacks;
+    # a weakly held listener collected inside it makes CallbackRegistry._remove_proxy
+    # raise KeyError: 'changed' in a weakref callback (matplotlib 3.8.4 to 3.11),
+    # which pytest reports as an unraisable exception
+    visualization = abtem.Images(_values(), sampling=0.1).show(cbar=True)
+    norm = visualization.artists[0, 0].norm
+    listener = _Listener()
+    norm.callbacks.connect("changed", listener.on_changed)
+    del listener
+
+    blocked = matplotlib.cbook.CallbackRegistry.blocked
+
+    @contextlib.contextmanager
+    def blocked_with_a_collection(self, **kwargs):
+        with blocked(self, **kwargs):
+            gc.collect()  # where an automatic collection can land
+            yield
+
+    monkeypatch.setattr(
+        matplotlib.cbook.CallbackRegistry, "blocked", blocked_with_a_collection
+    )
+    gc.disable()  # so that the listener is collected inside the blocked() window
+    try:
+        visualization.set_value_limits([0.2, 3.0])
+    finally:
+        gc.enable()
+
+    visualization.get_figure().canvas.draw()
+    cax = visualization.axes._caxes[0, 0][-1]
+    assert cax.get_ylim() == pytest.approx((0.2, 3.0), rel=1e-6)

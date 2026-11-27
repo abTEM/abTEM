@@ -18,7 +18,7 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
-from abtem.core.grid import Grid, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, validate_gpts
 from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
@@ -31,6 +31,12 @@ if TYPE_CHECKING:
 
 
 ScanWithSampling = Union["LineScan", "GridScan"]
+
+
+def _validate_scan_gpts(gpts: int | Sequence[int] | None) -> None:
+    """Raise a ``ValueError`` for a number of scan positions below 1."""
+    if gpts is not None:
+        validate_gpts(np.atleast_1d(gpts))
 
 
 def validate_scan(
@@ -476,6 +482,7 @@ class LineScan(BaseScan):
         fractional: bool = False,
         potential: BasePotential | Atoms | None = None,
     ):
+        _validate_scan_gpts(gpts)
         self._gpts = gpts
         self._sampling = sampling
 
@@ -666,6 +673,7 @@ class LineScan(BaseScan):
 
     @gpts.setter
     def gpts(self, gpts: int):
+        _validate_scan_gpts(gpts)
         self._gpts = gpts
         self._adjust_sampling()
 
@@ -932,6 +940,8 @@ class GridScan(HasGrid2DMixin, BaseScan):
     ):
         super().__init__()
 
+        _validate_scan_gpts(gpts)
+
         self._start = validate_coordinate(
             coordinate=start, potential=potential, fractional=fractional
         )
@@ -983,6 +993,11 @@ class GridScan(HasGrid2DMixin, BaseScan):
         not included."""
         assert len(self.grid.endpoint) == 2
         return self.grid.endpoint
+
+    @HasGrid2DMixin.gpts.setter
+    def gpts(self, gpts: tuple[int, int]):
+        _validate_scan_gpts(gpts)
+        self.grid.gpts = gpts
 
     @property
     def shape(self) -> tuple[int, int]:
