@@ -982,6 +982,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             figsize=figsize,
             # interact=interact,
             title=title,
+            units=units,
             **kwargs,
         )
 
@@ -2197,6 +2198,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             interactive=not interact and display,
             legend=legend,
             common_scale=common_scale,
+            units=units,
             **kwargs,
         )
 

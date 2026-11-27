@@ -236,7 +236,15 @@ class LinesArtist(Artist1D):
         is_complex = np.iscomplexobj(measurement.array)
         y = self._reshape_data(measurement.array)
 
-        x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
+        # The x axis is converted as well as relabelled, as the extent of an image is.
+        self._x_conversion = get_conversion_factor(
+            units,
+            measurement.axes_metadata[-1].units,
+            energy=measurement.metadata.get("energy", None),
+        )
+        x = self._convert_x(
+            measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
+        )
 
         # One line per index of the axes before the last one, which is the x axis of
         # the plot. These are the ensemble axes of a line profile, but also all axes
@@ -278,6 +286,13 @@ class LinesArtist(Artist1D):
 
         if logscale:
             self.set_logscale(True)
+
+    def _convert_x(self, x):
+        # Coordinates of an axis that is not numeric are not units to convert.
+        if self._x_conversion == 1.0:
+            return x
+
+        return np.asarray(x, dtype=float) * self._x_conversion
 
     def remove(self):
         for line in self._lines:
@@ -329,7 +344,7 @@ class LinesArtist(Artist1D):
 
     def set_data(self, data):
         y = self._reshape_data(data.array)
-        x = data.base_axes_metadata[-1].coordinates(data.shape[-1])
+        x = self._convert_x(data.base_axes_metadata[-1].coordinates(data.shape[-1]))
 
         if len(y.shape) == 1:
             y = y[..., None]
