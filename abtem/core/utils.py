@@ -181,7 +181,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if key not in b.__dict__:
             return False
 
-        equal = _values_equal(value, b.__dict__[key])
+        equal = values_equal(value, b.__dict__[key])
         if equal is None:
             undecided = undecided or key
         elif not equal:
@@ -197,7 +197,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
 
 
 def _items_equal(value, other) -> Optional[bool]:
-    """`_values_equal` item by item, for two lists or tuples of the same length or
+    """`values_equal` item by item, for two lists or tuples of the same length or
     two dicts with the same keys; `False` for any other pair."""
     if isinstance(value, dict) and isinstance(other, dict):
         if value.keys() != other.keys():
@@ -212,7 +212,7 @@ def _items_equal(value, other) -> Optional[bool]:
 
     undecided = False
     for item, other_item in pairs:
-        equal = _values_equal(item, other_item)
+        equal = values_equal(item, other_item)
         if equal is None:
             undecided = True
         elif not equal:
@@ -220,7 +220,7 @@ def _items_equal(value, other) -> Optional[bool]:
     return None if undecided else True
 
 
-def _values_equal(value, other) -> Optional[bool]:
+def values_equal(value, other) -> Optional[bool]:
     """Whether two attribute values are equal by the rules of `safe_equality`, or
     `None` when lazy content leaves it undecided."""
     if is_dask_collection(value) or is_dask_collection(other):

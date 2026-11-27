@@ -36,7 +36,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.core.utils import EqualityMixin, _values_equal, itemset
+from abtem.core.utils import EqualityMixin, values_equal, itemset
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     BaseFrozenPhonons,
@@ -109,8 +109,8 @@ class _DummyGPAW(EqualityMixin):
     def __eq__(self, other):
         return (
             isinstance(other, _DummyGPAW)
-            and _values_equal(_settings(self.setup_mode), _settings(other.setup_mode))
-            and _values_equal(_settings(self.setup_xc), _settings(other.setup_xc))
+            and values_equal(_settings(self.setup_mode), _settings(other.setup_mode))
+            and values_equal(_settings(self.setup_xc), _settings(other.setup_xc))
             and super().__eq__(other)
         )
 
