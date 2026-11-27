@@ -1093,6 +1093,30 @@ Bugfixes:
   `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
   `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
   fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
+- `==` compares a list, tuple or dict holding arrays or `dask.delayed` values item by item, by the same rules as
+  attributes. An object holding one, such as a `GPAWPotential` from a list of `.gpw` paths and any `CrystalPotential`,
+  `SMatrix` or multislice transform holding it, never equalled its own copy. A list or tuple of numbers and arrays now
+  compares the same whatever the order of its items; in a dict, a number ahead of its first array still compares
+  exactly. **Behaviour change:** an error raised by an abTEM object's own `==` while such a container is compared now
+  escapes, as it already does for an object held directly; before, the container read as different. `==` between
+  objects holding lists of delayed values with different keys, such as `GPAWPotential(["a.gpw", "b.gpw"])` and
+  `GPAWPotential(["a.gpw", "c.gpw"])`, raises `LazyComparisonError` (a `TypeError`) instead of returning `False`, as
+  for a held dask array of another name
+- A `GPAWPotential` from GPAW calculators (one, or a list) equals its copy and one built from the same calculators; it
+  compared by identity. A `_DummyGPAW` compares by value, leaving out its grid descriptor and comparing the mode and
+  exchange-correlation functional by their `todict()` settings; its dask token, but not that of a `GPAWPotential`,
+  changes
+- `==` between objects holding a list with a measurement ensemble that has only ensemble axes (from `integrate_radial`
+  over a non-linear axis) and `None` or another object returns `False` instead of raising `NotImplementedError`
+- A detector, `apply_ctf` or another transform of lazy waves whose scan axis is sliced to no positions (`waves[2:2]`)
+  returns an empty result, as for eager waves, instead of raising `TypeError: ScanAxis does not support a negative or
+  empty slice`
+- An FFT under `fft: fftw` of an empty array, such as the multislice of waves sliced to no scan positions
+  (`waves[2:2]`), or of an aligned view with a length-1 axis made with `None`, no longer raises
+  `ValueError: Invalid input striding` in some runs; the array is copied to the layout the FFTW plans are made for
+- On Metal, the truth value of an array of more than one element, or of an empty one, raises NumPy's `ValueError`
+  instead of torch's `RuntimeError`, so `==` between objects holding a list, tuple or dict of Metal arrays compares them
+  item by item instead of raising
 
 Documentation:
 
