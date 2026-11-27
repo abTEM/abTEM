@@ -20,7 +20,7 @@ import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import get_dtype
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -373,7 +373,7 @@ def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     elif gpts_or_sampling["sampling"]:
         sampling = ensure_is_tuple(gpts_or_sampling["sampling"], 2)
         adjusted_sampling = tuple(
-            l / np.ceil(l / d) for d, l in zip(sampling, measurement.extent)
+            l / safe_ceiling_int(l / d) for d, l in zip(sampling, measurement.extent)
         )
         assert np.allclose(interpolated.sampling, adjusted_sampling)
 
