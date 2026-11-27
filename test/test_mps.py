@@ -97,8 +97,10 @@ def test_the_truth_value_of_an_array_is_numpys(size):
 
     try:
         expected = bool(array)
-    except ValueError:
-        with pytest.raises(ValueError, match="truth value of an"):
+    except (ValueError, DeprecationWarning) as error:
+        # An empty array raises ValueError from NumPy 2.2; before, it gives False
+        # with a DeprecationWarning, which the test configuration makes an error.
+        with pytest.raises(type(error), match="truth value of an"):
             bool(on_device)
     else:
         assert bool(on_device) == expected

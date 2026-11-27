@@ -532,7 +532,9 @@ class TorchNDArray:
                 "ambiguous. Use a.any() or a.all()"
             )
         if self._tensor.numel() == 0:
-            raise ValueError("The truth value of an empty array is ambiguous.")
+            # The installed NumPy's own verdict: it raises from NumPy 2.2, and
+            # gives False with a DeprecationWarning before.
+            return bool(np.empty(0))
         return bool(self._tensor)
 
     def __getattr__(self, name):
