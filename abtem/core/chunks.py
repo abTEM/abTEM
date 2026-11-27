@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import numbers
 from functools import reduce
 from itertools import accumulate
 from operator import mul
@@ -269,10 +268,7 @@ def _auto_chunks(
             np.floor(parse_bytes(max_elements) / np.dtype(dtype).itemsize)
         )
 
-    elif isinstance(max_elements, numbers.Integral):
-        max_elements = int(max_elements)
-
-    else:
+    elif not isinstance(max_elements, int):
         raise ValueError("limit must be an integer or a string")
 
     normalized_chunks = tuple(s if c == -1 else c for s, c in zip(shape, chunks))

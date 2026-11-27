@@ -1082,3 +1082,23 @@ def test_float64_plane_wave_expansion_is_the_analytic_one(interpolation, lazy):
     )
     expected = np.exp(2j * np.pi * phase) * interpolation**2 / np.prod(gpts)
     np.testing.assert_allclose(array, expected, rtol=0, atol=1e-12 * np.abs(expected).max())
+
+
+def test_a_numpy_integer_batch_size_works_for_probes_and_transforms_too():
+    # the batch size is converted to a number of elements where it is an integer; a
+    # NumPy integer was not one, and was refused
+    from ase import Atoms
+
+    import abtem
+
+    atoms = Atoms("Si", positions=[(2.0, 2.0, 1.0)], cell=(4, 4, 2), pbc=True)
+    probe = abtem.Probe(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=np.array([0.0, 10.0, 20.0]),
+        gpts=32,
+        extent=4.0,
+    )
+    expected = probe.build(lazy=True, max_batch=2).compute().array
+    actual = probe.build(lazy=True, max_batch=np.int64(2)).compute().array
+    np.testing.assert_array_equal(actual, expected)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import numbers
 import warnings
 from abc import abstractmethod
 from copy import copy
@@ -1879,7 +1880,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         lazy = validate_lazy(lazy)
         array: np.ndarray | da.core.Array
         if lazy:
-            if isinstance(max_batch, int):
+            if isinstance(max_batch, numbers.Integral):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import numbers
 import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING
@@ -1312,7 +1313,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         waves = waves.ensure_real_space()
         sites = self.validate_sites(sites)
 
-        if isinstance(max_batch, int):
+        if isinstance(max_batch, numbers.Integral):
             limit = int(max_batch * np.prod(waves.shape) * len(self))
         else:
             limit = max_batch
