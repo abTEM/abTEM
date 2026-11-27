@@ -54,7 +54,7 @@ BOUND_LABELS = {
     "max_intensity": "intensity",
     "max_abs_norm": "max_abs",
 }
-ENTRY_KEYS = {"case", "commit", "reason", "pr", *BOUND_KEYS}
+ENTRY_KEYS = {"case", "commit", "reason", "pr", "shape", *BOUND_KEYS}
 
 #: Axis fields that only name or typeset an axis; differences are reported but
 #: are not a change of the result. Fields starting with ``_`` are abtem's
@@ -92,7 +92,8 @@ class Accepted:
     optional bounds cap how
     large the accepted drift may be, per output; a drift beyond a bound stays
     ``DRIFT``. A non-finite value that differs between the two outputs is never
-    accepted.
+    accepted. ``shape`` maps an output name to the candidate shape the change
+    gives it; see ``_shape_violations``.
     """
 
     case: str
@@ -102,6 +103,7 @@ class Accepted:
     max_rel: float | None = None
     max_intensity: float | None = None
     max_abs_norm: float | None = None
+    shape: dict[str, tuple[int, ...]] = field(default_factory=dict)
     matched: list[str] = field(default_factory=list)
     #: whether the entry's glob matches a case id both compared bundles hold
     covers: bool = False
@@ -109,6 +111,10 @@ class Accepted:
     #: drifting case ids accepted by another change's entries, not by this one
     dominated: list[str] = field(default_factory=list)
     worst: dict[str, float] = field(default_factory=dict)
+    #: (reference shape, candidate shape) of each declared output that changed shape
+    shape_change: dict[str, tuple[tuple[int, ...], tuple[int, ...]]] = field(
+        default_factory=dict
+    )
     #: why the entry was not applied, for the report; empty when it applies
     scope_note: str = ""
     #: the full sha ``commit`` resolves to: entries of one change share it
@@ -126,10 +132,13 @@ class Accepted:
         return {k: getattr(self, k) for k in BOUND_KEYS if getattr(self, k) is not None}
 
     def violations(self, outputs: dict[str, dict[str, Any]]) -> list[str]:
-        """Outputs whose drift exceeds a bound or has non-finite mismatches."""
+        """Outputs whose drift exceeds a bound or has non-finite mismatches.
+
+        Outputs with the verdict ``SHAPE`` have no drift to bound.
+        """
         out = []
         for name, s in outputs.items():
-            if s.get("identical"):
+            if s.get("identical") or s.get("verdict") == SHAPE:
                 continue
             if s.get("nonfinite_mismatch"):
                 out.append(
@@ -147,9 +156,14 @@ class Accepted:
         return out
 
     def record(self, case_id: str, outputs: dict[str, dict[str, Any]]) -> None:
-        """Credit a matched drift and fold its size into ``worst``."""
+        """Credit a matched row; fold its drift into ``worst`` and its shapes
+        into ``shape_change``."""
         self.matched.append(case_id)
-        for s in outputs.values():
+        for name, s in outputs.items():
+            if s.get("verdict") == SHAPE:
+                if name in self.shape and "cand_shape" in s:
+                    self.shape_change[name] = (s["ref_shape"], s["cand_shape"])
+                continue
             for key in ("rel_above", "intensity", "max_abs_norm"):
                 value = s.get(key)
                 if value is None:
@@ -160,8 +174,60 @@ class Accepted:
                     self.worst[key] = value
 
 
-def _all_case_ids(reg: dict[str, registry.Case]) -> list[str]:
-    return [str(cid) for c in reg.values() for tier in c.tiers for cid in c.ids(tier)]
+def _shape_violations(
+    group: list[Accepted], outputs: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Why a change's entries do not accept the ``SHAPE`` outputs of a row.
+
+    An output is accepted when its shape changed, some entry of the change
+    declares, for its name, the candidate shape, its dtype is unchanged and
+    every candidate value is finite; the axis mismatches that follow from the
+    new shape are accepted with it. An output missing in the candidate, with a
+    changed dtype or with an unchanged shape is never accepted.
+    """
+    out = []
+    for name, s in outputs.items():
+        if s.get("verdict") != SHAPE:
+            continue
+        declared = [a.shape[name] for a in group if name in a.shape]
+        if "cand_shape" not in s:
+            out.append(f"{name} missing in the candidate")
+        elif not s["dtype_ok"]:
+            out.append(f"{name} dtype changed")
+        elif s["cand_shape"] == s["ref_shape"]:
+            out.append(
+                f"{name} shape is unchanged; only its axes differ "
+                f"({'; '.join(s['mismatch'])})"
+            )
+        elif not declared:
+            out.append(f"{name} has no declared shape ({'; '.join(s['mismatch'])})")
+        elif s["cand_shape"] not in declared:
+            out.append(
+                f"{name} shape {s['cand_shape']} but the change declares "
+                + " / ".join(map(str, declared))
+            )
+        elif s["cand_nonfinite"]:
+            out.append(f"{name} has {s['cand_nonfinite']} non-finite values")
+    return out
+
+
+def _change_violations(
+    group: list[Accepted], outputs: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Every reason the entries of one change do not accept a row's outputs."""
+    return [v for a in group for v in a.violations(outputs)] + _shape_violations(
+        group, outputs
+    )
+
+
+def _outputs_by_case_id(reg: dict[str, registry.Case]) -> dict[str, tuple[str, ...]]:
+    """Output names of every registered case id."""
+    return {
+        str(cid): c.outputs or ()
+        for c in reg.values()
+        for tier in c.tiers
+        for cid in c.ids(tier)
+    }
 
 
 def _number(value: Any) -> bool:
@@ -170,6 +236,14 @@ def _number(value: Any) -> bool:
         and not isinstance(value, bool)
         and math.isfinite(value)
         and value > 0
+    )
+
+
+def _shape(dims: Any) -> bool:
+    return (
+        isinstance(dims, list)
+        and bool(dims)
+        and all(isinstance(d, int) and not isinstance(d, bool) and d > 0 for d in dims)
     )
 
 
@@ -186,7 +260,10 @@ def load_accepted(
     shift, a flip or a phase scramble of the output, so only a bound on the
     largest elementwise difference rejects a corrupted result. With a
     registry, the ``case`` glob must match at least one registered case id of
-    any tier, device or variant.
+    any tier, device or variant. ``shape``, if present, is a non-empty table
+    mapping an output name to an array of positive integers, the shape the
+    candidate's output has; with a registry, each name must be an output of a
+    registered case the glob matches.
 
     ``path=None`` reads the shipped file and returns no entries when it is
     absent; an explicit ``path`` must exist.
@@ -204,7 +281,7 @@ def load_accepted(
     extra = set(data) - {"accepted"}
     if extra:
         raise CompareError(f"{path.name}: unknown top-level keys {sorted(extra)}")
-    known_ids = _all_case_ids(reg) if reg else None
+    known_ids = _outputs_by_case_id(reg) if reg else None
     out = []
     entries = data.get("accepted", [])
     if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
@@ -243,19 +320,38 @@ def load_accepted(
                 f"{where}: 'max_abs_norm' is required: it is the bound a shifted, "
                 "flipped or rescaled output cannot pass"
             )
+        shape = entry.get("shape", {})
+        if "shape" in entry and not (
+            isinstance(shape, dict)
+            and shape
+            and all(_shape(dims) for dims in shape.values())
+        ):
+            raise CompareError(
+                f"{where}: 'shape' must be a non-empty table mapping an output "
+                "name to an array of positive integers"
+            )
         acc = Accepted(
             entry["case"].strip(),
             commit.strip().lower(),
             entry["reason"].strip(),
             pr,
         )
+        acc.shape = {name: tuple(dims) for name, dims in shape.items()}
         for key in BOUND_KEYS:
             if key in entry:
                 setattr(acc, key, float(entry[key]))
-        if known_ids is not None and not any(acc.matches(c) for c in known_ids):
-            raise CompareError(
-                f"{where}: case glob {acc.case!r} matches no registered case"
-            )
+        if known_ids is not None:
+            matched = [c for c in known_ids if acc.matches(c)]
+            if not matched:
+                raise CompareError(
+                    f"{where}: case glob {acc.case!r} matches no registered case"
+                )
+            outputs = {o for c in matched for o in known_ids[c]}
+            if set(acc.shape) - outputs:
+                raise CompareError(
+                    f"{where}: 'shape' names {sorted(set(acc.shape) - outputs)}, "
+                    f"not an output of any case matching {acc.case!r}"
+                )
         out.append(acc)
     return out
 
@@ -434,12 +530,14 @@ def output_stats(
 ) -> dict[str, Any]:
     s = close_stats(cand_arr, ref_arr, above_rel=above_rel)
     s["dtype_ok"] = str(cand_arr.dtype) == str(ref_arr.dtype)
-    s["shape_ok"] = tuple(cand_arr.shape) == tuple(ref_arr.shape)
+    s["ref_shape"], s["cand_shape"] = tuple(ref_arr.shape), tuple(cand_arr.shape)
+    s["shape_ok"] = s["cand_shape"] == s["ref_shape"]
     bad, info = axes_diff(ref_axes, cand_axes)
     s["axes_ok"] = not bad
     notes = []
     if not s["shape_ok"]:
-        notes.append(f"shape {tuple(ref_arr.shape)} → {tuple(cand_arr.shape)}")
+        s["cand_nonfinite"] = int((~np.isfinite(cand_arr)).sum())
+        notes.append(f"shape {s['ref_shape']} → {s['cand_shape']}")
     if not s["dtype_ok"]:
         notes.append(f"dtype {ref_arr.dtype} → {cand_arr.dtype}")
     notes.extend(bad)
@@ -817,17 +915,21 @@ def _pair_row(
         row.notes.append("new outputs, not compared: " + ", ".join(new))
     row.verdict = worst
 
-    if worst == DRIFT and kind == SAME:
+    if worst in (DRIFT, SHAPE) and kind == SAME:
         # Every entry of one change must hold its bounds; of several changes in
-        # the candidate, the drift is accepted when one change's entries all hold.
+        # the candidate, the row is accepted when one change's entries all hold.
         matching = [a for a in accepted if a.matches(cand_id)]
         changes: dict[str, list[Accepted]] = {}
         for a in matching:
             changes.setdefault(a.change, []).append(a)
+        if worst == SHAPE:
+            # only a change that declares a shape takes part in a SHAPE row
+            changes = {c: g for c, g in changes.items() if any(a.shape for a in g)}
+            matching = [a for a in matching if a.change in changes]
         held = {
             commit
             for commit, group in changes.items()
-            if not any(a.violations(row.outputs) for a in group)
+            if not _change_violations(group, row.outputs)
         }
         if held:
             row.verdict = ACCEPTED
@@ -838,7 +940,9 @@ def _pair_row(
                 else:
                     a.dominated.append(cand_id)
         elif matching:
-            over = [v for a in matching for v in a.violations(row.outputs)]
+            over = [
+                v for g in changes.values() for v in _change_violations(g, row.outputs)
+            ]
             row.notes.append("exceeds accepted bound: " + "; ".join(over))
             for a in matching:
                 a.record(cand_id, row.outputs)
@@ -1139,10 +1243,9 @@ def _worst(row: Row, key: str) -> str:
 
 
 def _bounds_text(a: Accepted) -> str:
-    return (
-        ", ".join(f"{BOUND_LABELS[k]} ≤ {_sci(v)}" for k, v in a.bounds().items())
-        or "none"
-    )
+    parts = [f"{BOUND_LABELS[k]} ≤ {_sci(v)}" for k, v in a.bounds().items()]
+    parts += [f"shape {name} {dims}" for name, dims in a.shape.items()]
+    return ", ".join(parts) or "none"
 
 
 def _measured_text(a: Accepted) -> str:
@@ -1151,9 +1254,9 @@ def _measured_text(a: Accepted) -> str:
         ("intensity", "intensity"),
         ("max_abs_norm", "max_abs"),
     )
-    return ", ".join(
-        f"{label} {_sci(a.worst[k])}" for k, label in names if k in a.worst
-    )
+    parts = [f"{label} {_sci(a.worst[k])}" for k, label in names if k in a.worst]
+    parts += [f"{n} {ref} → {cand}" for n, (ref, cand) in a.shape_change.items()]
+    return ", ".join(parts)
 
 
 def to_markdown(report: Report) -> str:
@@ -1263,11 +1366,13 @@ def to_markdown(report: Report) -> str:
         lines.append(
             "Rows: accepted_changes.toml entries that apply to this reference and "
             "candidate and cover a compared case. "
-            "`bounds` = the largest drift the entry accepts per output; `matched` = "
-            "drifting case ids the entry covers (in brackets: how many exceed a "
-            "bound and stay DRIFT, and `dominated`: how many more it covers that "
+            "`bounds` = the largest drift the entry accepts per output, and the "
+            "shapes it declares; `matched` = "
+            "drifting or reshaped case ids the entry covers (in brackets: how many "
+            "exceed a bound or declare another shape and stay DRIFT or SHAPE, and "
+            "`dominated`: how many more it covers that "
             "another change's entries accept instead); `measured` = the largest "
-            "drift over the matched ids."
+            "drift over the matched ids and the shape changes."
         )
         lines.append("")
         lines.append(
@@ -1325,6 +1430,7 @@ def _entry_json(a: Accepted) -> dict[str, Any]:
         "pr": a.pr,
         "reason": a.reason,
         "bounds": a.bounds(),
+        "shape": a.shape,
         "matched": a.matched,
         "exceeded": a.exceeded,
         "dominated": a.dominated,

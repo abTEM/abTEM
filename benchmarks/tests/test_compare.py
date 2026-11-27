@@ -4,10 +4,11 @@ import subprocess
 
 import numpy as np
 import pytest
-from abtem_bench import cli, store
+from abtem_bench import cli, registry, store
 from abtem_bench import compare as cmp
 from abtem_bench.compare import _contains as real_contains  # before patching
 from abtem_bench.compare import _resolve as real_resolve
+from abtem_bench.registry import Tier
 from conftest import CID, REFERENCE_SHA, bundle, one, record
 
 ARR = np.linspace(1.0, 2.0, 16).reshape(4, 4)
@@ -549,6 +550,313 @@ def test_a_missing_default_accepted_file_is_reported(tmp_path, registry_with_dem
     assert report.accepted_exists and "no accepted_changes.toml" not in cmp.to_markdown(
         report
     )
+
+
+# ---------------------------------------------------------------------------
+# accepted_changes.toml: declared shapes
+
+SID = "demo.shape@quick/cpu"
+#: the reference's output arrays; a candidate changes the shape along axis 1
+POT = np.linspace(1.0, 2.0, 72).reshape(3, 4, 6)
+AUX = np.linspace(1.0, 2.0, 12).reshape(3, 4)
+DECLARE = "shape = { potential = [3, 5, 6] }"
+
+
+@pytest.fixture
+def registry_with_shape(registry_with_demo):
+    tiers = {t: Tier(gpts=(4, 4)) for t in registry.TIER_NAMES}
+    for name, outputs in (("demo.shape", ("potential", "aux")), ("demo.other", ("x",))):
+        registry.case(name, tiers=tiers, outputs=outputs)(lambda p, d: lambda: None)
+    return registry_with_demo
+
+
+def _grown(tmp_path, cand=None, ref_axes=(), cand_axes=()):
+    """Reference bundle and a candidate whose ``potential`` has one more row along
+    axis 1 (``cand`` replaces the candidate's outputs)."""
+    ref = bundle(
+        tmp_path,
+        "ref",
+        {
+            SID: (
+                record(),
+                {"potential": (POT, list(ref_axes), {}), "aux": (AUX, [], {})},
+            )
+        },
+        label="v0",
+    )
+    if cand is None:
+        cand = {
+            "potential": (np.resize(POT, (3, 5, 6)), list(cand_axes), {}),
+            "aux": (AUX, [], {}),
+        }
+    return ref, bundle(tmp_path, "cand", {SID: (record(), cand)})
+
+
+def _shape_entry(declare=DECLARE, case="demo.shape@quick/*", extra=""):
+    return f'case = "{case}"\nreason = "grown"\npr = 7\n{LOOSE}\n{declare}\n{extra}'
+
+
+def _compare_shape(tmp_path, reg, ref, cand, *entries):
+    return cmp.compare(ref, cand, reg, accepted_path=_toml(tmp_path, *entries))
+
+
+def test_a_declared_shape_is_accepted(tmp_path, registry_with_shape):
+    ref, cand = _grown(tmp_path)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    row = report.rows[0]
+    assert row.verdict == cmp.ACCEPTED and row.accepted_by == ["grown"]
+    assert row.outputs["potential"]["verdict"] == cmp.SHAPE
+    assert report.failures(cmp.parse_fail_on("drift,shape")) == []
+    entry = report.accepted[0]
+    assert entry.matched == [SID] and report.stale_accepted == []
+    # the NaN statistics of the shape-accepted output are not folded into worst
+    assert entry.worst == {"rel_above": 0.0, "intensity": 0.0, "max_abs_norm": 0.0}
+    assert entry.shape_change == {"potential": ((3, 4, 6), (3, 5, 6))}
+
+
+@pytest.mark.parametrize(
+    "declared", [[3, 5, 7], [3, 6, 6], [4, 5, 6], [3, 4, 6], [5, 3, 6], [3, 5]]
+)
+def test_a_different_declared_shape_stays_shape(
+    tmp_path, registry_with_shape, declared
+):
+    ref, cand = _grown(tmp_path)
+    entry = _shape_entry(f"shape = {{ potential = {declared} }}")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, entry)
+    row = report.rows[0]
+    assert row.verdict == cmp.SHAPE and row.accepted_by == []
+    assert (
+        "exceeds accepted bound: potential shape (3, 5, 6) but the change declares "
+        f"{tuple(declared)}"
+    ) in row.notes
+    assert report.failures({"shape": None}) == [f"{SID}: SHAPE"]
+    assert report.accepted[0].exceeded == [SID] and report.stale_accepted == []
+
+
+def test_an_undeclared_output_that_changes_shape_stays_shape(
+    tmp_path, registry_with_shape
+):
+    cand = {
+        "potential": (np.resize(POT, (3, 5, 6)), [], {}),
+        "aux": (np.resize(AUX, (3, 5)), [], {}),
+    }
+    ref, cand = _grown(tmp_path, cand)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    note = next(n for n in report.rows[0].notes if n.startswith("exceeds"))
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert note == (
+        "exceeds accepted bound: aux has no declared shape (shape (3, 4) → (3, 5))"
+    )
+    both = _shape_entry("shape = { potential = [3, 5, 6], aux = [3, 5] }")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, both)
+    assert report.rows[0].verdict == cmp.ACCEPTED
+
+
+def test_an_entry_of_the_change_may_declare_what_another_does_not(
+    tmp_path, registry_with_shape
+):
+    ref, cand = _grown(tmp_path)
+    report = _compare_shape(
+        tmp_path,
+        registry_with_shape,
+        ref,
+        cand,
+        _shape_entry(),
+        _shape_entry("", case="demo.shape@*"),
+    )
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    assert [a.matched for a in report.accepted] == [[SID], [SID]]
+
+
+@pytest.mark.parametrize("same_shape", [False, True])
+def test_a_dtype_change_is_never_accepted(tmp_path, registry_with_shape, same_shape):
+    pot = np.resize(POT, POT.shape if same_shape else (3, 5, 6)).astype(np.float32)
+    ref, cand = _grown(tmp_path, {"potential": (pot, [], {}), "aux": (AUX, [], {})})
+    declare = f"shape = {{ potential = {list(pot.shape)} }}"
+    report = _compare_shape(
+        tmp_path, registry_with_shape, ref, cand, _shape_entry(declare)
+    )
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert "exceeds accepted bound: potential dtype changed" in report.rows[0].notes
+
+
+def test_a_missing_output_is_never_accepted(tmp_path, registry_with_shape):
+    ref, cand = _grown(tmp_path, {"aux": (AUX, [], {})})
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert (
+        "exceeds accepted bound: potential missing in the candidate"
+        in report.rows[0].notes
+    )
+
+
+@pytest.mark.parametrize("bound, verdict", [("1", cmp.ACCEPTED), ("0.1", cmp.SHAPE)])
+def test_drift_of_another_output_must_hold_the_bounds(
+    tmp_path, registry_with_shape, bound, verdict
+):
+    cand = {
+        "potential": (np.resize(POT, (3, 5, 6)), [], {}),
+        "aux": (AUX * 1.5, [], {}),
+    }
+    ref, cand = _grown(tmp_path, cand)
+    entry = _shape_entry(extra=f"max_rel = {bound}")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, entry)
+    assert report.rows[0].verdict == verdict
+    assert report.accepted[0].worst["rel_above"] == pytest.approx(0.5)
+    if verdict == cmp.SHAPE:
+        assert (
+            "exceeds accepted bound: aux rel 5.0e-01 > 1.0e-01" in report.rows[0].notes
+        )
+
+
+def test_an_axis_mismatch_follows_the_declared_shape(tmp_path, registry_with_shape):
+    def axes(n):
+        return [{"type": "x", "sampling": 1.0, "values": list(range(n))}] * 3
+
+    ref, cand = _grown(tmp_path, ref_axes=axes(4), cand_axes=axes(5))
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.rows[0].outputs["potential"]["axes_ok"] is False
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    wrong = _shape_entry("shape = { potential = [3, 5, 7] }")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, wrong)
+    assert report.rows[0].verdict == cmp.SHAPE
+
+
+def test_a_change_without_a_shape_leaves_a_shape_row_untouched(
+    tmp_path, registry_with_shape
+):
+    ref, cand = _grown(tmp_path)
+    old_style = _shape_entry("", extra='commit = "1111111"')
+    # alone, it is as on a base that knows no shape: no note, not matched, stale
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, old_style)
+    row = report.rows[0]
+    assert row.verdict == cmp.SHAPE
+    assert row.notes == ["potential: shape (3, 4, 6) → (3, 5, 6)"]
+    [entry] = report.accepted
+    assert entry.matched == entry.exceeded == entry.dominated == []
+    assert report.stale_accepted == [entry]
+    # next to a change that declares a wrong shape, it takes no part either
+    wrong = _shape_entry(DECLARE.replace("5", "6"))
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, old_style, wrong)
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert report.rows[0].notes[-1] == (
+        "exceeds accepted bound: potential shape (3, 5, 6) but the change "
+        "declares (3, 6, 6)"
+    )
+    first, second = report.accepted
+    assert first.matched == first.exceeded == first.dominated == []
+    assert second.exceeded == [SID] and report.stale_accepted == [first]
+    # and it is not dominated by a change that accepts the row
+    report = _compare_shape(
+        tmp_path, registry_with_shape, ref, cand, old_style, _shape_entry()
+    )
+    assert report.rows[0].verdict == cmp.ACCEPTED
+    first, second = report.accepted
+    assert first.matched == first.dominated == [] and second.matched == [SID]
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_a_non_finite_value_in_a_shape_accepted_output_is_refused(
+    tmp_path, registry_with_shape, bad
+):
+    pot = np.resize(POT, (3, 5, 6))
+    pot[0, 0, :2] = bad
+    ref, cand = _grown(tmp_path, {"potential": (pot, [], {}), "aux": (AUX, [], {})})
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert (
+        "exceeds accepted bound: potential has 2 non-finite values"
+        in report.rows[0].notes
+    )
+
+
+def test_an_output_of_unchanged_shape_is_never_accepted_by_shape(
+    tmp_path, registry_with_shape
+):
+    def axes(sampling):
+        return [{"type": "x", "sampling": sampling}] * 3
+
+    cand = {"potential": (POT, axes(2.0), {}), "aux": (AUX, [], {})}
+    ref, cand = _grown(tmp_path, cand, ref_axes=axes(1.0))
+    entry = _shape_entry("shape = { potential = [3, 4, 6] }")
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, entry)
+    row = report.rows[0]
+    assert row.verdict == cmp.SHAPE
+    assert row.notes[-1].startswith(
+        "exceeds accepted bound: potential shape is unchanged; only its axes "
+        "differ (axis 0 sampling 1.0 → 2.0"
+    )
+
+
+def test_an_entry_whose_change_the_candidate_lacks_is_not_applied(
+    tmp_path, registry_with_shape, monkeypatch
+):
+    monkeypatch.setattr(cmp, "_contains", lambda commit, sha: False)
+    ref, cand = _grown(tmp_path)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    assert report.rows[0].verdict == cmp.SHAPE
+    assert report.accepted == [] and len(report.not_applicable) == 1
+
+
+def test_the_changelog_and_json_show_the_declared_shape(tmp_path, registry_with_shape):
+    ref, cand = _grown(tmp_path)
+    report = _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry())
+    md = cmp.to_markdown(report)
+    assert "max_abs ≤ 1.0e+01, shape potential (3, 5, 6) |" in md
+    assert ", potential (3, 4, 6) → (3, 5, 6) |" in md
+    assert cmp.to_json(report)["accepted"][0]["shape"] == {"potential": [3, 5, 6]}
+    assert cmp.to_json(report)["rows"][0]["verdict"] == cmp.ACCEPTED
+
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        "shape = 3",
+        "shape = [3, 5, 6]",
+        "shape = {}",
+        "shape = { potential = [] }",
+        "shape = { potential = 5 }",
+        'shape = { potential = "3" }',
+        "shape = { potential = [3.0, 5, 6] }",
+        "shape = { potential = [true, 5, 6] }",
+        "shape = { potential = [0, 5, 6] }",
+        "shape = { potential = [3, -5, 6] }",
+        "shape = { potential = [[3], 5, 6] }",
+        "shape = { potential = [3, 5, 6], aux = [] }",
+    ],
+)
+def test_an_invalid_shape_is_refused(tmp_path, registry_with_shape, declare):
+    ref, cand = _grown(tmp_path)
+    with pytest.raises(cmp.CompareError, match="entry 0: 'shape' must be a non-empty"):
+        _compare_shape(tmp_path, registry_with_shape, ref, cand, _shape_entry(declare))
+
+
+@pytest.mark.parametrize(
+    "case, declare, unknown",
+    [
+        ("demo.shape@*", "shape = { nosuch = [3] }", "nosuch"),
+        ("demo.shape@*", "shape = { potential = [3], x = [3] }", "x"),
+        # an output of a case the glob does not match
+        ("demo.shape@*", "shape = { x = [3] }", "x"),
+        # the demo case declares no outputs
+        ("demo.case@*", "shape = { output = [3] }", "output"),
+    ],
+)
+def test_a_shape_naming_no_output_of_a_matched_case_is_refused(
+    tmp_path, registry_with_shape, case, declare, unknown
+):
+    path = _toml(tmp_path, _shape_entry(declare, case))
+    with pytest.raises(
+        cmp.CompareError, match=f"entry 0: 'shape' names \\['{unknown}'\\]"
+    ):
+        cmp.load_accepted(path, registry_with_shape)
+
+
+def test_a_shape_may_name_an_output_of_any_matched_case(tmp_path, registry_with_shape):
+    declare = "shape = { potential = [3], x = [3] }"
+    path = _toml(tmp_path, _shape_entry(declare, "demo.*"))
+    [entry] = cmp.load_accepted(path, registry_with_shape)
+    assert entry.shape == {"potential": (3,), "x": (3,)}
 
 
 # ---------------------------------------------------------------------------
