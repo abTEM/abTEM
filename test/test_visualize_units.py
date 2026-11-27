@@ -102,9 +102,12 @@ def test_updating_the_data_of_a_converted_profile_keeps_the_units():
     profiles = _reciprocal_space_profiles()
     visualization = profiles.show(units="mrad")
     artist = np.asarray(visualization.artists).ravel()[0]
-    before = np.array(artist._lines[0].get_xdata())
+    in_mrad = 0.25 * np.arange(6) * energy2wavelength(ENERGY) * 1e3
+
+    # the data of the line are in mrad when drawn, and still are after the update
+    np.testing.assert_allclose(artist._lines[0].get_xdata(), in_mrad)
 
     artist.set_data(profiles * 2)
 
-    np.testing.assert_allclose(artist._lines[0].get_xdata(), before)
+    np.testing.assert_allclose(artist._lines[0].get_xdata(), in_mrad)
     plt.close("all")

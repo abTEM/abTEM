@@ -1099,6 +1099,11 @@ def test_a_numpy_integer_batch_size_works_for_probes_and_transforms_too():
         gpts=32,
         extent=4.0,
     )
-    expected = probe.build(lazy=True, max_batch=2).compute().array
-    actual = probe.build(lazy=True, max_batch=np.int64(2)).compute().array
-    np.testing.assert_array_equal(actual, expected)
+    expected = probe.build(lazy=True, max_batch=2)
+    actual = probe.build(lazy=True, max_batch=np.int64(2))
+
+    # the same chunks: a NumPy integer read as a number of elements, not of items,
+    # would split the three defocus values differently
+    assert expected.array.chunks[0] == (2, 1)
+    assert actual.array.chunks == expected.array.chunks
+    np.testing.assert_array_equal(actual.compute().array, expected.compute().array)
