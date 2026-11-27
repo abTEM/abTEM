@@ -147,3 +147,25 @@ def test_a_norm_listener_collected_while_the_norm_is_blocked_is_not_an_error(
     cax = visualization.axes._caxes[0, 0][-1]
     assert cax.get_ylim() == pytest.approx((0.2, 3.0), rel=1e-6)
 
+
+@pytest.mark.parametrize("explode", [False, True], ids=["single", "common_scale"])
+def test_log_limit_of_diffraction_spots_comes_from_the_spots_that_are_drawn(explode):
+    # the indexed pattern holds positive values far below the threshold of the spots
+    # (numerical noise), which are not drawn: the shared lower limit was one of those,
+    # and every drawn spot sat in the top tenth of the colormap
+    patterns = _indexed_diffraction_patterns(defocus=[0.0, 50.0] if explode else 0.0)
+    drawn = patterns.array[patterns.array > 1e-6]
+    assert patterns.array[patterns.array > 0].min() < 1e-6 < drawn.min()
+
+    if explode:
+        visualization = patterns.show(
+            logscale=True, explode=True, common_color_scale=True
+        )
+    else:
+        visualization = patterns.show(logscale=True, vmin=0)
+    visualization.get_figure().canvas.draw()
+
+    assert visualization.artists.size == (2 if explode else 1)
+    for artist in visualization.artists.ravel():
+        assert artist.norm.vmin == pytest.approx(drawn.min())
+        assert artist.norm.vmax == pytest.approx(drawn.max())

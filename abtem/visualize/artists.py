@@ -200,6 +200,11 @@ class Artist(metaclass=ABCMeta):
     def set_logscale(self, logscale: bool = False):
         pass
 
+    def drawn_values(self) -> np.ndarray | None:
+        """The values the artist draws, or None where these are all the values of the
+        measurement."""
+        return None
+
     @abstractmethod
     def get_power(self):
         pass
@@ -330,12 +335,13 @@ class LinesArtist(Artist1D):
         ptp = xlim[1] - xlim[0]
         return [xlim[0] - 0.05 * ptp, xlim[1] + 0.05 * ptp]
 
+    def drawn_values(self):
+        # the lines, which hold the real and imaginary parts of complex data apart
+        return np.concatenate([np.ravel(line.get_data()[1]) for line in self._lines])
+
     def get_ylim(self):
         if self._ax.get_yscale() == "log":
-            data = np.concatenate(
-                [np.ravel(line.get_data()[1]) for line in self._lines]
-            )
-            return _log_value_limits(data, warn=False)
+            return _log_value_limits(self.drawn_values(), warn=False)
 
         ylim = [np.inf, -np.inf]
         for line in self._lines:
@@ -980,6 +986,10 @@ class ScatterArtist(Artist2D):
         if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
+
+    def drawn_values(self):
+        # only the spots above the threshold are drawn
+        return np.asarray(self._circles.get_array())
 
     def __getattr__(self, name):
         if name in self.__dict__:

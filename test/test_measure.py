@@ -2887,6 +2887,30 @@ def test_common_log_limits_of_exploded_profiles_with_an_all_zero_member():
         plt.close("all")
 
 
+def test_common_log_limits_of_complex_profiles_cover_the_real_and_imaginary_lines():
+    # the limits came from the real part of the array, with a ComplexWarning, and the
+    # imaginary line of the first member was drawn outside its panel
+    import matplotlib.pyplot as plt
+
+    x = np.linspace(1, 10, 10)
+    profiles = RealSpaceLineProfiles(
+        np.array([x + 1000j * x, 2 * x + 1j * x]),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="m", values=(0, 1))],
+        metadata={},
+    )
+    visualization = profiles.show(explode=True, logscale=True, common_scale=True)
+    try:
+        # the lines drawn span 1 to 10000, with one margin
+        margin = (10000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 10000 * margin]
+            )
+    finally:
+        plt.close("all")
+
+
 def test_images_interpolate_to_a_sampling_that_divides_the_extent():
     # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
     images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
