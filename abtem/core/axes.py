@@ -730,8 +730,8 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     way only for a step of one and with ``fftshift=True``, since it rounds its offset
     to a whole multiple of its sampling. Any other item is passed to the axis's own
     ``__getitem__``. Where that raises TypeError, a linear axis becomes an
-    `OrdinalAxis` of the coordinates of the selected members, and any other axis is
-    copied whole.
+    `OrdinalAxis` of the coordinates of the selected members, and any other axis,
+    a `ScanAxis` included, is copied whole.
     """
     if isinstance(axis, LinearAxis):
         run = _increasing_run(item, n)
@@ -749,9 +749,10 @@ def _index_ensemble_axis(axis: AxisMetadata, item: Any, n: int) -> AxisMetadata:
     try:
         return axis[item].copy()
     except TypeError:
-        if isinstance(axis, LinearAxis):
+        if isinstance(axis, LinearAxis) and not isinstance(axis, ScanAxis):
             # a reversed or otherwise irregular selection of a linear axis is not
-            # linear: keep the coordinates of the members instead of the whole axis
+            # linear: keep the coordinates of the members instead of the whole axis.
+            # A scan axis stays one (the reductions find the scan by its class).
             try:
                 return axis.to_ordinal_axis(n)[item].copy()
             except (TypeError, IndexError):

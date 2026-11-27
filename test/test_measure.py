@@ -2660,9 +2660,9 @@ def test_indexing_a_linear_ensemble_axis_out_of_order_keeps_the_coordinates(
 ):
     # an index that is not an increasing run cannot be a linear axis; the axis was
     # copied whole, so the coordinates of the members were those of the first ones
-    from abtem.core.axes import ScanAxis
+    from abtem.core.axes import RealSpaceAxis
 
-    axis = ScanAxis(offset=1.0, sampling=0.5, label="x", units="Å")
+    axis = RealSpaceAxis(offset=1.0, sampling=0.5, label="x", units="Å")
     array = np.arange(7 * 3 * 3, dtype="float32").reshape(7, 3, 3)
     images = Images(array, sampling=0.1, ensemble_axes_metadata=[axis])
     if lazy:
@@ -2676,6 +2676,28 @@ def test_indexing_a_linear_ensemble_axis_out_of_order_keeps_the_coordinates(
         np.asarray(new_axis.coordinates(selected.shape[0])), coordinates
     )
     np.testing.assert_array_equal(selected.compute().array, array[item])
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_scan_indexed_out_of_order_is_still_a_scan(lazy):
+    # reductions find the scan by its axis class: the reversed scan became ordinal
+    # and integrating gave line profiles where 1.0.11 gave images
+    from abtem.core.axes import ScanAxis
+
+    axes = [ScanAxis(label="x", units="Å", sampling=0.5, offset=0.0) for _ in range(2)]
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((3, 4, 16, 16), dtype="float32"),
+        sampling=0.1,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 1e5},
+    )
+    if lazy:
+        patterns = patterns.lazy()
+
+    integrated = patterns[::-1].integrate_radial(0, 10)
+    assert isinstance(integrated.compute(), Images)
+    assert isinstance(patterns[::-1].center_of_mass().compute(), Images)
+    assert all(isinstance(a, ScanAxis) for a in patterns[::-1].ensemble_axes_metadata)
 
 
 @pytest.mark.parametrize("lazy", [True, False])
