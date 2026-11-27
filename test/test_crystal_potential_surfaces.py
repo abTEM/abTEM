@@ -84,11 +84,19 @@ def _assert_same(actual, expected, device):
         )
 
 
-def test_default_follows_the_projection(silicon):
-    assert CrystalPotential(_unit(silicon), (1, 1, 2)).correct_surfaces
-    assert not CrystalPotential(
-        _unit(silicon, projection="infinite"), (1, 1, 2)
-    ).correct_surfaces
+def test_the_default_does_not_correct_the_surfaces(silicon):
+    # as in 1.0.11; 1.1 corrects by default
+    for projection in ("finite", "infinite"):
+        crystal = CrystalPotential(_unit(silicon, projection=projection), (1, 1, 2))
+        assert not crystal.correct_surfaces
+
+    unit = _unit(silicon)
+    np.testing.assert_array_equal(
+        CrystalPotential(unit, (1, 1, 2)).build(lazy=False).array,
+        CrystalPotential(unit, (1, 1, 2), correct_surfaces=False)
+        .build(lazy=False)
+        .array,
+    )
 
 
 def test_explicit_choice(silicon):
@@ -164,7 +172,7 @@ def test_infinite_projection_has_no_surfaces_to_correct(silicon):
 @devices
 @pytest.mark.parametrize("repetitions", [1, 2, 3, 6])
 def test_finite_projection_matches_a_slab(silicon, repetitions, device):
-    crystal = CrystalPotential(_unit(silicon, device=device), (1, 1, repetitions))
+    crystal = CrystalPotential(_unit(silicon, device=device), (1, 1, repetitions), correct_surfaces=True)
     array = asnumpy(crystal.build(lazy=False).array)
     expected = _folded_slab(
         silicon, repetitions, 1, crystal.slice_thickness, crystal.gpts
@@ -180,7 +188,7 @@ def test_nonuniform_slicing_matches_a_slab(zinc_oxide, device):
     unit_slices = np.array(unit.slice_thickness)
     assert not np.allclose(unit_slices, unit_slices[0]), "needs a nonuniform pattern"
 
-    crystal = CrystalPotential(unit, (2, 1, 3))
+    crystal = CrystalPotential(unit, (2, 1, 3), correct_surfaces=True)
     array = asnumpy(crystal.build(lazy=False).array)
     # the atoms are sliced as they are without the correction
     np.testing.assert_allclose(crystal.slice_thickness, np.tile(unit_slices, 3))
@@ -199,7 +207,7 @@ def test_a_cutoff_longer_than_the_unit_matches_a_slab(repetitions):
     reach = int(np.ceil(unit._margins()[2] / unit.box[2]))
     assert reach > 1
 
-    crystal = CrystalPotential(unit, (1, 1, repetitions))
+    crystal = CrystalPotential(unit, (1, 1, repetitions), correct_surfaces=True)
     array = crystal.build(lazy=False).array
     expected = _folded_slab(
         thin, repetitions, reach, crystal.slice_thickness, crystal.gpts
@@ -211,7 +219,7 @@ def test_only_the_slices_at_the_surfaces_change(silicon):
     unit = _unit(silicon)
     reach = int(np.ceil(unit._margins()[2] / unit.box[2]))
     n_unit = len(unit.slice_thickness)
-    corrected = CrystalPotential(unit, (1, 1, 8)).build(lazy=False).array
+    corrected = CrystalPotential(unit, (1, 1, 8), correct_surfaces=True).build(lazy=False).array
     plain = CrystalPotential(unit, (1, 1, 8), correct_surfaces=False)
     plain = plain.build(lazy=False).array
 
@@ -240,7 +248,7 @@ def test_periodic_stack_is_not_a_slab(silicon):
 @pytest.mark.parametrize("repetitions", [1, 4])
 def test_builds_agree(silicon, repetitions, device):
     unit = _unit(silicon, slice_thickness=A / 3, device=device)
-    crystal = CrystalPotential(unit, (2, 1, repetitions), exit_planes=3)
+    crystal = CrystalPotential(unit, (2, 1, repetitions), exit_planes=3, correct_surfaces=True)
     eager = crystal.build(lazy=False)
     expected = asnumpy(eager.array)
 
@@ -257,7 +265,7 @@ def test_builds_agree(silicon, repetitions, device):
 
 
 def test_lateral_repetitions(silicon):
-    crystal = CrystalPotential(_unit(silicon), (2, 3, 2))
+    crystal = CrystalPotential(_unit(silicon), (2, 3, 2), correct_surfaces=True)
     array = crystal.build(lazy=False).array
     assert array.shape[1:] == tuple(crystal.gpts)
     tiles = array.reshape(array.shape[0], 2, -1, 3, array.shape[2] // 3)
@@ -265,7 +273,7 @@ def test_lateral_repetitions(silicon):
 
 
 def test_sliced_atoms_are_those_of_the_crystal(silicon):
-    corrected = CrystalPotential(_unit(silicon), (1, 1, 2))
+    corrected = CrystalPotential(_unit(silicon), (1, 1, 2), correct_surfaces=True)
     plain = CrystalPotential(_unit(silicon), (1, 1, 2), correct_surfaces=False)
     assert corrected.get_sliced_atoms().atoms == plain.get_sliced_atoms().atoms
 
@@ -286,7 +294,7 @@ def test_frozen_phonon_pool_without_displacements_matches_a_slab(silicon):
     unit = _frozen_phonon_unit(silicon, sigmas=0.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        crystal = CrystalPotential(unit, (2, 2, 2), seeds=(1,))
+        crystal = CrystalPotential(unit, (2, 2, 2), seeds=(1,), correct_surfaces=True)
         array = crystal.build(lazy=False).array
     expected = _folded_slab(
         silicon * (2, 2, 1), 2, 1, crystal.slice_thickness, crystal.gpts
@@ -299,7 +307,7 @@ def test_frozen_phonon_pool_at_the_surfaces(silicon, device):
     unit = _frozen_phonon_unit(silicon, sigmas=0.08, device=device)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        crystal = CrystalPotential(unit, (2, 2, 6), seeds=(1,))
+        crystal = CrystalPotential(unit, (2, 2, 6), seeds=(1,), correct_surfaces=True)
         plain = CrystalPotential(unit, (2, 2, 6), seeds=(1,), correct_surfaces=False)
         eager = asnumpy(crystal.build(lazy=False).array)
         lazy = asnumpy(crystal.build(lazy=True).array.compute())
@@ -318,7 +326,7 @@ def test_surface_correction_moves_the_exit_wave_towards_the_slab(silicon):
     """The diffraction intensity of the crystal, with the correction, is closer to
     that of the slab with vacuum than that of the periodic stack."""
     unit = _unit(silicon)
-    corrected = CrystalPotential(unit, (1, 1, 8))
+    corrected = CrystalPotential(unit, (1, 1, 8), correct_surfaces=True)
     plain = CrystalPotential(unit, (1, 1, 8), correct_surfaces=False)
     entrance, crystal, exit_ = _slab(
         silicon, 8, 1, corrected.slice_thickness, corrected.gpts
@@ -345,7 +353,7 @@ def test_surface_correction_moves_the_exit_wave_towards_the_slab(silicon):
 
 def test_a_crystal_stacked_from_a_correcting_crystal_along_z_raises(silicon):
     """Every junction between its repetitions would have the surfaces of a slab."""
-    inner = CrystalPotential(_unit(silicon), (2, 2, 1))
+    inner = CrystalPotential(_unit(silicon), (2, 2, 1), correct_surfaces=True)
     assert inner.correct_surfaces
     with pytest.raises(ValueError, match="correct_surfaces=False"):
         CrystalPotential(inner, (1, 1, 3))
@@ -353,7 +361,7 @@ def test_a_crystal_stacked_from_a_correcting_crystal_along_z_raises(silicon):
 
 def test_a_crystal_stacked_along_z_from_a_deeper_correcting_crystal_raises(silicon):
     """The chain of units is checked down to the last crystal."""
-    inner = CrystalPotential(_unit(silicon), (2, 2, 1))
+    inner = CrystalPotential(_unit(silicon), (2, 2, 1), correct_surfaces=True)
     middle = CrystalPotential(inner, (2, 1, 1))
     with pytest.raises(ValueError, match="correct_surfaces=False"):
         CrystalPotential(middle, (1, 1, 6))
@@ -374,9 +382,9 @@ def test_a_nested_crystal_without_inner_correction_is_the_stack(silicon):
 def test_a_nested_crystal_tiled_laterally_keeps_the_correction(silicon):
     """Tiling a crystal that is tall along z does not put surfaces inside it."""
     unit = _unit(silicon)
-    inner = CrystalPotential(unit, (1, 1, 3))
+    inner = CrystalPotential(unit, (1, 1, 3), correct_surfaces=True)
     nested = CrystalPotential(inner, (2, 2, 1))
-    flat = CrystalPotential(unit, (2, 2, 3))
+    flat = CrystalPotential(unit, (2, 2, 3), correct_surfaces=True)
     np.testing.assert_allclose(
         nested.build(lazy=False).array,
         flat.build(lazy=False).array,
@@ -387,7 +395,7 @@ def test_a_nested_crystal_tiled_laterally_keeps_the_correction(silicon):
 def test_a_unit_without_atoms_has_no_surfaces_to_correct():
     empty = Atoms(cell=[4, 4, 4], pbc=True)
     unit = Potential(empty, sampling=SAMPLING, slice_thickness=2.0, projection="finite")
-    array = CrystalPotential(unit, (1, 1, 3)).build(lazy=False).array
+    array = CrystalPotential(unit, (1, 1, 3), correct_surfaces=True).build(lazy=False).array
     assert array.shape[0] == 6
     assert not array.any()
 
@@ -403,20 +411,20 @@ def _near_surfaces(atoms, shift):
 def test_atoms_centered_in_the_cell_are_not_warned_about(silicon):
     atoms = silicon.copy()
     atoms.center(axis=2)
-    CrystalPotential(_unit(atoms), (1, 1, 2))
+    CrystalPotential(_unit(atoms), (1, 1, 2), correct_surfaces=True)
 
 
 @pytest.mark.parametrize("shift", [0.0, 0.1, -0.1, 0.29])
 def test_atoms_near_the_entrance_or_exit_plane_are_warned_about(silicon, shift):
     atoms = _near_surfaces(silicon, shift)
     with pytest.warns(UserWarning, match=r"atoms.center\(axis=2\)"):
-        CrystalPotential(_unit(atoms), (1, 1, 2))
+        CrystalPotential(_unit(atoms), (1, 1, 2), correct_surfaces=True)
 
 
 @pytest.mark.filterwarnings("error:.*atom.* of the potential unit are within")
 @pytest.mark.parametrize("shift", [0.31, 0.5, -0.31])
 def test_atoms_farther_than_the_distance_are_not_warned_about(silicon, shift):
-    CrystalPotential(_unit(_near_surfaces(silicon, shift)), (1, 1, 2))
+    CrystalPotential(_unit(_near_surfaces(silicon, shift)), (1, 1, 2), correct_surfaces=True)
 
 
 @pytest.mark.filterwarnings("error:.*atom.* of the potential unit are within")
@@ -432,7 +440,7 @@ def test_no_warning_when_there_is_no_correction_to_be_poor(silicon):
 
 def test_the_warning_is_given_once_not_by_every_lazy_block(silicon):
     with pytest.warns(UserWarning, match="within"):
-        crystal = CrystalPotential(_unit(silicon), (1, 1, 2), seeds=(1, 2))
+        crystal = CrystalPotential(_unit(silicon), (1, 1, 2), seeds=(1, 2), correct_surfaces=True)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "error", message=".*atom.* of the potential unit are within"

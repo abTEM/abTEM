@@ -1848,8 +1848,9 @@ class CrystalPotential(_PotentialBuilder):
         If False, the individual configurations are returned.
     correct_surfaces : bool, optional
         Whether to calculate the slices at the surfaces of the crystal as they are in
-        a slab. The default is True for a unit that is a periodic :class:`.Potential`
-        with a finite projection, and False otherwise.
+        a slab, for a unit that is a periodic :class:`.Potential` with a finite
+        projection (it has no effect on any other unit). The default is False, as in
+        abTEM 1.0.11; it becomes True in abTEM 1.1.
 
         The slices of a finite projection hold the potential of the atoms within the
         integration cutoff of them. In a periodic stack of the unit, the first and last
@@ -1911,7 +1912,7 @@ class CrystalPotential(_PotentialBuilder):
         exit_planes: int | None = None,
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
-        correct_surfaces: bool | None = None,
+        correct_surfaces: bool = False,
         _root_seed: int | tuple[int, ...] | None = None,
     ):
         # _root_seed is given when a crystal is rebuilt, e.g. for a lazy block
@@ -1970,8 +1971,6 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
-        if correct_surfaces is None:
-            correct_surfaces = _has_finite_projection(potential_unit)
         self._correct_surfaces = bool(correct_surfaces)
         if self._correct_surfaces and not _surface_atom_warning_suppressed.get():
             _warn_if_atoms_near_surfaces(potential_unit, repetitions[2])
