@@ -1093,9 +1093,10 @@ Bugfixes:
   `cupy-cuda12x`, instead of an unpinned `cuda-bindings` from NVIDIA's package index. **Behaviour change:**
   `ABTEM_CI_MULTIGPU` is enabled only by `1`; `0` and empty disable it, and any other value, such as `yes` or `true`,
   fails the run at the start. Before, any non-empty value, `0` included, enabled it ([PR #708](https://github.com/abTEM/abTEM/pull/708))
-- Bloch waves with `solver="eigh"` on a ROCm GPU raised `CUSOLVERError: rocblas_status_not_implemented`: the HIP binding of
-  CuPy has no `syevd`, which the in-place solve called directly. On ROCm the structure matrix is now solved by
-  `cupy.linalg.eigh`, which copies it, as it does on the CPU
+- Bloch waves on a ROCm GPU (`solver="eigh"`, and `solver="auto"` below the size at which it takes the band solver) raised
+  `CUSOLVERError: rocblas_status_not_implemented`: the HIP binding of CuPy has no `syevd`, which the in-place solve called
+  directly. On ROCm the structure matrix is now solved by `cupy.linalg.eigh`, which copies it; on CUDA and on the CPU the
+  in-place solve is unchanged
 
 Documentation:
 
