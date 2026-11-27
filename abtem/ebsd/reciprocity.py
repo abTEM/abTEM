@@ -28,6 +28,7 @@ direction uses none of the antialias aperture.
 
 from __future__ import annotations
 
+import numbers
 import warnings
 from typing import Callable, Optional, Sequence
 
@@ -594,8 +595,8 @@ class EBSD(CopyMixin, EqualityMixin):
             raise RuntimeError("the potential has no grid")
 
         # each direction holds its wave and its own propagator kernel
-        if isinstance(max_batch, int):
-            max_batch = max_batch * 2 * int(np.prod(gpts))
+        if isinstance(max_batch, numbers.Integral):
+            max_batch = int(max_batch) * 2 * int(np.prod(gpts))
 
         chunks = validate_chunks(
             shape=(len(self._detector), 2) + tuple(gpts),

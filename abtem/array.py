@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import numbers
 import operator
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -2489,7 +2490,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             | tuple[np.ndarray, ...]
         )
         if self.is_lazy:
-            if isinstance(max_batch, int):
+            if isinstance(max_batch, numbers.Integral):
                 max_batch = int(max_batch * np.prod(self.base_shape))
             elif max_batch == "auto" and self.device == "gpu":
                 from abtem.core.chunks import estimate_scan_batch_size
