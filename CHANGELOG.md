@@ -1132,12 +1132,13 @@ Bugfixes:
   `SMatrix` or multislice transform holding it, never equalled its own copy. A list, tuple or dict of numbers and
   arrays now compares the same whatever the order of its items, and a difference after a lazy item is found.
   **Behaviour change:** a list or tuple of abTEM objects equals a tuple or list of the same objects, and numbers in it
-  compare to the tolerance of `np.allclose` (integers exactly), where `==` on the container decided before.
-  **Behaviour change:** an error raised by an abTEM object's own `==` while such a container is compared now escapes,
-  as it already does for an object held directly; before, the container read as different. `==` between objects
-  holding lists of delayed values with different keys, such as `GPAWPotential(["a.gpw", "b.gpw"])` and
-  `GPAWPotential(["a.gpw", "c.gpw"])`, raises `LazyComparisonError` (a `TypeError`) instead of returning `False`, as
-  for a held dask array of another name
+  compare to the tolerance of `np.allclose` (integers exactly), where `==` on the container decided before. The
+  numbers of a dict, such as a probe's aberration coefficients, compare to the same tolerance, as a number attribute
+  does; they compared exactly. **Behaviour change:** an error raised by an abTEM object's own `==` while such a
+  container is compared now escapes, as it already does for an object held directly; before, the container read as
+  different. `==` between objects holding lists of delayed values with different keys, such as
+  `GPAWPotential(["a.gpw", "b.gpw"])` and `GPAWPotential(["a.gpw", "c.gpw"])`, raises `LazyComparisonError` (a
+  `TypeError`) instead of returning `False`, as for a held dask array of another name
 - A `GPAWPotential` from GPAW calculators (one, or a list) equals its copy and one built from the same calculators; it
   compared by identity. A `_DummyGPAW` compares by value, leaving out its grid descriptor and comparing the mode and
   exchange-correlation functional by their `todict()` settings; its dask token, but not that of a `GPAWPotential`,
