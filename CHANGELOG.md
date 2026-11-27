@@ -1096,7 +1096,7 @@ Bugfixes:
 - Bloch waves on a ROCm GPU (`solver="eigh"`, and `solver="auto"` below the size at which it takes the band solver) raised
   `CUSOLVERError: rocblas_status_not_implemented`: the HIP binding of CuPy has no `syevd`, which the in-place solve called
   directly. On ROCm the structure matrix is now solved by `cupy.linalg.eigh`, which copies it; on CUDA and on the CPU the
-  in-place solve is unchanged
+  in-place solve is unchanged ([PR #714](https://github.com/abTEM/abTEM/pull/714))
 
 Documentation:
 
