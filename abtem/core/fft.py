@@ -900,6 +900,13 @@ def _fft_dispatch(
             meta=xp.array((), dtype=_fft_dtype(x.dtype)),
         )
 
+    if 0 in x.shape:
+        # CuPy and torch reject an array with a zero-length axis, a batch axis
+        # included. No caller passes `s`, so the output has the input's shape.
+        # A zero-length transformed axis, which no public call produces, also
+        # returns empty here, where NumPy and FFTW raise.
+        return xp.empty(x.shape, dtype=_fft_dtype(x.dtype))
+
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
         _warn_slow_metal_fft_size(x.shape, func_name, kwargs)
         return getattr(backend.tp.fft, func_name)(x, **kwargs)

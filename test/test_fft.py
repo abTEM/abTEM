@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import pytest
 
-from utils import gpu, lazy_params, requires_gpu, si_cubic_atoms
+from utils import devices, gpu, lazy_params, requires_gpu, si_cubic_atoms
 
 import abtem
 from abtem.core import config
@@ -669,6 +669,21 @@ def test_a_c_ordered_empty_array_is_passed_through_uncopied(monkeypatch):
     monkeypatch.setattr(abtem_fft.pyfftw, "is_byte_aligned", lambda *args: True)
 
     assert abtem_fft._fftw_aligned(array) is array
+
+
+@devices
+@pytest.mark.parametrize("func", ["fft2", "ifft2", "fftn", "ifftn"])
+@pytest.mark.parametrize("shape", [(0, 4, 6), (3, 0, 4, 6)])
+def test_an_fft_of_an_empty_array_is_empty_and_complex(device, func, shape):
+    """CuPy and torch raise for a transform of an array with a zero-length axis,
+    batch axes included; the transformed axes are not empty here."""
+    xp = abtem.core.backend.get_array_module(device)
+    array = xp.zeros(shape, dtype=xp.complex64)
+
+    result = getattr(abtem_fft, func)(array, axes=(-2, -1))
+
+    assert result.shape == shape
+    assert result.dtype == xp.complex64
 
 
 @requires_pyfftw
