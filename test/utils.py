@@ -120,3 +120,21 @@ def assert_scanned_measurement_as_expected(
 
 gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
 devices = pytest.mark.parametrize("device", [gpu, "cpu"])
+
+
+def exactly_dividing_lengths():
+    """Pairs ``(length, step, count)`` of floats, with ``length / step == count``
+    exactly as decimal numbers: every length from 1 to 40 in steps of 0.1, and
+    each common step that divides it a whole number of times. The division is
+    decided on the decimal strings, so no float rounding enters the oracle."""
+    from fractions import Fraction
+
+    steps = "0.05 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1 1.2 1.5 2".split()
+    pairs = []
+    for tenths in range(10, 401):
+        length = Fraction(tenths, 10)
+        for step in steps:
+            quotient = length / Fraction(step)
+            if quotient.denominator == 1:
+                pairs.append((float(length), float(step), int(quotient)))
+    return pairs

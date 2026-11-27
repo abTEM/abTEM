@@ -1662,3 +1662,32 @@ class TestSliceIndexedAtomsWrapping:
         )
         with pytest.raises(RuntimeError, match="orthogonal"):
             SliceIndexedAtoms(atoms, slice_thickness=1.0)
+
+
+def test_slice_count_of_an_exactly_dividing_thickness():
+    from utils import exactly_dividing_lengths
+
+    from abtem.slicing import _validate_slice_thickness
+
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the count is still 36.
+    for depth, thickness, count in exactly_dividing_lengths():
+        slices = _validate_slice_thickness(thickness, thickness=depth)
+        assert len(slices) == count, (depth, thickness, len(slices), count)
+
+
+@pytest.mark.parametrize("depth, thickness", [(36.001, 1.0), (36.0000002, 1.0)])
+def test_slice_count_still_rounds_up_a_genuine_remainder(depth, thickness):
+    from abtem.slicing import _validate_slice_thickness
+
+    assert len(_validate_slice_thickness(thickness, thickness=depth)) == 37
+
+
+def test_repeated_atoms_and_crystal_potential_have_the_same_slice_count():
+    def carbon_cell(depth):
+        return Atoms("C", positions=[(1.0, 1.0, 0.5)], cell=(4.0, 3.0, depth), pbc=True)
+
+    unit = Potential(carbon_cell(3.6), gpts=(40, 30), slice_thickness=0.3)
+    repeated = Potential(carbon_cell(3.6) * (1, 1, 3), gpts=(40, 30), slice_thickness=0.3)
+    crystal = CrystalPotential(unit, repetitions=(1, 1, 3))
+    assert unit.num_slices == 12
+    assert repeated.num_slices == crystal.num_slices == 36

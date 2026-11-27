@@ -117,3 +117,24 @@ def test_sampling_change(grid_data, new_sampling):
         assert np.allclose(grid.sampling, adjusted_sampling)
 
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def test_gpts_of_an_exactly_dividing_sampling():
+    from utils import exactly_dividing_lengths
+
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the grid still has 36 points.
+    for extent, sampling, count in exactly_dividing_lengths():
+        grid = Grid(extent=extent, sampling=sampling)
+        assert grid.gpts == (count, count), (extent, sampling, grid.gpts, count)
+
+
+@pytest.mark.parametrize("extent", [1.1, 3.7, 5.43, 7.3, 10.8, 13.37])
+def test_gpts_round_trip_through_the_sampling(extent):
+    for n in range(1, 200):
+        grid = Grid(extent=extent, sampling=extent / n)
+        assert grid.gpts == (n, n), (extent, n, grid.gpts)
+
+
+@pytest.mark.parametrize("extent", [36.001, 36.0000002])
+def test_gpts_still_round_up_a_genuine_remainder(extent):
+    assert Grid(extent=extent, sampling=1.0).gpts == (37, 37)

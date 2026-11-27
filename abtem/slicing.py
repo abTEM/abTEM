@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import is_cell_orthogonal, _wrap_and_snap_atoms
-from abtem.core.utils import EqualityMixin, label_to_index
+from abtem.core.utils import EqualityMixin, label_to_index, safe_ceiling_int
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -76,8 +76,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = safe_ceiling_int(thickness / slice_thickness)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())

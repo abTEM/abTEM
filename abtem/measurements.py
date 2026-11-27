@@ -58,6 +58,7 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
     number_to_tuple,
+    safe_ceiling_int,
     safe_floor_int,
 )
 
@@ -1737,7 +1738,7 @@ class Images(_BaseMeasurement2D):
         if gpts is None and sampling is not None:
             if np.isscalar(sampling):
                 sampling = (sampling,) * 2
-            gpts = tuple(int(np.ceil(l / d)) for d, l in zip(sampling, self.extent))
+            gpts = tuple(safe_ceiling_int(l / d) for d, l in zip(sampling, self.extent))
 
         elif gpts is not None:
             if np.isscalar(gpts):
@@ -2099,7 +2100,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = int(np.ceil(self.extent / sampling))
+            gpts = safe_ceiling_int(self.extent / sampling)
 
         if sampling is None:
             sampling = self.extent / gpts
