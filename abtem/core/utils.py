@@ -282,9 +282,12 @@ def _values_equal(value, other) -> Optional[bool]:
             # arrays in one list, which `==` decided by its first difference.
             if isinstance(value, (list, tuple, dict)):
                 return _items_equal(value, other)
-        except (TypeError, _TooManyIndicesError):
-            # NumPy cannot convert the values (`_TooManyIndicesError`: a list
-            # holding array objects, which it indexes); `==` gave the verdict.
+        except (TypeError, NotImplementedError, _TooManyIndicesError):
+            # NumPy cannot convert or subtract the values: a list holding array
+            # objects, which it indexes (`_TooManyIndicesError`), or does
+            # arithmetic on when they have only ensemble axes
+            # (`NotImplementedError`, for another operand); `==` gave the
+            # verdict.
             pass
     # `np.all`, not `equal is False`. The identity test only catches the
     # `False` singleton, and several producers here return something else:

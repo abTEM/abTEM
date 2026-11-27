@@ -686,32 +686,71 @@ class TestEqualityDiscriminates:
         assert hold(3) != hold(3, 3)
         assert hold(3, 3) != hold(3)
 
+    @staticmethod
+    def _array_object(kind, scale=1.0):
+        """An `Images` (3 by 4), or a `MeasurementsEnsemble` of 3 positions, which
+        has only ensemble axes and is indexable like an array of 3."""
+        from abtem.core.axes import NonLinearAxis
+        from abtem.measurements import DiffractionPatterns
+
+        if kind == "images":
+            return TestEqualityDiscriminates._images(
+                np.full((3, 4), scale, dtype="float32")
+            )
+        return DiffractionPatterns(
+            np.full((3, 6, 6), scale, dtype="float32"),
+            sampling=0.2,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                NonLinearAxis(label="x", values=(0.25, 1.25, 2.75), units="Å")
+            ],
+        ).integrate_radial(0, 10)
+
+    @pytest.mark.parametrize("kind", ["images", "ensemble"])
     @pytest.mark.parametrize(
         "other",
-        ["none", "floats", "empty", "integers", "number", "object"],
+        ["none", "floats", "empty", "integers", "number", "object", "detector"],
     )
     @pytest.mark.parametrize("container_first", [True, False])
     def test_a_container_of_array_objects_differs_from_a_value_in_both_orders(
-        self, other, container_first
+        self, other, container_first, kind
     ):
-        """Whichever side the container of `ArrayObject`s is on, `None`, a list
-        of numbers, an empty list, a number and a bare object differ from it.
-        Device-independent."""
+        """Whichever side the container of array objects is on, `None`, a list
+        of numbers, an empty list, a number, a bare object and an abTEM object of
+        another class differ from it. An `Images` and a `MeasurementsEnsemble` with
+        only ensemble axes are converted differently by NumPy. Device-independent."""
+        from abtem import AnnularDetector
+
         Holder = self._list_holder()
-        images = self._images(np.zeros((3, 4), dtype="float32"))
+        element = self._array_object(kind)
         values = {
             "none": None,
             "floats": [1.0],
             "empty": [],
             "integers": [1, 2],
             "number": 1.0,
-            "object": images,
+            "object": element,
+            "detector": AnnularDetector(50, 150),
         }
-        container = Holder([images, images] if other == "integers" else [images])
+        container = Holder([element, element] if other == "integers" else [element])
         value = Holder(values[other])
 
         pair = (container, value) if container_first else (value, container)
         assert pair[0] != pair[1]
+
+    def test_a_container_of_an_ensemble_of_measurements_is_decided_by_its_elements(
+        self,
+    ):
+        """A list holding a `MeasurementsEnsemble` equals a fresh one and differs
+        from one with every value doubled. Device-independent."""
+        Holder = self._list_holder()
+
+        assert Holder([self._array_object("ensemble")]) == Holder(
+            [self._array_object("ensemble")]
+        )
+        assert Holder([self._array_object("ensemble")]) != Holder(
+            [self._array_object("ensemble", scale=2.0)]
+        )
 
     @pytest.mark.parametrize("object_first", [True, False])
     def test_an_array_object_differs_from_a_number_in_both_orders(self, object_first):
