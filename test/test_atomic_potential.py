@@ -342,7 +342,7 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         return abtem.Potential(
             ase.build.bulk("Si", cubic=True),
             gpts=(64, 64),
-            slice_thickness=1.0,
+            num_slices=6,
             **kwargs,
         )
 
