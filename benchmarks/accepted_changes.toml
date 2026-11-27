@@ -1,0 +1,190 @@
+# Accepted result changes.
+#
+# A DRIFT verdict (candidate differs from the reference beyond the case's
+# tolerance) fails `abtem-bench compare --fail-on drift` unless an entry here
+# covers it; a SHAPE verdict (an output's shape, axes or dtype differs) fails
+# `--fail-on shape` unless entries declare the new shape. Add the entry in the
+# same pull request as the change that causes the drift; the report renders the
+# entries that apply as the changelog table, with the drift it measured, and
+# reports entries that match nothing as stale.
+#
+# Fields
+#   case          glob over case ids or names, e.g. "hrtem.exitwave@*" or
+#                 "stem.*@quick/cpu"; brackets are literal; must match at least
+#                 one registered case id
+#   commit        the commit that made the change, as a sha prefix of 7 to 40
+#                 hex digits. The entry applies when the candidate bundle's
+#                 commit contains it and the reference bundle's does not (git
+#                 rev-parse and merge-base --is-ancestor in the harness's
+#                 repository); where git cannot tell for either bundle, the
+#                 entry is not applied and compare warns. Entries whose
+#                 prefixes resolve to one commit are one change.
+#   reason        one line, present tense: what changed and why the result is
+#                 right
+#   pr            pull request number that introduced the change
+#   max_abs_norm  required bound per output on max|c - r| / max|r|; the
+#                 integrated intensity alone does not notice a shifted, flipped
+#                 or phase-scrambled output
+#   max_rel, max_intensity
+#                 optional bounds per output on rel and |intensity|
+#   shape         optional table mapping an output name to the shape the
+#                 candidate gives it, e.g. { potential = [33, 256, 256] }: an
+#                 output whose shape changed to that one is accepted when its
+#                 dtype and number of axes are unchanged and its values are
+#                 finite (its axis mismatches follow from the new shape); the
+#                 bounds above then apply to its sums over the axes whose
+#                 length changed (invariant under a re-cut axis, not under a
+#                 resampled one); each name must be an output of a case the
+#                 glob matches
+# A drift beyond any bound of a change's entries is not accepted by that
+# change; when several changes in the candidate cover a case (dev holds both
+# #298 and the 1.0.11 port of the #269 accumulator), the drift is accepted when
+# the entries of one of them all hold. A non-finite value present in one output
+# only is never accepted.
+#
+# Each bound is twice the largest drift measured on the CPU at the quick and
+# standard tiers (2026-10-03), rounded up to one significant digit, so two to
+# four times the measurement; the A100 agrees to two digits where it was
+# measured. The drift was measured against v1.0.10 (the oldest reference
+# captured); against a reference that already carries part of one (v1.0.11
+# holds the accumulator half of #269 as the port 0a2f4965, a different commit)
+# the drift is smaller and the bounds are looser than twice it. Nothing is
+# measured at the large tier: entries written for every tier ("@*") bound it
+# with the quick and standard figures, so a larger drift there shows as DRIFT.
+
+# The exact Fresnel propagator (#298) is the default since 2026-07-07; every
+# multislice case's default variant moves against v1.0.10 (order 1 there).
+# The relative error in the far tails of the patterns reaches O(1) to O(10).
+# The HRTEM and CBED max_abs_norm grows from the quick to the standard tier
+# (exit wave 2.8e-3 to 0.25, CBED 2.2e-3 to 7.7e-2), so each of the two tiers
+# has its own entry and the large tier none until it is measured. Where the
+# accepted drift is itself that large, no bound tells it from a corrupted
+# output of the same size. The [order1] variants, which share every code path
+# but the propagator and bound max_abs_norm at 6e-7 to 7e-6, guard everything
+# except the exact propagator itself.
+
+[[accepted]]
+case = "hrtem.exitwave@quick/*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
+pr = 298
+max_rel = 4e-1
+max_intensity = 5e-4
+max_abs_norm = 6e-3
+
+[[accepted]]
+case = "hrtem.exitwave@standard/*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); through 157 slices the order-1 phase error moved the exit wave by up to a quarter of its maximum."
+pr = 298
+max_rel = 2e1
+max_intensity = 7e-3
+max_abs_norm = 6e-1
+
+[[accepted]]
+case = "diffraction.cbed@quick/*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
+pr = 298
+max_rel = 3
+max_intensity = 3e-4
+max_abs_norm = 5e-3
+
+[[accepted]]
+case = "diffraction.cbed@standard/*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles, more so through 157 slices."
+pr = 298
+max_rel = 2e1
+max_intensity = 2e-3
+max_abs_norm = 2e-1
+
+[[accepted]]
+case = "stem.multidetector@*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
+pr = 298
+max_rel = 2e-2
+max_intensity = 8e-3
+max_abs_norm = 1e-2
+
+[[accepted]]
+case = "stem.multidetector[eager]@*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
+pr = 298
+max_rel = 2e-2
+max_intensity = 8e-3
+max_abs_norm = 1e-2
+
+[[accepted]]
+case = "stem.multidetector[auto]@*"
+commit = "0a6f505a"
+reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
+pr = 298
+max_rel = 2e-2
+max_intensity = 8e-3
+max_abs_norm = 1e-2
+
+# With the propagator held at order 1, the remaining difference is two float32
+# roundings in v1.0.10 that #269 makes float64: pi and pi**2 in Lobato's
+# projected_scattering_factor, and the accumulator of
+# DiffractionPatterns._radial_binning, which the segmented detector uses. With
+# both restored to float32 in dev, potential.infinite, hrtem.exitwave[order1]
+# and stem.multidetector[order1] are bit-identical to v1.0.10 at the quick tier,
+# and diffraction.cbed[order1] differs by 7e-14 (in the SrTiO3 potential; the
+# mechanism of that last residual is not isolated).
+
+[[accepted]]
+case = "potential.infinite@*"
+commit = "8fa77bdd"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, which moved the potential by up to 7e-8 relative."
+pr = 269
+max_rel = 2e-7
+max_intensity = 6e-8
+max_abs_norm = 2e-7
+
+[[accepted]]
+case = "hrtem.exitwave[order1]@*"
+commit = "8fa77bdd"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
+pr = 269
+max_rel = 1e-5
+max_intensity = 4e-7
+max_abs_norm = 2e-6
+
+[[accepted]]
+case = "diffraction.cbed[order1]@*"
+commit = "8fa77bdd"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
+pr = 269
+max_rel = 6e-5
+max_intensity = 8e-8
+max_abs_norm = 6e-7
+
+[[accepted]]
+case = "stem.multidetector[order1]@*"
+commit = "8fa77bdd"
+reason = "Lobato scattering factors use float64 pi and pi**2, and segmented-detector bins accumulate in the working precision instead of float32 (#269); the segmented signal moves by up to 4e-6 relative."
+pr = 269
+max_rel = 8e-6
+max_intensity = 2e-6
+max_abs_norm = 7e-6
+
+# 1.0.11 carries the accumulator half of #269 as a port on its release branch
+# (0a2f4965), without the Lobato pi change or #298. Against v1.0.10 every STEM
+# variant moves in the segmented signal only (quick tier: rel 8.8e-7,
+# intensity 1.8e-7, max_abs 5.1e-7; 2026-11-15); hrtem, cbed and the
+# potential stay within 4e-13. Unlike the rule above, the bounds are not twice
+# that measurement (they are 9 to 14 times it): they are the [order1] #269
+# entry's, which bound the same accumulator plus the pi change at the quick and
+# standard tiers, because the standard tier of 1.0.11 is not measured.
+
+[[accepted]]
+case = "stem.multidetector*@*"
+commit = "0a2f4965"
+reason = "Segmented-detector bins accumulate in the working precision instead of float32 (port of #269 to 1.0.11); the segmented signal moves by up to 1e-6 relative."
+pr = 269
+max_rel = 8e-6
+max_intensity = 2e-6
+max_abs_norm = 7e-6

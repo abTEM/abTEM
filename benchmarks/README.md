@@ -1,0 +1,99 @@
+# abtem-bench: regression benchmarks for abTEM
+
+Runs a fixed matrix of user-facing abTEM workloads against a checkout and records, per case, the result arrays, wall time and peak memory, in a format that does not depend on the abtem version. Two bundles are then compared: results (bit-identical, within tolerance, drift, shape change), speed and memory. Design and milestones: [abtem-benchmarks/design](https://github.com/abTEM/abtem-benchmarks/tree/main/design); discussion: [#380](https://github.com/abTEM/abTEM/discussions/380).
+
+## Invariants
+
+- The harness (`abtem_bench/`) and the cases (`abtem_bench/cases/`) always come from the checkout you invoke; only the `abtem` package is swapped per ref, via a git worktree under `.worktrees/bench/<sha>` placed on `PYTHONPATH` behind the harness directory. Both refs run byte-identical case code, and every bundle records a hash of the case sources.
+- Each case id runs in a fresh subprocess (`python -P -m abtem_bench.worker`). The worker prints and records which abtem it imported and aborts if it is not the requested worktree. Interrupting a capture (Ctrl-C) kills the running worker, so it writes no record. Capturing needs Linux or macOS: the runner waits for workers with `os.wait4` and kills them by process group, so on Windows `capture` and `self-check` stop at once (exit 2), while `prepare` and `compare` run anywhere. The reports contain non-ASCII characters; the command line prints and writes them as UTF-8.
+- Peak host memory is the worker's own `VmHWM` from `/proc/self/status`, read after the case finishes, and the record names it (`memory.rss_meter = "VmHWM"`). `ru_maxrss` from `os.wait4` is recorded too (`peak_rss_wait4_bytes`) but not compared: Linux carries the runner's high-water mark into the child, so it never reads below the runner's own peak. A record without `rss_meter` is read as holding the `wait4` figure (harness versions before 0.2.0); when the two sides of a pair used different meters, `compare` shows no `rss` ratio, flags no memory, and says so in the row's note. On GPU cases a background thread samples the CuPy pool and the driver's device usage; CPU cases never initialise the GPU. No meter runs code on the computation. `VmHWM` exists on Linux only: elsewhere (macOS) `peak_rss_bytes` is `null` and `compare` shows no `rss` ratio and flags no memory; only `peak_rss_wait4_bytes` is recorded, in bytes on every system, and it is not compared.
+- The worker runs on abTEM's and dask's package defaults plus the preset: after `import abtem` it refreshes both configurations without YAML files or environment variables, so `ABTEM_*` and `DASK_*` variables and files under `~/.config/abtem` and `~/.config/dask` do not reach the record. Settings read only while abtem is imported are not covered.
+- A case or a variant may declare `requires=`, a check on the imported abtem; a ref that fails it records `UNSUPPORTED` instead of failing the run. The `[order1]` variants need `FourierMultislice` (v1.0.10 on), so older refs record them `UNSUPPORTED`.
+
+## Running
+
+From the repository root, no install needed:
+
+```
+export PYTHONPATH=$PWD/benchmarks
+python -P -m abtem_bench list --tier quick --device cpu
+python -P -m abtem_bench self-check --ref dev --tier quick --device cpu --preset accuracy --out .bench-out/selfcheck
+python -P -m abtem_bench capture --ref v1.0.10 --tier quick --device cpu --preset accuracy --out .bench-out/v1.0.10
+python -P -m abtem_bench capture --ref dev --tier quick --device cpu --preset accuracy --out .bench-out/dev
+python -P -m abtem_bench compare .bench-out/v1.0.10 .bench-out/dev --noise .bench-out/selfcheck --md report.md
+```
+
+On a machine whose runtime has no `git` (a container image that only carries Python), resolve the refs first where git exists, then run inside:
+
+```
+python3 -P -m abtem_bench.prepare --ref origin/dev --ref v1.0.10   # host: creates .worktrees/bench/<sha> and index.json
+python -P -m abtem_bench capture --ref origin/dev ...              # container: resolves the label from the index
+```
+
+`prepare` needs only the standard library. Without git and without a prepared index, the runner stops with a message naming the ref to prepare.
+
+Workers run with the same Python as the CLI, so that environment needs abtem's dependencies (abtem itself comes from each ref's worktree). `uv pip install -e benchmarks` into that environment installs the `abtem-bench` console script instead of the `PYTHONPATH` line. The `-P` flag matters when running from a checkout: without it the current directory shadows `PYTHONPATH`.
+
+Case ids are `name[variant]@tier/device`; `--only` takes globs on ids or names, with brackets matched literally. Tiers are `quick` (seconds per case, the CI tier), `standard` (minutes) and `large` (GPU stress sizes). A case times out after its tier's declared `timeout`, else 120 s on `quick` and 900 s on `standard`. A case is skipped (`SKIPPED-MEMORY`) when less than 8 GB of memory is available when it starts; the check reads `/proc/meminfo`, so it applies on Linux only.
+
+`capture` refuses an output directory that already holds files unless `--overwrite` is given, which deletes it first, but only when it is a bundle (it has a top-level `manifest.json`): a non-empty directory that is not a bundle is refused with or without `--overwrite`, and the current directory and its parents are never deleted. `self-check` writes the bundles `a/` and `b/` under its `--out` directory and applies the same rule to each of them; other files in `--out` are left alone. `capture` and `self-check` exit 1 when any captured case ended `ERROR`, `OOM`, `TIMEOUT` or `SKIPPED-MEMORY` (listed on stderr; the bundle is still written). An `--only` pattern that matches no case id is reported as a warning on stderr, in `list`, `capture` and `self-check`. `--repeats` sets the number of warm repeats per worker; `--rounds N` runs the whole case list N times, the refs interleaved per case, and merges the timings of all rounds into one record (`timings.rounds` counts the rounds merged). A round that is not `OK` ends that case in its bundle: its record is kept and no further round runs for it, while the other cases continue. The outputs of each `OK` round are compared bit for bit (NaN equal to NaN; shape and dtype must match) with those of the previous round: for a CPU case under the `accuracy` preset (where bit identity is expected) a difference makes the case `ERROR`, naming the differing outputs and the rounds; for any other case the record keeps status `OK` and gets a `notes` entry, which `compare` shows in the row's note. The ref worktrees under `.worktrees/bench/` stay for the next run; remove them with `git worktree remove`.
+
+## Timing noise
+
+Wall time varies more between processes than between the warm repeats of one process: on an AMD EPYC 7763 node, the same case at the same ref took up to 25 % longer in one process than in another, while the warm repeats within each process agreed to 2 %. With each capture pinned to one physical core on an otherwise idle machine (`taskset -c <core> python -P -m abtem_bench capture ...`; the workers inherit the mask), the warm time of `hrtem.exitwave[order1]@standard/cpu` over six rounds still spread by 2 % to 20 % (max − min over median), depending on the ref. `--rounds N` runs every case in a fresh process per round and pools the warm repeats of all rounds into one median (`timings.min` keeps their minimum). `compare --noise` takes its speed floor from a `self-check`, whose two processes can understate this spread; a speed difference no larger than the spread between processes is not evidence of a change.
+
+## Presets
+
+`accuracy` pins `precision: float64`, `fft: fftw` with `FFTW_ESTIMATE`, one FFTW and BLAS thread, the synchronous dask scheduler, explicit chunk sizes, fixed dask chunk sizes, `grid.round-to-fast-fft: false`, a fixed cuFFT cache size, and the thread environment, then dumps the fully resolved abTEM and dask configuration into the record. On CPU the expectation is bit-identical output across processes and days on the same machine; the self-check verifies that. `speed` keeps `FFTW_MEASURE` so the cold cost users pay is represented.
+
+## Reading a report
+
+One row per paired case id. `verdict` is the worst over the case's outputs: `IDENTICAL` (bit-for-bit), `OK` (within the case tolerance), `DRIFT` (beyond tolerance), `ACCEPTED` (drift or a changed output shape covered by `accepted_changes.toml`), `SHAPE` (shape, dtype or axes changed), or a run status (`UNSUPPORTED`, `ERROR`, `OOM`, `TIMEOUT`, `SKIPPED-MEMORY`; the note says which side failed). `ONLY-A` and `ONLY-B` are ids present in only the reference or only the candidate. Attribution rows pair a candidate variant declaring `compare_as` (`x[order1]`) with the reference default (`x`); they are informational and never fail a gate.
+
+`rel` is the largest relative error over elements above the case's `above_rel` fraction of the reference maximum, `intensity` the largest relative change of the integrated intensity; both name the output when a case has several. Any NaN in these counts as beyond tolerance. Complex outputs are compared on the modulus of the difference, `|candidate - reference|`, and their intensity is the sum of `|x|²`; real outputs use the plain sum. Axes compare numbers to a relative 1e-9 and an absolute 1e-12, with NaN equal to NaN, and everything else exactly. An axis field that defines the grid (`type`, `sampling`, `offset`, `values`, `units`, `endpoint`) present with a value on one side only is a `SHAPE` mismatch; labels, internal `_` fields and other one-sided fields are named in the note (all of them in the JSON report's `axes_info`) but do not change the verdict. An output's metadata is compared by the same rules (ignoring `label`, `units`, `tex_label`, `tex_units` and `_` fields) and its differences are named in the note and recorded in full as `metadata_info`, but never change the verdict. `time`, `cold`, `rss` and `vram` are candidate over reference ratios (warm median, first call, peak resident memory, peak CuPy pool usage).
+
+Speed is flagged beyond `max(--speed-threshold, 3 x speed floor)`, or marked `short` when the two medians differ by less than `--min-delta` seconds (default 0.05). Memory and VRAM are flagged beyond `max(--memory-threshold, 3 x floor)`, and only against a noise floor (`--noise`, a self-check directory or its `noise.json`): one process's peak memory is not reproducible enough to judge without one. With a noise file, the report counts the case ids that have no memory floor in it (`memory not judged for N case ids ...`). The self-check's accuracy spread masks elements below each case's own `above_rel`, as `compare` does. The floor also widens each accuracy tolerance to three times the spread the self-check measured, which matters on GPU, where float64 is not bit-reproducible. `auto` variants are never flagged. `compare` refuses bundles with different case code (`--allow-case-mismatch`), different presets (`--allow-preset-mismatch`) or no common case id.
+
+`--fail-on` takes a comma-separated list of gates: `drift` and `shape` (rows of that verdict), `error` (a failed run on the candidate side, including an id only the candidate holds), `missing` (`ONLY-A` rows, and ids the candidate reports `UNSUPPORTED` where the reference has a result), `speed[:N%]` and `memory[:N%]` (an increase beyond the flag threshold, or beyond `N%`; `memory` needs `--noise`). Without `--fail-on` the gates are `drift,shape,error,missing`; `--fail-on none`, alone, applies no gate. A `--fail-on` that names no gate is refused. Because `missing` is a default gate, a candidate that holds fewer case ids than the reference (a capture with `--only`, or a CPU-only capture against a CPU and GPU reference) fails by default: pass an explicit `--fail-on` list without `missing`, or `none`. Exit code 0 means every gate passed, 1 that a gate failed (for `capture` and `self-check`: that a case failed; for `self-check` of the `accuracy` preset on CPU: that the two captures are not bit-identical), 2 an input error or a crash (unknown gate, missing bundle, refused comparison, invalid `accepted_changes.toml`, corrupt bundle file, malformed `--noise` file). The JSON report (`--json`) is strict JSON: non-finite numbers are the strings `"inf"`, `"-inf"` and `"nan"`.
+
+## Accepted changes
+
+A `DRIFT` (or an intended change of an output's shape, a `SHAPE`) fails `--fail-on drift` (`--fail-on shape`) unless an entry in `accepted_changes.toml` covers it. Add the entry in the same pull request as the change:
+
+```toml
+[[accepted]]
+case = "hrtem.exitwave@quick/*"  # glob over case ids or names; must match a registered id
+commit = "0a6f505a"              # applies when the candidate contains this commit and the reference does not
+reason = "One line: what changed and why the new result is right."
+pr = 298
+max_abs_norm = 6e-3              # required: max|diff| / max|reference| per output
+max_intensity = 5e-4             # optional bounds per output: |intensity|, rel (max_rel)
+```
+
+`commit` names the commit that made the change, as a prefix of 7 to 40 hex digits. The entry applies when the candidate bundle's commit contains it and the reference bundle's commit does not, so one entry explains the drift against every reference that lacks the change, while a candidate that lacks the change (a release against dev) or a reference that already has it is not explained by the entry. compare asks git in the harness's repository (`git rev-parse`, `git merge-base --is-ancestor`). Where git cannot tell for either bundle (no git, as in a container without it, or a prefix or bundle sha it does not know, or a prefix it finds ambiguous), the entry is not applied, the report's list of entries not applied says why for each entry (the candidate lacks the commit, the reference already contains it, or git could not tell, and for which bundle), compare prints a warning on stderr, and the drift shows as `DRIFT`: run `compare` where git sees the repository. Every entry must set `max_abs_norm`, the largest elementwise difference relative to the largest reference element: the integrated intensity is unchanged by a shift, a flip or a phase scramble of the output, so a bound on it alone would accept a corrupted result. Where the accepted drift is itself as large as such a corruption, as for the #298 HRTEM and CBED entries at the standard tier, no bound can tell them apart; the `[order1]` variants, which bound `max_abs_norm` at 6e-7 to 7e-6, guard every code path but the exact propagator itself. `max_rel` and `max_intensity` are optional. Every entry of one change (prefixes that resolve to one commit) must hold its bounds; when the candidate contains several changes that cover a case, the drift is accepted when the entries of one change all hold, and the other entries count that case as `dominated` (shown next to `matched` in the changelog and in the JSON report), not as stale. A drift beyond every change's bounds stays `DRIFT`, and an output with non-finite values that differ between the two sides is never accepted, whatever the bounds. Unknown keys are refused, and `accepted` must be an array of tables (`[[accepted]]`). An explicit `--accepted <path>` must exist; when the default file is absent, nothing is accepted and the report says so (`accepted_path` and `accepted_exists` in the JSON report). The report renders the entries that apply as the changelog with the drift measured for each, and lists as stale the entries that cover a case both bundles hold but match no drift.
+
+```toml
+[[accepted]]
+case = "potential.infinite@quick/*"
+commit = "<sha of the commit that changes the slicing>"
+reason = "The commensurate slicing gives the potential 33 slices instead of 22."
+pr = 710
+max_abs_norm = 1e-7              # applies to the potential summed over z
+shape = { potential = [33, 256, 256] }
+```
+
+An intended change of an output's shape is declared with `shape`, a table that maps an output name to the shape the candidate gives it. A `SHAPE` output is then accepted, with the axis mismatches that follow from the new shape, when its shape changed, some entry of the change declares exactly that shape for it, its dtype is unchanged, every candidate value is finite and its number of axes is unchanged. The values of such an output are compared through its sums: the reference and the candidate are summed over every axis whose length differs (one axis, several, or all, which gives a single number), and the bounds of the change's entries (`max_rel`, `max_intensity`, `max_abs_norm`, non-finite mismatch) apply to the sums as they apply to an output of unchanged shape; the JSON report carries the sums' statistics as `summed` (with the `axes` summed over) and the changelog's measured drift includes them. A violation names the output, the bound and `summed over axes [...]`, and the row stays `SHAPE`. A sum is invariant when a change re-cuts an axis (slicing: each slice integrates the potential over its thickness, so the sum over z is the projected potential), but not when it resamples an axis (more pixels on the same extent): such an entry needs bounds wide enough for the scaling. The sums do not see how values are arranged along the summed axes: slices in another order, or a potential moved between slices, pass. Where the reference's sums are zero (an antisymmetric or difference-type output), any candidate whose sums are zero too passes, whatever its scale. A `SHAPE` output that no entry of the change declares, one whose shape differs from the declared one, one whose shape is unchanged (only its axes differ), one with non-finite values, one whose dtype changed, one with another number of axes (its values cannot be compared) and one missing in the candidate stay `SHAPE`, and the row's note names them. On a row whose worst verdict is `SHAPE`, only the changes with an entry that declares a `shape` take part; the entries of other changes are left as if absent. A row whose `SHAPE` outputs are all accepted and whose drifting outputs hold the bounds is `ACCEPTED`, so `--fail-on shape` and `--fail-on drift` both pass it; a row with an accepted `SHAPE` output and another output beyond the bounds stays `SHAPE`, so only the `shape` gate fails it. With the registry, each name in `shape` must be an output of a registered case that the entry's glob matches. The changelog lists the declaration with the bounds and the measured shape change (`potential (22, 256, 256) → (33, 256, 256)`) with the measured drift, and the JSON report carries `shape` for each entry.
+
+## Adding a case
+
+Decorate a function `(params, device) -> run` with `@case` in a module under `abtem_bench/cases/`. Setup goes in the function body; `run()` is the only timed region and returns the output objects (an `ArrayObject`, a list matching `outputs`, or a dict). Declare all three tiers with explicit `gpts`, `max_batch` and chunk sizes; never pass `sampling=` (the registry rejects it). Import abtem inside the function. Use `fixtures.multislice_kwargs(params)` to forward the propagator order and chunk size only where the ref accepts them.
+
+## Checks
+
+```
+uvx ruff check benchmarks/abtem_bench benchmarks/tests
+uvx mypy --follow-imports=silent --ignore-missing-imports benchmarks/abtem_bench
+PYTHONPATH=benchmarks python -P -m pytest benchmarks/tests
+```
+
+CI runs the harness tests in every cell of the `tests` job (Python 3.11 to 3.14; macOS and Windows on pull requests into main), which needs only the `test` dependency group, so a failure blocks the merge. The tests that start a worker skip on Windows, and those that read `/proc` skip off Linux.
