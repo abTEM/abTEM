@@ -686,6 +686,17 @@ def test_an_fft_of_an_empty_array_is_empty_and_complex(device, func, shape):
     assert result.dtype == xp.complex64
 
 
+@pytest.mark.parametrize("device", [gpu])
+def test_an_fft_of_an_empty_array_with_an_explicit_size_reaches_the_backend(device):
+    """An explicit `s` changes the output shape, so the empty shortcut leaves it
+    to the backend, which raises for the zero-length axis."""
+    xp = abtem.core.backend.get_array_module(device)
+    array = xp.zeros((0, 4, 6), dtype=xp.complex64)
+
+    with pytest.raises((RuntimeError, ValueError)):
+        abtem_fft.fft2(array, s=(5, 7))
+
+
 @requires_pyfftw
 @pytest.mark.parametrize("kind", _NUMPY_CONTIGUOUS_KINDS)
 def test_cached_fftw_convolution_of_an_array_numpy_flags_contiguous_with_other_strides(

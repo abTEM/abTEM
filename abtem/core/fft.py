@@ -900,9 +900,10 @@ def _fft_dispatch(
             meta=xp.array((), dtype=_fft_dtype(x.dtype)),
         )
 
-    if 0 in x.shape:
+    if 0 in x.shape and kwargs.get("s") is None:
         # CuPy and torch reject an array with a zero-length axis, a batch axis
-        # included. No caller passes `s`, so the output has the input's shape.
+        # included. Without `s` the output has the input's shape; with one it
+        # is left to the backend.
         # A zero-length transformed axis, which no public call produces, also
         # returns empty here, where NumPy and FFTW raise.
         return xp.empty(x.shape, dtype=_fft_dtype(x.dtype))
