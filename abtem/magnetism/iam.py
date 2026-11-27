@@ -350,10 +350,7 @@ class QuasiDipoleProjections(FieldIntegrator):
     # per (element, precision) on first use -- incidental state, never identity, same
     # reasoning as _DeviceArrayCache.__eq__ (integrals.py) and Potential's
     # _sliced_atoms exclusion. Without this, a used integrator stops
-    # comparing equal to an identical fresh one once anything is cached, and
-    # two integrators that cached the *same* element compare unequal anyway:
-    # dict.__eq__ on values that are numpy arrays raises ValueError, which
-    # safe_equality's exception guard reports as "unequal".
+    # comparing equal to an identical fresh one once anything is cached.
     _eq_exclude = ("_tables",)
 
     def __init__(

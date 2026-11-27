@@ -177,10 +177,8 @@ class _DeviceArrayCache(Mapping):
     def __eq__(self, other) -> bool:
         # A cache is incidental state, never identity: two integrators with the
         # same parametrization are the same integrator whether or not either
-        # has been used. Comparing contents would compare numpy arrays, which
-        # safe_equality turns into an unequal verdict via its ValueError guard,
-        # so a used integrator would stop comparing equal to an identical fresh
-        # one.
+        # has been used. Comparing contents would make a used integrator differ
+        # from an identical fresh one.
         #
         # This fixes the comparison at the *integrator* level only. A built
         # Potential still compares unequal to an identical unbuilt one, because
