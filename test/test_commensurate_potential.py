@@ -1,4 +1,4 @@
-"""Tests for Potential(sampling='auto', slice_thickness='auto').
+"""Tests for the commensurate grid and slicing of Potential (the default).
 
 The core physical claim these tests check: atoms related by a lattice
 translation must receive an identical discretised potential value, i.e. the
@@ -95,35 +95,45 @@ def _mos2():
 
 def _mgo():
     return crystal(
-        ["Mg", "O"], [(0, 0, 0), (0.5, 0, 0)], spacegroup=225,
+        ["Mg", "O"],
+        [(0, 0, 0), (0.5, 0, 0)],
+        spacegroup=225,
         cellpar=[4.211] * 3 + [90] * 3,
     )
 
 
 def _nacl():
     return crystal(
-        ["Na", "Cl"], [(0, 0, 0), (0.5, 0, 0)], spacegroup=225,
+        ["Na", "Cl"],
+        [(0, 0, 0), (0.5, 0, 0)],
+        spacegroup=225,
         cellpar=[5.640] * 3 + [90] * 3,
     )
 
 
 def _caf2():
     return crystal(
-        ["Ca", "F"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=225,
+        ["Ca", "F"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=225,
         cellpar=[5.463] * 3 + [90] * 3,
     )
 
 
 def _gaas():
     return crystal(
-        ["Ga", "As"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=216,
+        ["Ga", "As"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=216,
         cellpar=[5.653] * 3 + [90] * 3,
     )
 
 
 def _inp():
     return crystal(
-        ["In", "P"], [(0, 0, 0), (0.25, 0.25, 0.25)], spacegroup=216,
+        ["In", "P"],
+        [(0, 0, 0), (0.25, 0.25, 0.25)],
+        spacegroup=216,
         cellpar=[5.869] * 3 + [90] * 3,
     )
 
@@ -144,7 +154,9 @@ def _batio3_tetragonal():
 
 def _vo2_rutile():
     return crystal(
-        ["V", "O"], [(0, 0, 0), (0.3, 0.3, 0.0)], spacegroup=136,
+        ["V", "O"],
+        [(0, 0, 0), (0.3, 0.3, 0.0)],
+        spacegroup=136,
         cellpar=[4.554, 4.554, 2.851, 90, 90, 90],
     )
 
@@ -234,8 +246,8 @@ def _max_relative_spread(
     device="cpu",
     reference=None,
 ):
-    """Repeat `primitive_atoms`, build Potential(sampling='auto',
-    slice_thickness='auto'), and return the largest relative spread of the
+    """Repeat `primitive_atoms`, build a Potential with the default commensurate
+    grid and slicing, and return the largest relative spread of the
     projected-potential value across atoms related by a `reference`-cell
     translation -- near-zero for a correctly commensurate grid.
 
@@ -251,8 +263,6 @@ def _max_relative_spread(
 
     pot = abtem.Potential(
         sc,
-        sampling="auto",
-        slice_thickness="auto",
         projection=projection,
         parametrization=parametrization,
         device=device,
@@ -356,7 +366,7 @@ def test_gpts_is_translation_invariant():
     structure is shifted."""
 
     def gpts_for(a):
-        return abtem.Potential(a, sampling="auto", slice_thickness="auto").gpts
+        return abtem.Potential(a).gpts
 
     for name, build in {**LATTICE_STRUCTURES, **SLAB_STRUCTURES}.items():
         atoms = build()
@@ -448,28 +458,35 @@ def _atoms_at_z(z, cell_z, cell_xy=5.0):
     )
 
 
-def test_slice_thickness_no_degenerate_trailing_slice():
-    """A real plane spacing right before the periodic z boundary (>= tolerance
-    but well under half the target thickness) must be merged rather than left
-    as its own near-zero final slice: the last and first slices are adjacent
-    through the periodic wrap at cell_z = 0."""
+def test_slice_thickness_never_exceeds_the_target_at_the_periodic_boundary():
+    """The plane at 3.0 lies within the tolerance of the top face, so it is the plane
+    at 0 of the next cell. Each plane gets the part of the cell closest to it, so the
+    slice limits are the midpoints (0.5, 1.5, 2.5) and the last slice is the 0.65 Å
+    from the last midpoint to the top face; no slice exceeds the target."""
     atoms = _atoms_at_z([0.0, 1.0, 2.0, 3.0], cell_z=3.15)
 
     result = commensurate_slice_thickness(atoms, target_thickness=1.0)
 
-    assert min(result) >= 0.5
-    assert result == pytest.approx((1.0, 1.0, 1.15))
+    assert result == pytest.approx((0.5, 1.0, 1.0, 0.65))
 
 
 def test_slice_thickness_splits_gaps_thicker_than_target():
     """Planes further apart than the target (cubic fcc has them 0.5 a apart)
-    must be split into equal slices near the target, not left as one thick slice."""
+    must be split into the fewest equal slices no thicker than the target, not
+    left as one thick slice."""
     atoms = bulk("Au", cubic=True)
 
     result = commensurate_slice_thickness(atoms, target_thickness=1.0)
 
-    assert result == pytest.approx((atoms.cell[2, 2] / 4,) * 4)
-    potential = abtem.Potential(atoms, slice_thickness="auto", sampling="auto")
+    # The planes lie on a lattice with step a / 2, which is divided into three equal
+    # base steps s to fit the target. Each plane sits in the middle of a slice of one
+    # base step, with an empty slice on either side; only the two slices at the cell
+    # faces differ (the plane at the face is cut in two by it).
+    s = atoms.cell[2, 2] / 6
+    assert result == pytest.approx((s / 2, s, s, s, s, s, s / 2))
+    assert len(set(result)) == 2
+    assert max(result) <= 1.0 + 1e-9
+    potential = abtem.Potential(atoms)
     assert potential.slice_thickness == pytest.approx(result)
 
 
@@ -479,20 +496,88 @@ def test_slice_thickness_merges_planes_closer_than_tolerance():
     rounding boundary."""
     atoms = _atoms_at_z([0.099, 0.101, 1.1, 2.1], cell_z=3.0)
 
-    result = commensurate_slice_thickness(atoms, target_thickness=1.0, tolerance=0.2)
+    result = commensurate_slice_thickness(atoms, target_thickness=1.2, tolerance=0.2)
 
     # A spurious boundary at 0.2 (from rounding 0.099 and 0.101 into
     # different tolerance-wide bins) would split the first slice into two.
-    assert len(result) == 3
-    assert result == pytest.approx((1.1, 1.0, 0.9))
+    assert len(result) == 4
+    assert result == pytest.approx((0.6, 1.0, 1.0, 0.4))
+
+
+@pytest.mark.parametrize("target", [0.5, 1.0, 1.7, 3.0])
+@pytest.mark.parametrize(
+    "atoms",
+    [
+        bulk("Si", cubic=True) * (1, 1, 3),
+        bulk("Au", cubic=True) * (1, 1, 2),
+        bulk("Cu", cubic=True) * (2, 2, 3),
+        bulk("Mg", "hcp", orthorhombic=True) * (1, 1, 2),
+    ],
+    ids=["Si", "Au", "Cu", "Mg"],
+)
+def test_slice_limits_never_cut_an_atom(atoms, target):
+    """A limit on an atom splits it between two slices, which smears its potential
+    along the beam when the projection is finite and, under frozen phonons, hands
+    a random part of the plane to either side."""
+    result = commensurate_slice_thickness(atoms, target_thickness=target)
+
+    cell_z = atoms.cell[2, 2]
+    # The cell faces are limits too and cut a plane that sits on them; that is the one
+    # exception, and the neighbouring slices see the two halves.
+    limits = np.cumsum(result)[:-1]
+    z = atoms.positions[:, 2] % cell_z
+    distance = np.abs(z[None] - limits[:, None])
+    distance = np.minimum(distance, cell_z - distance)
+    assert distance.min() > 0.05
+    assert max(result) <= target * (1 + 1e-9)
+    assert sum(result) == pytest.approx(cell_z)
+
+
+@pytest.mark.parametrize("target", [0.5, 1.0, 1.7, 3.0])
+@pytest.mark.parametrize(
+    "atoms",
+    [bulk("Si", cubic=True) * (2, 2, 6), bulk("Au", cubic=True) * (2, 2, 3)],
+    ids=["Si", "Au"],
+)
+def test_lattice_slicing_has_one_thickness_but_the_faces(atoms, target):
+    """Planes on a lattice give equal slices, bit for bit, except the two at the cell
+    faces, so the Fresnel propagator (cached on the thickness) is computed at most
+    three times, not once per slice."""
+    result = commensurate_slice_thickness(atoms, target_thickness=target)
+
+    assert len(set(result)) <= 3
+    assert len(set(result[1:-1])) == 1
+
+
+def test_fresnel_propagator_is_computed_at_most_three_times(monkeypatch):
+    """A plane wave through a Si potential with planes further apart than the
+    target hits the propagator cache on every slice but the faces: the first
+    slice, the equal ones, and the last."""
+    from abtem.multislice import FresnelPropagator
+
+    calls = []
+    original = FresnelPropagator._calculate_array
+
+    def counting(waves, thickness, *args, **kwargs):
+        calls.append(thickness)
+        return original(waves, thickness, *args, **kwargs)
+
+    monkeypatch.setattr(FresnelPropagator, "_calculate_array", staticmethod(counting))
+
+    atoms = bulk("Si", cubic=True) * (1, 1, 6)
+    potential = abtem.Potential(atoms, sampling=0.25, projection="infinite")
+    abtem.PlaneWave(energy=100e3).multislice(potential).compute()
+
+    assert len(potential.slice_thickness) > 10
+    assert len(calls) <= 3
 
 
 # ── AtomsEnsemble: commensurability search must be skipped ──────────────────
-def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_search():
+def test_atoms_ensemble_skips_the_commensurate_search():
     """A multi-configuration `AtomsEnsemble` has no single reference lattice to
     detect commensurability against: each configuration is an independent MD
-    snapshot, and `frozen_phonons.atoms` is only the first frame. 'auto'
-    sampling/slice_thickness must fall back to the plain non-commensurate
+    snapshot, and `frozen_phonons.atoms` is only the first frame. The grid and
+    the slicing must fall back to the plain non-commensurate
     behaviour (as already used for non-periodic structures) rather than
     search for commensurate planes in one arbitrary frame."""
     single = _si().repeat((2, 2, 2))
@@ -504,13 +589,11 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
     trajectory = [single, single.copy()]
     # Pin the option: the expected gpts below are the default mode's.
     with abtem.config.set({"grid.round-to-fast-fft": "auto"}):
-        ensemble_pot = abtem.Potential(
-            trajectory, sampling="auto", slice_thickness="auto"
-        )
+        ensemble_pot = abtem.Potential(trajectory)
 
     extent_x, extent_y = float(single.cell[0, 0]), float(single.cell[1, 1])
     # The ensemble path uses the plain target sampling (no commensurate
-    # search), rounded up to a fast FFT size like every auto-derived grid.
+    # search), rounded up to a fast FFT size like every grid abTEM derives.
     from abtem.core.fft import next_fast_fft_size
 
     expected_gpts = (
@@ -535,9 +618,7 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
     # Same behaviour when explicitly wrapped in AtomsEnsemble rather than a
     # plain list.
     with abtem.config.set({"grid.round-to-fast-fft": "auto"}):
-        explicit_pot = abtem.Potential(
-            abtem.AtomsEnsemble(trajectory), sampling="auto", slice_thickness="auto"
-        )
+        explicit_pot = abtem.Potential(abtem.AtomsEnsemble(trajectory))
     assert explicit_pot.gpts == expected_gpts
     assert explicit_pot.num_slices == n_slices
 
@@ -552,29 +633,42 @@ def test_atoms_ensemble_single_config_still_uses_commensurate_search():
     single = _si().repeat((2, 2, 2))
     single.cell[0, 0] += 0.13
 
-    plain_pot = abtem.Potential(single, sampling="auto", slice_thickness="auto")
-    ensemble_pot = abtem.Potential(
-        abtem.AtomsEnsemble([single]), sampling="auto", slice_thickness="auto"
-    )
+    plain_pot = abtem.Potential(single)
+    ensemble_pot = abtem.Potential(abtem.AtomsEnsemble([single]))
 
     assert ensemble_pot.gpts == plain_pot.gpts
     assert ensemble_pot.slice_thickness == plain_pot.slice_thickness
 
 
-# ── the defaults are 'auto' ──────────────────────────────────────────────────
+# ── the defaults are commensurate targets that yield to the waves ────────────
 def _gold():
     return bulk("Au", cubic=True).repeat((2, 2, 2))
 
 
-def test_default_slice_thickness_and_sampling_are_auto():
+def test_default_slice_thickness_and_sampling_are_the_configured_targets():
     default = abtem.Potential(_gold())
-    auto = abtem.Potential(_gold(), slice_thickness="auto", sampling="auto")
+    explicit = abtem.Potential(_gold(), sampling=0.05, slice_thickness=1.0)
 
-    assert default.slice_thickness == pytest.approx(auto.slice_thickness)
-    assert default.slice_thickness == pytest.approx((1.02,) * 8)
-    assert default.gpts == auto.gpts
+    assert default.slice_thickness == pytest.approx(explicit.slice_thickness)
+    assert default.slice_thickness == pytest.approx(
+        commensurate_slice_thickness(_gold(), 1.0)
+    )
+    assert default.gpts == explicit.gpts == (168, 168)
     assert default.grid.gpts_is_default
-    assert not auto.grid.gpts_is_default
+    assert not explicit.grid.gpts_is_default
+
+
+def test_configured_targets_are_used_when_none_are_given():
+    with abtem.config.set(
+        {"potential.sampling": 0.1, "potential.slice-thickness": 2.1}
+    ):
+        configured = abtem.Potential(_gold())
+    explicit = abtem.Potential(_gold(), sampling=0.1, slice_thickness=2.1)
+
+    assert configured.gpts == explicit.gpts
+    assert configured.slice_thickness == pytest.approx(explicit.slice_thickness)
+    assert max(configured.slice_thickness) <= 2.1
+    assert configured.grid.gpts_is_default
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -603,57 +697,23 @@ def test_explicit_waves_grid_overrides_the_default_potential_grid(
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("grid_kwargs", [{"gpts": 100}, {"sampling": 0.1}])
-def test_explicit_auto_sampling_is_not_overridden_by_the_waves_but_warns(
-    device, grid_kwargs
+def test_explicit_potential_sampling_is_not_overridden_by_the_waves(
+    device, grid_kwargs, recwarn
 ):
-    potential = abtem.Potential(_gold(), sampling="auto", device=device)
+    potential = abtem.Potential(_gold(), sampling=0.05, device=device)
     waves = abtem.PlaneWave(energy=200e3, device=device, **grid_kwargs)
 
-    with pytest.warns(UserWarning, match="sampling='auto'"):
-        exit_waves = waves.multislice(potential)
+    exit_waves = waves.multislice(potential)
 
     assert exit_waves.gpts == (168, 168)
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "make_potential, make_waves",
-    [
-        # nothing explicit on the waves: they adopt the 'auto' grid
-        (
-            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
-            lambda d: abtem.PlaneWave(energy=200e3, device=d),
-        ),
-        # an explicit grid on the waves agreeing with the 'auto' one
-        (
-            lambda d: abtem.Potential(_gold(), sampling="auto", device=d),
-            lambda d: abtem.PlaneWave(energy=200e3, gpts=168, device=d),
-        ),
-        # the default grid yields to the waves without comment
-        (
-            lambda d: abtem.Potential(_gold(), device=d),
-            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
-        ),
-        # a numeric sampling on the potential is not an 'auto' one
-        (
-            lambda d: abtem.Potential(_gold(), sampling=0.05, device=d),
-            lambda d: abtem.PlaneWave(energy=200e3, gpts=100, device=d),
-        ),
-    ],
-)
-def test_no_warning_unless_an_explicit_waves_grid_meets_an_explicit_auto_one(
-    device, make_potential, make_waves, recwarn
-):
-    make_waves(device).multislice(make_potential(device))
-
-    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_waves_that_adopted_a_grid_do_not_count_as_explicit(device, recwarn):
     """A probe reused with a second potential has a grid only because it took one
-    from the first; that is not an explicit request to warn about, or to override
-    the grid of a default potential."""
+    from the first; that is not an explicit request to override the grid of a
+    default potential."""
     first = abtem.Potential(_gold(), device=device)
     second = abtem.Potential(bulk("Au", cubic=True).repeat((3, 3, 1)), device=device)
     probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
@@ -663,7 +723,7 @@ def test_waves_that_adopted_a_grid_do_not_count_as_explicit(device, recwarn):
 
     assert probe.gpts == second.gpts
     assert second.grid.gpts_is_default
-    assert not [w for w in recwarn if "sampling='auto'" in str(w.message)]
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -682,10 +742,321 @@ def test_probe_matched_to_a_default_potential_adopts_its_grid(device):
     assert measurement.shape == (2, 2)
 
 
-def test_auto_slicing_and_grid_of_a_structure_without_atoms():
+def test_default_slicing_and_grid_of_a_structure_without_atoms():
     empty = _gold()[:0]
 
-    potential = abtem.Potential(empty, slice_thickness="auto", sampling="auto")
+    potential = abtem.Potential(empty)
 
     assert sum(potential.slice_thickness) == pytest.approx(empty.cell[2, 2])
     assert potential.gpts is not None
+
+
+# ── targets are upper bounds ─────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "make_atoms",
+    [
+        lambda: _si() * (3, 3, 2),
+        lambda: _au() * (2, 2, 2),
+        lambda: _tio2_rutile() * (3, 3, 2),
+        lambda: _gan_wurtzite(),
+        lambda: _mos2(),
+        lambda: _srtio3() * (2, 2, 2),
+    ],
+    ids=["Si", "Au", "rutile", "GaN", "MoS2", "SrTiO3"],
+)
+@pytest.mark.parametrize(
+    "sampling, slice_thickness", [(0.02, 0.4), (0.05, 1.0), (0.2, 2.5)]
+)
+def test_grid_and_slices_are_never_coarser_than_requested(
+    make_atoms, sampling, slice_thickness
+):
+    potential = abtem.Potential(
+        make_atoms(), sampling=sampling, slice_thickness=slice_thickness
+    )
+
+    assert max(potential.sampling) <= sampling * (1 + 1e-9)
+    assert max(potential.slice_thickness) <= slice_thickness * (1 + 1e-9)
+
+
+@pytest.mark.parametrize("n_periods", [150, 180, 199, 250, 450])
+def test_commensurate_gpts_never_coarser_and_bounded_in_cost(n_periods):
+    # Planes about as fine as the target: the commensurate grid nearest the
+    # target was up to 1.5 times coarser than it. The coarsest commensurate grid
+    # that meets the target can have twice the points, so beyond 15 % more the
+    # plain grid is used.
+    extent = 10.0
+    planes = np.arange(n_periods) * extent / n_periods
+    positions = np.stack([planes, planes, np.zeros_like(planes)], axis=1)
+
+    gpts = commensurate_gpts(
+        (extent, extent), positions, target_sampling=0.05, round_to_fast_fft=False
+    )
+
+    for n in gpts:
+        assert extent / n <= 0.05 * (1 + 1e-9)
+        assert n <= 200 * 1.15
+        assert n % n_periods == 0 or n == 200
+
+
+# ── explicit control: gpts and num_slices ────────────────────────────────────
+def test_num_slices_divides_the_height_into_equal_slices():
+    atoms = _si() * (2, 2, 3)
+
+    potential = abtem.Potential(atoms, num_slices=7)
+
+    assert potential.slice_thickness == pytest.approx((atoms.cell[2, 2] / 7,) * 7)
+
+
+def test_num_slices_follows_the_plane_and_the_box():
+    atoms = _srtio3() * (2, 3, 4)
+    a = _srtio3().cell[0, 0]
+
+    in_plane = abtem.Potential(atoms, plane="xz", num_slices=5)
+    in_box = abtem.Potential(_srtio3(), box=(2 * a, 3 * a, 4 * a), num_slices=5)
+
+    assert sum(in_plane.slice_thickness) == pytest.approx(atoms.cell[1, 1])
+    assert in_box.slice_thickness == pytest.approx((4 * a / 5,) * 5)
+
+
+@pytest.mark.parametrize("num_slices", [0, -1, 2.5, True, "4"])
+def test_invalid_num_slices_raises(num_slices):
+    with pytest.raises(ValueError, match="num_slices"):
+        abtem.Potential(_si(), num_slices=num_slices)
+
+
+def test_slice_thickness_and_num_slices_are_exclusive():
+    with pytest.raises(ValueError, match="either slice_thickness or num_slices"):
+        abtem.Potential(_si(), slice_thickness=1.0, num_slices=4)
+
+
+def test_gpts_and_slice_thickness_sequences_are_used_exactly():
+    atoms = _si() * (2, 2, 1)
+    thicknesses = (1.0, 2.0, atoms.cell[2, 2] - 3.0)
+
+    potential = abtem.Potential(atoms, gpts=(101, 103), slice_thickness=thicknesses)
+
+    assert potential.gpts == (101, 103)
+    assert potential.slice_thickness == pytest.approx(thicknesses)
+
+
+# ── commensurate=False ───────────────────────────────────────────────────────
+def test_without_commensurability_the_grid_and_slices_are_plain():
+    atoms = _si() * (3, 3, 2)
+    extent = atoms.cell[0, 0]
+
+    explicit = abtem.Potential(
+        atoms, sampling=0.05, slice_thickness=1.0, commensurate=False
+    )
+    default = abtem.Potential(atoms, commensurate=False)
+
+    # As `Grid` derives it from the sampling, and `slice_thickness` divides the
+    # height, before commensurability was introduced.
+    plain = abtem.core.grid.Grid(extent=(extent, extent), sampling=0.05).gpts
+    n = int(np.ceil(atoms.cell[2, 2] / 1.0))
+    for potential in (explicit, default):
+        assert potential.gpts == plain
+        assert potential.slice_thickness == pytest.approx((atoms.cell[2, 2] / n,) * n)
+    assert default.grid.gpts_is_default
+    assert not explicit.grid.gpts_is_default
+
+
+# ── input forms ──────────────────────────────────────────────────────────────
+def test_array_sampling_and_slice_thickness_are_accepted():
+    atoms = _si() * (2, 2, 2)
+    reference = abtem.Potential(atoms, sampling=(0.05, 0.04), slice_thickness=0.9)
+    thicknesses = np.full(4, atoms.cell[2, 2] / 4)
+
+    from_arrays = abtem.Potential(
+        atoms, sampling=np.array([0.05, 0.04]), slice_thickness=np.float64(0.9)
+    )
+    sequence = abtem.Potential(atoms, slice_thickness=thicknesses)
+
+    assert from_arrays.gpts == reference.gpts
+    assert from_arrays.slice_thickness == reference.slice_thickness
+    assert sequence.slice_thickness == pytest.approx(tuple(thicknesses))
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"sampling": "auto"}, "sampling must be one or two positive"),
+        ({"slice_thickness": "auto"}, "slice_thickness must be a positive number"),
+        ({"sampling": True}, "sampling must be one or two positive"),
+        ({"slice_thickness": True}, "slice_thickness must be a positive number"),
+        ({"sampling": -0.05}, "positive"),
+        ({"sampling": (0.05, 0.05, 0.05)}, "one or two"),
+        ({"slice_thickness": 0.0}, "positive"),
+    ],
+)
+def test_invalid_targets_raise(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        abtem.Potential(_si(), **kwargs)
+
+
+@pytest.mark.parametrize(
+    "key, value, match",
+    [
+        ("potential.slice-thickness", [0.05, 0.05], "potential.slice-thickness"),
+        ("potential.slice-thickness", True, "potential.slice-thickness"),
+        ("potential.slice-thickness", "auto", "potential.slice-thickness"),
+        ("potential.sampling", True, "potential.sampling"),
+        ("potential.sampling", -1.0, "potential.sampling"),
+    ],
+)
+def test_invalid_configured_targets_name_the_configuration_key(key, value, match):
+    with abtem.config.set({key: value}):
+        with pytest.raises(ValueError, match=match):
+            abtem.Potential(_si())
+
+
+# ── periodicity is that of the potential's axes ──────────────────────────────
+def _si_wire():
+    # Periodic along x only, with vacuum around it.
+    wire = _si() * (3, 1, 1)
+    wire.center(vacuum=6.0, axis=(1, 2))
+    wire.pbc = (True, False, False)
+    return wire
+
+
+def test_slices_are_commensurate_along_a_periodic_beam_direction_of_a_plane():
+    # Viewed along the wire ("yz"), the beam runs along the periodic x of the
+    # atoms: the slices are commensurate with its planes (a / 4 apart), which they
+    # enclose rather than end on, and no thicker than the default target.
+    wire = _si_wire()
+
+    potential = abtem.Potential(wire, plane="yz")
+
+    a = _si().cell[0, 0]
+    assert sum(potential.slice_thickness) == pytest.approx(3 * a)
+    assert max(potential.slice_thickness) <= 1.0 + 1e-9
+    limits = np.cumsum((0.0,) + potential.slice_thickness)
+    planes = a / 4 * np.arange(12)
+    assert np.min(np.abs(limits[1:-1, None] - planes[None])) > 0.1
+
+
+def test_grid_is_commensurate_only_along_periodic_axes():
+    wire = _si_wire()
+    from abtem.core.fft import next_fast_fft_size
+
+    potential = abtem.Potential(wire)
+
+    x, y = potential.extent
+    commensurate = commensurate_gpts((x, y), wire.positions, target_sampling=0.05)
+    assert potential.gpts[0] == commensurate[0]
+    assert potential.gpts[1] == next_fast_fft_size(int(np.ceil(y / 0.05)))
+    # Along z the wire is not periodic, so its slices are uniform.
+    n = int(np.ceil(wire.cell[2, 2]))
+    assert potential.slice_thickness == pytest.approx((wire.cell[2, 2] / n,) * n)
+
+
+# ── other builders ───────────────────────────────────────────────────────────
+def test_lazily_read_trajectory_gets_the_plain_default_grid():
+    import dask
+
+    atoms = _si() * (2, 2, 1)
+    trajectory = abtem.AtomsEnsemble(
+        [dask.delayed(atoms.copy)() for _ in range(2)], cell=atoms.cell
+    )
+
+    potential = abtem.Potential(trajectory)
+
+    assert potential.grid.gpts_is_default
+    assert potential.slice_thickness == pytest.approx((atoms.cell[2, 2] / 6,) * 6)
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"sampling": 0.1, "slice_thickness": 0.5}])
+def test_magnetic_fields_are_sliced_and_sampled_as_the_potential(kwargs):
+    from abtem.magnetism.iam import MagneticField, VectorPotential
+
+    atoms = _fe() * (2, 2, 2)
+    potential = abtem.Potential(atoms, **kwargs)
+
+    for field in (MagneticField(atoms, **kwargs), VectorPotential(atoms, **kwargs)):
+        assert field.gpts == potential.gpts
+        assert field.slice_thickness == potential.slice_thickness
+        assert field.grid.gpts_is_default == potential.grid.gpts_is_default
+
+
+def test_a_rebuilt_potential_keeps_the_resolved_grid_and_slices():
+    atoms = _si() * (2, 2, 2)
+    potential = abtem.Potential(
+        abtem.FrozenPhonons(atoms, 2, sigmas=0.05, seed=1), num_slices=5
+    )
+
+    array = potential.build(lazy=True).compute()
+
+    assert array.shape[:2] == (2, 5)
+    assert array.gpts == potential.gpts
+
+
+def _mean_haadf(potential, scan_extent, device):
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(start=(0, 0), end=scan_extent, gpts=(3, 3), endpoint=False)
+    detector = abtem.AnnularDetector(inner=50, outer=120)
+    measurement = probe.scan(potential, scan=scan, detectors=detector).compute()
+    return float(np.mean(measurement.to_cpu().array))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_crystal_potential_tile_boundaries_do_not_bias_finite_haadf(device):
+    """A plane on the cell face is cut by it, and in a `CrystalPotential` the last
+    slice of one tile and the first of the next, each holding half of that plane, are
+    adjacent. With the planes on a lattice and equal slices the two halves add up, so
+    the finite-projection HAADF of six tiles stays within a few percent of the same
+    crystal sliced at 0.1 Å (-11.9 % with the previous midpoint slicing, -1.6 %
+    now)."""
+    unit_atoms = bulk("Si", cubic=True) * (2, 2, 1)
+    # The grid must cover the detector: the antialiasing cutoff of a 200 keV probe is
+    # 148 mrad at this grid, beyond the 120 mrad outer angle.
+    gpts = (192, 192)
+    scan_extent = (unit_atoms.cell[0, 0] / 2, unit_atoms.cell[1, 1] / 2)
+
+    reference = abtem.Potential(
+        unit_atoms * (1, 1, 6),
+        gpts=gpts,
+        slice_thickness=0.1,
+        projection="finite",
+        commensurate=False,
+        device=device,
+    )
+    unit = abtem.Potential(
+        unit_atoms,
+        gpts=gpts,
+        slice_thickness=1.0,
+        projection="finite",
+        device=device,
+    )
+    # The periodic stack, which is what the reference is; correct_surfaces would
+    # (by design) remove the periodic images beyond the outer surfaces.
+    crystal = abtem.CrystalPotential(
+        unit, repetitions=(1, 1, 6), correct_surfaces=False
+    )
+
+    expected = _mean_haadf(reference, scan_extent, device)
+    result = _mean_haadf(crystal, scan_extent, device)
+
+    assert result == pytest.approx(expected, rel=0.03)
+
+
+def test_planes_with_lattice_like_spacings_off_the_lattice_use_the_midpoint_rule():
+    """Every spacing is within 5 % of the smallest, but the planes drift off the
+    lattice of the mean step by 0.2 Å, so a half-step limit could fall on a plane."""
+    from abtem.slicing import _lattice_pieces, _plane_lattice_periods
+
+    planes = np.cumsum([0.0] + [1.0] * 10 + [1.04] * 9)
+    cell_z = 20.4
+
+    assert _plane_lattice_periods(planes, cell_z) == 20
+    assert _lattice_pieces(planes, cell_z, 1.0) is None
+
+    atoms = _atoms_at_z(planes, cell_z=cell_z)
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+    assert sum(result) == pytest.approx(cell_z)
+    assert max(result) <= 1.0 + 1e-9
+
+
+def test_planes_closer_than_the_tolerance_are_not_a_lattice():
+    from abtem.slicing import _plane_lattice_periods
+
+    assert _plane_lattice_periods(np.array([0.0, 0.0005, 2.0]), 4.0) is None

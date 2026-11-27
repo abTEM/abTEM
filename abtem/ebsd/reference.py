@@ -134,6 +134,9 @@ def _patch_intensities(
                 _displaced(slab, rotation, builder._frozen_phonons),
                 gpts=gpts,
                 slice_thickness=builder._slice_thickness,
+                # Uniform slices: the slab is displaced per configuration, and
+                # slices that followed its atoms would differ between them.
+                commensurate=False,
                 projection="finite",
                 device=builder._device,
             ),

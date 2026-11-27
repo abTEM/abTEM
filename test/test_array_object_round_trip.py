@@ -397,7 +397,7 @@ def test_transmission_function_with_ensemble_axes_and_exit_planes_round_trip(
 ):
     frozen_phonons = abtem.FrozenPhonons(_atoms(), num_configs=3, sigmas=0.1, seed=1)
     potential = abtem.Potential(
-        frozen_phonons, gpts=(40, 30), slice_thickness=1.0, exit_planes=1
+        frozen_phonons, gpts=(40, 30), num_slices=4, exit_planes=1
     ).build(lazy=lazy)
     potential.metadata["label"] = "kept"
     original = potential.transmission_function(ENERGY)

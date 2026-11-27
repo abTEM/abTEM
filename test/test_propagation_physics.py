@@ -273,7 +273,7 @@ def test_tilted_plane_wave_matches_explicit_phase_ramp(n, energy, device):
     atoms = _general_position_cell() * (1, 1, 12)
     with abtem.config.set({"precision": "float64"}):
         potential = abtem.Potential(
-            atoms, gpts=(82, 94), slice_thickness=0.5, projection="infinite",
+            atoms, gpts=(82, 94), num_slices=80, projection="infinite",
             device=device,
         )
         k_t = n / potential.extent[0]

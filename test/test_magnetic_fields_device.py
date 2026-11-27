@@ -242,3 +242,27 @@ def test_a_strain_leaves_the_moments_and_a_rotation_turns_them():
     # the rotation part is the closest rotation to the map
     u, _, vt = np.linalg.svd(transform)
     np.testing.assert_allclose(rotated, moments @ (u @ vt), atol=1e-12)
+
+
+@pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+def test_field_is_continuous_in_a_slice_limit_between_table_nodes(cls):
+    """The kernels look up a slice in cumulative integral tables with nodes every
+    0.1 Å from the atom. A limit 0.55 Å above the atom lies halfway between two
+    nodes; snapped to the nearer one, one ulp decided which, and half the
+    maximum of the field moved between the slices on either side of it."""
+    atoms = _atoms(height=2.0)[:1]  # the Fe atom
+    atoms.positions[0, 2] = 0.7
+    limit = 0.7 + 0.55
+
+    def build(limit):
+        thicknesses = (limit, 2.0 - limit)
+        return cls(atoms, gpts=(40, 30), slice_thickness=thicknesses).build(
+            lazy=False
+        )
+
+    reference = asnumpy(build(limit).array)
+    scale = np.abs(reference).max()
+    for shifted in (np.nextafter(limit, 0.0), np.nextafter(limit, 2.0)):
+        np.testing.assert_allclose(
+            asnumpy(build(shifted).array), reference, rtol=0, atol=1e-6 * scale
+        )

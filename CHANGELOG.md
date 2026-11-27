@@ -109,12 +109,46 @@ Features:
 - `GPAWParametrization` is now usable: it fits a Lobato-form IAM potential to the X-ray scattering factor
   of an all-electron GPAW calculation, with working ionization support and a regularized fit
   ([PR #329](https://github.com/abTEM/abTEM/pull/329))
-- `Potential(sampling="auto", slice_thickness="auto")` automatically finds a grid commensurate with the atomic
-  lattice — so translation-equivalent atoms discretize identically — near the usual default targets
-  ($0.05 \ \mathrm{Å}$, $1 \ \mathrm{Å}$), preferring FFT-fast grid sizes wherever that is compatible with
-  commensurability. New `grid.round-to-fast-fft` config key (`'auto'`/`True`/`False`), `Grid.round_to_fast_fft()`,
-  and `is_fast_fft_size`/`next_fast_fft_size` helpers in `abtem.core.fft`
+- `Potential` chooses its grid and slices commensurate with the atoms, so translation-equivalent atoms
+  discretize identically, preferring FFT-fast grid sizes wherever that is compatible with commensurability
   ([PR #274](https://github.com/abTEM/abTEM/pull/274), [PR #347](https://github.com/abTEM/abTEM/pull/347))
+    - **Behaviour change:** `sampling` and `slice_thickness` are the largest sampling and slice thickness to
+      accept, as before, but the grid is now the coarsest one commensurate with the atom planes that meets the
+      sampling, and each atomic plane lies inside its own slice, so a slice limit does not cut an atom (which
+      would split it between two slices and bias `projection="finite"`); the one exception is a plane on a cell face, which the face cuts, so the
+      faces are slice limits that can fall on an atom. Planes on a lattice along z, as in a crystal, get equal slices: as many
+      lattice steps as fit the thickness, or the step divided into the fewest equal parts that fit when it is
+      wider, with the limits half a step off the lattice; only the two slices at the faces differ, so the
+      Fresnel propagator is computed about three times, not once per slice. Other planes get limits midway
+      between them, and a gap wider than the thickness a slice centred on each plane and empty slices between.
+      This also applies to an explicit numeric
+      `sampling` and `slice_thickness`, which results of an existing script depend on: `Potential(si * (3, 3, 2),
+      sampling=0.05, slice_thickness=1.0)` (cubic Si) has 336 × 336 grid points instead of 326 × 326, and 17
+      slices (0.34 and 0.68 Å) instead of 11 of 0.987 Å, so a multislice simulation does up to about twice
+      as many slices (Si at 1.3 to 1.35 Å: 1.8 to 1.9 times dev's, and 2.0 to 2.4 times the multislice time) where
+      the planes are further apart than the thickness. Use `gpts` and `num_slices` to set
+      the discretization explicitly; `commensurate=False` restores the plain grid and uniform slices
+    - Neither is ever coarser than requested. A commensurate grid that would need more than 15 % more grid
+      points than the plain grid along an axis (atom planes about as fine as the sampling) gives way to the
+      plain grid. Axes along which the atoms are not periodic (`pbc`, read along the axes of the potential, so
+      also for `plane="xz"`), and an `AtomsEnsemble` of several configurations, get the plain grid and uniform
+      slices. Atoms passed one at a time, such as the snapshots of a trajectory, each get their own grid and
+      slicing (use `FrozenPhonons`, an `AtomsEnsemble`, or `gpts` and `num_slices`), and `Potential` and
+      `GPAWPotential` can give a different number of slices for the same `slice_thickness`, which fails when
+      they are combined: pass `slice_thickness=potential.slice_thickness` to the `GPAWPotential`
+    - The grid of a `Potential` is a grid abTEM derives itself, so it is rounded up to a fast FFT length in
+      `grid.round-to-fast-fft: auto` (the default) also when a numeric `sampling` is given, and also for
+      atoms that are not periodic (a molecule's 246 × 260 grid becomes 250 × 270); `commensurate=False` leaves it
+      as `Grid` derives it
+    - The defaults are the configuration keys `potential.sampling` ($0.05 \ \mathrm{Å}$) and
+      `potential.slice-thickness` ($1 \ \mathrm{Å}$); a default grid yields to a `gpts` or `sampling` of the
+      waves it is matched to
+    - New `num_slices`, which divides the height into that many equal slices, for exact control of the
+      slicing as `gpts` gives of the grid
+    - `MagneticField` and `VectorPotential` take the same arguments and choose the same grid and slices as a
+      `Potential` of the same atoms
+    - New `grid.round-to-fast-fft` config key (`'auto'`/`True`/`False`), `Grid.round_to_fast_fft()`, and
+      `is_fast_fft_size`/`next_fast_fft_size` helpers in `abtem.core.fft`
 - Significant improvements on simulating large potentials on GPU, alongside minor performance improvements
   ([PR #269](https://github.com/abTEM/abTEM/pull/269))
     - The potential is now built in chunks of contiguous slices instead of all at once, keeping peak VRAM
@@ -304,6 +338,12 @@ Dependencies:
 
 Bugfixes:
 
+- **Behaviour change:** `MagneticField` and `VectorPotential` interpolate their tabulated integrals between the
+  0.1 Å table nodes along z instead of snapping each slice limit to the nearest node. A limit halfway between two
+  nodes moved a whole node interval of the atom's integral between the neighbouring slices depending on one
+  ulp, which moved the transverse components of the first slice near the atom by up to 60 % (5 % of the
+  field's maximum). Slices whose limits lie off the nodes change slightly; the slices of a cell still add up to the same
+  integral through it
 - C-PRISM (`upsample=True`) in single precision chooses the retained modes in double precision. The eigendecompositions
   that pick them are of normal matrices, which square the condition number, so in single precision the weakest
   directions spanned by the built beams (a few 1e-4 of the largest) mixed with the round-off null space and were
@@ -789,7 +829,7 @@ Bugfixes:
       `36.00000000000001`) used to add one: 37 slices of 0.2919 Å instead of 36 of 0.3 Å, `gpts=(37, 19)`
       instead of `(36, 18)`. This applies to `Potential`, `CrystalPotential`, `Grid`, `GridScan`,
       `Images.interpolate`, the line-profile `interpolate`, the detectors' `resample`, the grid of
-      `Potential(sampling="auto")` and the target grid of `commensurate_gpts`. A quotient with a genuine
+      the default grid of `Potential` and the target grid of `commensurate_gpts`. A quotient with a genuine
       remainder still rounds up. A repeated `GPAWPotential` with a transformed cell now matches the tiled
       one-cell potential, where its slices took one z sample more from the sixth slice on
     - **Behaviour change:** `LineScan(sampling=...)` with `endpoint=True` (the default) spaces its positions
@@ -1130,8 +1170,8 @@ Bugfixes:
 
 Documentation:
 
-- `sampling="auto"`/`slice_thickness="auto"` documented in detail in the potentials walkthrough, including a
-  worked example of the commensurability artifact they remove; cross-referenced from the convergence appendix
+- The commensurate grid and slicing of `Potential` documented in detail in the potentials walkthrough,
+  including a worked example of the commensurability artifact they remove; cross-referenced from the convergence appendix
   (manual commensurate sampling) and the performance-tips appendix (fast FFT sizes)
 - New tutorial on phonon-loss spectroscopy: energy-resolved frozen phonons, the decomposition into total, elastic
   and diffuse intensity, the momentum-resolved spectrum $S(q, E)$, the spectral detectors and detailed-balance

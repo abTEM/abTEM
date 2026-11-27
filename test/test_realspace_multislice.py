@@ -603,11 +603,7 @@ class TestBackscatteringEnsemble:
     def test_frozen_phonons(self, num_configs, slices_per_cell, scan, lazy, device):
         atoms = ase.build.bulk("Si", cubic=True)
         frozen_phonons = abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1)
-        kwargs = dict(
-            gpts=(24, 20),
-            slice_thickness=atoms.cell[2, 2] / slices_per_cell,
-            exit_planes=1,
-        )
+        kwargs = dict(gpts=(24, 20), num_slices=slices_per_cell, exit_planes=1)
 
         with abtem.config.set({"device": device}):
             members = [
@@ -806,10 +802,7 @@ class TestFullExpansionChunking:
         displaced = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
         with abtem.config.set({"device": device}):
             potential = abtem.Potential(
-                displaced * (1, 1, 3),
-                gpts=(24, 20),
-                slice_thickness=atoms.cell[2, 2],
-                exit_planes=1,
+                displaced * (1, 1, 3), gpts=(24, 20), num_slices=3, exit_planes=1
             )
             transmitted, backscattered = _multislice_arrays(potential, lazy)
             (alone,) = _multislice_arrays(potential, lazy, backscattered=False)
@@ -825,7 +818,7 @@ class TestFullExpansionChunking:
         slab.cell[2, 2] = 3 * atoms.cell[2, 2]
         with abtem.config.set({"device": device}):
             potential = abtem.Potential(
-                slab, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3, exit_planes=1
+                slab, gpts=(24, 20), num_slices=9, exit_planes=1
             )
             transmitted, backscattered = _multislice_arrays(potential, False)
             (alone,) = _multislice_arrays(potential, False, backscattered=False)

@@ -31,11 +31,11 @@ def zinc_oxide():
     return bulk("ZnO", "wurtzite", a=3.25, c=5.2, orthorhombic=True)
 
 
-def _unit(atoms, projection="finite", slice_thickness=A / 4, device="cpu"):
+def _unit(atoms, projection="finite", num_slices=4, device="cpu"):
     return Potential(
         atoms,
         sampling=SAMPLING,
-        slice_thickness=slice_thickness,
+        num_slices=num_slices,
         projection=projection,
         device=device,
     )
@@ -116,7 +116,7 @@ def test_a_unit_that_is_not_a_potential_is_left_as_it_is(silicon):
 @pytest.mark.parametrize("projection", ["finite", "infinite"])
 def test_the_crystal_is_unchanged(silicon, projection):
     """The surfaces are corrected in the slices: not in the extent of the crystal."""
-    unit = _unit(silicon, projection=projection, slice_thickness=A / 3)
+    unit = _unit(silicon, projection=projection, num_slices=3)
     corrected = CrystalPotential(unit, (1, 1, 3), exit_planes=4, correct_surfaces=True)
     plain = CrystalPotential(unit, (1, 1, 3), exit_planes=4, correct_surfaces=False)
 
@@ -155,8 +155,15 @@ def test_finite_projection_matches_a_slab(silicon, repetitions, device):
 
 
 @devices
-def test_nonuniform_auto_slicing_matches_a_slab(zinc_oxide, device):
-    unit = _unit(zinc_oxide, slice_thickness="auto", device=device)
+def test_nonuniform_default_slicing_matches_a_slab(zinc_oxide, device):
+    # the slices follow the atomic planes, so they are not uniform
+    unit = Potential(
+        zinc_oxide,
+        sampling=SAMPLING,
+        slice_thickness=1.0,
+        projection="finite",
+        device=device,
+    )
     unit_slices = np.array(unit.slice_thickness)
     assert not np.allclose(unit_slices, unit_slices[0]), "needs a nonuniform pattern"
 
@@ -175,7 +182,7 @@ def test_a_cutoff_longer_than_the_unit_matches_a_slab(repetitions):
     """The surface slices reach several units into the crystal, and the vacuum
     that holds the tails is several units thick."""
     thin = bulk("Cu", cubic=True, a=1.9)
-    unit = _unit(thin, slice_thickness=0.95)
+    unit = _unit(thin, num_slices=2)
     reach = int(np.ceil(unit._margins()[2] / unit.box[2]))
     assert reach > 1
 
@@ -219,7 +226,7 @@ def test_periodic_stack_is_not_a_slab(silicon):
 @devices
 @pytest.mark.parametrize("repetitions", [1, 4])
 def test_builds_agree(silicon, repetitions, device):
-    unit = _unit(silicon, slice_thickness=A / 3, device=device)
+    unit = _unit(silicon, num_slices=3, device=device)
     crystal = CrystalPotential(unit, (2, 1, repetitions), exit_planes=3)
     eager = crystal.build(lazy=False)
     expected = asnumpy(eager.array)

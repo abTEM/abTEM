@@ -342,7 +342,7 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         return abtem.Potential(
             ase.build.bulk("Si", cubic=True),
             gpts=(64, 64),
-            slice_thickness=1.0,
+            num_slices=6,
             **kwargs,
         )
 
@@ -1356,7 +1356,7 @@ class TestGaussianProjectionIntegralsUsable:
             with abtem.config.set({"precision": "float32", "fft": "numpy"}):
                 return np.asarray(
                     abtem.Potential(
-                        atoms, gpts=(64, 64), slice_thickness=1.0,
+                        atoms, gpts=(64, 64), num_slices=4,
                         integrator=integrator,
                     ).build(lazy=False).array
                 )

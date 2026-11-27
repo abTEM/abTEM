@@ -24,7 +24,7 @@ def test_unbuilt_component_axis_matches_the_built_array(cls, labels):
     )
     atoms.set_array("magnetic_moments", np.tile([0.0, 0.0, 2.0], (len(atoms), 1)))
 
-    builder = cls(atoms, gpts=(10, 12), slice_thickness=1.5)
+    builder = cls(atoms, gpts=(10, 12), num_slices=2)
     built = builder.build()
 
     assert builder.base_axes_metadata[1].values == labels
@@ -61,7 +61,7 @@ def test_depth_profile_of_a_vector_field_keeps_its_components(
     atoms = _iron_atoms(depth=5.0)
     if frozen_phonons:
         atoms = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
-    built = cls(atoms, gpts=(10, 12), slice_thickness=1.0, device=device).build(
+    built = cls(atoms, gpts=(10, 12), num_slices=5, device=device).build(
         lazy=lazy
     )
     # (ensemble, z, component, x, y); the profile of a lazy field is lazy and equals

@@ -914,7 +914,7 @@ def test_real_space_pixelated_detector_multislice(lazy):
     )
     result = result.compute(scheduler="synchronous") if lazy else result
 
-    assert result.shape == expected.shape == (128, 221)
+    assert result.shape == expected.shape == (128, 240)
     np.testing.assert_allclose(
         result.array, expected, rtol=0, atol=1e-12 * expected.max()
     )
