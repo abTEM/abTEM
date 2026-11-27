@@ -1049,3 +1049,36 @@ def test_scan_of_a_built_s_matrix_equals_the_scan_of_the_s_matrix():
     expected = s_matrix.scan(scan, lazy=False)
     built = s_matrix.build(lazy=False)
     np.testing.assert_allclose(built.scan(scan).array, expected.array, rtol=1e-5)
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("interpolation", [1, 2])
+def test_float64_plane_wave_expansion_is_the_analytic_one(interpolation, lazy):
+    import abtem
+
+    # the wave vectors and coordinates were single precision whatever the
+    # configured precision, so a float64 expansion carried ~1e-6 round-off
+    extent, gpts = (8.2, 9.4), (64, 72)
+    with abtem.config.set({"precision": "float64"}):
+        s_matrix = abtem.SMatrix(
+            energy=100e3,
+            semiangle_cutoff=20,
+            extent=extent,
+            gpts=gpts,
+            interpolation=interpolation,
+            downsample=False,
+        )
+        built = s_matrix.build(lazy=lazy)
+        assert built.array.dtype == np.complex128
+        array = np.asarray(built.compute().array if lazy else built.array)
+        wave_vectors = np.asarray(s_matrix.wave_vectors)
+
+    assert wave_vectors.dtype == np.float64
+    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
+    phase = (
+        wave_vectors[:, 0, None, None] * x[:, None]
+        + wave_vectors[:, 1, None, None] * y[None, :]
+    )
+    expected = np.exp(2j * np.pi * phase) * interpolation**2 / np.prod(gpts)
+    np.testing.assert_allclose(array, expected, rtol=0, atol=1e-12 * np.abs(expected).max())

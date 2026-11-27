@@ -437,13 +437,13 @@ def _map_blocks(array, scans, block_indices, window_offset=(0, 0), **kwargs):
             new_axis=new_axis,
             chunks=new_chunks,
             **kwargs,
-            meta=np.array((), dtype=np.complex64),
+            meta=np.array((), dtype=get_dtype(complex=True)),
         )
 
         if len(scan) == 0:
             block = da.zeros(
                 (0,) * len(block.shape),
-                dtype=np.complex64,
+                dtype=get_dtype(complex=True),
             )
 
         blocks += (block,)
@@ -709,7 +709,7 @@ def _single_rechunk_reduce(
                 (0,) * len(array.shape[:-3]) + indices,
                 da.zeros(
                     (0,) * len(blocks.shape),
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 ),
             )
             continue
@@ -747,7 +747,7 @@ def _single_rechunk_reduce(
             drop_axis=drop_axis,
             chunks=new_chunks,
             **kwargs,
-            meta=np.array((), dtype=np.complex64),
+            meta=np.array((), dtype=get_dtype(complex=True)),
         )
 
         itemset(blocks, (0,) * len(array.shape[:-3]) + indices, new_block)
@@ -811,7 +811,7 @@ def _no_chunks_reduce(
         new_axis=new_axis,
         chunks=chunks,
         **kwargs,
-        meta=np.array((), dtype=np.complex64),
+        meta=np.array((), dtype=get_dtype(complex=True)),
     )
 
     dummy_probes = s_matrix_array.dummy_probes(scan=scan, ctf=ctf)
@@ -915,7 +915,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
-        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=np.float32)
+        kwargs["wave_vectors"] = np.array(
+            kwargs["wave_vectors"], dtype=get_dtype(complex=False)
+        )
         return kwargs
 
         # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
@@ -1289,7 +1291,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         shape = (len(scan), num_leading) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1, -1)
 
-        dtype = np.dtype("complex64")
+        dtype = np.dtype(get_dtype(complex=True))
         batch = validate_chunks(shape, chunks, dtype=dtype, device=self.device)[0][0]
 
         if max_batch_reduction != "auto" or self.window_gpts == self.gpts:
@@ -1720,7 +1722,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             shape=(len(self),) + exit_planes_shape + self.gpts,
             chunks=("auto",) + (-1,) * (len(exit_planes_shape) + 2),
             max_elements=max_batch,
-            dtype=np.dtype("complex64"),
+            dtype=np.dtype(get_dtype(complex=True)),
             device=self.device,
         )
         return chunks[:1] + chunks[-2:]
@@ -1869,7 +1871,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         xp = get_array_module(s_matrix.device)
 
-        wave_vectors = xp.asarray(s_matrix.wave_vectors, dtype=xp.float32)
+        wave_vectors = xp.asarray(
+            s_matrix.wave_vectors, dtype=get_dtype(complex=False)
+        )
 
         array = plane_waves(
             wave_vectors[wave_vector_range], s_matrix.extent, s_matrix.gpts
