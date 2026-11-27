@@ -2,9 +2,11 @@
 #
 # A DRIFT verdict (candidate differs from the reference beyond the case's
 # tolerance) fails `abtem-bench compare --fail-on drift` unless an entry here
-# covers it. Add the entry in the same pull request as the change that causes
-# the drift; the report renders the entries that apply as the changelog table,
-# with the drift it measured, and reports entries that match nothing as stale.
+# covers it; a SHAPE verdict (an output's shape, axes or dtype differs) fails
+# `--fail-on shape` unless entries declare the new shape. Add the entry in the
+# same pull request as the change that causes the drift; the report renders the
+# entries that apply as the changelog table, with the drift it measured, and
+# reports entries that match nothing as stale.
 #
 # Fields
 #   case          glob over case ids or names, e.g. "hrtem.exitwave@*" or
@@ -25,6 +27,13 @@
 #                 or phase-scrambled output
 #   max_rel, max_intensity
 #                 optional bounds per output on rel and |intensity|
+#   shape         optional table mapping an output name to the shape the
+#                 candidate gives it, e.g. { potential = [33, 256, 256] }: an
+#                 output whose shape changed to that one is accepted when its
+#                 dtype is unchanged and its values are finite (its axis
+#                 mismatches follow from the new shape); the bounds above then
+#                 apply to the case's other outputs only; each name must be an
+#                 output of a case the glob matches
 # A drift beyond any bound of a change's entries is not accepted by that
 # change; when several changes in the candidate cover a case (dev holds both
 # #298 and the 1.0.11 port of the #269 accumulator), the drift is accepted when
