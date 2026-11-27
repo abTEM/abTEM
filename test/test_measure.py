@@ -1935,9 +1935,84 @@ class TestDiffractionPatternsIndexOrientations:
         )
         if lazy:
             patterns = patterns.lazy()
-        with pytest.raises(ValueError, match="length 1 or the length"):
+        with pytest.raises(ValueError, match="length 1 or the length|not of length 1"):
             patterns.index_diffraction_spots(
                 cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
+
+    @staticmethod
+    def _patterns(ensemble_shape, lazy):
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n))) for n in ensemble_shape
+            ],
+        )
+        return patterns.lazy() if lazy else patterns
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape, squeezed_shape",
+        [
+            ((), (), ()),
+            ((3,), (3,), (3,)),
+            ((4, 3), (4, 3), (4, 3)),
+            # extra leading axes of length 1
+            ((), (1,), ()),
+            ((), (1, 1), ()),
+            ((3,), (1, 3), (3,)),
+            ((3,), (1, 1, 3), (3,)),
+            ((4, 3), (1, 4, 3), (4, 3)),
+            # a length-1 axis within the ensemble axes is broadcast, not dropped
+            ((4, 3), (4, 1), (4, 1)),
+            ((4, 3), (1, 3), (1, 3)),
+            ((4, 3), (1, 4, 1), (4, 1)),
+        ],
+    )
+    def test_extra_leading_axes_of_length_one_are_dropped(
+        self, lazy, ensemble_shape, matrices_ensemble_shape, squeezed_shape
+    ):
+        """Matrices with extra leading axes of length 1 index the patterns as
+        the matrices without them (as in 1.0.11)."""
+        n = int(np.prod(matrices_ensemble_shape))
+        matrices = self._matrices(n, seed=1).reshape(matrices_ensemble_shape + (3, 3))
+        squeezed = matrices.reshape(squeezed_shape + (3, 3))
+
+        indexed, expected = (
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=m
+            )
+            for m in (matrices, squeezed)
+        )
+        if lazy:
+            indexed, expected = indexed.compute(), expected.compute()
+
+        assert indexed.ensemble_shape == ensemble_shape
+        assert indexed.array.shape == expected.array.shape
+        np.testing.assert_array_equal(indexed.array, expected.array)
+        np.testing.assert_array_equal(indexed.miller_indices, expected.miller_indices)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape",
+        [
+            ((), (2,)),
+            ((3,), (2, 3)),
+            ((4, 3), (2, 4, 3)),
+            ((3,), (3, 1)),
+            ((4, 3), (4, 1, 1)),
+        ],
+    )
+    def test_extra_leading_axes_longer_than_one_raise(
+        self, lazy, ensemble_shape, matrices_ensemble_shape
+    ):
+        matrices = self._matrices(int(np.prod(matrices_ensemble_shape)), seed=1)
+        matrices = matrices.reshape(matrices_ensemble_shape + (3, 3))
+        with pytest.raises(ValueError, match="more ensemble axes|length 1 or the"):
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=matrices
             )
 
 

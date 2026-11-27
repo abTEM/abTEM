@@ -2836,21 +2836,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        # each pattern is indexed with one matrix: an axis of the matrices is
+        # each pattern is indexed with one matrix: leading axes of length 1 beyond
+        # the ensemble are dropped, and an axis of the remaining ensemble shape is
         # either 1 or as long as the matching ensemble axis
-        if orientation_matrices is not None and (
-            len(orientation_matrices.shape[:-2]) > len(self.ensemble_shape)
-            or any(
+        if orientation_matrices is not None:
+            n_extra = orientation_matrices.ndim - 2 - len(self.ensemble_shape)
+            if n_extra > 0:
+                if any(n != 1 for n in orientation_matrices.shape[:n_extra]):
+                    raise ValueError(
+                        "The orientation matrices have more ensemble axes than the "
+                        "diffraction patterns, and the extra leading axes are not of "
+                        "length 1: the ensemble shape of the matrices is "
+                        f"{orientation_matrices.shape[:-2]}, that of the patterns is "
+                        f"{self.ensemble_shape}."
+                    )
+                orientation_matrices = orientation_matrices[(0,) * n_extra]
+            if any(
                 m not in (1, n)
                 for n, m in zip(
-                    self.ensemble_shape[::-1], orientation_matrices.shape[:-2][::-1]
+                    self.ensemble_shape[::-1], orientation_matrices.shape[-3::-1]
                 )
-            )
-        ):
-            raise ValueError(
-                "Every axis of the orientation matrices' ensemble shape must have"
-                " length 1 or the length of the matching ensemble axis."
-            )
+            ):
+                raise ValueError(
+                    "Every axis of the orientation matrices' ensemble shape must have"
+                    " length 1 or the length of the matching ensemble axis."
+                )
 
         if energy is None:
             energy = self._get_from_metadata("energy")
