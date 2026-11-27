@@ -2785,3 +2785,47 @@ def test_line_profiles_show_with_a_logscale_keyword(logscale):
         assert visualization.axes[0, 0].get_yscale() == ("log" if logscale else "linear")
     finally:
         plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "y",
+    [
+        np.linspace(100, 1000, 50),
+        np.linspace(10, 1000, 50),
+        np.logspace(-3, 0, 50),
+        np.linspace(-1, 1, 50),
+        np.full(50, 3.0),
+    ],
+    ids=["100-1000", "10-1000", "decades", "with negatives", "constant"],
+)
+def test_log_scale_line_profiles_have_one_margin_rule(y):
+    # two rules set the limits, with a lower margin of a factor 1.82 for 100 to 1000
+    # and 1.1 for 10 to 1000; the margin is now the same factor at both ends
+    import matplotlib.pyplot as plt
+
+    visualization = RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+    try:
+        low, high = visualization.axes[0, 0].get_ylim()
+        shown = y[y > 0]
+        assert low < shown.min() and high > shown.max()
+        np.testing.assert_allclose(
+            shown.min() / low, high / shown.max(), rtol=1e-6
+        )
+        assert shown.min() / low < 1.5 or shown.max() == shown.min()
+        # the artist reports the same limits as it sets
+        np.testing.assert_allclose(
+            visualization.artists[0, 0].get_ylim(), [low, high], rtol=1e-6
+        )
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize("y", [np.zeros(5), -np.ones(5)], ids=["zeros", "negative"])
+def test_log_scale_line_profiles_without_a_positive_value_warn(y):
+    import matplotlib.pyplot as plt
+
+    try:
+        with pytest.warns(UserWarning, match="no positive values"):
+            RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+    finally:
+        plt.close("all")

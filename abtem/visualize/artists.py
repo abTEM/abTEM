@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -67,6 +68,37 @@ def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=No
         value_limits[1] += margin
 
     return value_limits
+
+
+def _log_value_limits(data, value_limits=None, warn=True):
+    """The limits of a logarithmic value axis.
+
+    Only the positive values of the data can be shown. The limits are those given, or
+    the extremes of the positive values for one that is not given or not positive,
+    widened by a factor (their ratio to the power 0.05, or 1.1 for a single value) so
+    that the margin is 5 % of the decades shown, as it is 5 % of the range on a linear
+    axis. A plot without a positive value warns and shows one decade from 1.
+    """
+    data = np.asarray(data)
+    positive = data[data > 0]
+    limits = [None, None] if value_limits is None else list(value_limits)
+    if positive.size:
+        defaults = [float(positive.min()), float(positive.max())]
+    else:
+        defaults = [None, None]
+
+    for i in range(2):
+        if limits[i] is None or not limits[i] > 0:
+            limits[i] = defaults[i]
+
+    if limits[0] is None or limits[1] is None:
+        if warn:
+            warnings.warn("There are no positive values to show on a logarithmic axis.")
+        return [1.0, 10.0]
+
+    low, high = limits
+    margin = (high / low) ** 0.05 if high > low else 1.1
+    return [low / margin, high * margin]
 
 
 class ScaleBar:
@@ -276,23 +308,17 @@ class LinesArtist(Artist1D):
         return [xlim[0] - 0.05 * ptp, xlim[1] + 0.05 * ptp]
 
     def get_ylim(self):
-        log = self._ax.get_yscale() == "log"
+        if self._ax.get_yscale() == "log":
+            data = np.concatenate(
+                [np.ravel(line.get_data()[1]) for line in self._lines]
+            )
+            return _log_value_limits(data, warn=False)
+
         ylim = [np.inf, -np.inf]
         for line in self._lines:
             data = np.asarray(line.get_data()[1])
-            if log:
-                # only positive values can be shown, and the margin is a factor
-                data = data[data > 0]
-                if data.size == 0:
-                    continue
             new_ylim = [np.min(data), np.max(data)]
             ylim = [min(new_ylim[0], ylim[0]), max(new_ylim[1], ylim[1])]
-
-        if log:
-            if ylim[0] > ylim[1]:
-                return [1.0, 10.0]
-            margin = (ylim[1] / ylim[0]) ** 0.05 if ylim[1] > ylim[0] else 1.1
-            return [ylim[0] / margin, ylim[1] * margin]
 
         ptp = ylim[1] - ylim[0]
         ptp = max(ptp, ylim[1] * 0.01)
@@ -343,18 +369,11 @@ class LinesArtist(Artist1D):
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
-        value_limits = _get_value_limits(data, value_limits, margin=0.05)
 
         if self._ax.get_yscale() == "log":
-            # a logarithmic axis shows only positive values, and the margin of the
-            # limits is a factor
-            positive = data[data > 0]
-            low, high = value_limits
-            if low <= 0:
-                low = positive.min() / 1.1 if positive.size else 1.0
-            if high <= low:
-                high = low * 10.0
-            value_limits = [low, high]
+            value_limits = _log_value_limits(data, value_limits)
+        else:
+            value_limits = _get_value_limits(data, value_limits, margin=0.05)
 
         self._ax.set_ylim(value_limits)
 
