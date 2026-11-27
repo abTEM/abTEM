@@ -33,6 +33,7 @@ from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     FrozenPhonons,
+    _displace_repeated_atoms,
     _safe_read_atoms,
 )
 from abtem.parametrizations import EwaldParametrization, LobatoParametrization
@@ -574,7 +575,7 @@ class GPAWPotential(_PotentialBuilder):
             gd = calculator.gd
             nt_sG = calculator.nt_sG
 
-        random_atoms = self.frozen_phonons.randomize(atoms)
+        random_atoms = _displace_repeated_atoms(self.frozen_phonons, self.repetitions)
 
         calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
         calc.initialize(random_atoms)
@@ -591,9 +592,7 @@ class GPAWPotential(_PotentialBuilder):
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
 
-        atoms = self.frozen_phonons.atoms * self.repetitions
-
-        atoms = self.frozen_phonons.randomize(atoms)
+        atoms = _displace_repeated_atoms(self.frozen_phonons, self.repetitions)
 
         ewald_potential = Potential(
             atoms=atoms,
@@ -662,7 +661,7 @@ class GPAWPotential(_PotentialBuilder):
         # gd = calculator.gd
         # nt_sG = calculator.nt_sG
 
-        random_atoms = self.frozen_phonons.randomize(atoms)
+        random_atoms = _displace_repeated_atoms(self.frozen_phonons, self.repetitions)
 
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001

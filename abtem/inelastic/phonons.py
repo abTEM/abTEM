@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
+import copy
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -265,6 +266,24 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
+
+
+def _displace_repeated_atoms(
+    frozen_phonons, repetitions: tuple[int, int, int]
+) -> Atoms:
+    """The atoms of `frozen_phonons` repeated and displaced as one configuration.
+
+    A displacement given for each atom is repeated with the atoms: `atoms *
+    repetitions` keeps the order of the atoms within each copy of the cell.
+    """
+    atoms = frozen_phonons.atoms * repetitions
+    sigmas = getattr(frozen_phonons, "_sigmas", None)
+    if isinstance(sigmas, np.ndarray):
+        frozen_phonons = copy.copy(frozen_phonons)
+        frozen_phonons._sigmas = np.tile(
+            sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1)
+        )
+    return frozen_phonons.randomize(atoms)
 
 
 class FrozenPhonons(BaseFrozenPhonons):

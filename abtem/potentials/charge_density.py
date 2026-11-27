@@ -3,7 +3,6 @@ electrostatic potential in multislice simulations."""
 
 from __future__ import annotations
 
-import copy
 from functools import partial
 from typing import Tuple, Union
 
@@ -20,7 +19,11 @@ from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.utils import get_dtype, itemset
-from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
+from abtem.inelastic.phonons import (
+    AtomsEnsemble,
+    DummyFrozenPhonons,
+    _displace_repeated_atoms,
+)
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
@@ -311,24 +314,6 @@ def _generate_slices(
 
         slic._array -= slic._array.min()
         yield slic
-
-
-def _displace_repeated_atoms(
-    frozen_phonons, repetitions: Tuple[int, int, int]
-) -> Atoms:
-    """The atoms of `frozen_phonons` repeated and displaced as one configuration.
-
-    A displacement given for each atom is repeated with the atoms: `atoms *
-    repetitions` keeps the order of the atoms within each copy of the cell.
-    """
-    atoms = frozen_phonons.atoms * repetitions
-    sigmas = getattr(frozen_phonons, "_sigmas", None)
-    if isinstance(sigmas, np.ndarray):
-        frozen_phonons = copy.copy(frozen_phonons)
-        frozen_phonons._sigmas = np.tile(
-            sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1)
-        )
-    return frozen_phonons.randomize(atoms)
 
 
 class ChargeDensityPotential(_PotentialBuilder):
