@@ -403,3 +403,45 @@ def test_repeated_cell_configuration_equals_the_potential_of_its_displaced_atoms
         np.testing.assert_allclose(
             built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
         )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "sigmas",
+    [np.array([0.05, 0.15]), np.array([[0.05, 0.1, 0.0], [0.15, 0.05, 0.1]])],
+    ids=["per_atom", "per_atom_anisotropic"],
+)
+def test_repeated_cell_displaces_atoms_with_their_own_sigmas(
+    charge_density_3d, sigmas, lazy
+):
+    """Displacements given for each atom are repeated with the atoms (they raised
+    "Property must be provided for all atoms.")."""
+    atoms = Atoms(
+        "C2", positions=[(1.5, 2.5, 2.5), (3.5, 2.5, 2.5)], cell=(5, 5, 5), pbc=True
+    )
+    repetitions = (2, 1, 1)
+    built = ChargeDensityPotential(
+        FrozenPhonons(atoms, 3, sigmas=sigmas, seed=1, ensemble_mean=False),
+        charge_density_3d,
+        sampling=0.4,
+        repetitions=repetitions,
+    ).build(lazy=lazy)
+    built = built.compute() if lazy else built
+
+    # the same configurations from the repeated atoms, with the sigmas repeated
+    repeated_sigmas = np.tile(sigmas, (2,) + (1,) * (sigmas.ndim - 1))
+    expected = ChargeDensityPotential(
+        FrozenPhonons(
+            atoms * repetitions, 3, sigmas=repeated_sigmas, seed=1, ensemble_mean=False
+        ),
+        np.tile(charge_density_3d, repetitions),
+        sampling=0.4,
+    ).build(lazy=False)
+
+    scale = np.abs(expected.array).max()
+    np.testing.assert_allclose(built.array, expected.array, rtol=0, atol=1e-6 * scale)
+    # the atoms are displaced
+    undisplaced = ChargeDensityPotential(
+        atoms, charge_density_3d, sampling=0.4, repetitions=repetitions
+    ).build(lazy=False)
+    assert np.abs(built.array[0] - undisplaced.array).max() > 1e-3 * scale

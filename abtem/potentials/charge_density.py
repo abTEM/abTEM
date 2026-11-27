@@ -3,6 +3,7 @@ electrostatic potential in multislice simulations."""
 
 from __future__ import annotations
 
+import copy
 from functools import partial
 from typing import Tuple, Union
 
@@ -310,6 +311,24 @@ def _generate_slices(
 
         slic._array -= slic._array.min()
         yield slic
+
+
+def _displace_repeated_atoms(
+    frozen_phonons, repetitions: Tuple[int, int, int]
+) -> Atoms:
+    """The atoms of `frozen_phonons` repeated and displaced as one configuration.
+
+    A displacement given for each atom is repeated with the atoms: `atoms *
+    repetitions` keeps the order of the atoms within each copy of the cell.
+    """
+    atoms = frozen_phonons.atoms * repetitions
+    sigmas = getattr(frozen_phonons, "_sigmas", None)
+    if isinstance(sigmas, np.ndarray):
+        frozen_phonons = copy.copy(frozen_phonons)
+        frozen_phonons._sigmas = np.tile(
+            sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1)
+        )
+    return frozen_phonons.randomize(atoms)
 
 
 class ChargeDensityPotential(_PotentialBuilder):
@@ -626,9 +645,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             # displaced here, as the potential made below holds these atoms alone
-            atoms = self.frozen_phonons.randomize(
-                self.frozen_phonons.atoms * self.repetitions
-            )
+            atoms = _displace_repeated_atoms(self.frozen_phonons, self.repetitions)
             ewald_parametrization = EwaldParametrization(width=3)
             ewald_potential = Potential(
                 atoms=atoms,
