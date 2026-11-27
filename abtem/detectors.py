@@ -26,6 +26,7 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
+    _image_resampling_gpts,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -1155,10 +1156,7 @@ class PixelatedDetector(BaseDetector):
         sampling, gpts = waves._valid_sampling, waves._valid_gpts
         if self.resample:
             extent = tuple(d * n for d, n in zip(sampling, gpts))
-            resample = (
-                (self.resample,) * 2 if np.isscalar(self.resample) else self.resample
-            )
-            gpts = tuple(int(np.ceil(e / d)) for e, d in zip(extent, resample))
+            gpts = _image_resampling_gpts(extent, self.resample)
             sampling = tuple(e / n for e, n in zip(extent, gpts))
         return sampling, gpts
 

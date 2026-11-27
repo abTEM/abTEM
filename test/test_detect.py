@@ -765,3 +765,24 @@ def test_pixelated_detector_resample_equals_interpolate(
     np.testing.assert_allclose(
         asnumpy(result.array), expected, rtol=0, atol=1e-5 * expected.max()
     )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_real_space_pixelated_detector_resamples_to_a_sampling_that_divides_the_extent(
+    lazy,
+):
+    # 10.8 / 0.3 is 36.00000000000001 in floats, so the detector declared 37 pixels
+    # where the images had 36.
+    from ase import Atoms
+
+    atoms = Atoms("C", positions=[(5.4, 5.4, 1.0)], cell=(10.8, 10.8, 2.0), pbc=True)
+    potential = abtem.Potential(atoms, gpts=36, slice_thickness=2.0)
+    detector = abtem.PixelatedDetector(reciprocal_space=False, resample=0.3)
+
+    result = abtem.PlaneWave(energy=100e3).multislice(
+        potential, detectors=detector, lazy=lazy
+    )
+    result = result.compute() if lazy else result
+
+    assert result.shape == (36, 36)
+    assert result.base_axes_metadata[0].sampling == pytest.approx(0.3)
