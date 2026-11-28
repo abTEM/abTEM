@@ -2525,6 +2525,38 @@ def test_band_solver_in_single_precision_is_as_accurate_as_eigh():
     assert np.abs(single - reference).max() < 3e-5 * np.abs(reference).max()
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("threads", [1, 4])
+def test_band_solver_of_a_single_precision_host_matrix_is_solved_in_double(
+    dtype, threads
+):
+    # reduced in single precision, the band form of a 960-beam matrix was off by
+    # 1e-5 to 3e-5 of the largest amplitude, by an amount that depended on how the
+    # BLAS split its products between threads; the rounding of the matrix itself
+    # (the floor, taken out here by solving the rounded matrix exactly) is 1e-6
+    from threadpoolctl import threadpool_limits
+
+    rng = np.random.default_rng(3)
+    n = 400
+    couplings = rng.normal(size=(n, n)) * 0.002
+    if dtype == np.complex64:
+        couplings = couplings + 1j * rng.normal(size=(n, n)) * 0.002
+    diagonal = np.diag(np.sort(rng.uniform(-2.0, 2.0, n)))
+    A = (diagonal + (couplings + couplings.conj().T) / 2).astype(dtype)
+    scales = np.array([8.0, 80.0])
+
+    values, vectors = np.linalg.eigh(A.astype(np.complex128))
+    phases = np.exp(1j * np.outer(values, scales))
+    exact = vectors @ (phases * vectors[0].conj()[:, None])
+
+    with threadpool_limits(threads):
+        result = propagate_incident_beam(A, scales)
+
+    assert result.dtype == np.complex64
+    # beyond the rounding of the result to single precision: the solve was in double
+    assert np.abs(result - exact).max() < 2e-7 * np.abs(exact).max()
+
+
 def test_band_solver_through_lazy_rotation_series():
     ensemble = _silicon_bloch_waves("cpu", g_max=6.0, sg_max=0.3).rotate(
         "x", np.array([0.0, 0.02])

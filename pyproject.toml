@@ -183,6 +183,11 @@ filterwarnings = [
     # GPAW advises against OMP_NUM_THREADS above 1 in plane-wave mode, a performance
     # remark that the small calculations of the tests do not need.
     "ignore:Using OMP_NUM_THREADS>1 in PW-mode is not useful:UserWarning",
+    # matplotlib's CallbackRegistry raises KeyError 'changed' when a weakly held
+    # listener is garbage-collected inside CallbackRegistry.blocked(); the
+    # collection's timing decides which test sees it. Python 3.14 words the
+    # message differently, hence "Exception ignored.*".
+    "ignore:(?s)Exception ignored.*WeakMethod.*KeyError. 'changed':pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.numpydoc_validation]

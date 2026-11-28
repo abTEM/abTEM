@@ -143,6 +143,68 @@ class TestEnvironmentVariables:
         assert "chunk_size" not in fresh_config["dask"]
 
 
+class TestSectionAndKeyVariables:
+    """``ABTEM_<SECTION>`` and ``ABTEM_<SECTION>__<KEY>`` in one environment:
+    the variable of the key wins, whatever the order of the environment."""
+
+    SECTION = "ABTEM_DIAGNOSTICS"
+    KEY = "ABTEM_DIAGNOSTICS__TASK_PROGRESS"
+
+    @staticmethod
+    def _environment(items, section_first):
+        return dict(items if section_first else reversed(items))
+
+    @pytest.mark.parametrize("section_first", [True, False])
+    def test_a_key_variable_wins_over_a_section_set_to_a_value(self, section_first):
+        env = self._environment([(self.SECTION, "1"), (self.KEY, "1")], section_first)
+
+        with pytest.warns(UserWarning) as record:
+            collected = config.collect_env(env)
+
+        assert collected == {"diagnostics": {"task_progress": 1}}
+        message = str(record[0].message)
+        assert "ABTEM_DIAGNOSTICS=1" in message
+        assert self.KEY in message
+
+    @pytest.mark.parametrize("section_first", [True, False])
+    def test_a_key_variable_overrides_the_key_of_a_section_given_as_a_dict(
+        self, section_first
+    ):
+        env = self._environment(
+            [
+                (self.SECTION, "{'task-progress': False, 'progress-bar': True}"),
+                (self.KEY, "1"),
+            ],
+            section_first,
+        )
+
+        collected = config.collect_env(env)
+
+        assert collected == {"diagnostics": {"task-progress": 1, "progress-bar": True}}
+
+    @pytest.mark.parametrize("section_first", [True, False])
+    def test_the_deprecated_dask_variables_resolve_the_same_way(self, section_first):
+        env = self._environment(
+            [("DASK_DIAGNOSTICS", "1"), ("DASK_DIAGNOSTICS__TASK_PROGRESS", "1")],
+            section_first,
+        )
+
+        with pytest.warns(FutureWarning):
+            with pytest.warns(UserWarning) as record:
+                collected = config.collect_legacy_env(env)
+
+        assert collected == {"diagnostics": {"task_progress": 1}}
+        message = str(next(w for w in record if w.category is UserWarning).message)
+        assert "DASK_DIAGNOSTICS=1" in message
+        assert "DASK_DIAGNOSTICS__TASK_PROGRESS" in message
+
+    def test_a_lone_section_or_a_lone_key_is_unchanged(self):
+        assert config.collect_env({self.SECTION: "1"}) == {"diagnostics": 1}
+        assert config.collect_env({self.KEY: "1"}) == {
+            "diagnostics": {"task_progress": 1}
+        }
+
+
 class TestControlEnvVarsDoNotLeak:
     """ABTEM_CONFIG/ABTEM_ROOT_CONFIG control config *discovery* (_get_paths);
     they must not also be read as configuration values by collect_env, or
