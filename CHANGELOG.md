@@ -304,6 +304,7 @@ Dependencies:
 
 Bugfixes:
 
+- `MeasurementsEnsemble.show()` plots along the last ensemble axis that is not exploded instead of raising `IndexError`; exploding every axis raises a `ValueError` that says why. `RealSpaceLineProfiles.show(logscale=True)` works (the keyword reached matplotlib's `Line2D`), with limits computed for positive values with one margin rule, and a warning when there is none. `max_batch_multislice` and the other batch sizes accept NumPy integers. `show_atoms` raises a `ValueError` for a plane that is not a string such as `'xy'`; the pair of viewing angles its documentation offered was never implemented, and the documentation now says so. Also in 1.0.12.
 - C-PRISM (`upsample=True`) in single precision chooses the retained modes in double precision. The eigendecompositions
   that pick them are of normal matrices, which square the condition number, so in single precision the weakest
   directions spanned by the built beams (a few 1e-4 of the largest) mixed with the round-off null space and were

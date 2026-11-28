@@ -799,3 +799,51 @@ def test_a_small_max_batch_multislice_builds_each_reseeded_pool_once(
     )
 
     assert list(builds.values()) == [1, 1, 1]
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("path", ["build", "scan"])
+def test_max_batch_multislice_accepts_a_numpy_integer(lazy, path):
+    """A NumPy integer, such as an np.arange loop gives, batches as an int does."""
+    from ase import Atoms
+
+    from abtem import Potential, SMatrix
+
+    atoms = Atoms("Si", positions=[(2.0, 2.0, 1.0)], cell=(4, 4, 2), pbc=True)
+    potential = Potential(atoms, gpts=32, slice_thickness=1)
+
+    def run(max_batch):
+        s_matrix = SMatrix(
+            energy=100e3, semiangle_cutoff=20, potential=potential, interpolation=2
+        )
+        if path == "build":
+            result = s_matrix.build(lazy=lazy, max_batch=max_batch)
+        else:
+            result = s_matrix.scan(
+                GridScan(start=(0, 0), end=(2, 2), gpts=2),
+                max_batch_multislice=max_batch,
+                lazy=lazy,
+            )
+        return result.compute() if lazy else result
+
+    np.testing.assert_array_equal(run(np.int64(4)).array, run(4).array)
+
+
+def test_a_numpy_integer_batch_size_works_for_probes_too():
+    import abtem
+
+    probe = abtem.Probe(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=np.array([0.0, 10.0, 20.0]),
+        gpts=32,
+        extent=4.0,
+    )
+    expected = probe.build(lazy=True, max_batch=2)
+    actual = probe.build(lazy=True, max_batch=np.int64(2))
+
+    # the same chunks: a NumPy integer read as a number of elements, not of items,
+    # would split the three defocus values differently
+    assert expected.array.chunks[0] == (2, 1)
+    assert actual.array.chunks == expected.array.chunks
+    np.testing.assert_array_equal(actual.compute().array, expected.compute().array)

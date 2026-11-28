@@ -77,7 +77,7 @@ from abtem.core.utils import (
 # from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import LinesArtist
-from abtem.visualize.visualizations import Visualization
+from abtem.visualize.visualizations import Visualization, _validate_axes_types
 
 interpolate_bilinear_cuda: Optional[Callable] = None
 sum_run_length_encoded: Optional[Callable] = None
@@ -1428,6 +1428,20 @@ class MeasurementsEnsemble(BaseMeasurements):
         # ]
 
         artist_type = LinesArtist
+
+        # A measurement without base axes is plotted along one of its ensemble axes,
+        # which is overlaid: by default the last one that is not exploded.
+        overlaid, exploded = _validate_axes_types(
+            overlay, explode, len(self.ensemble_shape)
+        )
+        if not overlaid:
+            free = [i for i in range(len(self.ensemble_shape)) if i not in exploded]
+            if not free:
+                raise ValueError(
+                    "every ensemble axis is exploded, so none is left to plot along; "
+                    "leave one out of `explode`"
+                )
+            overlay = (free[-1],)
 
         visualization = Visualization(
             measurement=self,

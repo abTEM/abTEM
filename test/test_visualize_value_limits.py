@@ -24,7 +24,7 @@ def _values():
     return np.random.default_rng(0).random((32, 24)) + 0.5
 
 
-def _indexed_diffraction_patterns():
+def _indexed_diffraction_patterns(semiangle_cutoff=20, **probe_kwargs):
     atoms = Atoms(
         "CO",
         positions=[(1.0, 1.0, 0.5), (2.5, 1.7, 2.5)],
@@ -32,7 +32,11 @@ def _indexed_diffraction_patterns():
         pbc=True,
     )
     probe = abtem.Probe(
-        energy=100e3, semiangle_cutoff=20, extent=(4.0, 3.0), gpts=(40, 30)
+        energy=100e3,
+        semiangle_cutoff=semiangle_cutoff,
+        extent=(4.0, 3.0),
+        gpts=(40, 30),
+        **probe_kwargs,
     )
     patterns = probe.build(lazy=False).diffraction_patterns(max_angle=None)
     return patterns.index_diffraction_spots(cell=atoms.cell)
@@ -142,3 +146,48 @@ def test_a_norm_listener_collected_while_the_norm_is_blocked_is_not_an_error(
     visualization.get_figure().canvas.draw()
     cax = visualization.axes._caxes[0, 0][-1]
     assert cax.get_ylim() == pytest.approx((0.2, 3.0), rel=1e-6)
+
+
+@pytest.mark.parametrize("explode", [False, True], ids=["single", "common_scale"])
+def test_log_limit_of_diffraction_spots_comes_from_the_spots_that_are_drawn(explode):
+    # the indexed pattern holds positive values far below the threshold of the spots
+    # (numerical noise), which are not drawn: the shared lower limit was one of those,
+    # and every drawn spot sat in the top tenth of the colormap
+    patterns = _indexed_diffraction_patterns(defocus=[0.0, 50.0] if explode else 0.0)
+    drawn = patterns.array[patterns.array > 1e-6]
+    assert patterns.array[patterns.array > 0].min() < 1e-6 < drawn.min()
+
+    if explode:
+        visualization = patterns.show(
+            logscale=True, explode=True, common_color_scale=True
+        )
+    else:
+        visualization = patterns.show(logscale=True, vmin=0)
+    visualization.get_figure().canvas.draw()
+
+    assert visualization.artists.size == (2 if explode else 1)
+    for artist in visualization.artists.ravel():
+        assert artist.norm.vmin == pytest.approx(drawn.min())
+        assert artist.norm.vmax == pytest.approx(drawn.max())
+
+
+def test_common_log_limits_of_spots_do_not_depend_on_the_member_shown():
+    # one artist shows one member at a time: the limits of the whole ensemble that can
+    # be drawn, not those of the member on screen (the lower limit followed it)
+    patterns = _indexed_diffraction_patterns(semiangle_cutoff=[8.0, 30.0])
+    drawn = patterns.array[patterns.array > 1e-6]
+    assert patterns.array[1][patterns.array[1] > 1e-6].min() < (
+        patterns.array[0][patterns.array[0] > 1e-6].min()
+    )
+
+    visualization = patterns.show(logscale=True, common_color_scale=True)
+    (artist,) = visualization.artists.ravel()
+
+    def limits():
+        return artist.norm.vmin, artist.norm.vmax
+
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))
+    visualization.update_data_indices((1,))
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))
+    visualization.set_common_value_limits()
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))

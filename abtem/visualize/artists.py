@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -67,6 +68,45 @@ def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=No
         value_limits[1] += margin
 
     return value_limits
+
+
+def _positive_value_limits(data, value_limits=None):
+    """The limits of a logarithmic value axis before the margin: those given, or the
+    extremes of the positive values of the data for one that is not given or not
+    positive. An entry is None if there is no positive value to take it from."""
+    data = np.asarray(data)
+    positive = data[data > 0]
+    limits = [None, None] if value_limits is None else list(value_limits)
+    if positive.size:
+        defaults = [float(positive.min()), float(positive.max())]
+    else:
+        defaults = [None, None]
+
+    for i in range(2):
+        if limits[i] is None or not limits[i] > 0:
+            limits[i] = defaults[i]
+    return limits
+
+
+def _log_value_limits(data, value_limits=None, warn=True):
+    """The limits of a logarithmic value axis.
+
+    Only the positive values of the data can be shown. The limits are those given, or
+    the extremes of the positive values for one that is not given or not positive,
+    widened by a factor (their ratio to the power 0.05, or 1.1 for a single value) so
+    that the margin is 5 % of the decades shown, as it is 5 % of the range on a linear
+    axis. A plot without a positive value warns and shows one decade from 1.
+    """
+    limits = _positive_value_limits(data, value_limits)
+
+    if limits[0] is None or limits[1] is None:
+        if warn:
+            warnings.warn("There are no positive values to show on a logarithmic axis.")
+        return [1.0, 10.0]
+
+    low, high = limits
+    margin = (high / low) ** 0.05 if high > low else 1.1
+    return [low / margin, high * margin]
 
 
 class ScaleBar:
@@ -160,6 +200,12 @@ class Artist(metaclass=ABCMeta):
     def set_logscale(self, logscale: bool = False):
         pass
 
+    def drawn_values(self) -> np.ndarray | None:
+        """The values the artist draws, or None where the artist does not hold all
+        the values that can be drawn: one that shows a member of an ensemble at a
+        time."""
+        return None
+
     @abstractmethod
     def get_power(self):
         pass
@@ -196,6 +242,7 @@ class LinesArtist(Artist1D):
         label=None,
         units: str = None,
         legend: bool = False,
+        logscale: bool = False,
         **kwargs,
     ):
         super().__init__(ax=ax, measurement=measurement)
@@ -251,6 +298,9 @@ class LinesArtist(Artist1D):
         formatter.set_powerlimits((-2, 2))
         ax.yaxis.set_major_formatter(formatter)
 
+        if logscale:
+            self.set_logscale(True)
+
     def _convert_x(self, x):
         # Coordinates of an axis that is not numeric are not units to convert.
         if self._x_conversion == 1.0:
@@ -286,12 +336,20 @@ class LinesArtist(Artist1D):
         ptp = xlim[1] - xlim[0]
         return [xlim[0] - 0.05 * ptp, xlim[1] + 0.05 * ptp]
 
+    def drawn_values(self):
+        # the lines, which hold the real and imaginary parts of complex data apart
+        return np.concatenate([np.ravel(line.get_data()[1]) for line in self._lines])
+
     def get_ylim(self):
+        if self._ax.get_yscale() == "log":
+            return _log_value_limits(self.drawn_values(), warn=False)
+
         ylim = [np.inf, -np.inf]
         for line in self._lines:
-            data = line.get_data()[1]
+            data = np.asarray(line.get_data()[1])
             new_ylim = [np.min(data), np.max(data)]
             ylim = [min(new_ylim[0], ylim[0]), max(new_ylim[1], ylim[1])]
+
         ptp = ylim[1] - ylim[0]
         ptp = max(ptp, ylim[1] * 0.01)
         return [ylim[0] - 0.05 * ptp, ylim[1] + 0.05 * ptp]
@@ -341,7 +399,12 @@ class LinesArtist(Artist1D):
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
-        value_limits = _get_value_limits(data, value_limits, margin=0.05)
+
+        if self._ax.get_yscale() == "log":
+            value_limits = _log_value_limits(data, value_limits)
+        else:
+            value_limits = _get_value_limits(data, value_limits, margin=0.05)
+
         self._ax.set_ylim(value_limits)
 
     def set_legend(self, **kwargs):

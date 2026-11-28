@@ -4518,3 +4518,175 @@ def test_azimuthal_average_of_small_integer_counts_does_not_overflow(
     occupied = values != 0  # a bin with no pixel is zero
     assert occupied.sum() > 5
     np.testing.assert_allclose(values[occupied], value, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "shape, kwargs, num_panels, num_points",
+    [
+        ((3,), {}, (1, 1), 3),
+        ((3, 4), {}, (1, 1), 4),
+        ((3, 4), {"explode": (0,)}, (3, 1), 4),
+        ((3, 4, 2), {}, (1, 1), 2),
+    ],
+)
+def test_show_of_a_measurement_ensemble_plots_along_its_last_free_axis(
+    shape, kwargs, num_panels, num_points
+):
+    # without base axes, show() found no axis to plot along and raised IndexError
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    axes = [
+        OrdinalAxis(values=tuple(range(n)), label=f"a{i}") for i, n in enumerate(shape)
+    ]
+    ensemble = MeasurementsEnsemble(
+        np.random.default_rng(0).random(shape), ensemble_axes_metadata=axes
+    )
+
+    visualization = ensemble.show(**kwargs)
+    try:
+        assert visualization.axes.shape == num_panels
+        assert len(visualization.axes[0, 0].lines[0].get_xdata()) == num_points
+    finally:
+        plt.close("all")
+
+
+def test_show_of_a_measurement_ensemble_with_every_axis_exploded_explains_itself():
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    ensemble = MeasurementsEnsemble(
+        np.zeros(3), ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))]
+    )
+    with pytest.raises(ValueError, match="none is left to plot along"):
+        ensemble.show(explode=True)
+
+
+@pytest.mark.parametrize("logscale", [True, False])
+def test_line_profiles_show_with_a_logscale_keyword(logscale):
+    # the keyword reached matplotlib's Line2D, which does not know it
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import LinearAxis
+
+    profiles = RealSpaceLineProfiles(
+        np.array([1.0, 10.0, 100.0, 1000.0]),
+        sampling=0.1,
+        metadata={},
+    )
+    visualization = profiles.show(logscale=logscale)
+    try:
+        assert visualization.axes[0, 0].get_yscale() == ("log" if logscale else "linear")
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "y",
+    [
+        np.linspace(100, 1000, 50),
+        np.linspace(10, 1000, 50),
+        np.logspace(-3, 0, 50),
+        np.linspace(-1, 1, 50),
+        np.full(50, 3.0),
+    ],
+    ids=["100-1000", "10-1000", "decades", "with negatives", "constant"],
+)
+def test_log_scale_line_profiles_have_one_margin_rule(y):
+    # two rules set the limits, with a lower margin of a factor 1.82 for 100 to 1000
+    # and 1.1 for 10 to 1000; the margin is now the same factor at both ends
+    import matplotlib.pyplot as plt
+
+    visualization = RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+    try:
+        low, high = visualization.axes[0, 0].get_ylim()
+        shown = y[y > 0]
+        assert low < shown.min() and high > shown.max()
+        np.testing.assert_allclose(shown.min() / low, high / shown.max(), rtol=1e-6)
+        assert shown.min() / low < 1.5 or shown.max() == shown.min()
+        # the artist reports the same limits as it sets
+        np.testing.assert_allclose(
+            visualization.artists[0, 0].get_ylim(), [low, high], rtol=1e-6
+        )
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize("y", [np.zeros(5), -np.ones(5)], ids=["zeros", "negative"])
+def test_log_scale_line_profiles_without_a_positive_value_warn(y):
+    import matplotlib.pyplot as plt
+
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+        messages = [str(w.message) for w in caught]
+        # abTEM's own message; matplotlib's "Data has no positive values" comes for
+        # these data whatever abTEM does
+        assert any("to show on a logarithmic axis" in m for m in messages), messages
+    finally:
+        plt.close("all")
+
+
+def _exploded_log_profiles(members):
+    return RealSpaceLineProfiles(
+        np.array(members, dtype=float),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="member", values=tuple(range(len(members))))
+        ],
+        metadata={},
+    )
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        [np.append(np.linspace(1, 10, 9), 0.0), np.linspace(100, 1000, 10)],
+        [np.linspace(1, 10, 10), np.linspace(100, 1000, 10), np.zeros(10)],
+    ],
+    ids=["one_zero", "all_zero_member"],
+)
+def test_common_log_limits_of_exploded_profiles_cover_every_panel(members):
+    # each panel took the limits of its own smallest positive value, and the shared
+    # axis kept those of the last: the first member was drawn outside its axis
+    import matplotlib.pyplot as plt
+
+    visualization = _exploded_log_profiles(members).show(
+        explode=True, logscale=True, common_scale=True
+    )
+    try:
+        # the extremes of the positive values of all the members, with one margin
+        margin = (1000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 1000 * margin]
+            )
+    finally:
+        plt.close("all")
+
+
+def test_common_log_limits_of_complex_profiles_cover_the_real_and_imaginary_lines():
+    # the limits came from the real part of the array, with a ComplexWarning, and the
+    # imaginary line of the first member was drawn outside its panel
+    import matplotlib.pyplot as plt
+
+    x = np.linspace(1, 10, 10)
+    profiles = RealSpaceLineProfiles(
+        np.array([x + 1000j * x, 2 * x + 1j * x]),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="m", values=(0, 1))],
+        metadata={},
+    )
+    visualization = profiles.show(explode=True, logscale=True, common_scale=True)
+    try:
+        # the lines drawn span 1 to 10000, with one margin
+        margin = (10000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 10000 * margin]
+            )
+    finally:
+        plt.close("all")

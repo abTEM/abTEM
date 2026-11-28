@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import io
 import itertools
+import numbers
 import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
@@ -1526,7 +1527,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_elements -- so this returns immediately without touching the
         cache or calling validate_chunks again.
         """
-        if isinstance(max_batch, int):
+        if isinstance(max_batch, numbers.Integral):
             return max_batch
 
         key = (max_batch, waves.shape, waves.dtype, self.device)
@@ -1577,7 +1578,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
                 return
             threshold = None
 
-        if isinstance(max_batch, int):
+        if isinstance(max_batch, numbers.Integral):
             limit = int(max_batch * np.prod(waves.shape) * len(self))
         else:
             limit = max_batch
