@@ -445,3 +445,40 @@ def test_repeated_cell_displaces_atoms_with_their_own_sigmas(
         atoms, charge_density_3d, sampling=0.4, repetitions=repetitions
     ).build(lazy=False)
     assert np.abs(built.array[0] - undisplaced.array).max() > 1e-3 * scale
+
+
+@pytest.mark.parametrize("repetitions", [(2, 3, 1), (1, 2, 2), (3, 1, 2)])
+@pytest.mark.parametrize(
+    "sigmas",
+    [
+        np.array([0.0, 0.05, 0.1]),
+        np.array([[0.0, 0.0, 0.0], [0.1, 0.05, 0.0], [0.0, 0.1, 0.1]]),
+    ],
+    ids=["per_atom", "per_atom_anisotropic"],
+)
+def test_displaced_repeated_atoms_take_the_sigma_of_their_own_atom(
+    repetitions, sigmas
+):
+    """Sigmas given per atom are tiled in the order of `atoms * repetitions`: an atom
+    with a zero sigma stays in place in every copy, and the others move as in the
+    configuration of the repeated atoms with the tiled sigmas."""
+    from abtem.inelastic.phonons import _displace_repeated_atoms
+
+    atoms = Atoms(
+        "C3",
+        positions=[(0.5, 0.5, 0.5), (1.5, 1.0, 1.5), (2.5, 2.0, 0.5)],
+        cell=(3, 3, 3),
+        pbc=True,
+    )
+    frozen_phonons = FrozenPhonons(atoms, 2, sigmas=sigmas, seed=1)
+
+    displaced = _displace_repeated_atoms(frozen_phonons, repetitions)
+
+    repeated = atoms * repetitions
+    tiled = np.tile(sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1))
+    expected = FrozenPhonons(repeated, 2, sigmas=tiled, seed=1).randomize(repeated)
+    np.testing.assert_array_equal(displaced.positions, expected.positions)
+
+    moved = np.abs(displaced.positions - repeated.positions).max(axis=1)
+    assert np.all(moved[0::3] == 0.0)
+    assert np.all(moved[1::3] > 0.0)

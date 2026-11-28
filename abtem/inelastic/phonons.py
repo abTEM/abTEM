@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from abc import ABCMeta, abstractmethod
 import copy
+from abc import ABCMeta, abstractmethod
 from functools import partial
 from typing import (
     TYPE_CHECKING,
