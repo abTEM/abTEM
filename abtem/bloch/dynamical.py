@@ -1178,6 +1178,30 @@ def _eigh_evr(a: np.ndarray, overwrite_a: bool) -> tuple[np.ndarray, np.ndarray]
     return (w, v) if double else (w.astype(a.real.dtype), v.astype(a.dtype))
 
 
+# From this many beams the eigendecomposition on a ROCm GPU is slow enough to warn
+# about (measured from 1000 beams on an MI250X, see `_eigh`).
+_ROCM_EIGH_WARN_BEAMS = 1000
+_rocm_eigh_warned = False
+
+
+def _warn_if_rocm_eigh_is_slow(n: int) -> None:
+    # Once per process, as for the precision warning: the warning registry is
+    # invalidated by the filters abTEM and dask change on every call.
+    global _rocm_eigh_warned
+    if n < _ROCM_EIGH_WARN_BEAMS or _rocm_eigh_warned:
+        return
+    _rocm_eigh_warned = True
+    warnings.warn(
+        f"Diagonalizing the structure matrix of {n} beams on a ROCm GPU is slower than "
+        "on the CPU: CuPy's ROCm build solves it with rocSOLVER's QR-iteration "
+        "eigensolver, which took 9 s for 1000 beams and 193 s for 3000 on an MI250X, "
+        "35 to 55 times longer than LAPACK on a 12-core CPU. Compute on the CPU "
+        "device for this size.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """The eigenvalues and eigenvectors of a Hermitian matrix, from its lower triangle.
 
@@ -1190,6 +1214,12 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
     A single-precision matrix on the CPU is still copied: `numpy.linalg.eigh` solves
     it in double precision, an order of magnitude more accurately than LAPACK's
     single-precision solver, and the results do not change with this function.
+
+    On a ROCm GPU the solve goes through `cupy.linalg.eigh`, which copies the matrix and
+    reaches rocSOLVER's QR-iteration eigensolver through `cupyx.cusolver.syevj`:
+    accurate, but much slower than the host at 1000 to 3000 beams (60.8 s for 2000
+    beams on an MI250X, against 0.5 s for the host's eigenvalues alone), which
+    is why a warning is issued from 1000 beams.
     """
     xp = get_array_module(a)
     if xp is np and _COMPLEX_EIGH_NEEDS_EVR and np.iscomplexobj(a):
@@ -1199,7 +1229,17 @@ def _eigh(a: np.ndarray, overwrite_a: bool = False) -> tuple[np.ndarray, np.ndar
         return scipy.linalg.eigh(
             a, lower=True, overwrite_a=True, check_finite=False, driver="evd"
         )
-    if overwrite_a and cp is not None and xp is cp and a.flags.f_contiguous:
+    # ROCm: the HIP binding of cupy has no syevd, so cupy.linalg.eigh itself goes
+    # through cupyx.cusolver.syevj, which copies the matrix.
+    if cp is not None and xp is cp and cp.cuda.runtime.is_hip:
+        _warn_if_rocm_eigh_is_slow(len(a))
+    if (
+        overwrite_a
+        and cp is not None
+        and xp is cp
+        and a.flags.f_contiguous
+        and not cp.cuda.runtime.is_hip
+    ):
         try:
             # the function behind cupy.linalg.eigh, which takes overwrite_a
             from cupy.linalg._eigenvalue import _syevd  # type: ignore
