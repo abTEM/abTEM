@@ -58,13 +58,14 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
     number_to_tuple,
+    safe_ceiling_int,
     safe_floor_int,
 )
 
 # from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import LinesArtist
-from abtem.visualize.visualizations import Visualization
+from abtem.visualize.visualizations import Visualization, _validate_axes_types
 from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
 interpolate_bilinear_cuda: Optional[Callable] = None
@@ -324,6 +325,23 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
+def _cupy_double_precision(array):
+    """Return a CuPy map_coordinates input in double precision.
+
+    cupyx's map_coordinates computes in the precision of its input. For a
+    single-precision input, CuPy 14.1 and later take the starting index from
+    floor((float)c) but the weights from floor(c) on the coordinate's own
+    dtype, so a float64 coordinate just below an integer, k - 1e-12, gives the
+    value at node k + 1. A double-precision input makes the prefilter, the index
+    and the weights float64; the output keeps the caller's dtype. SciPy computes
+    in float64 throughout and is left alone.
+    """
+    xp = get_array_module(array)
+    if cp is None or xp is not cp:
+        return array
+    return array.astype(xp.promote_types(array.dtype, xp.float64), copy=False)
+
+
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
@@ -355,7 +373,8 @@ def _interpolate_stack(
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        member = _cupy_double_precision(array[i])
+        map_coordinates(member, positions.T, output=output[i], order=order, **kwargs)
 
     output = output.reshape(old_shape[:-2] + positions_shape[:-1])
     return output
@@ -639,20 +658,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             "Provide one of 'dose_per_area' or 'total_dose'."
         )
 
-        if (dose_per_area is not None) and (total_dose is not None):
+        # exactly one of the two: with neither, the dose would be NaN
+        if (dose_per_area is None) == (total_dose is None):
             raise wrong_dose_error
 
-        if dose_per_area is not None and total_dose is None:
+        if dose_per_area is not None:
             total_dose = self._area_per_pixel * dose_per_area
-        elif total_dose is None:
-            pass
-
-        elif total_dose is not None:
-            if dose_per_area is not None:
-                raise wrong_dose_error
-
-        else:
-            raise wrong_dose_error
 
         total_dose = np.array(total_dose, dtype=dtype)
 
@@ -943,6 +954,20 @@ class MeasurementsEnsemble(BaseMeasurements):
 
         artist_type = LinesArtist
 
+        # A measurement without base axes is plotted along one of its ensemble axes,
+        # which is overlaid: by default the last one that is not exploded.
+        overlaid, exploded = _validate_axes_types(
+            overlay, explode, len(self.ensemble_shape)
+        )
+        if not overlaid:
+            free = [i for i in range(len(self.ensemble_shape)) if i not in exploded]
+            if not free:
+                raise ValueError(
+                    "every ensemble axis is exploded, so none is left to plot along; "
+                    "leave one out of `explode`"
+                )
+            overlay = (free[-1],)
+
         visualization = Visualization(
             measurement=self,
             ax=ax,
@@ -957,6 +982,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             figsize=figsize,
             # interact=interact,
             title=title,
+            units=units,
             **kwargs,
         )
 
@@ -1079,8 +1105,10 @@ class _BaseMeasurement2D(BaseMeasurements):
         if margin != 0.0:
             scan.add_margin(margin)
 
+        # In float64 whatever the configured precision: positions rounded to
+        # float32 are off by up to 3.8e-5 pixels near 100 Å at 0.1 Å sampling.
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+            (scan._positions(np.float64) - self.offset) / self.sampling
         )
 
         if width:
@@ -1555,9 +1583,7 @@ class Images(_BaseMeasurement2D):
         self._check_is_complex()
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.rechunk(
-                self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
@@ -1711,9 +1737,7 @@ class Images(_BaseMeasurement2D):
             raise ValueError()
 
         if gpts is None and sampling is not None:
-            if np.isscalar(sampling):
-                sampling = (sampling,) * 2
-            gpts = tuple(int(np.ceil(l / d)) for d, l in zip(sampling, self.extent))
+            gpts = _image_resampling_gpts(self.extent, sampling)
 
         elif gpts is not None:
             if np.isscalar(gpts):
@@ -1730,15 +1754,13 @@ class Images(_BaseMeasurement2D):
 
         array = None
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             if method == "fft":
                 array = array.map_blocks(
                     fft_interpolate,
                     new_shape=gpts,
                     normalization=normalization,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -1750,7 +1772,7 @@ class Images(_BaseMeasurement2D):
                     order=order,
                     cval=cval,
                     pad_mode=boundary,
-                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                     meta=xp.array((), dtype=self.array.dtype),
                 )
 
@@ -1857,9 +1879,7 @@ class Images(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.rechunk(
-                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
-            )
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
             )
@@ -2034,7 +2054,8 @@ class _BaseMeasurement1D(BaseMeasurements):
         # ("output must have complex dtype").
         new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
-            map_coordinates(array[i], new_points, new_array[i], order=order)
+            member = _cupy_double_precision(array[i])
+            map_coordinates(member, new_points, new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 
@@ -2078,19 +2099,19 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = int(np.ceil(self.extent / sampling))
+            gpts = safe_ceiling_int(self.extent / sampling)
 
         if sampling is None:
             sampling = self.extent / gpts
 
         if self.is_lazy:
-            array = self.array.rechunk(self.array.chunks[:-1] + ((self.shape[-1],),))
+            array = self.no_base_chunks().array
             array = array.map_blocks(
                 self._interpolate,
                 gpts=gpts,
                 endpoint=endpoint,
                 order=order,
-                chunks=self.array.chunks[:-1] + (gpts,),
+                chunks=array.chunks[:-1] + (gpts,),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
@@ -2175,6 +2196,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             interactive=not interact and display,
             legend=legend,
             common_scale=common_scale,
+            units=units,
             **kwargs,
         )
 
@@ -2348,6 +2370,7 @@ def _fourier_space_bilinear_nodes_and_weight(
     old_angular_sampling: tuple[float, float],
     new_angular_sampling: tuple[float, float],
     xp,
+    dtype,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nodes = []
     weights = []
@@ -2361,15 +2384,16 @@ def _fourier_space_bilinear_nodes_and_weight(
         1 / new_angular_sampling[1] / new_shape[1],
     )
 
+    # In float64 on the host whatever `dtype`: a frequency n / 2 steps from zero
+    # rounded to float32 is off by about eps * n / 2 steps, and so is its weight.
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
-        distances = k_new[None] - k[:, None]
-        distances[distances < 0.0] = np.inf
-        w = distances.min(0) / (k[1] - k[0])
-        w[w == np.inf] = 0.0
-        nodes.append(distances.argmin(0))
-        weights.append(w)
+        k = np.fft.fftshift(np.fft.fftfreq(n, r))
+        k_new = np.fft.fftshift(np.fft.fftfreq(m, d))
+        # the node at or below each new frequency; node 0, weight 0 below the first
+        node = np.maximum(np.searchsorted(k, k_new, side="right") - 1, 0)
+        w = np.maximum(k_new - k[node], 0.0) / (k[1] - k[0])
+        nodes.append(xp.asarray(node))
+        weights.append(xp.asarray(w, dtype=dtype))
 
     v, u = nodes
     vw, uw = weights
@@ -2490,6 +2514,16 @@ def _interpolate_bilinear(x, v, u, vw, uw):
     return y.reshape((B, out_H, out_W))
 
 
+def _image_resampling_gpts(
+    extent: tuple[float, float], sampling: float | tuple[float, float]
+) -> tuple[int, int]:
+    """Grid points of images of `extent` [Å] interpolated to `sampling` [Å], as
+    `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
+    if np.isscalar(sampling):
+        sampling = (sampling,) * 2
+    return tuple(max(safe_ceiling_int(e / d), 1) for d, e in zip(sampling, extent))
+
+
 def _diffraction_pattern_resampling_gpts(
     old_sampling: tuple[float, float],
     old_gpts: tuple[int, int],
@@ -2503,6 +2537,8 @@ def _diffraction_pattern_resampling_gpts(
 
         elif isinstance(sampling, float):
             validated_sampling = (sampling,) * 2
+        elif isinstance(sampling, (tuple, list)) and len(sampling) == 2:
+            validated_sampling = tuple(float(d) for d in sampling)
         else:
             raise ValueError("Invalid sampling.")
 
@@ -2519,7 +2555,7 @@ def _diffraction_pattern_resampling_gpts(
             gpts = (gpts,) * 2
 
         validated_sampling = tuple(
-            d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
+            d * old_n / new_n for d, old_n, new_n in zip(old_sampling, old_gpts, gpts)
         )
 
     return gpts, validated_sampling
@@ -2701,6 +2737,40 @@ class DiffractionPatterns(_BaseMeasurement2D):
         from abtem.bloch.indexing import index_diffraction_spots
         from abtem.bloch.utils import filter_reciprocal_space_vectors
 
+        # bloch.indexing.index_diffraction_spots takes one orientation. The
+        # orientation matrices have the ensemble shape of the block (or length 1
+        # on an axis, or fewer leading axes) followed by two axes. Split along the
+        # first ensemble axis on which they vary and index each member with its
+        # own matrix, so its spots are filtered and assigned exactly as for that
+        # member indexed on its own.
+        orientation_matrices = orientation_matrices[
+            (None,) * (len(array.shape[:-2]) - len(orientation_matrices.shape[:-2]))
+        ]
+        varying = [i for i, n in enumerate(orientation_matrices.shape[:-2]) if n > 1]
+        if varying:
+            axis = varying[0]
+            take = (slice(None),) * axis
+            members = []
+            for j in range(array.shape[axis]):
+                members.append(
+                    DiffractionPatterns._index_diffraction_spots(
+                        array=array[take + (slice(j, j + 1),)],
+                        orientation_matrices=orientation_matrices[
+                            take + (slice(j, j + 1),)
+                        ],
+                        hkl=hkl,
+                        mask_all=mask_all,
+                        sampling=sampling,
+                        cell=cell,
+                        sg_max=sg_max,
+                        g_max=g_max,
+                        centering=centering,
+                        energy=energy,
+                        radius=radius,
+                    )
+                )
+            return get_array_module(members[0]).concatenate(members, axis=axis)
+
         mask = filter_reciprocal_space_vectors(
             hkl,
             cell,
@@ -2748,8 +2818,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             three floats (for orthorhombic unit cells).
         orientation_matrices : np.ndarray, optional
             Orientation matrices used for indexing the diffraction spots. The shape of
-            the orientation matrices must be broadcastable with the ensemble shape of
-            the diffraction patterns.
+            the orientation matrices, without the last two axes, must broadcast to the
+            ensemble shape of the diffraction patterns: each axis has length 1 or the
+            length of that ensemble axis. Each pattern is indexed with its own matrix.
         sg_max : float, optional
             Maximum excitation error [1/Å] of the indexed diffraction spots.
             The default is estimated from the energy and `g_max`.
@@ -2776,13 +2847,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
-        if orientation_matrices is not None and not is_broadcastable(
-            self.ensemble_shape, orientation_matrices.shape[:-2]
-        ):
-            raise ValueError(
-                "The ensemble shape and the shape of the orientation matrices must be"
-                " broadcastable."
-            )
+        # each pattern is indexed with one matrix: leading axes of length 1 beyond
+        # the ensemble are dropped, and an axis of the remaining ensemble shape is
+        # either 1 or as long as the matching ensemble axis
+        if orientation_matrices is not None:
+            n_extra = orientation_matrices.ndim - 2 - len(self.ensemble_shape)
+            if n_extra > 0:
+                if any(n != 1 for n in orientation_matrices.shape[:n_extra]):
+                    raise ValueError(
+                        "The orientation matrices have more ensemble axes than the "
+                        "diffraction patterns, and the extra leading axes are not of "
+                        "length 1: the ensemble shape of the matrices is "
+                        f"{orientation_matrices.shape[:-2]}, that of the patterns is "
+                        f"{self.ensemble_shape}."
+                    )
+                orientation_matrices = orientation_matrices[(0,) * n_extra]
+            if any(
+                m not in (1, n)
+                for n, m in zip(
+                    self.ensemble_shape[::-1], orientation_matrices.shape[-3::-1]
+                )
+            ):
+                raise ValueError(
+                    "Every axis of the orientation matrices' ensemble shape must have"
+                    " length 1 or the length of the matching ensemble axis."
+                )
 
         if energy is None:
             energy = self._get_from_metadata("energy")
@@ -2811,6 +2900,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
         if self.is_lazy:
+            array = self.no_base_chunks().array
             orientation_matrices = orientation_matrices[
                 (None,)
                 * (len(self.array.shape[:-2]) - len(orientation_matrices.shape[:-2]))
@@ -2818,7 +2908,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             chunks = tuple(
                 c if n == sum(c) else 1
-                for n, c in zip(orientation_matrices.shape, self.array.chunks[:-2])
+                for n, c in zip(orientation_matrices.shape, array.chunks[:-2])
             )
 
             lazy_orientation_matrices = da.from_array(
@@ -2827,7 +2917,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             intensities = da.map_blocks(
                 self._index_diffraction_spots,
-                self.array,
+                array,
                 lazy_orientation_matrices,
                 hkl=hkl,
                 mask_all=mask,
@@ -2839,7 +2929,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 energy=energy,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
-                chunks=self.array.chunks[:-2] + (mask.sum(),),
+                chunks=array.chunks[:-2] + (mask.sum(),),
                 meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
@@ -2978,8 +3068,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
         xp = get_array_module(array)
+        if np.issubdtype(array.dtype, np.inexact):
+            dtype = np.finfo(array.dtype).dtype  # real, also for complex patterns
+        else:
+            # counts are interpolated in the configured precision
+            dtype = np.dtype(get_dtype(complex=False))
+            array = array.astype(dtype)
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
-            array.shape[-2:], new_gpts, sampling, new_sampling, xp
+            array.shape[-2:], new_gpts, sampling, new_sampling, xp, dtype
         )
 
         old_shape = array.shape
@@ -2999,11 +3095,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def interpolate(
         self,
         sampling: Optional[str | float | tuple[float, float]] = None,
-        gpts: Optional[tuple[int, int]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a
-        different sampling.
+        different sampling. A sampling finer than that of the diffraction patterns, or
+        more `gpts`, is accepted: the interpolation is bilinear and adds no angular
+        resolution, and the new frequencies outside the range of the patterns'
+        frequencies (a pixel or two at the ends of each axis) take the value of the
+        nearest edge pixel, up to the renormalisation that keeps the sums.
 
         Parameters
         ----------
@@ -3012,7 +3112,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             If a single value, the same sampling is used for both axes. If 'uniform',
             the diffraction patterns are down-sampled along the axis with the smallest
             pixel size such that the sampling is uniform.
-        gpts : tuple of int
+        gpts : int or tuple of int
             Number of grid points of the diffraction patterns after interpolation in
             `x` and `y`.
             Do not use if 'sampling' is used.
@@ -3028,12 +3128,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._batch_interpolate_bilinear,
                 sampling=self.sampling,
                 new_sampling=sampling,
                 new_gpts=gpts,
-                chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
@@ -3238,10 +3339,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         polar_measurements : PolarMeasurements
             The polar measurements.
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         if nbins_radial <= 0 or nbins_azimuthal <= 0:
             raise RuntimeError("number of bins must be greater than zero")
+
+        if np.iscomplexobj(self.array):
+            raise TypeError(
+                "polar binning of complex diffraction patterns is not supported, "
+                "bin their `.intensity()` instead"
+            )
 
         if outer is None:
             outer = min(self.max_angles)
@@ -3326,6 +3438,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         radially_binned_measurement : PolarMeasurements
             Radially binned polar measurement(s).
+
+        Raises
+        ------
+        TypeError
+            If the diffraction patterns are complex.
         """
 
         if outer is None:
@@ -3557,7 +3674,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array.map_blocks(
                 self._bandlimit,
                 inner=inner,
                 outer=outer,
@@ -3633,11 +3750,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.map_blocks(
+            array = self.no_base_chunks().array
+            array = array.map_blocks(
                 self._crop,
                 gpts=gpts,
                 fftshift=self.fftshift,
-                chunks=self.array.chunks[:-2] + gpts,
+                chunks=array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:
@@ -3887,19 +4005,19 @@ def _complex_from_real_and_imag(real, imag):
     return array
 
 
-def _polar_bins_to_grid(array, regions):
+def _polar_bins_to_grid(array, regions, real_dtype):
     """Place polar-bin values (..., nbins_radial, nbins_azimuthal) on a regular grid.
 
     ``regions`` labels each grid pixel with its flat bin index (radial major, as
     from ``_polar_detector_bins``), or a negative value outside every bin, which
-    becomes NaN. Gathers with the array's own module, so it works for NumPy and
-    CuPy, and per block of a dask array.
+    becomes NaN. The result has the real dtype ``real_dtype``. Gathers with the
+    array's own module, so it works for NumPy and CuPy, and per block of a dask array.
     """
     xp = get_array_module(array)
     flat = array.reshape(array.shape[:-2] + (-1,))
     labels = xp.asarray(regions)
-    gathered = flat[..., xp.maximum(labels, 0)].astype(np.float32)
-    return xp.where(labels < 0, np.float32(np.nan), gathered)
+    gathered = flat[..., xp.maximum(labels, 0)].astype(real_dtype)
+    return xp.where(labels < 0, real_dtype.type(np.nan), gathered)
 
 
 class PolarMeasurements(BaseMeasurements):
@@ -4262,7 +4380,9 @@ class PolarMeasurements(BaseMeasurements):
         Returns
         -------
         diffraction_patterns : DiffractionPatterns
-            The diffraction patterns discretized from the polar measurements.
+            The diffraction patterns discretized from the polar measurements, in the
+            real precision of the polar bins (the configured precision for integer
+            counts). Pixels outside every bin are NaN.
         """
 
         if np.isscalar(gpts):
@@ -4291,19 +4411,27 @@ class PolarMeasurements(BaseMeasurements):
             return_indices=False,
         )
 
+        # The real precision of the bins; counts get the configured precision, which
+        # holds the NaN outside the bins.
+        if np.issubdtype(self.array.dtype, np.integer):
+            dtype = np.dtype(get_dtype(complex=False))
+        else:
+            dtype = np.finfo(self.array.dtype).dtype
+
         if self.is_lazy:
             # per block, over whole polar bins, so the graph runs once and the
             # result stays lazy
-            array = self.array.rechunk(self.array.chunks[:-2] + (-1, -1))
+            array = self.no_base_chunks().array
             xp = get_array_module(array)
             new_array = array.map_blocks(
                 _polar_bins_to_grid,
                 regions=regions,
+                real_dtype=dtype,
                 chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=dtype),
             )
         else:
-            new_array = _polar_bins_to_grid(self.array, regions)
+            new_array = _polar_bins_to_grid(self.array, regions, dtype)
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
         sampling = (
@@ -4651,13 +4779,20 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         self._intensities = array
         self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
+    def _replace_array(self, array):
+        super()._replace_array(array)
+        # an alias of the array, kept in step with it
+        self._intensities = array
+
+    @classmethod
     def from_array_and_metadata(
-        self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
     ) -> BaseMeasurements:
         raise NotImplementedError
 
+    @property
     def _area_per_pixel(self):
-        raise NotImplementedError
+        raise RuntimeError("Cannot infer pixel area for indexed diffraction patterns.")
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
@@ -4939,14 +5074,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         else:
             c = intensities_dict[spot]
 
-        intensities = self.intensities / c
-        return self.__class__(
-            intensities,
-            self.miller_indices.copy(),
-            self.positions.copy(),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self._metadata,
-        )
+        kwargs = self._copy_kwargs(exclude=("array",))
+        return self.__class__(array=self.intensities / c, **kwargs)
 
     def to_data_array(self):
         """

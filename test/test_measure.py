@@ -1,4 +1,5 @@
 import operator
+import warnings
 
 import ase
 import dask.array as da
@@ -8,16 +9,23 @@ import pytest
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, assert_array_matches_device, ensure_is_tuple, gpu
+from utils import (
+    array_is_close,
+    assert_array_matches_device,
+    devices,
+    ensure_is_tuple,
+    gpu,
+)
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import get_dtype
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    IndexedDiffractionPatterns,
     MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
@@ -366,7 +374,7 @@ def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     elif gpts_or_sampling["sampling"]:
         sampling = ensure_is_tuple(gpts_or_sampling["sampling"], 2)
         adjusted_sampling = tuple(
-            l / np.ceil(l / d) for d, l in zip(sampling, measurement.extent)
+            l / safe_ceiling_int(l / d) for d, l in zip(sampling, measurement.extent)
         )
         assert np.allclose(interpolated.sampling, adjusted_sampling)
 
@@ -1825,3 +1833,1094 @@ def test_show_labels_the_real_and_imaginary_lines_of_an_overlaid_ensemble():
     ]
     np.testing.assert_allclose(lines[0].get_ydata(), array[0].real)
     np.testing.assert_allclose(lines[3].get_ydata(), array[1].imag)
+
+
+class TestDiffractionPatternsIndexOrientations:
+    """index_diffraction_spots with one orientation matrix per member indexes
+    each member with its own matrix, eagerly and with any number of members
+    per dask chunk: each member equals that member indexed on its own."""
+
+    # 4 x 3 patterns, so no two ensemble axes have the same length
+    SHAPE = (4, 3)
+
+    @staticmethod
+    def _matrices(n, seed):
+        from scipy.spatial.transform import Rotation
+
+        return Rotation.random(n, random_state=seed).as_matrix()
+
+    @staticmethod
+    def _array():
+        # indexing without a radius only picks and masks pixels, so the values
+        # compare exactly
+        return np.random.default_rng(0).random(
+            TestDiffractionPatternsIndexOrientations.SHAPE + (17, 21), np.float32
+        )
+
+    @classmethod
+    def _members_alone(cls, matrices):
+        """Each member indexed on its own, per index: (miller indices, array)."""
+        array = cls._array()
+        shape = (1,) * (len(cls.SHAPE) + 2 - matrices.ndim) + matrices.shape[:-2]
+        matrices = matrices.reshape(shape + (3, 3))
+        alone = {}
+        for index in np.ndindex(cls.SHAPE):
+            single = DiffractionPatterns(
+                array[index], sampling=0.5, metadata={"energy": 100e3}
+            ).index_diffraction_spots(
+                cell=4.0,
+                orientation_matrices=matrices[
+                    tuple(i if m > 1 else 0 for i, m in zip(index, shape))
+                ],
+            )
+            alone[index] = ([tuple(h) for h in single.miller_indices], single.array)
+        return alone
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize(
+        "matrices_shape",
+        [
+            # varying on one axis, broadcast on the other
+            (4, 1),
+            (1, 3),
+            # without the leading axis
+            (3,),
+            # varying on both axes
+            (4, 3),
+        ],
+    )
+    # eager; one member per chunk; every member in one chunk; uneven on both axes
+    @pytest.mark.parametrize("chunks", [None, (1, 1), (4, 3), (3, 2)])
+    def test_members_match_each_member_indexed_alone(
+        self, device, matrices_shape, chunks
+    ):
+        matrices = self._matrices(int(np.prod(matrices_shape)), seed=1).reshape(
+            matrices_shape + (3, 3)
+        )
+        axes = [OrdinalAxis(values=tuple(range(m))) for m in self.SHAPE]
+        data = copy_to_device(self._array(), device)
+        if chunks is not None:
+            data = da.from_array(data, chunks=chunks + (-1, -1))
+        patterns = DiffractionPatterns(
+            data,
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=axes,
+        )
+
+        indexed = patterns.index_diffraction_spots(
+            cell=4.0, orientation_matrices=matrices
+        )
+        assert indexed.is_lazy == (chunks is not None)
+        values = asnumpy(indexed.compute().array)
+
+        column = {tuple(h): j for j, h in enumerate(indexed.miller_indices)}
+        alone = self._members_alone(matrices)
+        for index in np.ndindex(self.SHAPE):
+            millers, expected = alone[index]
+            columns = [column[h] for h in millers]
+            others = np.setdiff1d(np.arange(len(column)), columns)
+            np.testing.assert_array_equal(values[index][columns], expected)
+            assert np.all(values[index][others] == 0)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("ensemble_shape", [(1,), ()])
+    def test_more_matrices_than_patterns_raises(self, lazy, ensemble_shape):
+        """One pattern cannot be indexed with three matrices: the result has
+        one member per pattern."""
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0,))] * len(ensemble_shape),
+        )
+        if lazy:
+            patterns = patterns.lazy()
+        with pytest.raises(ValueError, match="length 1 or the length|not of length 1"):
+            patterns.index_diffraction_spots(
+                cell=4.0, orientation_matrices=self._matrices(3, seed=1)
+            )
+
+    @staticmethod
+    def _patterns(ensemble_shape, lazy):
+        patterns = DiffractionPatterns(
+            np.random.default_rng(0).random(ensemble_shape + (17, 21)),
+            sampling=0.5,
+            metadata={"energy": 100e3},
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n))) for n in ensemble_shape
+            ],
+        )
+        return patterns.lazy() if lazy else patterns
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape, squeezed_shape",
+        [
+            ((), (), ()),
+            ((3,), (3,), (3,)),
+            ((4, 3), (4, 3), (4, 3)),
+            # extra leading axes of length 1
+            ((), (1,), ()),
+            ((), (1, 1), ()),
+            ((3,), (1, 3), (3,)),
+            ((3,), (1, 1, 3), (3,)),
+            ((4, 3), (1, 4, 3), (4, 3)),
+            # a length-1 axis within the ensemble axes is broadcast, not dropped
+            ((4, 3), (4, 1), (4, 1)),
+            ((4, 3), (1, 3), (1, 3)),
+            ((4, 3), (1, 4, 1), (4, 1)),
+        ],
+    )
+    def test_extra_leading_axes_of_length_one_are_dropped(
+        self, lazy, ensemble_shape, matrices_ensemble_shape, squeezed_shape
+    ):
+        """Matrices with extra leading axes of length 1 index the patterns as
+        the matrices without them (as in 1.0.11)."""
+        n = int(np.prod(matrices_ensemble_shape))
+        matrices = self._matrices(n, seed=1).reshape(matrices_ensemble_shape + (3, 3))
+        squeezed = matrices.reshape(squeezed_shape + (3, 3))
+
+        indexed, expected = (
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=m
+            )
+            for m in (matrices, squeezed)
+        )
+        if lazy:
+            indexed, expected = indexed.compute(), expected.compute()
+
+        assert indexed.ensemble_shape == ensemble_shape
+        assert indexed.array.shape == expected.array.shape
+        np.testing.assert_array_equal(indexed.array, expected.array)
+        np.testing.assert_array_equal(indexed.miller_indices, expected.miller_indices)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "ensemble_shape, matrices_ensemble_shape",
+        [
+            ((), (2,)),
+            ((3,), (2, 3)),
+            ((4, 3), (2, 4, 3)),
+            ((3,), (3, 1)),
+            ((4, 3), (4, 1, 1)),
+        ],
+    )
+    def test_extra_leading_axes_longer_than_one_raise(
+        self, lazy, ensemble_shape, matrices_ensemble_shape
+    ):
+        matrices = self._matrices(int(np.prod(matrices_ensemble_shape)), seed=1)
+        matrices = matrices.reshape(matrices_ensemble_shape + (3, 3))
+        with pytest.raises(ValueError, match="more ensemble axes|length 1 or the"):
+            self._patterns(ensemble_shape, lazy).index_diffraction_spots(
+                cell=4.0, orientation_matrices=matrices
+            )
+
+
+def test_poisson_noise_needs_exactly_one_dose():
+    # with neither, the dose was NaN and NumPy failed with "lam value too large"
+    images = Images(np.ones((4, 4)), sampling=0.1)
+
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise()
+    with pytest.raises(RuntimeError, match="Provide one of"):
+        images.poisson_noise(dose_per_area=1.0, total_dose=1.0)
+
+    assert images.poisson_noise(total_dose=1e3, seed=0).shape == images.shape
+
+
+def _indexed_patterns():
+    return IndexedDiffractionPatterns(
+        np.array([1.0, 2.0, 4.0]),
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]]),
+        np.eye(3) * 0.2,
+    )
+
+
+@pytest.mark.parametrize(
+    "spot, expected", [(None, [0.25, 0.5, 1.0]), ((1, 0, 0), [0.5, 1, 2])]
+)
+def test_indexed_patterns_normalize_to_a_spot_and_keep_their_lattice(spot, expected):
+    # the reciprocal lattice vectors were replaced by the spot positions
+    patterns = _indexed_patterns()
+
+    normalized = patterns.normalize_to_spot(spot)
+
+    np.testing.assert_allclose(normalized.array, expected)
+    np.testing.assert_array_equal(normalized.miller_indices, patterns.miller_indices)
+    np.testing.assert_array_equal(
+        normalized.reciprocal_lattice_vectors, patterns.reciprocal_lattice_vectors
+    )
+    np.testing.assert_allclose(normalized.positions, patterns.positions)
+
+
+def test_indexed_patterns_cannot_infer_a_pixel_area():
+    # a missing @property made this a TypeError (method * float)
+    with pytest.raises(RuntimeError, match="Cannot infer pixel area"):
+        _indexed_patterns().poisson_noise(dose_per_area=1.0)
+
+
+def test_miller_index_labels_have_only_the_attributes_of_an_annotation():
+    """The labels pass `Annotation` methods on to each label and have no others.
+
+    Plotting runs on the CPU whatever the device of the measurement, so no device is
+    parametrised.
+    """
+    import copy
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ase.build import bulk
+
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((48, 40)),
+        sampling=(0.2, 0.25),
+        metadata={"energy": 100e3},
+        fftshift=True,
+    )
+    indexed = patterns.index_diffraction_spots(cell=bulk("Si", cubic=True).cell)
+    try:
+        labels = indexed.show(annotations=True).artists[0, 0].annotations
+        assert not hasattr(labels, "no_such_attribute")
+        assert getattr(labels, "_no_such_attribute", None) is None
+        with pytest.raises(AttributeError):
+            labels.stale  # a non-callable attribute of Annotation is not delegated
+        assert len(copy.deepcopy(labels)._annotations) == len(labels._annotations)
+
+        labels.set_fontsize(12)
+        assert {label.get_fontsize() for label in labels._annotations} == {12.0}
+    finally:
+        plt.close("all")
+
+
+_GRID_SPLIT_PATTERN_OPERATIONS = {
+    "bandlimit": lambda patterns: patterns.bandlimit(0, 10),
+    "block_direct": lambda patterns: patterns.block_direct(),
+    "crop": lambda patterns: patterns.crop(10),
+    "interpolate": lambda patterns: patterns.interpolate(0.03),
+    "index_diffraction_spots": lambda patterns: patterns.index_diffraction_spots(
+        cell=4.0
+    ),
+}
+
+
+@pytest.mark.parametrize("operation", list(_GRID_SPLIT_PATTERN_OPERATIONS))
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 17, 21),
+        (3, 9, 21),
+        (3, 17, 11),
+        (1, (10, 7), (4, 4, 13)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_diffraction_patterns_split_along_the_grid_match_eager(
+    device, chunks, operation
+):
+    """A lazy operation on diffraction patterns whose grid is in several dask
+    chunks gives the eager result: the grid is gathered into one chunk first."""
+    shape = (3, 17, 21)
+    array = np.random.default_rng(2).random(shape).astype(np.float32)
+    kwargs = dict(
+        sampling=0.05,
+        metadata={"energy": 1e5, "semiangle_cutoff": 10.0},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = DiffractionPatterns(copy_to_device(array, device), **kwargs)
+    lazy = DiffractionPatterns(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+    apply = _GRID_SPLIT_PATTERN_OPERATIONS[operation]
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = apply(eager)
+        result = apply(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    assert computed.array.shape == expected_array.shape
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "config, input_dtype, expected_dtype",
+    [
+        ("float64", np.float64, np.float64),
+        ("float32", np.float64, np.float64),
+        ("float64", np.float32, np.float32),
+        # counts get the configured precision, which holds the NaN outside the bins
+        ("float64", np.uint16, np.float64),
+    ],
+)
+def test_polar_to_diffraction_patterns_keeps_the_precision_of_the_bins(
+    config, input_dtype, expected_dtype, device
+):
+    nbins_radial, nbins_azimuthal, members = 4, 6, 3
+    rng = np.random.default_rng(5)
+    shape = (members, nbins_radial, nbins_azimuthal)
+    # values not representable in float32, so a narrowing gather is seen
+    data = (100 * rng.random(shape) + 1e-9).astype(input_dtype)
+
+    def polar(lazy):
+        array = da.from_array(data, chunks=(1, -1, -1)) if lazy else data
+        return PolarMeasurements(
+            array,
+            radial_sampling=5.0,
+            azimuthal_sampling=2 * np.pi / nbins_azimuthal,
+            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(members)))],
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+
+    with abtem.config.set({"precision": config}):
+        lazy = polar(True).to_diffraction_patterns(gpts=(40, 33))
+        eager = polar(False).to_diffraction_patterns(gpts=(40, 33))
+
+    declared = lazy.array.dtype
+    computed = asnumpy(lazy.copy().compute().array)
+    assert declared == computed.dtype == eager.array.dtype == expected_dtype
+    eager_values = asnumpy(eager.array)
+    np.testing.assert_array_equal(computed, eager_values)
+    inside = ~np.isnan(eager_values)
+    assert inside.any() and (~inside).any()
+    # a pixel takes the value of its bin unchanged
+    for member in range(members):
+        assert np.isin(eager_values[member][inside[member]], data[member]).all()
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize(
+    "dtype, shape, tolerance",
+    [("float32", (2, 512, 515), 2e-6), ("float64", (2, 64, 67), 1e-12)],
+)
+def test_diffraction_patterns_interpolate_is_linear_interpolation(
+    dtype, shape, tolerance, lazy, device
+):
+    # Linear interpolation on the centred frequency axes, renormalized to the
+    # input's total as interpolate does. The new sampling is finer than the old
+    # one, so the output has pixels beyond the input's frequency range on both
+    # sides of both axes; they take the value of the edge node, which is the
+    # interpolation at the frequency clipped to the input's range. The tolerance,
+    # relative to the maximum, is a few float32 epsilons for float32.
+    import scipy.interpolate
+
+    sampling, new_sampling = (0.01, 0.0093), 0.007
+    patterns = _random_patterns(shape, sampling, dtype, lazy, device)
+
+    interpolated = patterns.interpolate(sampling=new_sampling)
+
+    values = asnumpy(interpolated.copy().compute().array)
+    assert values.dtype == np.dtype(dtype)
+    k = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(shape[1:], sampling)
+    ]
+    k_new = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / (n * d)))
+        for n, d in zip(interpolated.base_shape, interpolated.sampling)
+    ]
+    assert all((q < p[0]).any() and (q > p[-1]).any() for q, p in zip(k_new, k))
+    k_new = [np.clip(q, p[0], p[-1]) for q, p in zip(k_new, k)]
+    points = np.stack(np.meshgrid(*k_new, indexing="ij"), -1)
+    for member, pattern in enumerate(asnumpy(patterns.copy().compute().array)):
+        expected = scipy.interpolate.RegularGridInterpolator(
+            k, pattern.astype(np.float64)
+        )(points)
+        found = values[member].astype(np.float64)
+        expected *= found.sum() / expected.sum()
+        np.testing.assert_allclose(
+            found, expected, rtol=0, atol=tolerance * found.max()
+        )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+def test_polar_binning_of_complex_diffraction_patterns_points_to_the_intensity(
+    lazy, device
+):
+    array = np.ones((2, 32, 32), dtype=np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    patterns = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.polar_binning(2, 4)
+    with pytest.raises(TypeError, match=r"\.intensity\(\)"):
+        patterns.radial_binning(step_size=1.0)
+    assert patterns.intensity().polar_binning(2, 4).shape == (2, 2, 4)
+
+
+def _random_patterns(shape, sampling, dtype, lazy, device):
+    array = np.random.default_rng(1).random(shape).astype(dtype)
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    return DiffractionPatterns(
+        array,
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(shape[0])))],
+        metadata={"energy": 100e3},
+    ).copy_to_device(device)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize("gpts", [(32, 30), 32])
+def test_diffraction_patterns_interpolate_to_gpts_keeps_the_angular_extent(
+    gpts, lazy, device
+):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(gpts=gpts)
+
+    new_gpts = (gpts,) * 2 if np.isscalar(gpts) else gpts
+    assert interpolated.base_shape == new_gpts
+    np.testing.assert_allclose(
+        interpolated.sampling,
+        (0.01 * 64 / new_gpts[0], 0.0093 * 67 / new_gpts[1]),
+        rtol=1e-12,
+    )
+    computed = asnumpy(interpolated.copy().compute().array)
+    assert computed.shape == (2,) + new_gpts
+    # the grid of a requested sampling that has the same extent
+    by_sampling = patterns.interpolate(sampling=interpolated.sampling)
+    np.testing.assert_array_equal(computed, asnumpy(by_sampling.copy().compute().array))
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_diffraction_patterns_interpolate_to_two_samplings(lazy, device, pair):
+    patterns = _random_patterns((2, 64, 67), (0.01, 0.0093), "float32", lazy, device)
+
+    interpolated = patterns.interpolate(sampling=pair((0.0131, 0.012)))
+
+    assert interpolated.sampling == (0.0131, 0.012)
+    assert interpolated.base_shape == (49, 52)
+    assert interpolated.copy().compute().array.shape == (2, 49, 52)
+
+
+@pytest.mark.parametrize("cls", [DiffractionPatterns, Images])
+@pytest.mark.parametrize(
+    "special, limits",
+    [
+        (np.nan, dict()),
+        (np.nan, dict(vmin=0.1, vmax=1.2)),
+        (np.nan, dict(logscale=True)),
+        (np.inf, dict()),
+        (np.inf, dict(logscale=True)),
+        (0.0, dict(logscale=True)),
+    ],
+)
+def test_show_complex_measurements_with_masked_pixels(cls, special, limits):
+    """A pixel the amplitude norm masks (NaN, inf, zero on a log scale) is
+    transparent and the other pixels are drawn as without it, when shown, after a
+    power change (which replaces a log norm by a power norm) and when the
+    visualization moves to another member. Host matplotlib code, so the device is
+    not a parameter."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rng = np.random.default_rng(0)
+    shape = (2, 20, 27)
+    array = (rng.random(shape) + 1j * rng.random(shape)).astype(np.complex64)
+    finite = array.copy()
+    # a value inside the range of the others, which gives the same limits
+    finite[:, 2, 5] = array[:, 3, 3]
+    array[:, 2, 5] = special
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
+    if cls is DiffractionPatterns:
+        kwargs.update(fftshift=True, metadata={"energy": 100e3})
+
+    def alpha(artist):
+        return np.ma.filled(np.ma.asarray(artist.phase_axes_image.get_alpha()), -1.0)
+
+    def alphas(data):
+        visualization = cls(data, **kwargs).show(**limits)
+        artist = visualization.artists[0, 0]
+        found = [alpha(artist)]
+        artist.set_power(0.5)
+        found.append(alpha(artist))
+        visualization.update_data_indices((1,))
+        found.append(alpha(artist))
+        return found
+
+    try:
+        expected, found = alphas(finite), alphas(array)
+    finally:
+        plt.close("all")
+
+    # the image is drawn transposed
+    keep = np.ones(expected[0].shape, dtype=bool)
+    keep[5, 2] = False
+    for e, f in zip(expected, found):
+        assert f[5, 2] == 0.0
+        np.testing.assert_array_equal(f[keep], e[keep])
+
+
+def test_compute_of_indexed_diffraction_patterns_leaves_no_lazy_attribute():
+    from dask import is_dask_collection
+
+    probe = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=(4.0, 3.0), gpts=(40, 30)
+    )
+    patterns = probe.build(lazy=False).diffraction_patterns(max_angle=None)
+    cell = np.diag([4.0, 3.0, 4.0])
+    eager = patterns.index_diffraction_spots(cell=cell)
+    computed = patterns.ensure_lazy().index_diffraction_spots(cell=cell).compute()
+
+    lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
+    assert lazy == []
+    np.testing.assert_array_equal(computed.array, eager.array)
+
+
+_EPS32 = np.finfo(np.float32).eps
+
+
+def _spline_interpolate(array, entry):
+    """Spline-interpolate a 2D array (possibly on the GPU) by one of the three
+    public entry points that reach map_coordinates: to 1.31 times the points
+    for the images, to twice the number of rows along the diagonal for the
+    line, and to 1.31 times the points of the first two rows, joined into one
+    profile, for the profile."""
+    if entry == "profile":
+        profiles = RealSpaceLineProfiles(array[:2].reshape(-1), sampling=0.1)
+        return profiles.interpolate(gpts=int(profiles.shape[-1] * 1.31)).array
+    images = Images(array, sampling=(0.1, 0.1))
+    if entry == "line":
+        return images.interpolate_line(
+            start=(0.0, 0.0), end=images.extent, gpts=2 * array.shape[0]
+        ).array
+    gpts = (int(array.shape[0] * 1.31), int(array.shape[1] * 1.31))
+    return images.interpolate(gpts=gpts, method="spline").array
+
+
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_branch_hands_map_coordinates_double_precision(entry, monkeypatch):
+    """The CuPy branch gives map_coordinates a double-precision input and
+    coordinates. cupyx's kernel computes in the precision of its input, so a
+    single-precision one takes the starting index from the float32-rounded
+    coordinate and the weights from the float64 one. Pinned to the CPU: the test
+    is about what reaches cupyx, which does not depend on the device, with
+    SciPy's map_coordinates in place of cupyx's."""
+    import types
+
+    import scipy.ndimage
+
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    expected = _spline_interpolate(array, entry)
+
+    seen = []
+
+    def spy(input, coordinates, *args, **kwargs):
+        seen.append((input.dtype, coordinates.dtype))
+        return scipy.ndimage.map_coordinates(input, coordinates, *args, **kwargs)
+
+    monkeypatch.setattr(abtem.measurements, "cp", np)
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    result = _spline_interpolate(array, entry)
+
+    assert seen
+    assert set(seen) == {(np.dtype(np.float64),) * 2}
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("order", [1, 3])
+def test_interpolate_stack_just_below_grid_nodes(device, order):
+    """Coordinates a hair below a grid node must give that node's value. With
+    float64 coordinates on a float32 image, cupyx's spline kernel (CuPy 14.1 and
+    later) took the index from the float32-rounded coordinate and the weights
+    from the float64 one, and returned the value at the next node instead."""
+    from abtem.measurements import _interpolate_stack
+
+    rng = np.random.default_rng(11)
+    array = rng.random((16, 24)).astype(np.float32)
+    k = np.arange(1, 15)
+    positions = np.stack([k - 1e-12, np.full(k.shape, 5.0)], axis=-1)
+    values = _interpolate_stack(
+        copy_to_device(array, device),
+        copy_to_device(positions, device),
+        mode="wrap",
+        order=order,
+    )
+    np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+@pytest.mark.parametrize("entry", ["images", "line", "profile"])
+def test_cupy_spline_interpolation_of_single_precision_data_matches_numpy(entry, dtype):
+    """On the GPU, single-precision data interpolate to within a few float32
+    roundings of the NumPy result, which SciPy computes in float64."""
+    rng = np.random.default_rng(5)
+    array = rng.random((1024, 768))
+    if dtype == np.complex64:
+        array = array + 1j * rng.random(array.shape)
+    array = array.astype(dtype)
+
+    expected = _spline_interpolate(array, entry)
+    result = asnumpy(_spline_interpolate(copy_to_device(array, "gpu"), entry))
+
+    assert result.dtype == dtype
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+@pytest.mark.parametrize("order", [1, 3])
+@pytest.mark.parametrize("delta", [1e-12, 2e-5])
+def test_cupy_interpolation_just_below_far_grid_nodes(delta, order):
+    """Far from the origin a coordinate k - delta rounds to k in float32. The
+    result must still be the NumPy one, not the value at node k + 1. The y
+    positions are multiples of 1/64, exact in float32, so that only the x
+    coordinate carries the offset."""
+    from abtem.measurements import _interpolate_stack
+
+    array = np.random.default_rng(7).random((1024, 768)).astype(np.float32)
+    k = np.arange(900, 1000)
+    y = np.round(np.linspace(700.0, 760.0, len(k)) * 64) / 64
+    positions = np.stack([k - delta, y], axis=-1)
+
+    expected = _interpolate_stack(array, positions, mode="wrap", order=order)
+    result = _interpolate_stack(
+        copy_to_device(array, "gpu"),
+        copy_to_device(positions, "gpu"),
+        mode="wrap",
+        order=order,
+    )
+
+    np.testing.assert_allclose(
+        asnumpy(result), expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+def _line_pixel_positions(start, end, gpts, sampling, margin=0.0):
+    """The pixel coordinates of gpts points along a line from start to end [Å],
+    built in float64. A margin extends the line at both ends and, as a scan keeps
+    its sampling, adds the points that fill it."""
+    start, end = np.array(start), np.array(end)
+    length = np.linalg.norm(end - start)
+    direction = (end - start) / length
+    start, end = start - margin * direction, end + margin * direction
+    gpts = int(np.ceil((length + 2 * margin) / (length / gpts)))
+    line = np.stack(
+        [np.linspace(a, b, gpts, endpoint=False) for a, b in zip(start, end)], axis=-1
+    )
+    return line / np.array(sampling)
+
+
+@pytest.mark.parametrize(
+    "width, margin", [(0.0, 0.0), (0.3, 0.0), (0.0, 0.5), (0.3, 0.5)]
+)
+def test_interpolate_line_positions_are_float64(width, margin, monkeypatch):
+    """interpolate_line hands map_coordinates positions that are exact in float64,
+    not rounded to the float32 of a scan's positions, which is up to
+    ulp32(position) / 2 / sampling pixels (3.8e-5 pixels near 100 Å at 0.1 Å).
+    SciPy's map_coordinates records the coordinates. Pinned to NumPy: the
+    positions of NumPy and CuPy are the same."""
+    import types
+
+    import scipy.ndimage
+
+    sampling = (0.1, 0.07)
+    # 384 x 256: the sizes differ, so a swapped axis changes the coordinates.
+    array = np.random.default_rng(3).random((384, 256)).astype(np.float32)
+    start, end, gpts = (1.3, 2.1), (30.7, 14.9), 503
+
+    seen = []
+
+    def spy(input, coordinates, **kwargs):
+        seen.append(coordinates)
+        return scipy.ndimage.map_coordinates(input, coordinates, **kwargs)
+
+    monkeypatch.setattr(
+        abtem.measurements,
+        "get_ndimage_module",
+        lambda array: types.SimpleNamespace(map_coordinates=spy),
+    )
+    Images(array, sampling=sampling).interpolate_line(
+        start=start, end=end, gpts=gpts, width=width, margin=margin
+    )
+
+    (coordinates,) = seen
+    assert coordinates.dtype == np.float64
+    expected = _line_pixel_positions(start, end, gpts, sampling, margin)
+    # The padding of 2 * order pixels shifts the coordinates. The samples across
+    # the width are placed symmetrically about the line, so they average to it.
+    mean = coordinates.T.reshape(len(expected), -1, 2).mean(axis=1) - 6
+    np.testing.assert_allclose(mean, expected, rtol=0, atol=1e-9)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_interpolate_line_matches_float64_reference(device):
+    """Along a line reaching about 1000 pixels along the first axis and 750
+    along the second, the interpolated values of single-precision data match
+    SciPy's cubic spline at positions built in float64, to a few float32
+    roundings. Positions rounded to float32 are off by up to 3.8e-5 pixels,
+    which moves random data by 3.8e-5 of the maximum."""
+    import scipy.ndimage
+
+    start, end = (1.7, 1.1), (100.9, 52.3)
+    sampling = (0.1, 0.07)
+    gpts = 2048
+    array = np.random.default_rng(5).random((1024, 768)).astype(np.float32)
+    positions = _line_pixel_positions(start, end, gpts, sampling)
+    padded = np.pad(array.astype(np.float64), 6, mode="wrap")
+    expected = scipy.ndimage.map_coordinates(padded, (positions + 6).T, order=3)
+
+    images = Images(copy_to_device(array, device), sampling=sampling)
+    result = asnumpy(images.interpolate_line(start, end, gpts=gpts, order=3).array)
+
+    assert result.dtype == np.float32
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=8 * _EPS32 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@devices
+@pytest.mark.parametrize(
+    "items",
+    [(slice(None, None, 2), slice(1, None, 3)), ([0, 2, 4, 6], [1, 4, 7])],
+    ids=["slices", "index_arrays"],
+)
+def test_subsampled_scan_images_have_the_subsampled_scan_sampling(
+    items, lazy, device
+):
+    axes = [
+        ScanAxis(label="x", sampling=0.5, offset=0.25),
+        ScanAxis(label="y", sampling=0.4, offset=-0.2),
+    ]
+    array = np.random.default_rng(0).random((8, 9, 6, 6), dtype=np.float32)
+    dp = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=0.2,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 100e3},
+    )
+    if lazy:
+        dp = dp.ensure_lazy(chunks=(3, 4, -1, -1))
+    full = dp.integrate_radial(0, 10)
+
+    subsampled = dp[items[0]][:, items[1]]
+    sub = subsampled.integrate_radial(0, 10)
+
+    assert isinstance(sub, Images)
+    assert sub.shape == (4, 3)
+    assert sub.sampling == pytest.approx((1.0, 1.2))
+    np.testing.assert_allclose(
+        asnumpy(sub.compute().array),
+        asnumpy(full.compute().array)[items[0]][:, items[1]],
+        rtol=1e-6,
+    )
+    for new_axis, axis, item, n, n_full in zip(
+        subsampled.ensemble_axes_metadata, axes, items, (4, 3), (8, 9)
+    ):
+        np.testing.assert_allclose(
+            new_axis.coordinates(n), np.asarray(axis.coordinates(n_full))[item]
+        )
+
+
+@pytest.mark.parametrize(
+    "item",
+    [slice(None, None, -1), slice(5, 1, -1), [5, 1], [-1, -3], [4, 0, 2]],
+    ids=["reversed", "reversed range", "decreasing", "negative", "unordered"],
+)
+@pytest.mark.parametrize("lazy", [False, True])
+def test_indexing_a_linear_ensemble_axis_out_of_order_keeps_the_coordinates(
+    item, lazy
+):
+    # an index that is not an increasing run cannot be a linear axis; the axis was
+    # copied whole, so the coordinates of the members were those of the first ones
+    from abtem.core.axes import RealSpaceAxis
+
+    axis = RealSpaceAxis(offset=1.0, sampling=0.5, label="x", units="Å")
+    array = np.arange(7 * 3 * 3, dtype="float32").reshape(7, 3, 3)
+    images = Images(array, sampling=0.1, ensemble_axes_metadata=[axis])
+    if lazy:
+        images = images.lazy()
+
+    coordinates = np.asarray(axis.coordinates(7))[item]
+    selected = images[item]
+
+    new_axis = selected.ensemble_axes_metadata[0]
+    np.testing.assert_allclose(
+        np.asarray(new_axis.coordinates(selected.shape[0])), coordinates
+    )
+    np.testing.assert_array_equal(selected.compute().array, array[item])
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_scan_indexed_out_of_order_is_still_a_scan(lazy):
+    # reductions find the scan by its axis class: the reversed scan became ordinal
+    # and integrating gave line profiles where 1.0.11 gave images
+    from abtem.core.axes import ScanAxis
+
+    axes = [ScanAxis(label="x", units="Å", sampling=0.5, offset=0.0) for _ in range(2)]
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((3, 4, 16, 16), dtype="float32"),
+        sampling=0.1,
+        ensemble_axes_metadata=axes,
+        metadata={"energy": 1e5},
+    )
+    if lazy:
+        patterns = patterns.lazy()
+
+    integrated = patterns[::-1].integrate_radial(0, 10)
+    assert isinstance(integrated.compute(), Images)
+    assert isinstance(patterns[::-1].center_of_mass().compute(), Images)
+    assert all(isinstance(a, ScanAxis) for a in patterns[::-1].ensemble_axes_metadata)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("dtype", ["int32", "uint16"])
+def test_diffraction_patterns_interpolate_counts_in_the_configured_precision(
+    dtype, lazy
+):
+    # integer counts raised a UFuncTypeError: the weights were cast to the integers
+    counts = np.random.default_rng(0).integers(0, 1000, (2, 32, 33)).astype(dtype)
+    patterns = DiffractionPatterns(
+        counts,
+        sampling=(0.1, 0.09),
+        ensemble_axes_metadata=[abtem.core.axes.OrdinalAxis(values=(0, 1))],
+        metadata={"energy": 1e5},
+    )
+    if lazy:
+        patterns = patterns.lazy()
+
+    interpolated = patterns.interpolate(sampling=0.07).compute()
+
+    assert interpolated.array.dtype == np.dtype(get_dtype(complex=False))
+    np.testing.assert_allclose(
+        interpolated.array.sum((-2, -1)), counts.sum((-2, -1)), rtol=1e-5
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, kwargs, num_panels, num_points",
+    [
+        ((3,), {}, (1, 1), 3),
+        ((3, 4), {}, (1, 1), 4),
+        ((3, 4), {"explode": (0,)}, (3, 1), 4),
+        ((3, 4, 2), {}, (1, 1), 2),
+    ],
+)
+def test_show_of_a_measurement_ensemble_plots_along_its_last_free_axis(
+    shape, kwargs, num_panels, num_points
+):
+    # without base axes, show() found no axis to plot along and raised IndexError
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    axes = [
+        OrdinalAxis(values=tuple(range(n)), label=f"a{i}") for i, n in enumerate(shape)
+    ]
+    ensemble = MeasurementsEnsemble(
+        np.random.default_rng(0).random(shape), ensemble_axes_metadata=axes
+    )
+
+    visualization = ensemble.show(**kwargs)
+    try:
+        assert visualization.axes.shape == num_panels
+        assert len(visualization.axes[0, 0].lines[0].get_xdata()) == num_points
+    finally:
+        plt.close("all")
+
+
+def test_show_of_a_measurement_ensemble_with_every_axis_exploded_explains_itself():
+    from abtem.core.axes import OrdinalAxis
+    from abtem.measurements import MeasurementsEnsemble
+
+    ensemble = MeasurementsEnsemble(
+        np.zeros(3), ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))]
+    )
+    with pytest.raises(ValueError, match="none is left to plot along"):
+        ensemble.show(explode=True)
+
+
+@pytest.mark.parametrize("logscale", [True, False])
+def test_line_profiles_show_with_a_logscale_keyword(logscale):
+    # the keyword reached matplotlib's Line2D, which does not know it
+    import matplotlib.pyplot as plt
+
+    from abtem.core.axes import LinearAxis
+
+    profiles = RealSpaceLineProfiles(
+        np.array([1.0, 10.0, 100.0, 1000.0]),
+        sampling=0.1,
+        metadata={},
+    )
+    visualization = profiles.show(logscale=logscale)
+    try:
+        yscale = visualization.axes[0, 0].get_yscale()
+        assert yscale == ("log" if logscale else "linear")
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "y",
+    [
+        np.linspace(100, 1000, 50),
+        np.linspace(10, 1000, 50),
+        np.logspace(-3, 0, 50),
+        np.linspace(-1, 1, 50),
+        np.full(50, 3.0),
+    ],
+    ids=["100-1000", "10-1000", "decades", "with negatives", "constant"],
+)
+def test_log_scale_line_profiles_have_one_margin_rule(y):
+    # two rules set the limits, with a lower margin of a factor 1.82 for 100 to 1000
+    # and 1.1 for 10 to 1000; the margin is now the same factor at both ends
+    import matplotlib.pyplot as plt
+
+    visualization = RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+    try:
+        low, high = visualization.axes[0, 0].get_ylim()
+        shown = y[y > 0]
+        assert low < shown.min() and high > shown.max()
+        np.testing.assert_allclose(
+            shown.min() / low, high / shown.max(), rtol=1e-6
+        )
+        assert shown.min() / low < 1.5 or shown.max() == shown.min()
+        # the artist reports the same limits as it sets
+        np.testing.assert_allclose(
+            visualization.artists[0, 0].get_ylim(), [low, high], rtol=1e-6
+        )
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize("y", [np.zeros(5), -np.ones(5)], ids=["zeros", "negative"])
+def test_log_scale_line_profiles_without_a_positive_value_warn(y):
+    import matplotlib.pyplot as plt
+
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RealSpaceLineProfiles(y, sampling=0.1).show(logscale=True)
+        messages = [str(w.message) for w in caught]
+        # abTEM's own message; matplotlib's "Data has no positive values" comes for
+        # these data whatever abTEM does
+        assert any("to show on a logarithmic axis" in m for m in messages), messages
+    finally:
+        plt.close("all")
+
+
+def _exploded_log_profiles(members):
+    from abtem.core.axes import OrdinalAxis
+
+    return RealSpaceLineProfiles(
+        np.array(members, dtype=float),
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="member", values=tuple(range(len(members))))
+        ],
+        metadata={},
+    )
+
+
+def test_common_log_limits_of_exploded_profiles_cover_every_panel():
+    # each panel took the limits of its own smallest positive value, and the shared
+    # axis kept those of the last: the first member was drawn outside its axis
+    import matplotlib.pyplot as plt
+
+    members = [
+        np.append(np.linspace(1, 10, 9), 0.0),
+        np.linspace(100, 1000, 10),
+    ]
+    visualization = _exploded_log_profiles(members).show(
+        explode=True, logscale=True, common_scale=True
+    )
+    try:
+        axes = visualization.axes
+        limits = [axes[i].get_ylim() for i in np.ndindex(axes.shape)]
+        # the extremes of the positive values of all the members, with one margin
+        margin = (1000 / 1) ** 0.05
+        for low, high in limits:
+            np.testing.assert_allclose([low, high], [1 / margin, 1000 * margin])
+    finally:
+        plt.close("all")
+
+
+def test_common_log_limits_of_exploded_profiles_with_an_all_zero_member():
+    import matplotlib.pyplot as plt
+
+    members = [np.linspace(1, 10, 10), np.linspace(100, 1000, 10), np.zeros(10)]
+    visualization = _exploded_log_profiles(members).show(
+        explode=True, logscale=True, common_scale=True
+    )
+    try:
+        margin = (1000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 1000 * margin]
+            )
+    finally:
+        plt.close("all")
+
+
+def test_common_log_limits_of_complex_profiles_cover_the_real_and_imaginary_lines():
+    # the limits came from the real part of the array, with a ComplexWarning, and the
+    # imaginary line of the first member was drawn outside its panel
+    import matplotlib.pyplot as plt
+
+    x = np.linspace(1, 10, 10)
+    profiles = RealSpaceLineProfiles(
+        np.array([x + 1000j * x, 2 * x + 1j * x]),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="m", values=(0, 1))],
+        metadata={},
+    )
+    visualization = profiles.show(explode=True, logscale=True, common_scale=True)
+    try:
+        # the lines drawn span 1 to 10000, with one margin
+        margin = (10000 / 1) ** 0.05
+        for i in np.ndindex(visualization.axes.shape):
+            np.testing.assert_allclose(
+                visualization.axes[i].get_ylim(), [1 / margin, 10000 * margin]
+            )
+    finally:
+        plt.close("all")
+
+
+def test_images_interpolate_to_a_sampling_that_divides_the_extent():
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
+    images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
+    assert images.interpolate(sampling=0.3).shape == (36, 18)
+
+
+def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
+    profiles = RealSpaceLineProfiles(np.random.default_rng(0).random(10), sampling=1.08)
+    assert profiles.interpolate(sampling=0.3).shape == (36,)

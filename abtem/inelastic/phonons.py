@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Optional,
     Sequence,
     Union,
@@ -31,16 +31,12 @@ if TYPE_CHECKING:
     pass
 
 
-Reader: Optional[Callable] = None
-try:
-    from gpaw.io import Reader  # noqa
-except ImportError:
-    Reader = None
-
-
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
-        assert Reader is not None
+        # imported here, so that a missing or broken GPAW fails only when a GPAW
+        # file is read, with its own error, and never at `import abtem`
+        from gpaw.io import Reader
+
         with Reader(calculator) as reader:
             atoms = read_atoms(reader.atoms)
     else:
@@ -270,6 +266,24 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
+
+
+def _displace_repeated_atoms(
+    frozen_phonons, repetitions: tuple[int, int, int]
+) -> Atoms:
+    """The atoms of `frozen_phonons` repeated and displaced as one configuration.
+
+    A displacement given for each atom is repeated with the atoms: `atoms *
+    repetitions` keeps the order of the atoms within each copy of the cell.
+    """
+    atoms = frozen_phonons.atoms * repetitions
+    sigmas = getattr(frozen_phonons, "_sigmas", None)
+    if isinstance(sigmas, np.ndarray):
+        frozen_phonons = copy.copy(frozen_phonons)
+        frozen_phonons._sigmas = np.tile(
+            sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1)
+        )
+    return frozen_phonons.randomize(atoms)
 
 
 class FrozenPhonons(BaseFrozenPhonons):

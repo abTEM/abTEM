@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import weakref
 from bisect import bisect_left
 from dataclasses import dataclass
 from functools import partial
@@ -22,7 +23,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator
 from abtem.finite_difference import multislice_step as realspace_multislice_step
@@ -110,6 +111,54 @@ def _apply_tilt_to_fresnel_propagator_array(
     return array
 
 
+def _apply_tilt_of_waves(array: np.ndarray, waves: Waves, thickness: float):
+    """Multiply a Fourier-space array by the translation of the beams of ``waves`` by
+    ``tan(tilt) * thickness``, for the base tilt and every tilt axis. The array gets
+    the ensemble axes of the tilts; without tilt it is returned as it is."""
+    if waves.base_tilt != (0.0, 0.0):
+        array = _apply_tilt_to_fresnel_propagator_array(
+            array,
+            sampling=waves._valid_sampling,
+            thickness=thickness,
+            tilt=waves.base_tilt,
+        )
+
+    xp = get_array_module(waves.device)
+
+    tilt_axes = _get_tilt_axes(waves)
+    if not tilt_axes:
+        return array
+
+    for axis in reversed(waves.ensemble_axes_metadata):
+        if hasattr(axis, "tilt"):
+            tilt = xp.asarray(axis.tilt)
+            array = _apply_tilt_to_fresnel_propagator_array(
+                array,
+                sampling=waves._valid_sampling,
+                tilt=tilt,
+                thickness=thickness,
+            )
+
+        else:
+            array = array[..., None, :, :]
+
+    return array
+
+
+def _translate_tilted_waves(waves: Waves, thickness: float) -> Waves:
+    """Translate the beams of tilted ``waves`` by ``tan(tilt) * thickness``, the
+    tilt of the paraxial propagator (orders 1 and 2), for algorithms that do not
+    apply it in a propagator. Untilted waves are returned as they are."""
+    if waves.base_tilt == (0.0, 0.0) and not _get_tilt_axes(waves):
+        return waves
+
+    xp = get_array_module(waves.device)
+    ones = xp.ones(waves._valid_gpts, dtype=get_dtype(complex=True))
+    factor = _apply_tilt_of_waves(ones, waves, thickness)
+    waves._array = fft2_convolve(waves._array, factor, overwrite_x=True)
+    return waves
+
+
 class FresnelPropagator:
     """
     The Fresnel propagator is used for propagating wave functions using the near-field
@@ -176,34 +225,7 @@ class FresnelPropagator:
             get_array_module(waves.device),
         )
 
-        if waves.base_tilt != (0.0, 0.0):
-            array = _apply_tilt_to_fresnel_propagator_array(
-                array,
-                sampling=waves._valid_sampling,
-                thickness=thickness,
-                tilt=waves.base_tilt,
-            )
-
-        xp = get_array_module(waves.device)
-
-        tilt_axes = _get_tilt_axes(waves)
-        if not tilt_axes:
-            return array
-
-        for axis in reversed(waves.ensemble_axes_metadata):
-            if hasattr(axis, "tilt"):
-                tilt = xp.asarray(axis.tilt)
-                array = _apply_tilt_to_fresnel_propagator_array(
-                    array,
-                    sampling=waves._valid_sampling,
-                    tilt=tilt,
-                    thickness=thickness,
-                )
-
-            else:
-                array = array[..., None, :, :]
-
-        return array
+        return _apply_tilt_of_waves(array, waves, thickness)
 
     def propagate(
         self, waves: Waves, thickness: float, in_place: bool = False, order: int = 1
@@ -620,7 +642,7 @@ def multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice, next_slice=None):
-            return realspace_multislice_step(
+            result = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=next_slice,
@@ -629,6 +651,13 @@ def multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",
             )
+            # the stencil knows nothing of the tilt of the beams, which the Fourier
+            # propagator applies as a translation
+            if isinstance(result, tuple):
+                _translate_tilted_waves(result[0], potential_slice.thickness)
+            else:
+                _translate_tilted_waves(result, potential_slice.thickness)
+            return result
 
     (
         extra_ensemble_axes_shape,
@@ -862,7 +891,7 @@ def transition_potential_multislice_and_detect(
         laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
 
         def multislice_step(waves, potential_slice):
-            return realspace_multislice_step(
+            waves = realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 next_slice=None,
@@ -871,6 +900,7 @@ def transition_potential_multislice_and_detect(
                 order=algorithm.order,
                 fully_corrected=False,
             )
+            return _translate_tilted_waves(waves, potential_slice.thickness)
 
     if detectors is None:
         detectors = [WavesDetector()]
@@ -983,19 +1013,30 @@ def transition_potential_multislice_and_detect(
                 # never off the slice (compare standard_multislice_and_detect
                 # at multislice.py:672), so sharing TransmissionFunction
                 # instances across slice indices is safe here.
-                tx_dedup: dict[int, TransmissionFunction] = {}
+                # An id identifies an object only while the object lives: a
+                # generator that yields a new slice every time (a frozen-phonon
+                # mosaic, a Potential) frees each slice, and a later slice can
+                # get its id and with it the wrong transmission function. Each
+                # entry therefore keeps a weak reference to its slice and is used
+                # only while that slice is the one looked up. A weak reference,
+                # so that the cache holds no slice the generator has let go of.
+                tx_dedup: dict[
+                    int, tuple[weakref.ref[PotentialArray], TransmissionFunction]
+                ] = {}
                 slice_cache = []
                 for slice_obj in potential_configuration.generate_slices():
                     key = id(slice_obj)
-                    cached = tx_dedup.get(key)
-                    if cached is None:
+                    entry = tx_dedup.get(key)
+                    if entry is not None and entry[0]() is slice_obj:
+                        cached = entry[1]
+                    else:
                         cached = antialias_aperture.bandlimit(
                             slice_obj.transmission_function(
                                 energy=waves._valid_energy
                             ),
                             in_place=False,
                         )
-                        tx_dedup[key] = cached
+                        tx_dedup[key] = (weakref.ref(slice_obj), cached)
                     slice_cache.append(cached)
             else:
                 slice_cache = list(potential_configuration.generate_slices())

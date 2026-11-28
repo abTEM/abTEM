@@ -13,6 +13,7 @@ from ase.data import chemical_symbols, covalent_radii
 from ase.data.colors import jmol_colors
 from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
@@ -25,6 +26,7 @@ from abtem.visualize.artists import (
     LinesArtist,
     ScatterArtist,
     _get_value_limits,
+    _positive_value_limits,
     validate_cmap,
 )
 from abtem.visualize.axes_grid import AxesCollection, AxesGrid
@@ -35,10 +37,16 @@ if TYPE_CHECKING:
 
 
 def discrete_cmap(num_colors, base_cmap):
+    """A colormap of the first `num_colors` colours of `base_cmap`, one per region.
+
+    A listed colormap: a colormap interpolated between the colours, as
+    LinearSegmentedColormap.from_list makes, cannot be made of a single colour, which
+    a one-region detector (AnnularDetector) needs.
+    """
     if isinstance(base_cmap, str):
         base_cmap = plt.get_cmap(base_cmap)
     colors = base_cmap(range(0, num_colors))
-    return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
+    return matplotlib.colors.ListedColormap(colors)
 
 
 def _validate_axes_types(overlay, explode, ensemble_dims):
@@ -358,7 +366,11 @@ class Visualization:
                 validated_indices += (axis_indices[k],)
                 k += 1
                 removed_axes += 1
-            elif i not in self._overlay:
+            elif i in self._overlay:
+                # kept whole, but its place must be held so that the indices of
+                # the later axes are not shifted onto it
+                validated_indices += (slice(None),)
+            else:
                 validated_indices += (0,)
 
         measurement = self._measurement[validated_indices]
@@ -413,18 +425,80 @@ class Visualization:
     def set_value_limits(
         self, value_limits: tuple[float, float] | list[float] = (None, None)
     ):
+        # limits given here are shared by every artist, also after a change of scale
+        self._value_limits = () if value_limits is None else tuple(value_limits)
+
+        if (
+            value_limits is not None
+            and value_limits[0] is not None
+            and value_limits[0] <= 0
+            and self._uses_log_norm()
+        ):
+            # a LogNorm takes no limit of 0 or below: the shared lower limit is the
+            # smallest positive value of the whole ensemble that can be drawn
+            values = self._drawn_values()
+            positive = values[values > 0]
+            if len(positive):
+                value_limits = [float(positive.min()), value_limits[1]]
+
         self.set_artists("value_limits", value_limits=value_limits)
 
     def set_power(self, power: float = 1.0):
         self.set_artists("power", power=power)
 
     def set_logscale(self, logscale: bool = False):
+        uses_log_norm = self._uses_log_norm()
         self.set_artists("logscale", logscale=logscale)
 
-    def set_common_value_limits(self, value_limits=(None, None)):
-        value_limits = _get_value_limits(
-            self._measurement.array, value_limits=value_limits
+        # a new norm takes the shared limits again, for its own valid lower limit
+        if self._uses_log_norm() != uses_log_norm and any(
+            limit is not None for limit in getattr(self, "_value_limits", ())
+        ):
+            self.set_value_limits(self._value_limits)
+
+    def _drawn_values(self):
+        """The values of the whole measurement that can be drawn, whichever member is
+        shown: those of the lines, which hold the real and imaginary parts of complex
+        data apart; the magnitudes otherwise; for spots those above the threshold."""
+        drawn = [artist.drawn_values() for artist in self.artists.ravel()]
+        if drawn and all(values is not None for values in drawn):
+            return np.concatenate([np.ravel(values) for values in drawn])
+
+        array = self._measurement.array
+        values = np.abs(array) if np.iscomplexobj(array) else array
+
+        thresholds = [
+            artist.threshold
+            for artist in self.artists.ravel()
+            if isinstance(artist, ScatterArtist)
+        ]
+        if thresholds:
+            values = values[values > min(thresholds)]
+        return values
+
+    def _uses_log_norm(self):
+        return any(
+            isinstance(
+                getattr(artist, "amplitude_norm", getattr(artist, "norm", None)),
+                LogNorm,
+            )
+            for artist in self.artists.ravel()
         )
+
+    def set_common_value_limits(self, value_limits=(None, None)):
+        if any(
+            isinstance(artist, LinesArtist) and artist.get_logscale()
+            for artist in self.artists.ravel()
+        ):
+            # the extremes of the positive values of all the panels together; each
+            # panel then adds the same margin
+            value_limits = _positive_value_limits(
+                self._drawn_values(), value_limits=value_limits
+            )
+        else:
+            value_limits = _get_value_limits(
+                self._measurement.array, value_limits=value_limits
+            )
         self.set_value_limits(value_limits)
 
     def set_column_titles(
@@ -713,7 +787,7 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 
 def show_atoms(
     atoms: Atoms,
-    plane: tuple[float, float] | str = "xy",
+    plane: str = "xy",
     ax: Axes = None,
     scale: float = 0.75,
     title: str = None,
@@ -733,9 +807,8 @@ def show_atoms(
     ----------
     atoms : ase.Atoms
         The atoms to be shown.
-    plane : str, two float
-        The projection plane given as a concatenation of 'x' 'y' and 'z', e.g. 'xy', or as two floats representing the
-        azimuth and elevation angles of the viewing direction [degrees], e.g. (45, 45).
+    plane : str
+        The projection plane given as a concatenation of 'x' 'y' and 'z', e.g. 'xy'.
     ax : matplotlib.axes.Axes, optional
         If given the plots are added to the axes.
     scale : float
@@ -760,6 +833,12 @@ def show_atoms(
     -------
     matplotlib.figure.Figure, matplotlib.axes.Axes
     """
+    if not isinstance(plane, str):
+        raise ValueError(
+            "the projection plane must be given as a string of axes, e.g. 'xy', "
+            f"not {plane!r}"
+        )
+
     if show_periodic:
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)

@@ -11,6 +11,7 @@ from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.base import is_dask_collection
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
@@ -105,7 +106,31 @@ class CopyMixin:
         return copy.deepcopy(self)
 
 
+def _is_integral(value) -> bool:
+    """Whether `value` is an integer, or a tuple, list or array of integers."""
+    if isinstance(value, (int, np.integer)):
+        return True
+    if isinstance(value, (tuple, list)):
+        return all(_is_integral(item) for item in value)
+    # A NumPy dtype only: the `dtype` of a `dask.delayed` value is delayed too,
+    # and comparing it raises.
+    dtype = getattr(value, "dtype", None)
+    return isinstance(dtype, np.dtype) and dtype.kind in ("b", "i", "u")
+
+
+def _shape(value) -> tuple[int, ...]:
+    """The `.shape` of `value`, else `np.shape`."""
+    shape = getattr(value, "shape", None)
+    return np.shape(value) if shape is None else tuple(shape)
+
+
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
+    """Whether two objects have the same attributes, except those in `exclude`.
+
+    Numbers, and tuples, lists and arrays of numbers, are equal when their shapes
+    and their values are: integers exactly, any other number to the default
+    tolerance of `np.allclose`. A list equals a tuple of the same values.
+    """
     if not isinstance(b, a.__class__):
         return False
 
@@ -114,33 +139,62 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if key in exclude:
             continue
 
+        if key not in b.__dict__:
+            return False
+        other = b.__dict__[key]
+
+        if not isinstance(value, EqualityMixin):
+            # Arrays of different shapes differ, decided before the values are
+            # compared: a backend can raise its own error for operands that do not
+            # broadcast, and ones that do broadcast would compare equal.
+            shapes = getattr(value, "shape", None), getattr(other, "shape", None)
+            if all(isinstance(s, tuple) for s in shapes) and shapes[0] != shapes[1]:
+                return False
+
         try:
-            equal = value == b.__dict__[key]
+            equal = value == other
         except (KeyError, TypeError, ValueError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
 
-        if isinstance(value, EmptyEnsemble) and isinstance(
-            b.__dict__[key], EmptyEnsemble
-        ):
-            return True
+        if isinstance(value, EmptyEnsemble) and isinstance(other, EmptyEnsemble):
+            # these two attributes are equal; the rest are still compared
+            continue
 
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if isinstance(value, EqualityMixin):
-            equal = safe_equality(value, b.__dict__[key])
-
-        else:  # if isinstance(value, (tuple, list, np.ndarray)):
+        # A held EqualityMixin keeps the verdict of `==` above, its own __eq__ with
+        # Python's operator dispatch, so a check its class adds runs and a
+        # subclass of the other operand's class is compared as at the top level.
+        if not isinstance(value, EqualityMixin):
+            # A deferred array is not compared: that would run the computation
+            # that produces it, as `==` has never done
+            if is_dask_collection(value) or is_dask_collection(other):
+                continue
+            # A tolerance is for floating-point round-off; integers (seeds,
+            # counts, indices) compare without one. Both comparisons broadcast,
+            # so the shapes must match as well: (5,) is not (5, 5).
+            compare = (
+                np.equal if _is_integral(value) and _is_integral(other) else np.allclose
+            )
             try:
-                equal = np.allclose(value, b.__dict__[key])
+                equal = bool(np.all(compare(value, other)))
+                equal = equal and _shape(value) == _shape(other)
             except (ValueError, TypeError):
-                if isinstance(value, EqualityMixin):
-                    equal = safe_equality(value, b.__dict__[key])
+                pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
-        if equal is False:
+        if is_dask_collection(equal):
+            # a deferred value is not reduced: `not np.all(...)` would execute the
+            # graph, so `==` would run the simulations it compares
+            continue
+
+        # `np.all`, not an identity test with False: ase.Atoms.__eq__ returns
+        # numpy.bool_, which is not the False singleton, so atoms that differ
+        # compared equal
+        if not np.all(equal):
             return False
 
     return True
@@ -185,8 +239,13 @@ def _get_dims_to_broadcast(
 
 
 class EqualityMixin:
+    #: Names of lazily populated, derived attributes that carry no identity and are
+    #: left out of the comparison, so that an object does not stop equalling an
+    #: identical one once a result has been computed from it.
+    _eq_exclude: tuple[str, ...] = ()
+
     def __eq__(self, other):
-        return safe_equality(self, other)
+        return safe_equality(self, other, self._eq_exclude)
 
     def __ne__(self, other):
         return not self.__eq__(other)

@@ -1,7 +1,9 @@
 import os
+import sys
 import warnings
 import zlib
 
+import numpy as np
 import pytest
 from hypothesis import HealthCheck, Phase, settings
 
@@ -104,3 +106,28 @@ def pytest_collection_modifyitems(config, items):
 #     for item in items:
 #         if "slow" in item.keywords:
 #             item.add_marker(skip_slow)
+
+
+@pytest.fixture(autouse=True)
+def _undo_gpaw_debug_mode():
+    """Take back what GPAW's debug mode does to NumPy.
+
+    GPAW before 26 switches its debug mode on when ``pytest`` has been imported
+    (also with ``GPAW_DEBUG`` unset), and once ``gpaw`` is imported, which several
+    tests do, it replaces ``np.empty`` and ``np.empty_like`` by versions that fill the
+    array with NaN, and makes floating-point errors raise. Both reach every test that
+    follows in the process: matplotlib builds its grid of axes in an ``np.empty``
+    array of objects, so ``plt.subplots(..., sharey=True)`` fails once that array
+    holds NaN instead of None. GPAW keeps the original functions in its module.
+    """
+
+    def undo():
+        gpaw = sys.modules.get("gpaw")
+        if gpaw is not None and hasattr(gpaw, "oldempty"):
+            np.empty = gpaw.oldempty
+            np.empty_like = gpaw.oldempty_like
+            np.seterr(over="warn", divide="warn", invalid="warn", under="ignore")
+
+    undo()
+    yield
+    undo()

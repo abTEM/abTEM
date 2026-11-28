@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import numbers
 import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING
@@ -960,10 +961,20 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             metadata=metadata,
         )
 
-        self._local_potential = self.local_potential(space="real").sum(0)
+        self._derive_from_array()
         self._threshold = None
 
-    def from_array_and_metadata(self, array, metadata):
+    def _derive_from_array(self):
+        """Derive the state that depends on the array's content; `__init__` and
+        `_replace_array` call it."""
+        self._local_potential = self.local_potential(space="real").sum(0)
+
+    def _replace_array(self, array):
+        super()._replace_array(array)
+        self._derive_from_array()
+
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     def set_threshold(self, wave, threshold):
@@ -978,7 +989,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         Parameters
         ----------
         max_angle : float
-            Maximum angle (in degrees) for the local potential calculation.
+            Maximum scattering angle [mrad] for the local potential calculation.
         space : str, optional
             Specifies the coordinate space in which the potential is calculated.
             Default is "reciprocal". Possible values are "reciprocal" and "real".
@@ -1302,7 +1313,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         waves = waves.ensure_real_space()
         sites = self.validate_sites(sites)
 
-        if isinstance(max_batch, int):
+        if isinstance(max_batch, numbers.Integral):
             limit = int(max_batch * np.prod(waves.shape) * len(self))
         else:
             limit = max_batch

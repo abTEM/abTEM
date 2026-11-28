@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import numbers
 import warnings
 from abc import abstractmethod
 from copy import copy
@@ -102,12 +103,26 @@ def _ensure_parity_of_gpts(
 
 
 def _antialias_cutoff_gpts(
-    gpts: tuple[int, int], sampling: tuple[float, float]
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    extent: Optional[tuple[float, float]] = None,
 ) -> tuple[int, int]:
+    """The number of points within the antialias cutoff of a grid of the given
+    ``sampling``, on a grid of ``gpts`` points spanning ``extent`` (by default the
+    grid of ``gpts`` points at ``sampling``).
+
+    The count takes the parity of the number of points of the grid at ``sampling``
+    that spans ``extent`` when that number is an integer, as it is for downsampled or
+    tiled waves, and the parity of ``gpts`` otherwise."""
     kcut = 2.0 / 3.0 / max(sampling)
-    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    if extent is None:
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+    ratio = extent[0] / sampling[0], extent[1] / sampling[1]
+    parity_gpts = tuple(
+        round(r) if abs(r - round(r)) < 1e-6 else n for r, n in zip(ratio, gpts)
+    )
+    return _ensure_parity_of_gpts(new_gpts, parity_gpts, parity="same")
 
 
 def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
@@ -116,6 +131,42 @@ def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
     # traceback, and after an eager probe was built at every scan position.
     if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
         raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+
+
+def _max_batch_with_exit_planes(
+    waves_builder: WavesBuilder,
+    potential: Optional[BasePotential],
+    detectors: Optional[BaseDetector | list[BaseDetector]],
+    max_batch: int | str,
+) -> int | str:
+    """An automatic ``max_batch`` divided so that a block of detector output fits
+    the chunk size.
+
+    A block returns one output per exit plane and detector for each of its waves, all
+    in one chunk. The automatic batch of waves is divided by the output of the
+    block, in units of one wave, when that exceeds one wave; an integer
+    ``max_batch`` is returned as it is.
+    """
+    if max_batch != "auto" or potential is None:
+        return max_batch
+
+    from abtem.core.chunks import _chunk_bytes
+    from abtem.detectors import validate_detectors
+
+    wave_bytes = (
+        int(np.prod(waves_builder.gpts)) * np.dtype(waves_builder.dtype).itemsize
+    )
+    output_bytes = sum(
+        int(np.prod(detector._out_base_shape(waves_builder)[0]))
+        * np.dtype(detector._out_dtype(waves_builder)[0]).itemsize
+        for detector in validate_detectors(detectors, waves_builder)
+    )
+    ratio = -(-potential.num_exit_planes * output_bytes // wave_bytes)
+
+    if ratio <= 1:
+        return max_batch
+
+    return max(1, _chunk_bytes(waves_builder.device) // wave_bytes // ratio)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -179,18 +230,49 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         ]
 
     @property
+    def _antialias_sampling(self) -> tuple[float, float]:
+        """The sampling of the grid whose antialias aperture band-limits the waves:
+        their own, or that of the grid they were resampled from."""
+        return self.metadata.get("antialias_sampling", self._valid_sampling)
+
+    @property
+    def _coarsest_sampling(self) -> tuple[float, float]:
+        """The sampling of the coarsest grid the waves were resampled onto, at which
+        their content ends: their own, if they were not resampled."""
+        return self.metadata.get("coarsest_sampling", self._valid_sampling)
+
+    def _resampling_metadata(self, gpts: tuple[int, int]) -> dict:
+        """The metadata of these waves resampled to ``gpts`` points over their
+        extent that keeps the band limit of the content."""
+        sampling = (self._valid_extent[0] / gpts[0], self._valid_extent[1] / gpts[1])
+        return {
+            "antialias_sampling": self._antialias_sampling,
+            "coarsest_sampling": tuple(
+                max(coarsest, new)
+                for coarsest, new in zip(self._coarsest_sampling, sampling)
+            ),
+        }
+
+    @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """The number of grid points along the x and y direction in the simulation grid
         at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            n = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
+            # waves stored with the pixel count itself
+            cutoff_gpts = self.metadata["adjusted_antialias_cutoff_gpts"]
+        else:
+            cutoff_gpts = _antialias_cutoff_gpts(
+                self._valid_gpts, self._antialias_sampling, self._valid_extent
             )
-            m = min(
-                self.metadata["adjusted_antialias_cutoff_gpts"][1], self._valid_gpts[1]
-            )
-            return n, m
-        return _antialias_cutoff_gpts(self._valid_gpts, self._valid_sampling)
+        # the content ends at the edge of the coarsest grid it was resampled onto
+        content_gpts = [
+            round(length / sampling)
+            for length, sampling in zip(self._valid_extent, self._coarsest_sampling)
+        ]
+        return (
+            min(cutoff_gpts[0], content_gpts[0], self._valid_gpts[0]),
+            min(cutoff_gpts[1], content_gpts[1], self._valid_gpts[1]),
+        )
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
@@ -354,6 +436,46 @@ def reduce_ensemble(
     return reduced_output
 
 
+def _deprecated_normalization(
+    normalization, function: str, hint: str, stacklevel: int = 3
+):
+    """Warn that the ``normalization`` keyword of ``function`` is deprecated, and
+    return it validated; None when it was not given. The warning points ``stacklevel``
+    frames up from here, the default being the caller of ``function``."""
+    if normalization is None:
+        return None
+    warnings.warn(
+        f"The `normalization` argument of `{function}` is deprecated and will be "
+        f"removed in a future release. {hint}",
+        FutureWarning,
+        stacklevel=stacklevel,
+    )
+    if normalization not in ("values", "amplitude", "intensity"):
+        raise ValueError(
+            f"normalization {normalization!r} not recognized; use 'values' or "
+            "'amplitude'"
+        )
+    return normalization
+
+
+def _normalize_with_deprecated_normalization(normalize, normalization, function: str):
+    """The ``normalize`` flag of an exit-wave calculation. The ``normalization``
+    argument it replaced ('values' or 'amplitude', also still accepted in the
+    position of ``normalize``) only wrote a label to the metadata and never changed
+    the array, so it is validated and otherwise ignored."""
+    if isinstance(normalize, str):
+        normalize, normalization = False, normalize
+    _deprecated_normalization(
+        normalization,
+        function,
+        "It only set a metadata label and did not change the exit waves, which have "
+        "a value of one in the incident wave: use `normalize=True` for waves with "
+        "a reciprocal space intensity that sums to one.",
+        stacklevel=4,
+    )
+    return bool(normalize)
+
+
 class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
@@ -367,6 +489,14 @@ class _WavesNormalization(WavesToWavesTransform):
     @property
     def in_place(self) -> bool:
         return self._in_place
+
+    @property
+    def metadata(self) -> dict:
+        # the wave functions are now normalized as those of a builder with
+        # `normalize=True` are, which `diffraction_patterns` must not divide again
+        if self._space == "reciprocal":
+            return {"normalization": "reciprocal_space"}
+        return {}
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -611,8 +741,7 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        # The norm sums over the whole grid, so a lazy block must hold all of it.
-        return transform.apply(self.no_base_chunks())
+        return transform.apply(self)
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -1097,9 +1226,14 @@ class Waves(BaseWaves, ArrayObject):
         self,
         max_angle: str | float = "cutoff",
         gpts: Optional[tuple[int, int]] = None,
-        normalization: str = "values",
+        normalization: Optional[str] = None,
     ) -> Waves:
         """Downsample the wave functions to a lower maximum scattering angle.
+
+        The normalization of the wave functions is kept: with the normalization of
+        ``PlaneWave()``, where the wave function takes a value of one everywhere, the
+        pixel values are preserved; with that of ``PlaneWave(normalize=True)``, which
+        ``Probe`` waves have, the reciprocal space intensity keeps its sum.
 
         Parameters
         ----------
@@ -1121,15 +1255,10 @@ class Waves(BaseWaves, ArrayObject):
             Number of grid points of the wave functions after downsampling.
             If given, `max_angle` is not used.
 
-        normalization : {'values', 'amplitude'}
-            The normalization parameter determines the preserved quantity after
-            normalization.
-
-                ``values`` :
-                    The pixel-wise values of the wave function are preserved (default).
-
-                ``amplitude`` :
-                    The total amplitude of the wave function is preserved.
+        normalization : {'values', 'amplitude'}, optional
+            Deprecated. Overrides what is preserved: ``values`` the pixel values,
+            ``amplitude`` the total amplitude. By default the normalization of the
+            waves is kept, as described above.
 
         Returns
         -------
@@ -1137,12 +1266,17 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        waves = self.ensure_real_space()
+        waves = self.ensure_real_space().no_base_chunks()
         xp = get_array_module(waves.array)
 
         if gpts is None:
             gpts = waves._gpts_within_angle(max_angle)
 
+        normalization = _deprecated_normalization(
+            normalization,
+            "Waves.downsample",
+            "The normalization of the waves is kept by default.",
+        ) or Waves._fft_resampling_normalization(waves.metadata)
         if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
@@ -1163,13 +1297,33 @@ class Waves(BaseWaves, ArrayObject):
             waves._valid_extent[0] / gpts[0],
             waves._valid_extent[1] / gpts[1],
         )
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            waves.antialias_cutoff_gpts
-        )
+        kwargs["metadata"].update(waves._resampling_metadata(gpts))
         downsampled = self.__class__(**kwargs)
         if self.reciprocal_space:
             return downsampled.ensure_reciprocal_space()
         return downsampled
+
+    @staticmethod
+    def _fft_resampling_normalization(metadata) -> str:
+        """What `fft_interpolate` preserves when resampling waves with this metadata:
+        the pixel values of waves with the normalization of ``PlaneWave()``, otherwise
+        the reciprocal space intensity, as `diffraction_patterns` takes the waves."""
+        if Waves._diffraction_pattern_should_normalize(metadata):
+            return "values"
+        return "amplitude"
+
+    @staticmethod
+    def _diffraction_pattern_should_normalize(metadata, renormalize=True):
+        """Whether ``diffraction_patterns`` should renormalize the intensity
+        for the given ``metadata`` (see its ``renormalize`` parameter)."""
+        if renormalize and "normalization" in metadata:
+            if metadata["normalization"] == "values":
+                return True
+            elif metadata["normalization"] != "reciprocal_space":
+                raise RuntimeError(
+                    f"normalization {metadata['normalization']} not recognized"
+                )
+        return False
 
     @staticmethod
     def _diffraction_pattern(
@@ -1268,14 +1422,7 @@ class Waves(BaseWaves, ArrayObject):
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
-        normalize = False
-        if renormalize and "normalization" in metadata:
-            if metadata["normalization"] == "values":
-                normalize = True
-            elif metadata["normalization"] != "reciprocal_space":
-                raise RuntimeError(
-                    f"normalization {metadata['normalization']} not recognized"
-                )
+        normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
             # Declare the precision the blocks return, which follows the waves
@@ -1286,15 +1433,16 @@ class Waves(BaseWaves, ArrayObject):
                 self.array.dtype if return_complex else np.finfo(self.array.dtype).dtype
             )
 
+            array = self.no_base_chunks()._lazy_array
             pattern = da.map_blocks(
                 self._diffraction_pattern,
-                self.array,
+                array,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
                 reciprocal_space=self.reciprocal_space,
-                chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                chunks=array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
         else:
@@ -1732,7 +1880,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         lazy = validate_lazy(lazy)
         array: np.ndarray | da.core.Array
         if lazy:
-            if isinstance(max_batch, int):
+            if isinstance(max_batch, numbers.Integral):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts
@@ -1921,7 +2069,8 @@ class PlaneWave(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -1939,6 +2088,8 @@ class PlaneWave(WavesBuilder):
         potential = validate_potential(potential)
 
         self.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(self, potential, detectors, max_batch)
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
@@ -2219,7 +2370,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
@@ -2237,6 +2389,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2280,7 +2434,9 @@ class Probe(WavesBuilder):
         max_batch : int or str, optional
             The number of probe wave functions in each chunk of the Dask array. If
             'auto' (default), the batch size is chosen from the abtem configuration
-            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``), and divided so that the
+            output of a block, one for every exit plane of the potential, fits the
+            chunk size.
         lazy : bool, optional
             If True, build measurements lazily; otherwise compute eagerly. Defaults to
             the value set in the user configuration file.
@@ -2308,6 +2464,8 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         if potential is not None:
             probe.grid.match(potential)
+
+        max_batch = _max_batch_with_exit_planes(probe, potential, detectors, max_batch)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
@@ -2349,7 +2507,8 @@ class Probe(WavesBuilder):
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            "dask.chunk-size-gpu", and divided so that the output of a block, one for
+            every exit plane of the potential, fits the chunk size.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.

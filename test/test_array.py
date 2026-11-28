@@ -14,6 +14,7 @@ from utils import (assert_array_matches_device, assert_array_matches_laziness,
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
+from abtem.measurements import Images
 
 
 @given(data=st.data())
@@ -267,6 +268,9 @@ def test_from_zarr_legacy_format(data, has_array, url):
     root.attrs["type0"] = has_array.__class__.__name__
 
     has_array_from_zarr = from_zarr(url).compute()
+    assert has_array_from_zarr == has_array
+
+    has_array_from_zarr = from_zarr(url, chunks="auto").compute()
     assert has_array_from_zarr == has_array
 
 
@@ -681,19 +685,6 @@ class TestBaseLessArrayObject:
         after = m.no_base_chunks().array.chunks
         assert after == before
 
-    def test_no_base_chunks_own_arithmetic_is_correct_even_if_reached(
-        self, monkeypatch
-    ):
-        """`no_base_chunks()`'s early return on a correct `_has_base_chunks`
-        already keeps the buggy line from firing for a base-less object --
-        the test above pins that. This pins the line itself: forcing the
-        guard open (as a stale or differently-computed `_has_base_chunks`
-        might) must not resurrect the -0 collapse into one block."""
-        m = self._ensemble(chunks=(1, 1))
-        monkeypatch.setattr(type(m), "_has_base_chunks", property(lambda self: True))
-        after = m.no_base_chunks().array.chunks
-        assert after == ((1, 1), (1, 1))
-
     def test_partition_args_does_not_raise(self):
         m = self._ensemble()
         m._partition_args()  # used to raise ValueError
@@ -788,3 +779,425 @@ def test_to_data_array_does_not_share_nested_metadata_values(fake_xarray):
     waves.to_data_array().attrs["components"].append("diffuse")
 
     assert waves.metadata["components"] == ["total", "elastic"]
+
+
+def test_set_ensemble_axes_metadata_refuses_an_axis_that_does_not_fit():
+    """The axis is checked against the array: a mismatch raises and leaves the
+    old axis in place. The test sets metadata only, so it pins no device."""
+    old_axis = OrdinalAxis(label="a", values=(1, 2, 3))
+    images = Images(
+        np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=[old_axis]
+    )
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        images.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert images.ensemble_axes_metadata[0] == old_axis
+
+    new_axis = OrdinalAxis(label="b", values=(10, 20, 30))
+    assert images.set_ensemble_axes_metadata(new_axis, 0) is images
+    assert images.ensemble_axes_metadata[0] == new_axis
+
+
+def test_set_ensemble_axes_metadata_leaves_a_list_shared_with_another_object_alone():
+    """A refused axis is never written into the list the caller passed, and an
+    accepted one is installed in a list of the object's own, so another object
+    built from the same list keeps its axes. The test sets metadata only, so it
+    pins no device."""
+    axes = [OrdinalAxis(label="a", values=(1, 2, 3))]
+    first = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+    second = Images(np.zeros((3, 4, 4)), sampling=0.1, ensemble_axes_metadata=axes)
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20)), 0)
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"
+
+    first.set_ensemble_axes_metadata(OrdinalAxis(label="b", values=(10, 20, 30)), 0)
+    assert first.ensemble_axes_metadata[0].label == "b"
+    assert second.ensemble_axes_metadata[0].label == "a"
+    assert axes[0].label == "a"
+
+
+def _images_file(tmp_path):
+    import abtem
+
+    images = abtem.Images(
+        np.zeros((2, 4, 3)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(label="a", values=(1, 2))],
+    )
+    url = str(tmp_path / "images.zarr")
+    images.to_zarr(url)
+    return url
+
+
+def test_a_file_whose_stored_axes_do_not_fit_its_array_is_refused(tmp_path):
+    """An object is rebuilt from the axes the file stores, so a file whose axes do
+    not fit its array raises instead of loading the axes of its constructor
+    kwargs. CPU only: zarr is written and read on the host."""
+    import zarr
+
+    import abtem
+
+    url = _images_file(tmp_path)
+    root = zarr.open(url, mode="r+")
+    metadata = root.attrs["metadata0"]
+    metadata["axes"]["axis_0"]["values"] = {"_type": "tuple", "_value": [7, 8, 9]}
+    root.attrs["metadata0"] = metadata
+
+    with pytest.raises(RuntimeError, match="ordinal axis"):
+        abtem.from_zarr(url)
+
+
+def test_an_error_in_from_array_and_metadata_escapes_from_zarr(tmp_path, monkeypatch):
+    """Only the `NotImplementedError` of a class that cannot rebuild from axes
+    and metadata sends `from_zarr` to its constructor kwargs; any other error
+    escapes. CPU only: zarr is written and read on the host."""
+    import abtem
+
+    url = _images_file(tmp_path)
+
+    def broken(cls, array, axes_metadata, metadata):
+        raise TypeError("broken from_array_and_metadata")
+
+    monkeypatch.setattr(abtem.Images, "from_array_and_metadata", classmethod(broken))
+
+    with pytest.raises(TypeError, match="broken from_array_and_metadata"):
+        abtem.from_zarr(url)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        "abtem.measurements.IndexedDiffractionPatterns",
+        "abtem.prism.s_matrix.SMatrixArray",
+        "abtem.inelastic.core_loss.TransitionPotentialArray",
+    ],
+)
+def test_classes_that_cannot_rebuild_from_axes_say_so(cls):
+    """The stubs that send `from_zarr` to the stored constructor kwargs raise
+    `NotImplementedError` when called on the class; as instance methods or plain
+    functions they raised a `TypeError` first."""
+    import importlib
+
+    module, name = cls.rsplit(".", 1)
+    cls = getattr(importlib.import_module(module), name)
+
+    with pytest.raises(NotImplementedError):
+        cls.from_array_and_metadata(np.zeros((2, 2)), axes_metadata=[], metadata={})
+
+
+def test_s_matrix_and_indexed_patterns_still_read_from_their_kwargs(tmp_path):
+    """The classes without `from_array_and_metadata` load from their stored
+    constructor kwargs. CPU only: zarr is written and read on the host."""
+    from ase.build import bulk
+
+    import abtem
+
+    potential = abtem.Potential(bulk("Si", cubic=True), sampling=0.2)
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=10
+    ).build(lazy=False)
+    s_matrix.to_zarr(str(tmp_path / "s_matrix.zarr"))
+    read = abtem.from_zarr(str(tmp_path / "s_matrix.zarr")).compute()
+    assert type(read) is type(s_matrix)
+    np.testing.assert_allclose(read.array, s_matrix.array)
+
+    patterns = abtem.DiffractionPatterns(
+        np.random.default_rng(0).random((48, 40)),
+        sampling=(0.2, 0.25),
+        metadata={"energy": 100e3},
+        fftshift=True,
+    )
+    indexed = patterns.index_diffraction_spots(cell=bulk("Si", cubic=True).cell)
+    indexed.to_zarr(str(tmp_path / "indexed.zarr"))
+    read = abtem.from_zarr(str(tmp_path / "indexed.zarr")).compute()
+    assert type(read) is type(indexed)
+    np.testing.assert_allclose(np.asarray(read.array), np.asarray(indexed.array))
+
+
+def _linear_axes():
+    from abtem.core.axes import LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis, ScanAxis
+
+    return [
+        LinearAxis(label="z", sampling=0.7, offset=-1.3),
+        RealSpaceAxis(label="z", sampling=0.7, offset=-1.3),
+        ScanAxis(label="z", sampling=0.7, offset=-1.3),
+        ReciprocalSpaceAxis(label="z", sampling=0.7, offset=-(9 // 2) * 0.7),
+    ]
+
+
+# (item, step of the members it selects), over 9 members: slices with a positive
+# step, negative bounds included, and index arrays of evenly increasing members
+_LINEAR_AXIS_ITEMS = [
+    (slice(1, 8, 2), 2),
+    (slice(None, None, 3), 3),
+    (slice(-4, None), 1),
+    (slice(1, -2), 1),
+    (slice(-7, -1, 2), 2),
+    ([0, 3, 6], 3),
+    ([2, 3, 4], 1),
+    ([5], 1),
+    (np.array([False, True, False, True, False, True, False, False, False]), 2),
+]
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("axis", _linear_axes(), ids=lambda axis: type(axis).__name__)
+@pytest.mark.parametrize("item, step", _LINEAR_AXIS_ITEMS)
+def test_indexing_a_linear_ensemble_axis_keeps_the_coordinates_of_its_members(
+    axis, item, step, lazy, device
+):
+    from abtem.core.axes import ReciprocalSpaceAxis
+    from abtem.core.backend import asnumpy, copy_to_device
+    from abtem.measurements import Images
+
+    if isinstance(axis, ReciprocalSpaceAxis) and step != 1:
+        pytest.skip("a ReciprocalSpaceAxis keeps its class only for a step of one")
+
+    host = np.arange(9)[:, None, None] * 6.0 * np.ones((9, 3, 2))
+    images = Images(
+        copy_to_device(host, device), sampling=0.1, ensemble_axes_metadata=[axis]
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+
+    indexed = images[item]
+    new_axis = indexed.ensemble_axes_metadata[0]
+    expected = np.asarray(axis.coordinates(9))[item]
+
+    assert type(new_axis) is type(axis)
+    assert new_axis.sampling == pytest.approx(0.7 * step)
+    np.testing.assert_allclose(
+        new_axis.coordinates(len(expected)), expected, rtol=0, atol=1e-12 * 9 * 0.7
+    )
+    np.testing.assert_array_equal(asnumpy(indexed.compute().array), host[item])
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_a_new_axis_before_a_stepped_linear_ensemble_axis(device):
+    from abtem.core.axes import LinearAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    axis = LinearAxis(label="z", sampling=0.7, offset=-1.3)
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[axis],
+    )
+
+    new_axis = images[None, 1::2].ensemble_axes_metadata[1]
+
+    np.testing.assert_allclose(
+        new_axis.coordinates(4), np.asarray(axis.coordinates(9))[1::2], atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_chunks_of_a_stepped_linear_ensemble_axis_carry_their_own_coordinates(
+    lazy, device
+):
+    """The partition path indexes the already indexed axis with contiguous
+    forward slices; each block's coordinates are those of its members."""
+    from abtem.core.axes import ScanAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    images = Images(
+        copy_to_device(np.zeros((9, 3, 2)), device),
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.5, offset=1.0)],
+    )
+    if lazy:
+        images = images.ensure_lazy(chunks=(4, -1, -1))
+    indexed = images[1::2]
+    expected = indexed.ensemble_axes_metadata[0].coordinates(4)
+
+    blocks = indexed._partition_ensemble_axes_metadata(chunks=((2, 2),), lazy=False)
+
+    for block, start in zip(blocks, (0, 2)):
+        np.testing.assert_allclose(
+            block[0].coordinates(2), expected[start : start + 2], atol=1e-12
+        )
+
+
+def _scanned_images(device, lazy, x_offset=0.25, y_offset=-0.2, n=(8, 9), scale=1):
+    """Images over a scan whose axes have different lengths (8 and 9)."""
+    from abtem.core.axes import ScanAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    host = np.arange(np.prod(n) * 6 * 5, dtype=np.float32).reshape(n + (6, 5))
+    images = Images(
+        copy_to_device(host * scale, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.5, offset=x_offset),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+def _ordinal_scanned_images(device, lazy, n_a, y_offset=-0.2):
+    from abtem.core.axes import ScanAxis
+    from abtem.core.backend import copy_to_device
+    from abtem.measurements import Images
+
+    host = np.ones((n_a, 9, 6, 5), dtype=np.float32)
+    images = Images(
+        copy_to_device(host, device),
+        sampling=0.2,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=tuple(range(n_a))),
+            ScanAxis(label="y", sampling=0.4, offset=y_offset),
+        ],
+    )
+    return images.ensure_lazy() if lazy else images
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "other_kwargs, differing_axis, field",
+    [
+        ({"x_offset": 2.25}, 0, "offset 0.25 vs 2.25"),
+        ({"y_offset": 0.2}, 1, "offset -0.2 vs 0.2"),
+    ],
+)
+def test_stack_raises_for_members_with_different_axes(
+    other_kwargs, differing_axis, field, lazy, device
+):
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, **other_kwargs)
+
+    with pytest.raises(ValueError, match=f"axis {differing_axis}") as error:
+        stack((first, second), ("a", "b"))
+
+    assert field in str(error.value)
+    assert "sampling" not in str(error.value)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_stack_raises_for_the_two_halves_of_a_scan(lazy, device):
+    images = _scanned_images(device, lazy)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((images[:4], images[4:]), ("a", "b"))
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_stack_of_members_with_identical_axes_keeps_them(lazy, device):
+    from abtem.core.backend import asnumpy
+
+    first = _scanned_images(device, lazy)
+    second = _scanned_images(device, lazy, scale=2)
+
+    stacked = stack((first, second), ("a", "b"))
+
+    assert stacked.ensemble_axes_metadata[1:] == first.ensemble_axes_metadata
+    for i, member in enumerate((first, second)):
+        np.testing.assert_array_equal(
+            asnumpy(stacked[i].compute().array), asnumpy(member.compute().array)
+        )
+
+
+def test_the_error_of_a_stack_names_the_types_of_axes_of_different_classes():
+    from abtem.core.axes import RealSpaceAxis
+
+    images = _scanned_images("cpu", False)
+    other = images.copy()
+    other._ensemble_axes_metadata[0] = RealSpaceAxis(
+        label="x", sampling=0.5, offset=0.25
+    )
+
+    with pytest.raises(ValueError, match="type ScanAxis vs RealSpaceAxis"):
+        stack((images, other), ("a", "b"))
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_stack_of_indexed_diffraction_patterns_raises_for_members_with_different_axes(
+    lazy,
+):
+    """`IndexedDiffractionPatterns` has a `_stack` of its own."""
+    from abtem.core.axes import ScanAxis
+    from abtem.measurements import DiffractionPatterns
+
+    # only the axes metadata is compared, so the device does not matter
+    patterns = DiffractionPatterns(
+        np.random.default_rng(0).random((4, 17, 21)).astype(np.float32),
+        sampling=0.5,
+        metadata={"energy": 100e3},
+        ensemble_axes_metadata=[ScanAxis(label="x", sampling=0.5, offset=0.25)],
+    )
+    if lazy:
+        patterns = patterns.ensure_lazy()
+    indexed = patterns.index_diffraction_spots(cell=4.0)
+
+    with pytest.raises(ValueError, match="axis 0 'x'"):
+        stack((indexed[:2], indexed[2:]), ("a", "b"))
+
+    stacked = stack((indexed[:2], indexed[:2].copy()), ("a", "b"))
+    assert stacked.shape[:2] == (2, 2)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_concatenate_raises_for_members_with_different_axes_besides_the_joined_one(
+    lazy, device
+):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2, y_offset=0.2)
+
+    with pytest.raises(ValueError, match="axis 1 'y'"):
+        concatenate((first, second), axis=0)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_concatenate_of_members_with_identical_other_axes_joins_them(lazy, device):
+    first = _ordinal_scanned_images(device, lazy, n_a=3)
+    second = _ordinal_scanned_images(device, lazy, n_a=2)
+
+    joined = concatenate((first, second), axis=0)
+
+    assert joined.shape == (5, 9, 6, 5)
+    assert joined.ensemble_axes_metadata[0].values == (0, 1, 2, 0, 1)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_stack_and_concatenate_raise_for_members_with_a_different_number_of_axes(
+    lazy,
+):
+    from abtem.measurements import Images
+
+    first = _ordinal_scanned_images("cpu", lazy, n_a=3)
+    leading = [axis.copy() for axis in first.axes_metadata]
+    second = Images(
+        np.ones((3, 9, 6, 5, 6, 5), dtype=np.float32),
+        sampling=0.2,
+        ensemble_axes_metadata=leading,
+    )
+    if lazy:
+        second = second.ensure_lazy()
+
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        stack((first, second), ("a", "b"))
+    with pytest.raises(ValueError, match="4 and 6 axes"):
+        concatenate((first, second), axis=0)
+
+
+@pytest.mark.parametrize("axis", [0, -4])
+def test_concatenate_raises_with_a_message_for_a_joined_axis_that_cannot_be_joined(
+    axis,
+):
+    # the error is raised before any array work, so the device does not matter
+    images = _scanned_images("cpu", False)
+
+    with pytest.raises(RuntimeError, match="along the ScanAxis 'x'"):
+        concatenate((images[:4], images[4:]), axis=axis)

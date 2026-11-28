@@ -22,7 +22,8 @@ except (ModuleNotFoundError, ImportError):
 
 try:
     import mkl_fft  # type: ignore
-except ModuleNotFoundError:
+except ImportError:
+    # also a broken installation, e.g. a missing shared library
     mkl_fft = None
 
 try:
@@ -346,6 +347,33 @@ def _cupy_fft_with_cache_fallback(func, x, **kwargs):
         cache.set_memsize(memsize)
 
 
+def _transformed_axes(ndim: int, func_name: str, kwargs: dict) -> tuple[int, ...]:
+    """
+    The axes of an array of `ndim` dimensions that a transform acts on.
+
+    Which axes those are depends on the function -- ``fftn`` transforms all of
+    them unless ``axes`` says otherwise, ``fft2`` the trailing two, ``fft`` a
+    single one.
+    """
+    axes = kwargs.get("axes")
+    s = kwargs.get("s")
+
+    if axes is None:
+        if func_name.endswith("fftn"):
+            # numpy and cupy apply `s` to the TRAILING len(s) axes when no axes
+            # are given.
+            count = len(s) if s is not None else ndim
+            axes = tuple(range(ndim - count, ndim))
+        elif func_name.endswith("fft2"):
+            axes = (-2, -1)
+        else:
+            axes = (kwargs.get("axis", -1),)
+
+    # Drop axes the array does not have: cupy's fft2 quietly reduces the axes for
+    # arrays of fewer than two dimensions.
+    return tuple(axis for axis in axes if -ndim <= axis < ndim)
+
+
 def _fft_dispatch(
     x: U,
     func_name: str,
@@ -365,9 +393,12 @@ def _fft_dispatch(
             raise RuntimeError()
 
     if isinstance(x, da.core.Array):
+        # Each block is transformed on its own, so it must hold the whole of
+        # every transformed axis.
+        axes = _transformed_axes(x.ndim, func_name, kwargs)
         return da.map_blocks(
             _fft_dispatch,
-            x,
+            x.rechunk({axis: -1 for axis in axes}),
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
@@ -534,6 +565,8 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
 
     if isinstance(x, da.core.Array):
         dtype = get_dtype(complex=True)
+        # Each block is convolved on its own, so it must hold the whole grid.
+        x = x.rechunk({-2: -1, -1: -1})
         # The kernel goes in as a second dask array, so each block of x meets
         # the matching block of the kernel. Passed whole, it is broadcast
         # against every block, and a kernel axis longer than a block of x

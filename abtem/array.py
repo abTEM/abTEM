@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import numbers
 import operator
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -38,6 +39,7 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _index_ensemble_axis,
     _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
@@ -61,6 +63,7 @@ from abtem.core.utils import (
     itemset,
     normalize_axes,
     number_to_tuple,
+    safe_equality,
     tuple_range,
 )
 from abtem.transform import TransformFromFunc
@@ -101,6 +104,23 @@ ArrayObjectTypeAlt = TypeVar("ArrayObjectTypeAlt", bound="ArrayObject")
 ArrayItemType = Union[int, slice, list, np.ndarray, None]
 
 
+def _auto_ensemble_chunks(n_ensemble: int, n_base: int) -> tuple:
+    """Chunks that let dask choose the size of the ensemble chunks and keep each
+    base array (the grid of a wave function or an image) in one chunk."""
+    return ("auto",) * n_ensemble + (-1,) * n_base
+
+
+def _axis_origin(axis: AxisMetadata) -> float:
+    """The coordinate of the first sample of an axis for the exports, which describe
+    an axis by an origin and a sampling.
+
+    An unshifted reciprocal axis starts at zero frequency, whereas its `offset` is that
+    of the centred grid."""
+    if not getattr(axis, "fftshift", True):
+        return 0.0
+    return getattr(axis, "offset", 0.0)
+
+
 def _to_hyperspy_axes_metadata(
     axes_metadata: list[AxisMetadata], shape: int | tuple[int, ...]
 ):
@@ -114,7 +134,7 @@ def _to_hyperspy_axes_metadata(
 
         if isinstance(metadata, LinearAxis):
             hyperspy_axis["scale"] = metadata.sampling
-            hyperspy_axis["offset"] = metadata.offset
+            hyperspy_axis["offset"] = _axis_origin(metadata)
             hyperspy_axis["units"] = metadata.units
         elif isinstance(metadata, OrdinalAxis):
             if all(isinstance(value, Number) for value in metadata.values) and (
@@ -646,7 +666,7 @@ def _compute(
         arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
-        wrapper._array = array
+        wrapper._replace_array(array)
 
     profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
@@ -934,6 +954,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy != isinstance(array, da.core.Array):
             raise ValueError("Type of array must match type of object.")
 
+        self._replace_array(array)
+
+    def _replace_array(self, array: np.ndarray | da.core.Array):
+        """Replace the array in place; `compute` and the `array` setter go through
+        here. A subclass that derives state from the array in `__init__` overrides
+        this to derive it again from the new array."""
         self._array = array
 
     @property
@@ -1427,14 +1453,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         expanded_axes_metadatas = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
         ]
+        expanded_shape = list(self.ensemble_shape)
         for i, item in enumerate(items):
             if item is None:
                 expanded_axes_metadatas.insert(i, UnknownAxis())
+                expanded_shape.insert(i, 1)
 
         metadata = {}
         axes_metadata = []
         last_indexed = 0
-        for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
+        for item, expanded_axes_metadata, n in zip(
+            items, expanded_axes_metadatas, expanded_shape
+        ):
             last_indexed += 1
             if isinstance(item, Number):
                 metadata = {
@@ -1442,10 +1472,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     **expanded_axes_metadata.item_metadata(item, self.metadata),
                 }
             else:
-                try:
-                    axes_metadata += [expanded_axes_metadata[item].copy()]
-                except TypeError:
-                    axes_metadata += [expanded_axes_metadata.copy()]
+                axes_metadata += [_index_ensemble_axis(expanded_axes_metadata, item, n)]
 
         axes_metadata += expanded_axes_metadatas[last_indexed:]
         return axes_metadata, metadata
@@ -1593,7 +1620,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             return self
 
         if chunks == "auto":
-            chunks = ("auto",) * len(self.ensemble_shape) + (-1,) * len(self.base_shape)
+            chunks = _auto_ensemble_chunks(
+                len(self.ensemble_shape), len(self.base_shape)
+            )
 
         array = da.from_array(self.array, chunks=chunks)
 
@@ -1787,13 +1816,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
-        """Rechunk to remove chunks across the base dimensions."""
+        """Rechunk to remove chunks across the base dimensions.
+
+        An array whose base dimensions are in one chunk is returned as it is.
+        Otherwise dask chooses the chunks of the ensemble dimensions again, so that
+        a block holds the whole base array of as many members as fit dask's
+        `array.chunk-size`.
+        """
         if not self._has_base_chunks:
             return self
-        # See the comment in _has_base_chunks: -0 is 0, not "the end".
-        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
-        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(self.base_shape)
-        return self.rechunk(chunks)
+        return self.rechunk(
+            _auto_ensemble_chunks(len(self.ensemble_shape), len(self.base_shape))
+        )
 
     @staticmethod
     def _apply_transform(
@@ -1846,6 +1880,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The transformed array object.
         """
 
+        if self._has_base_chunks and not transform._allow_base_chunks:
+            # Each lazy block is transformed on its own, so it must hold the
+            # whole base array (the grid of a wave function or an image).
+            return self.no_base_chunks().apply_transform(transform, max_batch)
+
         new_arrays: (
             da.core.Array
             | np.ndarray
@@ -1853,7 +1892,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             | tuple[np.ndarray, ...]
         )
         if self.is_lazy:
-            if isinstance(max_batch, int):
+            if isinstance(max_batch, numbers.Integral):
                 max_batch = int(max_batch * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
@@ -1966,7 +2005,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def set_ensemble_axes_metadata(
         self, axes_metadata: AxisMetadata, axis: int
     ) -> Self:
-        """Sets the axes metadata of an ensemble axis.
+        """Sets the axes metadata of an ensemble axis. The axes metadata are left
+        unchanged when the new axis is refused.
 
         Parameters
         ----------
@@ -1974,16 +2014,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The new axis metadata.
         axis : int
             The axis to set.
+
+        Raises
+        ------
+        RuntimeError
+            If the axis metadata does not fit the dimension, for example an ordinal
+            axis with a different number of values.
         """
 
-        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-
-        self.ensemble_axes_metadata[axis] = axes_metadata
+        old_axes_metadata = self._ensemble_axes_metadata
+        self._ensemble_axes_metadata = list(old_axes_metadata)
+        self._ensemble_axes_metadata[axis] = axes_metadata
 
         try:
             self._check_axes_metadata()
         except RuntimeError:
             self._ensemble_axes_metadata = old_axes_metadata
+            raise
 
         return self
 
@@ -2050,6 +2097,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         destination = ensemble_axes + axes_base_indices[::-1]
 
         if transpose:
+            # HyperSpy takes the axes in the order of the array's dimensions.
+            axes_base = axes_base[::-1]
             if self.is_lazy:
                 array = da.moveaxis(self.array, source=source, destination=destination)
             else:
@@ -2057,7 +2106,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             array = self.array
 
-        s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+        s = signal_type(array, axes=ensemble_axes_metadata + axes_base)
 
         if self.is_lazy:
             s = s.as_lazy()
@@ -2152,7 +2201,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            origin.append(0.0)
+            origin.append(_axis_origin(axis))
 
         # The signal units are the metadata units, as abTEM's own measurements set them
         # ("arb. unit" by default). quantem only displays them, and reads the same
@@ -2429,7 +2478,7 @@ def _from_zarr_canonical(root, chunks, decode_types):
             # actually wrote, which itself never splits base axes -- this
             # branch only matters if a caller explicitly opts into "auto".
             num_ensemble_axes = zarr_array.ndim - cls._base_dims
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
@@ -2443,7 +2492,9 @@ def _from_zarr_canonical(root, chunks, decode_types):
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        except Exception:
+        except NotImplementedError:
+            # The class rebuilds only from its constructor kwargs, which every
+            # canonical file since abTEM 1.0.10 stores.
             if kwargs is None:
                 raise
 
@@ -2492,7 +2543,7 @@ def _from_zarr_legacy(root, chunks, decode_types):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = _auto_ensemble_chunks(num_ensemble_axes, cls._base_dims)
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
@@ -2538,6 +2589,47 @@ def validate_axis_metadata(
     return validated_axis_metadata
 
 
+def _short(value: Any, width: int = 40) -> str:
+    text = str(value)
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
+def _differing_fields(a: AxisMetadata, b: AxisMetadata) -> str:
+    """The fields in which two axes differ, each with both values. A field differs by
+    the rule of the axes' equality."""
+    if type(a) is not type(b):
+        return f"type {type(a).__name__} vs {type(b).__name__}"
+
+    fields = [
+        f"{key} {_short(a.__dict__[key])} vs {_short(b.__dict__[key])}"
+        for key in a.__dict__
+        if not safe_equality(a, b, exclude=tuple(k for k in a.__dict__ if k != key))
+    ]
+    return ", ".join(fields) or "in a way that could not be determined"
+
+
+def _check_same_axes(
+    array_objects: Sequence[ArrayObject], joined: Optional[int] = None
+) -> None:
+    """Raise a ValueError when an array object has a number of axes, or axis metadata
+    along an axis other than `joined`, different from the first one's. It names the
+    first axis that differs and the fields in which it does."""
+    first = array_objects[0].axes_metadata
+    for i, other in enumerate(array_objects[1:], start=1):
+        other_axes = other.axes_metadata
+        if len(first) != len(other_axes):
+            raise ValueError(
+                f"array objects 0 and {i} have different numbers of axes: "
+                f"{len(first)} and {len(other_axes)} axes"
+            )
+        for j, (a, b) in enumerate(zip(first, other_axes)):
+            if j != joined and a != b:
+                raise ValueError(
+                    f"array objects 0 and {i} have different axes along axis {j} "
+                    f"'{a.label}': {_differing_fields(a, b)}"
+                )
+
+
 def stack(
     arrays: Sequence[ArrayObjectType],
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
@@ -2560,6 +2652,12 @@ def stack(
     -------
     array_object : ArrayObject
         The stacked array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes of the array objects differ, since the stacked array object has
+        one set of axes for all of them.
     """
 
     # if not all(isinstance(array, ArrayObject) for array in arrays):
@@ -2569,6 +2667,7 @@ def stack(
     assert axis >= 0
 
     axis_metadata = validate_axis_metadata(axis_metadata)
+    _check_same_axes(arrays)
 
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
@@ -2581,7 +2680,8 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     arrays : sequence of array objects
         Each abTEM array object must have the same type and shape, except in the
         dimension corresponding to axis. The axis metadata along the concatenated
-        axis must be compatible for concatenation.
+        axis must be compatible for concatenation, and that along every other axis
+        must be equal.
     axis : int, optional
         The axis along which the arrays will be joined. Default is 0.
 
@@ -2589,7 +2689,16 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     -------
     array_object : ArrayObject
         The concatenated array object of the same type as the input.
+
+    Raises
+    ------
+    ValueError
+        If the axes other than the concatenated one differ between the array objects.
+    RuntimeError
+        If the axis metadata along the concatenated axis cannot be concatenated.
     """
+
+    _check_same_axes(arrays, joined=axis % len(arrays[0].axes_metadata))
 
     xp = get_array_module(arrays[0].array)
 

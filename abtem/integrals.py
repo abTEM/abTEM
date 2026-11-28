@@ -59,6 +59,17 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         If True, intermediate calculations are kept.
     """
 
+    # lazily filled caches, a function of what is compared already: an integrator
+    # that has been used must still equal an identical one that has not
+    _eq_exclude = (
+        "_gaussians",
+        "_corrections",
+        "_scattering_factors",
+        "_tables",
+        "_sorted_disks",
+        "_device_arrays",
+    )
+
     def __init__(self, periodic: bool, finite: bool, retain_data: bool = False):
         self._periodic = periodic
         self._finite = finite
@@ -806,7 +817,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._cutoff_tolerance = cutoff_tolerance
         self._inner_cutoff_factor = inner_cutoff_factor
         self._integration_step = integration_step
-        self._tables: dict[str, ProjectionIntegralTable] = {}
+        self._tables: dict[tuple[str, float], ProjectionIntegralTable] = {}
         self._sorted_disks: dict[
             tuple[str, tuple[float, float]], tuple[np.ndarray, np.ndarray]
         ] = {}
@@ -922,9 +933,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
 
         table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
 
-        self._tables[symbol] = ProjectionIntegralTable(radial_gpts, limits[1:], table)
-
-        return self._tables[symbol]
+        return ProjectionIntegralTable(radial_gpts, limits[1:], table)
 
     def get_integral_table(self, symbol, sampling):
         """
@@ -943,11 +952,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         projection_integral_table :
             ProjectionIntegralTable
         """
+        # the radial grid of the table follows the smallest sampling, so a table
+        # is only valid for the sampling it was made for
+        key = (symbol, float(min(sampling)))
         try:
-            scattering_factor = self.tables[symbol]
+            scattering_factor = self.tables[key]
         except KeyError:
             scattering_factor = self._calculate_integral_table(symbol, sampling)
-            self._tables[symbol] = scattering_factor
+            self._tables[key] = scattering_factor
 
         return scattering_factor
 

@@ -1,9 +1,11 @@
+import ase
 import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
 from ase.build import bulk
 from hypothesis import assume, given
+from utils import devices
 
 import abtem
 
@@ -348,6 +350,46 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
 @pytest.mark.parametrize(
     "detector",
     [
+        abtem.AnnularDetector(inner=10, outer=40),
+        abtem.FlexibleAnnularDetector(outer=40),
+        abtem.SegmentedDetector(inner=10, outer=40, nbins_radial=2, nbins_azimuthal=4),
+    ],
+    ids=["annular", "flexible_annular", "segmented"],
+)
+def test_radial_detector_show_can_be_drawn(detector):
+    """show() of a radial detector renders, not only builds the figure: the
+    one-region AnnularDetector made a one-colour colormap that matplotlib refused
+    when drawing it ("data mapping points must start with x=0 and end with x=1")."""
+    import matplotlib.pyplot as plt
+
+    try:
+        detector.show(energy=100e3, gpts=64, sampling=0.05)
+        plt.gcf().canvas.draw()
+    finally:
+        plt.close("all")
+
+
+@pytest.mark.parametrize("num_colors", [1, 2, 5, 10, 13])
+def test_discrete_cmap_gives_the_first_colours_of_its_base_map(num_colors):
+    """Region i of a detector plot (values -0.5 to num_colors - 0.5) has colour i
+    of the base colormap, for one region as for several."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    from abtem.visualize.visualizations import discrete_cmap
+
+    base = "tab10" if num_colors <= 10 else "tab20"
+    cmap = discrete_cmap(num_colors=num_colors, base_cmap=base)
+    norm = Normalize(vmin=-0.5, vmax=num_colors - 0.5)
+    np.testing.assert_allclose(
+        cmap(norm(np.arange(num_colors))),
+        plt.get_cmap(base)(range(num_colors)),
+    )
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
         abtem.AnnularDetector(inner=30, outer=100, offset=(5.0, -3.0)),
         abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
         abtem.PixelatedDetector(max_angle=60, resample="uniform"),
@@ -372,6 +414,64 @@ def test_lazy_detect_matches_eager_detect(detector):
     lazy = detector.detect(waves.ensure_lazy()).compute(progress_bar=False)
 
     np.testing.assert_array_equal(lazy.array, eager.array)
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=30, outer=100),
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        abtem.SegmentedDetector(inner=10, outer=80, nbins_radial=2, nbins_azimuthal=4),
+        abtem.PixelatedDetector(max_angle=None),
+        abtem.PixelatedDetector(max_angle=60),
+        abtem.WavesDetector(),
+    ],
+    ids=lambda detector: type(detector).__name__
+    + str(getattr(detector, "max_angle", "")),
+)
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (3, 32, 32),
+        (3, 16, 32),
+        (3, 32, 11),
+        (1, (20, 12), (8, 8, 16)),
+    ],
+    ids=["unsplit", "split_first_axis", "split_second_axis", "split_both"],
+)
+@devices
+def test_lazy_detect_of_waves_split_along_the_grid_matches_eager(
+    device, chunks, detector
+):
+    """A detector sees the whole grid of lazy waves that are split into several
+    dask chunks along the grid."""
+    import dask.array as da
+
+    from abtem.core.axes import UnknownAxis
+    from abtem.core.backend import asnumpy, copy_to_device
+
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    array = array.astype(np.complex64)
+    kwargs = dict(energy=100e3, sampling=0.1, ensemble_axes_metadata=[UnknownAxis()])
+    eager = abtem.Waves(copy_to_device(array, device), **kwargs)
+    lazy = abtem.Waves(
+        copy_to_device(da.from_array(array, chunks=chunks), device), **kwargs
+    )
+
+    with abtem.config.set({"fft": "numpy"}):
+        expected = detector.detect(eager)
+        result = detector.detect(lazy)
+        assert result.is_lazy
+        computed = result.copy().compute(progress_bar=False)
+
+    expected_array = asnumpy(expected.array)
+    np.testing.assert_allclose(
+        asnumpy(computed.array),
+        expected_array,
+        rtol=0,
+        atol=1e-5 * np.abs(expected_array).max(),
+    )
 
 
 @pytest.fixture
@@ -462,6 +562,18 @@ def test_real_space_pixelated_detector_refuses_uniform_resampling():
         abtem.PixelatedDetector(reciprocal_space=False, resample="uniform")
 
 
+@pytest.mark.parametrize("max_angle", [0, 0.0, -1, -0.5, np.int64(0), np.float32(-3)])
+def test_pixelated_detector_refuses_a_non_positive_max_angle(max_angle):
+    # a non-positive angle selects no pattern: it is refused at construction
+    with pytest.raises(ValueError, match="max_angle must be positive"):
+        abtem.PixelatedDetector(max_angle=max_angle)
+
+
+@pytest.mark.parametrize("max_angle", [None, "valid", "cutoff", "full", 30, 0.5])
+def test_pixelated_detector_accepts_a_positive_max_angle_or_a_name(max_angle):
+    assert abtem.PixelatedDetector(max_angle=max_angle).max_angle == max_angle
+
+
 def _waves_detector_setup():
     import ase.build
 
@@ -539,3 +651,138 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
     assert result.shape == waves.shape
     assert np.array_equal(result.sampling, waves.sampling)
     assert np.array_equal(result.array, waves.array)
+
+
+@devices
+@pytest.mark.parametrize("pair", [tuple, list])
+def test_pixelated_detector_downsamples_to_two_samplings(device, pair):
+    # both samplings are coarser than the waves' (0.1 and 0.077 1 / Å)
+    probe = abtem.Probe(
+        energy=100e3,
+        semiangle_cutoff=20,
+        extent=(10, 13),
+        gpts=(64, 80),
+        device=device,
+    )
+    waves = probe.build()
+    detector = abtem.PixelatedDetector(resample=pair((0.137, 0.15)))
+
+    detected = detector.detect(waves)
+
+    assert detected.sampling == (0.137, 0.15)
+    # the pre-allocated output shape is the computed one
+    assert detected.base_shape == detector._out_base_shape(waves)[0] == (22, 20)
+
+
+def _resample_entries(device):
+    # the waves are sampled at (0.1, 0.0769) 1 / Å, unequal along the two axes;
+    # a PRISM reduction at interpolation 2 at (0.2, 0.154) 1 / Å
+    atoms = ase.Atoms("C", positions=[(5, 6.5, 1)], cell=(10, 13, 2))
+    potential = abtem.Potential(atoms, gpts=(64, 80), device=device)
+    phonon_potential = abtem.Potential(
+        abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=1),
+        gpts=(64, 80),
+        device=device,
+    )
+    # the step is a whole number of pixels of the PRISM grids, (11, 7) of (44, 56)
+    scan = abtem.GridScan(start=(0, 0), end=(5, 6.5), gpts=(2, 4))
+
+    def probe():
+        return abtem.Probe(
+            energy=100e3,
+            semiangle_cutoff=20,
+            extent=(10, 13),
+            gpts=(64, 80),
+            device=device,
+        )
+
+    def s_matrix(**kwargs):
+        return abtem.SMatrix(
+            potential=potential,
+            energy=100e3,
+            semiangle_cutoff=20,
+            device=device,
+            **kwargs,
+        )
+
+    return {
+        "scan": lambda d: probe().scan(potential, scan=scan, detectors=d, lazy=False),
+        "lazy scan": lambda d: probe().scan(
+            potential, scan=scan, detectors=d, lazy=True
+        ),
+        "detect": lambda d: d.detect(
+            probe().multislice(potential, scan=scan, lazy=False)
+        ),
+        "lazy detect": lambda d: d.detect(
+            probe().multislice(potential, scan=scan, lazy=True)
+        ),
+        "lazy frozen-phonon scan": lambda d: probe().scan(
+            phonon_potential, scan=scan, detectors=d, lazy=True
+        ),
+        "prism scan": lambda d: s_matrix(interpolation=2).scan(
+            scan=scan, detectors=d, lazy=True
+        ),
+    }
+
+
+_RESAMPLE_ENTRIES = (
+    "scan",
+    "lazy scan",
+    "detect",
+    "lazy detect",
+    "lazy frozen-phonon scan",
+    "prism scan",
+)
+
+
+@devices
+@pytest.mark.parametrize("entry", _RESAMPLE_ENTRIES)
+# None keeps the whole grid
+@pytest.mark.parametrize("max_angle", ["valid", 60.0, None])
+# finer along both axes, along x only, along y only, uniform, coarser
+@pytest.mark.parametrize(
+    "resample", [0.05, (0.09, 0.2), (0.2, 0.07), "uniform", (0.12, 0.08)]
+)
+def test_pixelated_detector_resample_equals_interpolate(
+    device, entry, max_angle, resample
+):
+    """A resampling detector gives the patterns of the same run without
+    resampling, interpolated with DiffractionPatterns.interpolate, for samplings
+    coarser and finer than the waves'."""
+    from abtem.core.backend import asnumpy
+
+    run = _resample_entries(device)[entry]
+    expected = run(abtem.PixelatedDetector(max_angle=max_angle))
+    expected = expected.compute().interpolate(sampling=resample)
+
+    result = run(abtem.PixelatedDetector(max_angle=max_angle, resample=resample))
+    declared = result.shape
+    result = result.compute()
+
+    assert declared == result.shape == expected.shape
+    assert result.sampling == expected.sampling
+    expected = asnumpy(expected.array)
+    np.testing.assert_allclose(
+        asnumpy(result.array), expected, rtol=0, atol=1e-5 * expected.max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_real_space_pixelated_detector_resamples_to_a_sampling_that_divides_the_extent(
+    lazy,
+):
+    # 10.8 / 0.3 is 36.00000000000001 in floats, so the detector declared 37 pixels
+    # where the images had 36.
+    from ase import Atoms
+
+    atoms = Atoms("C", positions=[(5.4, 5.4, 1.0)], cell=(10.8, 10.8, 2.0), pbc=True)
+    potential = abtem.Potential(atoms, gpts=36, slice_thickness=2.0)
+    detector = abtem.PixelatedDetector(reciprocal_space=False, resample=0.3)
+
+    result = abtem.PlaneWave(energy=100e3).multislice(
+        potential, detectors=detector, lazy=lazy
+    )
+    result = result.compute() if lazy else result
+
+    assert result.shape == (36, 36)
+    assert result.base_axes_metadata[0].sampling == pytest.approx(0.3)

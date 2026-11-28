@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -11,6 +12,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import Collection, mpath, transforms
 from matplotlib.colors import Colormap
 from matplotlib.patches import Rectangle
+from matplotlib.text import Annotation
 from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
@@ -20,8 +22,6 @@ from abtem.core.colors import hsluv_cmap
 from abtem.core.units import get_conversion_factor
 
 if TYPE_CHECKING:
-    from matplotlib.text import Annotation
-
     from abtem.measurements import (
         DiffractionPatterns,
         Images,
@@ -68,6 +68,45 @@ def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=No
         value_limits[1] += margin
 
     return value_limits
+
+
+def _positive_value_limits(data, value_limits=None):
+    """The limits of a logarithmic value axis before the margin: those given, or the
+    extremes of the positive values of the data for one that is not given or not
+    positive. An entry is None if there is no positive value to take it from."""
+    data = np.asarray(data)
+    positive = data[data > 0]
+    limits = [None, None] if value_limits is None else list(value_limits)
+    if positive.size:
+        defaults = [float(positive.min()), float(positive.max())]
+    else:
+        defaults = [None, None]
+
+    for i in range(2):
+        if limits[i] is None or not limits[i] > 0:
+            limits[i] = defaults[i]
+    return limits
+
+
+def _log_value_limits(data, value_limits=None, warn=True):
+    """The limits of a logarithmic value axis.
+
+    Only the positive values of the data can be shown. The limits are those given, or
+    the extremes of the positive values for one that is not given or not positive,
+    widened by a factor (their ratio to the power 0.05, or 1.1 for a single value) so
+    that the margin is 5 % of the decades shown, as it is 5 % of the range on a linear
+    axis. A plot without a positive value warns and shows one decade from 1.
+    """
+    limits = _positive_value_limits(data, value_limits)
+
+    if limits[0] is None or limits[1] is None:
+        if warn:
+            warnings.warn("There are no positive values to show on a logarithmic axis.")
+        return [1.0, 10.0]
+
+    low, high = limits
+    margin = (high / low) ** 0.05 if high > low else 1.1
+    return [low / margin, high * margin]
 
 
 class ScaleBar:
@@ -158,8 +197,14 @@ class Artist(metaclass=ABCMeta):
     def set_power(self, power=1.0):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
+
+    def drawn_values(self) -> np.ndarray | None:
+        """The values the artist draws, or None where the artist does not hold all
+        the values that can be drawn: one that shows a member of an ensemble at a
+        time."""
+        return None
 
     @abstractmethod
     def get_power(self):
@@ -197,6 +242,7 @@ class LinesArtist(Artist1D):
         label=None,
         units: str = None,
         legend: bool = False,
+        logscale: bool = False,
         **kwargs,
     ):
         super().__init__(ax=ax, measurement=measurement)
@@ -204,7 +250,15 @@ class LinesArtist(Artist1D):
         is_complex = np.iscomplexobj(measurement.array)
         y = self._reshape_data(measurement.array)
 
-        x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
+        # The x axis is converted as well as relabelled, as the extent of an image is.
+        self._x_conversion = get_conversion_factor(
+            units,
+            measurement.axes_metadata[-1].units,
+            energy=measurement.metadata.get("energy", None),
+        )
+        x = self._convert_x(
+            measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
+        )
 
         # One line per index of the axes before the last one, which is the x axis of
         # the plot. These are the ensemble axes of a line profile, but also all axes
@@ -244,6 +298,16 @@ class LinesArtist(Artist1D):
         formatter.set_powerlimits((-2, 2))
         ax.yaxis.set_major_formatter(formatter)
 
+        if logscale:
+            self.set_logscale(True)
+
+    def _convert_x(self, x):
+        # Coordinates of an axis that is not numeric are not units to convert.
+        if self._x_conversion == 1.0:
+            return x
+
+        return np.asarray(x, dtype=float) * self._x_conversion
+
     def remove(self):
         for line in self._lines:
             line.remove()
@@ -272,12 +336,20 @@ class LinesArtist(Artist1D):
         ptp = xlim[1] - xlim[0]
         return [xlim[0] - 0.05 * ptp, xlim[1] + 0.05 * ptp]
 
+    def drawn_values(self):
+        # the lines, which hold the real and imaginary parts of complex data apart
+        return np.concatenate([np.ravel(line.get_data()[1]) for line in self._lines])
+
     def get_ylim(self):
+        if self._ax.get_yscale() == "log":
+            return _log_value_limits(self.drawn_values(), warn=False)
+
         ylim = [np.inf, -np.inf]
         for line in self._lines:
-            data = line.get_data()[1]
+            data = np.asarray(line.get_data()[1])
             new_ylim = [np.min(data), np.max(data)]
             ylim = [min(new_ylim[0], ylim[0]), max(new_ylim[1], ylim[1])]
+
         ptp = ylim[1] - ylim[0]
         ptp = max(ptp, ylim[1] * 0.01)
         return [ylim[0] - 0.05 * ptp, ylim[1] + 0.05 * ptp]
@@ -287,7 +359,7 @@ class LinesArtist(Artist1D):
 
     def set_data(self, data):
         y = self._reshape_data(data.array)
-        x = data.base_axes_metadata[-1].coordinates(data.shape[-1])
+        x = self._convert_x(data.base_axes_metadata[-1].coordinates(data.shape[-1]))
 
         if len(y.shape) == 1:
             y = y[..., None]
@@ -296,10 +368,10 @@ class LinesArtist(Artist1D):
             line.set_data(x, y[..., i])
 
     def get_logscale(self):
-        return self._ax.set_yscale("log")
+        return self._ax.get_yscale() == "log"
 
-    def set_logscale(self):
-        self._ax.set_yscale("log")
+    def set_logscale(self, logscale: bool = False):
+        self._ax.set_yscale("log" if logscale else "linear")
 
     def get_power(self):
         return 1.0
@@ -327,7 +399,12 @@ class LinesArtist(Artist1D):
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
-        value_limits = _get_value_limits(data, value_limits, margin=0.05)
+
+        if self._ax.get_yscale() == "log":
+            value_limits = _log_value_limits(data, value_limits)
+        else:
+            value_limits = _get_value_limits(data, value_limits, margin=0.05)
+
         self._ax.set_ylim(value_limits)
 
     def set_legend(self, **kwargs):
@@ -355,7 +432,7 @@ class Artist2D(Artist):
     def set_cbars(self, cmap):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
 
     @staticmethod
@@ -366,9 +443,22 @@ class Artist2D(Artist):
         if vmax is None and array is not None:
             vmax = array.max()
 
+        # a LogNorm takes no limit of 0 or below: as in `_get_norm`, leave it to the
+        # norm's autoscaling, which skips non-positive values; with no positive upper
+        # limit there is nothing to autoscale to
+        if (
+            isinstance(norm, colors.LogNorm)
+            and vmin is not None
+            and vmin <= 0
+            and (vmax is None or vmax > 0)
+        ):
+            vmin = None
+
+        # one change signal for both limits, also when only one of them changes
         with norm.callbacks.blocked():
             norm.vmin = vmin
-        norm.vmax = vmax
+            norm.vmax = vmax
+        norm._changed()
 
     @staticmethod
     def _update_norm(old_norm, power, artist, logscale=False):
@@ -447,7 +537,7 @@ def get_extent(measurement, units=None):
         units, measurement.base_axes_metadata[0].units, energy=energy
     )
     conversion_y = get_conversion_factor(
-        units, measurement.base_axes_metadata[0].units, energy=energy
+        units, measurement.base_axes_metadata[1].units, energy=energy
     )
 
     left = (
@@ -728,6 +818,7 @@ class CircleAnnotations:
         self._circle_collection = circle_collection
         self._placement = placement
         self._threshold = threshold
+        self._visible = True
 
         ax = circle_collection.axes
         positions = self._get_positions()
@@ -756,10 +847,10 @@ class CircleAnnotations:
         )
 
     def __getattr__(self, name):
-        try:
-            super(self.__class__).__getattr__(name)
-        except AttributeError:
-            pass
+        if name.startswith("_") or not callable(getattr(Annotation, name, None)):
+            raise AttributeError(
+                f"{self.__class__.__name__} object has no attribute {name}"
+            )
 
         def method(*args, **kwargs):
             return tuple(
@@ -980,6 +1071,13 @@ class ScatterArtist(Artist2D):
         self._update_norm(self.norm, power, self._circles, logscale=logscale)
 
 
+def _domain_coloring_alpha(norm, abs_array):
+    # Pixels the norm masks are transparent: NaN and inf, which do not enter the
+    # autoscaled limits, and zero amplitude on a log scale.
+    alpha = np.clip(norm(np.ma.masked_invalid(abs_array)), a_min=0.0, a_max=1.0)
+    return np.ma.filled(alpha, 0.0)
+
+
 class DomainColoringArtist(Artist2D):
     num_cbars = 2
 
@@ -1001,7 +1099,7 @@ class DomainColoringArtist(Artist2D):
         norm = _get_norm(vmin, vmax, power, logscale)
 
         abs_array = np.abs(measurement.array)
-        alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
+        alpha = _domain_coloring_alpha(norm, abs_array)
 
         extent = get_extent(measurement, units=units)
 
@@ -1072,8 +1170,7 @@ class DomainColoringArtist(Artist2D):
 
     def _update_alpha(self):
         data = self.amplitude_axes_image.get_array().data
-        alpha = self.amplitude_axes_image.norm(np.abs(data))
-        alpha = np.clip(alpha, a_min=0, a_max=1)
+        alpha = _domain_coloring_alpha(self.amplitude_axes_image.norm, np.abs(data))
         self.phase_axes_image.set_alpha(alpha)
 
     def set_value_limits(self, value_limits: tuple[float, float] = (None, None)):
@@ -1099,14 +1196,24 @@ class DomainColoringArtist(Artist2D):
         self._update_norm(self.amplitude_norm, power, self.amplitude_axes_image)
         self._update_alpha()
 
+    def set_logscale(self, logscale: bool = False):
+        # the amplitude norm decides the logarithmic scale and the opacity of the
+        # phase image, as at construction
+        self._update_norm(
+            self.amplitude_norm,
+            self.get_power(),
+            self.amplitude_axes_image,
+            logscale=logscale,
+        )
+        self._update_alpha()
+
     def set_extent(self, extent):
         self.phase_axes_image.set_extent(extent)
         self.amplitude_axes_image.set_extent(extent)
 
     def set_data(self, data):
         abs_array = np.abs(data._array)
-        alpha = self.amplitude_norm(abs_array)
-        alpha = np.clip(alpha, a_min=0, a_max=1)
+        alpha = _domain_coloring_alpha(self.amplitude_norm, abs_array)
 
         self.phase_axes_image.set_alpha(alpha.T)
         self.phase_axes_image.set_data(np.angle(data._array).T)

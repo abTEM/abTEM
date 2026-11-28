@@ -199,6 +199,46 @@ def test_grid_scan_zero_extent_rejected():
         GridScan(start=(1.0, 1.0), end=(1.0, 1.0), gpts=(4, 4))
 
 
+@pytest.mark.parametrize("gpts", [0, -1])
+def test_a_line_scan_rejects_gpts_below_one(gpts):
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        LineScan(start=(0.0, 0.0), end=(1.0, 0.0), gpts=gpts)
+
+    scan = LineScan(start=(0.0, 0.0), end=(1.0, 0.0), gpts=4)
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        scan.gpts = gpts
+    assert scan.gpts == 4
+
+
+def test_a_line_scan_rejects_gpts_below_one_also_with_a_sampling():
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        LineScan(start=(0.0, 0.0), end=(1.0, 0.0), gpts=0, sampling=0.5)
+
+
+@pytest.mark.parametrize("gpts", [(0, 4), (4, 0), (4, -1), 0, -2])
+def test_a_grid_scan_rejects_gpts_below_one(gpts):
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        GridScan(start=(0.0, 0.0), end=(1.0, 1.0), gpts=gpts)
+
+
+@pytest.mark.parametrize("gpts", [(0, 4), (4, -1), 0])
+def test_a_grid_scan_rejects_gpts_below_one_when_they_are_set(gpts):
+    scan = GridScan(start=(0.0, 0.0), end=(1.0, 1.0), gpts=(2, 4))
+
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        scan.gpts = gpts
+    assert scan.gpts == (2, 4)
+
+    scan.gpts = (3, 5)
+    assert scan.shape == (3, 5)
+
+
+def test_scans_of_one_position_are_accepted():
+    assert LineScan(start=(0.0, 0.0), end=(1.0, 0.0), gpts=1).shape == (1,)
+    assert GridScan(start=(0.0, 0.0), end=(1.0, 1.0), gpts=1).shape == (1, 1)
+    assert GridScan(start=(0.0, 0.0), end=(1.0, 1.0), gpts=(1, 4)).shape == (1, 4)
+
+
 # def test_source_offset():
 #     distribution = GaussianDistribution(4, num_samples=4, dimension=2)
 #
@@ -210,3 +250,9 @@ def test_grid_scan_zero_extent_rejected():
 #         blocks[i] = blocks[i].values
 #
 #     assert np.allclose(concatenate_blocks(blocks), s.get_positions())
+
+
+def test_a_line_scan_without_extent_is_refused_with_a_sampling():
+    # the extent divided by the sampling gave 0 positions
+    with pytest.raises(ValueError, match="gpts must be greater than 0"):
+        LineScan(start=(1.0, 1.0), end=(1.0, 1.0), sampling=0.1)

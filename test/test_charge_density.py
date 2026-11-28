@@ -3,6 +3,7 @@ import pytest
 from ase import Atoms
 
 import abtem
+from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.charge_density import (
     ChargeDensityPotential,
     _interpolate_between_cells,
@@ -266,3 +267,218 @@ def test_interpolation_between_cells_is_invariant_to_tiling(hexagonal_field):
 
     scale = np.abs(hexagonal_field).max()
     np.testing.assert_allclose(tiled, original, rtol=0, atol=1e-12 * scale)
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "charge_densities", [1, 3], ids=["shared", "per_configuration"]
+)
+def test_build_from_frozen_phonons(
+    carbon_atoms, charge_density_3d, lazy, charge_densities
+):
+    """Each configuration equals the potential of its displaced atoms built alone,
+    with one charge density for every configuration or one for each."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    densities = [charge_density_3d * (1 + 0.1 * i) for i in range(charge_densities)]
+    charge_density = densities[0] if charge_densities == 1 else np.stack(densities)
+
+    potential = ChargeDensityPotential(frozen_phonons, charge_density, sampling=0.2)
+    built = potential.build(lazy=lazy)
+    if lazy:
+        built = built.compute()
+
+    assert built.ensemble_shape == (3,)
+    for i, atoms in enumerate(frozen_phonons):
+        density = densities[i if charge_densities > 1 else 0]
+        expected = ChargeDensityPotential(atoms, density, sampling=0.2)
+        expected = expected.build(lazy=False)
+        np.testing.assert_allclose(
+            built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
+        )
+
+
+@pytest.mark.parametrize("cls", ["ChargeDensityPotential", "GPAWPotential"])
+def test_documented_slice_thickness_default_is_the_default(cls):
+    # the docstrings said 0.5 Å where the default is 1.0 Å
+    import inspect
+
+    from abtem.potentials import charge_density, gpaw
+
+    builder = getattr(charge_density, cls, None) or getattr(gpaw, cls)
+    default = inspect.signature(builder).parameters["slice_thickness"].default
+
+    assert f"(default is {default} Å)" in builder.__doc__
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_repeated_cell_displaces_each_frozen_phonon_configuration(
+    carbon_atoms, charge_density_3d, lazy
+):
+    """With `repetitions` the potential was made from the undisplaced repeated atoms,
+    so every configuration was the same."""
+
+    def build(sigmas, seed=4):
+        frozen_phonons = FrozenPhonons(
+            carbon_atoms, num_configs=3, sigmas=sigmas, seed=seed, ensemble_mean=False
+        )
+        potential = ChargeDensityPotential(
+            frozen_phonons, charge_density_3d, sampling=0.4, repetitions=(2, 1, 1)
+        )
+        built = potential.build(lazy=lazy)
+        return (built.compute() if lazy else built).array
+
+    displaced = build(0.1)
+    undisplaced = build(0.0)
+    scale = np.abs(undisplaced).max()
+
+    for i, j in [(0, 1), (0, 2), (1, 2)]:
+        assert np.abs(displaced[i] - displaced[j]).max() > 1e-3 * scale
+    # no displacement: the configurations are the repeated cell, all alike
+    np.testing.assert_allclose(undisplaced[0], undisplaced[1], atol=1e-6 * scale)
+    assert np.abs(displaced[0] - undisplaced[0]).max() > 1e-3 * scale
+    # a seed gives the same configurations again, another seed other ones
+    np.testing.assert_allclose(displaced, build(0.1), rtol=0, atol=1e-10 * scale)
+    assert np.abs(displaced - build(0.1, seed=5)).max() > 1e-3 * scale
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+# uneven chunks of several configurations; equal ones and one block add no case
+@pytest.mark.parametrize("chunks", [((1, 3),)], ids=["uneven"])
+@pytest.mark.parametrize(
+    "charge_densities", [1, 4], ids=["shared", "per_configuration"]
+)
+def test_chunks_of_several_configurations_get_their_own_charge_densities(
+    carbon_atoms, charge_density_3d, lazy, chunks, charge_densities
+):
+    """A chunk of configurations holds the charge densities of those configurations
+    (it used to get density k for chunk k, and drop the rest)."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=4, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    densities = [charge_density_3d * (1 + 0.5 * i) for i in range(charge_densities)]
+    charge_density = densities[0] if charge_densities == 1 else np.stack(densities)
+    potential = ChargeDensityPotential(frozen_phonons, charge_density, sampling=0.2)
+
+    if lazy:
+        blocks = list(potential.ensemble_blocks(chunks).compute())
+    else:
+        blocks = [block.item() for *_, block in potential.generate_blocks(chunks)]
+    built = np.concatenate(
+        [
+            block.build(lazy=False).array.reshape((-1,) + block.base_shape)
+            for block in blocks
+        ]
+    )
+
+    assert [block.ensemble_shape[0] for block in blocks] == list(
+        potential._validate_ensemble_chunks(chunks)[0]
+    )
+    for i, atoms in enumerate(frozen_phonons):
+        density = densities[i if charge_densities > 1 else 0]
+        expected = ChargeDensityPotential(atoms, density, sampling=0.2)
+        expected = expected.build(lazy=False).array
+        np.testing.assert_allclose(
+            built[i], expected, rtol=0, atol=1e-6 * expected.max()
+        )
+
+
+def test_repeated_cell_configuration_equals_the_potential_of_its_displaced_atoms(
+    carbon_atoms, charge_density_3d
+):
+    """Each configuration of a repeated cell is the potential of the displaced
+    repeated atoms with the repeated density."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    built = ChargeDensityPotential(
+        frozen_phonons, charge_density_3d, sampling=0.4, repetitions=(2, 1, 1)
+    ).build(lazy=False)
+    tiled = np.tile(charge_density_3d, (2, 1, 1))
+    for i, config in enumerate(frozen_phonons.generate_blocks(1)):
+        fp = config[2].item()
+        atoms = fp.randomize(carbon_atoms * (2, 1, 1))
+        expected = ChargeDensityPotential(atoms, tiled, sampling=0.4).build(lazy=False)
+        np.testing.assert_allclose(
+            built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "sigmas",
+    [np.array([0.05, 0.15]), np.array([[0.05, 0.1, 0.0], [0.15, 0.05, 0.1]])],
+    ids=["per_atom", "per_atom_anisotropic"],
+)
+def test_repeated_cell_displaces_atoms_with_their_own_sigmas(
+    charge_density_3d, sigmas, lazy
+):
+    """Displacements given for each atom are repeated with the atoms (they raised
+    "Property must be provided for all atoms.")."""
+    atoms = Atoms(
+        "C2", positions=[(1.5, 2.5, 2.5), (3.5, 2.5, 2.5)], cell=(5, 5, 5), pbc=True
+    )
+    repetitions = (2, 1, 1)
+    built = ChargeDensityPotential(
+        FrozenPhonons(atoms, 3, sigmas=sigmas, seed=1, ensemble_mean=False),
+        charge_density_3d,
+        sampling=0.4,
+        repetitions=repetitions,
+    ).build(lazy=lazy)
+    built = built.compute() if lazy else built
+
+    # the same configurations from the repeated atoms, with the sigmas repeated
+    repeated_sigmas = np.tile(sigmas, (2,) + (1,) * (sigmas.ndim - 1))
+    expected = ChargeDensityPotential(
+        FrozenPhonons(
+            atoms * repetitions, 3, sigmas=repeated_sigmas, seed=1, ensemble_mean=False
+        ),
+        np.tile(charge_density_3d, repetitions),
+        sampling=0.4,
+    ).build(lazy=False)
+
+    scale = np.abs(expected.array).max()
+    np.testing.assert_allclose(built.array, expected.array, rtol=0, atol=1e-6 * scale)
+    # the atoms are displaced
+    undisplaced = ChargeDensityPotential(
+        atoms, charge_density_3d, sampling=0.4, repetitions=repetitions
+    ).build(lazy=False)
+    assert np.abs(built.array[0] - undisplaced.array).max() > 1e-3 * scale
+
+
+@pytest.mark.parametrize("repetitions", [(2, 3, 1), (1, 2, 2), (3, 1, 2)])
+@pytest.mark.parametrize(
+    "sigmas",
+    [
+        np.array([0.0, 0.05, 0.1]),
+        np.array([[0.0, 0.0, 0.0], [0.1, 0.05, 0.0], [0.0, 0.1, 0.1]]),
+    ],
+    ids=["per_atom", "per_atom_anisotropic"],
+)
+def test_displaced_repeated_atoms_take_the_sigma_of_their_own_atom(
+    repetitions, sigmas
+):
+    """Sigmas given per atom are tiled in the order of `atoms * repetitions`: an atom
+    with a zero sigma stays in place in every copy, and the others move as in the
+    configuration of the repeated atoms with the tiled sigmas."""
+    from abtem.inelastic.phonons import _displace_repeated_atoms
+
+    atoms = Atoms(
+        "C3",
+        positions=[(0.5, 0.5, 0.5), (1.5, 1.0, 1.5), (2.5, 2.0, 0.5)],
+        cell=(3, 3, 3),
+        pbc=True,
+    )
+    frozen_phonons = FrozenPhonons(atoms, 2, sigmas=sigmas, seed=1)
+
+    displaced = _displace_repeated_atoms(frozen_phonons, repetitions)
+
+    repeated = atoms * repetitions
+    tiled = np.tile(sigmas, (int(np.prod(repetitions)),) + (1,) * (sigmas.ndim - 1))
+    expected = FrozenPhonons(repeated, 2, sigmas=tiled, seed=1).randomize(repeated)
+    np.testing.assert_array_equal(displaced.positions, expected.positions)
+
+    moved = np.abs(displaced.positions - repeated.positions).max(axis=1)
+    assert np.all(moved[0::3] == 0.0)
+    assert np.all(moved[1::3] > 0.0)

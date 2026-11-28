@@ -966,3 +966,36 @@ def test_propagator_expansion_scope_runs_in_the_core_loss_multislice(double_chan
     # Both propagators solve the same equation; relative to the maximum they differ
     # by 9e-5 (single channel) and 1e-3 (double channel).
     assert np.abs(result - reference).max() < 1e-2 * np.abs(reference).max()
+
+
+class TestStateDerivedFromTheArray:
+    """compute() and the array setter replace the array of a TransitionPotentialArray
+    together with the local potential derived from it."""
+
+    def _make(self):
+        return _synthetic_transition_potential(extent=(8.0, 8.0), gpts=(32, 32), n=2)
+
+    def test_compute_leaves_no_lazy_attribute(self):
+        from dask import is_dask_collection
+
+        tp = self._make()
+        computed = tp.ensure_lazy().compute()
+
+        lazy = [k for k, v in vars(computed).items() if is_dask_collection(v)]
+        assert not computed.is_lazy
+        assert lazy == []
+        np.testing.assert_array_equal(computed._local_potential, tp._local_potential)
+
+    def test_setting_the_array_derives_the_local_potential_from_it(self):
+        tp = self._make()
+        doubled = 2 * tp.array
+        tp.array = doubled
+
+        expected = TransitionPotentialArray(
+            Z=14,
+            array=doubled,
+            energy=ENERGY,
+            extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+        np.testing.assert_array_equal(tp._local_potential, expected._local_potential)

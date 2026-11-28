@@ -158,6 +158,88 @@ def test_to_quantem_does_not_share_nested_metadata(quantem_records):
     assert images.metadata["nested"] == {"a": [1, 2]}
 
 
+def _images_with_two_ensemble_axes(lazy, device):
+    # Every axis has its own size (3 and 4 members, 16 x 21 pixels), so an axis
+    # list in an order other than the data's gives a wrong size or coordinates.
+    shape = (3, 4, 16, 21)
+    array = np.arange(np.prod(shape), dtype=get_dtype()).reshape(shape)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 2, -1, -1))
+    return Images(
+        array,
+        sampling=SAMPLING,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="a", values=(0.0, 1.0, 2.0)),
+            OrdinalAxis(label="b", values=(0.0, 1.0, 2.0, 3.0)),
+        ],
+    ).copy_to_device(device)
+
+
+@pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_to_hyperspy_axes_describe_the_axes_of_the_data(transpose, lazy, device):
+    pytest.importorskip("hyperspy")
+    images = _images_with_two_ensemble_axes(lazy, device)
+
+    signal = images.to_hyperspy(transpose=transpose)
+
+    # transpose=True reverses the base axes only
+    order = (0, 1, 3, 2) if transpose else (0, 1, 2, 3)
+    # the signal holds the device array of the data, lazily or not
+    data = signal.data.compute() if hasattr(signal.data, "compute") else signal.data
+    data = asnumpy(data)
+    np.testing.assert_array_equal(
+        data, np.transpose(asnumpy(images.compute().array), order)
+    )
+    manager = signal.axes_manager
+    axes = sorted(
+        manager.navigation_axes + manager.signal_axes, key=lambda a: a.index_in_array
+    )
+    assert [axis.name for axis in axes] == [
+        images.axes_metadata[i].label for i in order
+    ]
+    assert [axis.size for axis in axes] == list(data.shape)
+    for axis, i in zip(axes, order):
+        expected = images.axes_metadata[i].coordinates(images.shape[i])
+        np.testing.assert_allclose(axis.axis, expected, rtol=1e-12)
+
+
+@pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_to_hyperspy_passes_the_axes_in_the_order_of_the_data(
+    transpose, lazy, monkeypatch
+):
+    """HyperSpy takes its axes in the order of the array's dimensions; a
+    stand-in for HyperSpy records what to_hyperspy passes it."""
+    captured = {}
+
+    class Signal2D:
+        def __init__(self, data, axes):
+            captured["shape"] = data.shape
+            captured["axes"] = axes
+
+        def as_lazy(self):
+            return self
+
+    monkeypatch.setattr(
+        abtem.array, "hs", SimpleNamespace(signals=SimpleNamespace(Signal2D=Signal2D))
+    )
+    images = _images_with_two_ensemble_axes(lazy, "cpu")
+
+    images.to_hyperspy(transpose=transpose)
+
+    order = (0, 1, 3, 2) if transpose else (0, 1, 2, 3)
+    axes = captured["axes"]
+    assert [axis["name"] for axis in axes] == [
+        images.axes_metadata[i].label for i in order
+    ]
+    assert [axis["size"] for axis in axes] == list(captured["shape"])
+    assert captured["shape"] == tuple(images.shape[i] for i in order)
+    for axis, i in zip(axes[2:], order[2:]):
+        assert axis["scale"] == images.axes_metadata[i].sampling
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_to_quantem_exports_a_host_array(device, quantem_records):
     # quantem's Dataset holds NumPy arrays only and rejects CuPy arrays.
@@ -169,3 +251,87 @@ def test_to_quantem_exports_a_host_array(device, quantem_records):
 
     assert type(quantem_records["array"]) is np.ndarray
     np.testing.assert_array_equal(quantem_records["array"], asnumpy(images.array))
+
+
+def test_to_quantem_origin_is_the_offset_of_scan_axes(quantem_records):
+    # the origin of every axis was written as 0
+    from abtem.core.axes import ScanAxis
+
+    scan_axes = [
+        ScanAxis(label="x", sampling=0.5, offset=1.0, units="Å"),
+        ScanAxis(label="y", sampling=0.4, offset=-2.0, units="Å"),
+    ]
+    images = Images(
+        np.zeros((4, 5, *GPTS), dtype=np.float32),
+        sampling=SAMPLING,
+        ensemble_axes_metadata=scan_axes,
+    )
+
+    images.to_quantem()
+
+    assert quantem_records["origin"][:2] == (1.0, -2.0)
+    assert quantem_records["origin"][2:] == (0.0, 0.0)
+
+
+def test_to_quantem_origin_puts_zero_frequency_at_k_zero(quantem_records):
+    patterns = DiffractionPatterns(
+        np.ones((*GPTS,), dtype=np.float32),
+        sampling=SAMPLING,
+        fftshift=True,
+        metadata={"energy": 100e3},
+    )
+
+    patterns.to_quantem()
+
+    for o, d, n in zip(quantem_records["origin"], quantem_records["sampling"], GPTS):
+        assert abs(o + (n // 2) * d) <= 1e-12 * d
+
+
+def test_to_quantem_origin_of_unshifted_patterns_is_zero(quantem_records):
+    # the data of an unshifted pattern start at zero frequency; the offset of the axis
+    # is that of the centred grid
+    patterns = DiffractionPatterns(
+        np.ones((*GPTS,), dtype=np.float32),
+        sampling=SAMPLING,
+        fftshift=False,
+        metadata={"energy": 100e3},
+    )
+
+    patterns.to_quantem()
+
+    assert quantem_records["origin"] == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_to_hyperspy_origin_follows_the_first_sample_of_a_pattern(
+    fftshift, monkeypatch
+):
+    # the offset of a reciprocal axis is that of the centred grid; the data of an
+    # unshifted pattern start at zero frequency, as the quantem export has it
+    captured = {}
+
+    class Signal2D:
+        def __init__(self, data, axes):
+            captured["axes"] = axes
+
+        def as_lazy(self):
+            return self
+
+    monkeypatch.setattr(
+        abtem.array, "hs", SimpleNamespace(signals=SimpleNamespace(Signal2D=Signal2D))
+    )
+    patterns = DiffractionPatterns(
+        np.ones(GPTS, dtype=np.float32),
+        sampling=SAMPLING,
+        fftshift=fftshift,
+        metadata={"energy": 100e3},
+    )
+
+    patterns.to_hyperspy(transpose=False)
+
+    offsets = [axis["offset"] for axis in captured["axes"]]
+    if fftshift:
+        expected = [-(n // 2) * d for n, d in zip(GPTS, SAMPLING)]
+    else:
+        expected = [0.0, 0.0]
+    np.testing.assert_allclose(offsets, expected, atol=1e-12)

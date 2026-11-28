@@ -3,6 +3,7 @@ types."""
 
 from __future__ import annotations
 
+import numbers
 from abc import abstractmethod
 from copy import copy
 from functools import partial
@@ -25,6 +26,7 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
+    _image_resampling_gpts,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -1018,8 +1020,8 @@ class PixelatedDetector(BaseDetector):
     Parameters
     ----------
     max_angle : float or {'cutoff', 'valid', 'full'}
-        The diffraction patterns will be detected up to this angle [mrad].
-        If str, it must be one of:
+        The diffraction patterns will be detected up to this angle [mrad], which must
+        be positive. If str, it must be one of:
 
         ``cutoff``
             The maximum scattering angle will be the cutoff of the antialiasing
@@ -1030,9 +1032,14 @@ class PixelatedDetector(BaseDetector):
         ``full``
             Diffraction patterns will not be cropped and will include angles outside
             the antialiasing aperture.
-    resample : str or False
+    resample : str, float, two floats or False
         If 'uniform', the diffraction patterns from rectangular cells will be
-        downsampled to a uniform angular sampling.
+        downsampled to a uniform angular sampling. A float or two floats resample
+        the diffraction patterns to that angular sampling [1 / Å], as
+        `DiffractionPatterns.interpolate` does. A sampling finer than that of the
+        waves adds pixels but no angular resolution: along each axis, the pattern has
+        the ratio of the sampling of the waves to the new sampling times as many
+        pixels as the cropped pattern, rounded up.
     reciprocal_space : bool, optional
         If True (default), the diffraction pattern intensities are detected, otherwise
         the probe intensities are
@@ -1056,6 +1063,11 @@ class PixelatedDetector(BaseDetector):
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
+        if isinstance(max_angle, numbers.Real) and max_angle <= 0:
+            raise ValueError(
+                "max_angle must be positive [mrad] or one of 'cutoff', 'valid' or "
+                f"'full', got {max_angle!r}."
+            )
         if not reciprocal_space and isinstance(resample, str):
             raise ValueError(
                 f"resample={resample!r} applies to diffraction patterns only; "
@@ -1128,14 +1140,6 @@ class PixelatedDetector(BaseDetector):
                 gpts=None,
                 adjust_sampling=False,
             )
-
-            if self.max_angle:
-                gpts = tuple(
-                    min(g, g_max)
-                    for g, g_max in zip(
-                        gpts, waves._gpts_within_angle(self.max_angle)
-                    )
-                )
         elif self.max_angle and not self.resample:
             gpts = waves._gpts_within_angle(self.max_angle)
             sampling = waves.reciprocal_space_sampling
@@ -1152,10 +1156,7 @@ class PixelatedDetector(BaseDetector):
         sampling, gpts = waves._valid_sampling, waves._valid_gpts
         if self.resample:
             extent = tuple(d * n for d, n in zip(sampling, gpts))
-            resample = (
-                (self.resample,) * 2 if np.isscalar(self.resample) else self.resample
-            )
-            gpts = tuple(int(np.ceil(e / d)) for e, d in zip(extent, resample))
+            gpts = _image_resampling_gpts(extent, self.resample)
             sampling = tuple(e / n for e, n in zip(extent, gpts))
         return sampling, gpts
 
@@ -1315,7 +1316,7 @@ class WavesDetector(BaseDetector):
         if self._gpts:
             # as `Waves.downsample` records it: the resampled waves keep the
             # band limit of the waves they were resampled from
-            metadata["adjusted_antialias_cutoff_gpts"] = waves.antialias_cutoff_gpts
+            metadata.update(waves._resampling_metadata(self._gpts))
         return (metadata,)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
@@ -1348,7 +1349,11 @@ class WavesDetector(BaseDetector):
             waves = waves.to_cpu()
 
         if self._gpts:
-            array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
+            array = fft_interpolate(
+                waves._eager_array,
+                new_shape=tuple(self._gpts),
+                normalization=waves._fft_resampling_normalization(waves.metadata),
+            )
         else:
             array = waves.array
 

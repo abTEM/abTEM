@@ -319,3 +319,26 @@ def test_frozen_phonons_with_other_positions_are_accepted(calculator):
     )
 
     assert potential.build(lazy=False).array.shape == (1, 4) + GPTS
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_per_atom_sigmas_with_repetitions_equal_the_scalar_sigma(calculator, lazy):
+    # sigmas given for each atom of the cell raised "Property must be provided for all
+    # atoms." with repetitions: they are repeated with the atoms
+    reps = (2, 1, 1)
+
+    def build(sigmas):
+        frozen_phonons = FrozenPhonons(
+            calculator.atoms, num_configs=2, sigmas=sigmas, seed=(3, 4)
+        )
+        potential = _repeated(calculator, reps, 0.9, frozen_phonons=frozen_phonons)
+        built = potential.build(lazy=lazy)
+        return (built.compute() if lazy else built).array
+
+    scalar = build(0.05)
+    per_atom = build(np.full(len(calculator.atoms), 0.05))
+
+    scale = np.abs(scalar).max()
+    np.testing.assert_allclose(per_atom, scalar, rtol=0, atol=1e-10 * scale)
+    # and the atoms are displaced
+    assert np.abs(scalar[0] - scalar[1]).max() > 1e-3 * scale

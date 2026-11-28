@@ -18,7 +18,7 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
-from abtem.core.grid import Grid, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, validate_gpts
 from abtem.core.utils import get_dtype, itemset
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import nyquist_sampling
@@ -31,6 +31,12 @@ if TYPE_CHECKING:
 
 
 ScanWithSampling = Union["LineScan", "GridScan"]
+
+
+def _validate_scan_gpts(gpts: int | Sequence[int] | None) -> None:
+    """Raise a ``ValueError`` for a number of scan positions below 1."""
+    if gpts is not None:
+        validate_gpts(np.atleast_1d(gpts))
 
 
 def validate_scan(
@@ -465,6 +471,7 @@ class LineScan(BaseScan):
         fractional: bool = False,
         potential: BasePotential | Atoms | None = None,
     ):
+        _validate_scan_gpts(gpts)
         self._gpts = gpts
         self._sampling = sampling
 
@@ -597,7 +604,9 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = int(np.ceil(self.extent / self.sampling))
+        gpts = int(np.ceil(self.extent / self.sampling))
+        _validate_scan_gpts(gpts)
+        self._gpts = gpts
 
         self._adjust_sampling()
 
@@ -629,6 +638,7 @@ class LineScan(BaseScan):
 
     @gpts.setter
     def gpts(self, gpts: int):
+        _validate_scan_gpts(gpts)
         self._gpts = gpts
         self._adjust_sampling()
 
@@ -764,6 +774,10 @@ class LineScan(BaseScan):
     def get_positions(
         self, chunks: int | None = None, lazy: bool = False
     ) -> np.ndarray:
+        return self._positions(get_dtype(complex=False))
+
+    def _positions(self, dtype) -> np.ndarray:
+        """The positions of the scan, shape (gpts, 2) [Å], in the given dtype."""
         if self.gpts is None:
             raise RuntimeError("gpts is not defined")
 
@@ -775,14 +789,14 @@ class LineScan(BaseScan):
             self.end[0],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         y = np.linspace(
             self.start[1],
             self.end[1],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=get_dtype(complex=False),
+            dtype=dtype,
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
@@ -874,6 +888,8 @@ class GridScan(HasGrid2DMixin, BaseScan):
     ):
         super().__init__()
 
+        _validate_scan_gpts(gpts)
+
         self._start = validate_coordinate(
             coordinate=start, potential=potential, fractional=fractional
         )
@@ -917,6 +933,11 @@ class GridScan(HasGrid2DMixin, BaseScan):
         not included."""
         assert len(self.grid.endpoint) == 2
         return self.grid.endpoint
+
+    @HasGrid2DMixin.gpts.setter
+    def gpts(self, gpts: tuple[int, int]):
+        _validate_scan_gpts(gpts)
+        self.grid.gpts = gpts
 
     @property
     def shape(self) -> tuple[int, int]:
