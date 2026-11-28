@@ -435,7 +435,7 @@ class Visualization:
             and self._uses_log_norm()
         ):
             # a LogNorm takes no limit of 0 or below: the shared lower limit is the
-            # smallest positive value of the whole ensemble
+            # smallest positive value of the whole ensemble that can be drawn
             values = self._drawn_values()
             positive = values[values > 0]
             if len(positive):
@@ -457,14 +457,24 @@ class Visualization:
             self.set_value_limits(self._value_limits)
 
     def _drawn_values(self):
-        """The values the artists draw: not those of a line profile's complex parts
-        taken together, nor the spots below the threshold."""
+        """The values of the whole measurement that can be drawn, whichever member is
+        shown: those of the lines, which hold the real and imaginary parts of complex
+        data apart; the magnitudes otherwise; for spots those above the threshold."""
         drawn = [artist.drawn_values() for artist in self.artists.ravel()]
         if drawn and all(values is not None for values in drawn):
             return np.concatenate([np.ravel(values) for values in drawn])
 
         array = self._measurement.array
-        return np.abs(array) if np.iscomplexobj(array) else array
+        values = np.abs(array) if np.iscomplexobj(array) else array
+
+        thresholds = [
+            artist.threshold
+            for artist in self.artists.ravel()
+            if isinstance(artist, ScatterArtist)
+        ]
+        if thresholds:
+            values = values[values > min(thresholds)]
+        return values
 
     def _uses_log_norm(self):
         return any(

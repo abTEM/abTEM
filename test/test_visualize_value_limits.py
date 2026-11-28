@@ -24,7 +24,7 @@ def _values():
     return np.random.default_rng(0).random((32, 24)) + 0.5
 
 
-def _indexed_diffraction_patterns(**probe_kwargs):
+def _indexed_diffraction_patterns(semiangle_cutoff=20, **probe_kwargs):
     atoms = Atoms(
         "CO",
         positions=[(1.0, 1.0, 0.5), (2.5, 1.7, 2.5)],
@@ -33,7 +33,7 @@ def _indexed_diffraction_patterns(**probe_kwargs):
     )
     probe = abtem.Probe(
         energy=100e3,
-        semiangle_cutoff=20,
+        semiangle_cutoff=semiangle_cutoff,
         extent=(4.0, 3.0),
         gpts=(40, 30),
         **probe_kwargs,
@@ -169,3 +169,25 @@ def test_log_limit_of_diffraction_spots_comes_from_the_spots_that_are_drawn(expl
     for artist in visualization.artists.ravel():
         assert artist.norm.vmin == pytest.approx(drawn.min())
         assert artist.norm.vmax == pytest.approx(drawn.max())
+
+
+def test_common_log_limits_of_spots_do_not_depend_on_the_member_shown():
+    # one artist shows one member at a time: the limits of the whole ensemble that can
+    # be drawn, not those of the member on screen (the lower limit followed it)
+    patterns = _indexed_diffraction_patterns(semiangle_cutoff=[8.0, 30.0])
+    drawn = patterns.array[patterns.array > 1e-6]
+    assert patterns.array[1][patterns.array[1] > 1e-6].min() < (
+        patterns.array[0][patterns.array[0] > 1e-6].min()
+    )
+
+    visualization = patterns.show(logscale=True, common_color_scale=True)
+    (artist,) = visualization.artists.ravel()
+
+    def limits():
+        return artist.norm.vmin, artist.norm.vmax
+
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))
+    visualization.update_data_indices((1,))
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))
+    visualization.set_common_value_limits()
+    assert limits() == pytest.approx((drawn.min(), drawn.max()))

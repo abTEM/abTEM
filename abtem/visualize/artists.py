@@ -201,8 +201,9 @@ class Artist(metaclass=ABCMeta):
         pass
 
     def drawn_values(self) -> np.ndarray | None:
-        """The values the artist draws, or None where these are all the values of the
-        measurement."""
+        """The values the artist draws, or None where the artist does not hold all
+        the values that can be drawn: one that shows a member of an ensemble at a
+        time."""
         return None
 
     @abstractmethod
@@ -986,10 +987,6 @@ class ScatterArtist(Artist2D):
         if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
-
-    def drawn_values(self):
-        # only the spots above the threshold are drawn
-        return np.asarray(self._circles.get_array())
 
     def __getattr__(self, name):
         if name in self.__dict__:
